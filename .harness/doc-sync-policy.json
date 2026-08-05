@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "desktop-contract",
+      "sources": [
+        "src-tauri/src/main.rs",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/store.rs",
+        "src-tauri/src/oauth.rs",
+        "src-tauri/src/commands/**/*.rs",
+        "src/lib/local-store.ts",
+        "src/lib/agent-tools.ts"
+      ],
+      "requiredDocs": [
+        "docs/architecture.md",
+        "docs/api.md",
+        "TASKS.md"
+      ]
+    },
+    {
+      "id": "provider-security",
+      "sources": [
+        "src-tauri/src/oauth.rs",
+        "src-tauri/src/store.rs"
+      ],
+      "requiredDocs": [
+        "AGENTS.md",
+        "docs/decisions.md"
+      ]
+    },
+    {
+      "id": "desktop-runtime",
+      "sources": [
+        "package.json",
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json"
+      ],
+      "requiredDocs": [
+        "README.md",
+        "docs/architecture.md",
+        "docs/decisions.md",
+        "TASKS.md"
+      ]
+    }
+  ],
+  "changeRecordDirectory": "docs/changes"
+}
