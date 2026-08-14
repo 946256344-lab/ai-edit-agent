@@ -6,8 +6,7 @@
       "sources": [
         "src-tauri/src/main.rs",
         "src-tauri/src/lib.rs",
-        "src-tauri/src/store.rs",
-        "src-tauri/src/oauth.rs",
+        "src-tauri/src/*.rs",
         "src-tauri/src/commands/**/*.rs",
         "src/lib/local-store.ts",
         "src/lib/agent-tools.ts"
@@ -22,7 +21,10 @@
       "id": "provider-security",
       "sources": [
         "src-tauri/src/oauth.rs",
-        "src-tauri/src/store.rs"
+        "src-tauri/src/custom_api.rs",
+        "src-tauri/src/music_provider.rs",
+        "src-tauri/src/provider.rs",
+        "src-tauri/src/agent.rs"
       ],
       "requiredDocs": [
         "AGENTS.md",

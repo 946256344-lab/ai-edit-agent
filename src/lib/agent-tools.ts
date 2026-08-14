@@ -1,13 +1,23 @@
 export type ModelProvider = 'openai-oauth' | 'custom-api' | 'local'
 
-export type ToolStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type ToolStatus = 'queued' | 'running' | 'completed' | 'partially_completed' | 'failed' | 'cancelled' | 'needs_clarification' | 'needs_review'
 
 export type AgentToolName =
   | 'analyze_assets'
   | 'search_media_segments'
+  | 'search_assets'
+  | 'get_text_capabilities'
+  | 'generate_storyboard'
   | 'create_timeline_draft'
+  | 'replace_clips'
+  | 'change_clip_duration'
+  | 'reorder_clips'
+  | 'replace_text_tracks'
   | 'render_preview'
   | 'create_jianying_draft'
+  | 'request_clarification'
+  | 'no_action'
+  | 'replace_timeline_clip'
 
 export type ToolInvocation<TInput, TResult> = {
   id: string

@@ -34,12 +34,12 @@ function runGit(args) {
 }
 
 function currentFiles() {
-  const status = runGit(['status', '--porcelain', '--untracked-files=all'])
-  if (!status) {
+  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root, encoding: 'utf8' })
+  if (!status.trim()) {
     return []
   }
 
-  return status.split('\n').map((line) => normalizePath(line.slice(3).replace(/^"|"$/g, '')))
+  return status.trimEnd().split('\n').map((line) => normalizePath(line.slice(3).replace(/^"|"$/g, '')))
 }
 
 function stagedFiles() {

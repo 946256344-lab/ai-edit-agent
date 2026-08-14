@@ -11,6 +11,7 @@
 - 源时间绑定的内部时间线、540 x 960 本地 FFmpeg preview 和质量检查。
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、注册和打开。
+- 非显式自然语言请求由模型在受控工具中逐步决策；模型可请求分析项目内已导入但未分析的素材，但不能直接执行文件、SQLite 或 FFmpeg 操作。storyboard 的镜头数和时长由模型提案，应用只保留本地处理安全上限。
 
 这不是生产就绪的 Agent 编排系统。自定义模型适配器、生产安装包中的媒体运行时、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
 

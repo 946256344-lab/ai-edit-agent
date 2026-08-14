@@ -408,3 +408,18 @@ pub fn start_experimental_openai_oauth(app: tauri::AppHandle) -> Result<OAuthSta
         experimental: true,
     })
 }
+
+#[tauri::command]
+pub fn clear_experimental_openai_oauth() -> OAuthStatus {
+    match credential_entry() {
+        Ok(entry) => match entry.delete_credential() {
+            Ok(()) => set_login_state(LoginState::Idle),
+            Err(keyring::Error::NoEntry) => set_login_state(LoginState::Idle),
+            Err(error) => set_login_state(LoginState::Failed(format!(
+                "Could not clear experimental OAuth credentials: {error}"
+            ))),
+        },
+        Err(error) => set_login_state(LoginState::Failed(error)),
+    }
+    current_status()
+}

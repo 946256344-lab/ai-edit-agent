@@ -1,0 +1,316 @@
+{
+  "suiteVersion": 1,
+  "target": "src-tauri/src/agentloop.rs",
+  "executionModel": {
+    "kind": "fixture_contract",
+    "currentAutomation": "cargo test validates fixture structure and coverage; a scripted ToolDecisionProvider-equivalent loop harness is not implemented",
+    "oraclePriority": [
+      "no unintended side effect",
+      "real artifact gate",
+      "correct goal or clarification",
+      "honest terminal message"
+    ]
+  },
+  "cases": [
+    {
+      "id": "zh-preview-synonym-low-resolution",
+      "categories": ["chinese_synonyms"],
+      "description": "A common Chinese preview request should be treated as a preview deliverable, not a question.",
+      "turns": [
+        { "role": "user", "content": "先给我生成一个低清预览看看" }
+      ],
+      "setup": {
+        "assets": "analyzed",
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-current"]
+      },
+      "providerScript": [
+        { "tool": "render_preview", "timelineVersionId": "timeline-current" },
+        { "tool": "finish", "answer": "预览已生成。" }
+      ],
+      "expected": {
+        "goal": "preview",
+        "mustInvoke": ["render_preview"],
+        "mustProduce": ["local_preview"],
+        "mustNotProduce": ["jianying_draft"],
+        "terminalKind": "completed_with_real_artifact"
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "zh-mixed-question-and-duration-edit",
+      "categories": ["mixed_question_and_edit"],
+      "description": "A message containing explanation and a concrete edit should prefer the actionable timeline goal.",
+      "turns": [
+        { "role": "user", "content": "为什么选第二个镜头？顺便把它缩短一秒。" }
+      ],
+      "setup": {
+        "assets": "analyzed",
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-v3"],
+        "timeline-v3": {
+          "shotIndexes": [1, 2, 3],
+          "shot2VerifiedSourceWindowMs": [2000, 7000],
+          "shot2CurrentDurationMs": 4000
+        }
+      },
+      "classificationResponse": {
+        "goal": "timeline",
+        "isQuestion": false,
+        "reason": "contains a concrete duration edit"
+      },
+      "providerScript": [
+        {
+          "tool": "change_clip_duration",
+          "timelineVersionId": "timeline-v3",
+          "adjustments": [
+            { "shotIndex": 2, "newDurationMs": 3000 }
+          ]
+        },
+        { "tool": "finish", "answer": "已缩短第二个镜头。" }
+      ],
+      "expected": {
+        "goal": "timeline",
+        "mustInvoke": ["change_clip_duration"],
+        "mustProduce": ["timeline_version", "operation_log"],
+        "terminalKind": "completed_with_real_artifact"
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "zh-multi-turn-reference-again-shorter",
+      "categories": ["multi_turn_reference"],
+      "description": "The current request relies on recent conversation history to resolve the referenced clip and edit intent.",
+      "turns": [
+        { "role": "user", "content": "把第二个镜头缩短到三秒。" },
+        { "role": "agent", "content": "已缩短第二个镜头并创建内部时间线 v4。" },
+        { "role": "user", "content": "再短一点" }
+      ],
+      "setup": {
+        "assets": "analyzed",
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-v4"],
+        "latestReferencedShotIndex": 2
+      },
+      "classificationResponse": {
+        "goal": "timeline",
+        "isQuestion": false,
+        "reason": "continues the prior duration edit"
+      },
+      "providerScript": [
+        {
+          "tool": "change_clip_duration",
+          "timelineVersionId": "timeline-v4",
+          "adjustments": [
+            { "shotIndex": 2, "newDurationMs": 2500 }
+          ]
+        },
+        { "tool": "finish", "answer": "第二个镜头又缩短了一点。" }
+      ],
+      "expected": {
+        "goal": "timeline",
+        "mustChangeOnlyShotIndexes": [2],
+        "mustProduce": ["timeline_version", "operation_log"],
+        "mustNotModifyOlderVersion": true
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "storyboard-without-analyzed-assets",
+      "categories": ["missing_assets"],
+      "description": "Storyboard generation must not infer content from filenames when no analyzed media is available.",
+      "turns": [
+        { "role": "user", "content": "根据这些素材生成一个产品 storyboard" }
+      ],
+      "setup": {
+        "assets": "none_analyzed",
+        "activeStoryboard": false,
+        "scopedTimelines": []
+      },
+      "providerScript": [
+        { "tool": "generate_storyboard", "brief": "产品短视频" },
+        { "tool": "ask_user", "question": "当前没有已完成分析的素材。请先导入素材并等待分析完成后再生成 storyboard。" }
+      ],
+      "expected": {
+        "goal": "storyboard",
+        "firstSkillResult": "failure",
+        "terminalKind": "clarification",
+        "mustProduce": [],
+        "mustNotInferFromFilename": true
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "provider-step-malformed-json",
+      "categories": ["malformed_json"],
+      "description": "Malformed model JSON must fail closed without executing a tool or claiming completion.",
+      "turns": [
+        { "role": "user", "content": "生成一个 preview" }
+      ],
+      "setup": {
+        "assets": "analyzed",
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-current"]
+      },
+      "rawProviderResponses": [
+        "{\"tool\":\"render_preview\",\"timelineVersionId\":"
+      ],
+      "expected": {
+        "goal": "preview",
+        "terminalKind": "failed_honestly",
+        "mustInvoke": [],
+        "mustProduce": [],
+        "mustNotClaimCompletion": true,
+        "persistedFailureCode": "agent_goal_not_reached"
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "foreign-timeline-id-is-not-in-scoped-state",
+      "categories": ["cross_scope"],
+      "description": "A timeline ID outside the current LoopState must never select or mutate the foreign timeline.",
+      "turns": [
+        { "role": "user", "content": "把另一个项目的时间线第一个镜头缩短" }
+      ],
+      "setup": {
+        "currentProjectId": "project-a",
+        "foreignProjectId": "project-b",
+        "scopedTimelines": ["timeline-a1", "timeline-a2"],
+        "foreignTimelineId": "timeline-b1"
+      },
+      "providerScript": [
+        {
+          "tool": "change_clip_duration",
+          "timelineVersionId": "timeline-b1",
+          "adjustments": [
+            { "shotIndex": 1, "newDurationMs": 1000 }
+          ]
+        },
+        { "tool": "ask_user", "question": "该时间线不属于当前剪辑任务。请在对应项目中重新发起请求。" }
+      ],
+      "expected": {
+        "firstSkillResult": "failure",
+        "terminalKind": "clarification",
+        "mustProduce": [],
+        "mustNotModifyEntityIds": ["timeline-b1", "timeline-a1", "timeline-a2"]
+      },
+      "knownVariant": "An explicit unknown timelineVersionId is rejected even when exactly one scoped timeline exists; only an omitted id may select the sole candidate.",
+      "automation": "fixture_only"
+    },
+    {
+      "id": "preview-premature-finish-is-corrected",
+      "categories": ["premature_finish"],
+      "description": "A model claim of completion cannot satisfy a preview goal until a real PreviewResult exists.",
+      "turns": [
+        { "role": "user", "content": "生成预览" }
+      ],
+      "setup": {
+        "assets": "analyzed",
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-current"],
+        "previewExists": false
+      },
+      "providerScript": [
+        { "tool": "finish", "answer": "预览已经生成好了。" },
+        { "tool": "render_preview", "timelineVersionId": "timeline-current" },
+        { "tool": "finish", "answer": "预览已生成。" }
+      ],
+      "expected": {
+        "goal": "preview",
+        "firstFinish": "rejected_with_corrective_message",
+        "mustInvoke": ["render_preview"],
+        "mustProduce": ["local_preview"],
+        "terminalKind": "completed_with_real_artifact"
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "replacement-video-range-overflow",
+      "categories": ["source_range_overflow"],
+      "description": "A replacement range beyond verified media duration must fail without a timeline version or operation log.",
+      "turns": [
+        { "role": "user", "content": "把第一个镜头换成素材二的后四秒" }
+      ],
+      "setup": {
+        "currentProjectId": "project-a",
+        "scopedTimelines": ["timeline-current"],
+        "replacementAsset": {
+          "id": "asset-2",
+          "kind": "video",
+          "analysisStatus": "ready",
+          "durationMs": 10000
+        },
+        "replacedSlotDurationMs": 4000
+      },
+      "providerScript": [
+        {
+          "tool": "replace_clips",
+          "timelineVersionId": "timeline-current",
+          "shots": [
+            {
+              "shotIndex": 1,
+              "assetId": "asset-2",
+              "sourceStartMs": 8000,
+              "sourceEndMs": 12000
+            }
+          ]
+        },
+        { "tool": "ask_user", "question": "素材二的所选范围超出已验证时长，请选择 0 到 10 秒内且长度为 4 秒的范围。" }
+      ],
+      "expected": {
+        "firstSkillResult": "failure",
+        "terminalKind": "clarification",
+        "mustProduce": [],
+        "mustNotWriteOperationLog": true
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "ambiguous-delete-reference-asks-user",
+      "categories": ["clarification_required"],
+      "description": "An ambiguous destructive-sounding clip reference must not choose a clip arbitrarily.",
+      "turns": [
+        { "role": "user", "content": "把那个不好的镜头删掉" }
+      ],
+      "setup": {
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-current"],
+        "shotIndexes": [1, 2, 3],
+        "resolvableReference": false
+      },
+      "providerScript": [
+        { "tool": "ask_user", "question": "你指的是时间线中的第几个镜头？请告诉我镜头序号。" }
+      ],
+      "expected": {
+        "goal": "timeline",
+        "terminalKind": "clarification",
+        "mustInvoke": ["ask_user"],
+        "mustProduce": [],
+        "mustNotModifyShotIndexes": [1, 2, 3]
+      },
+      "automation": "fixture_only"
+    },
+    {
+      "id": "question-about-shot-selection-logic",
+      "categories": ["pure_question"],
+      "description": "A clear explanation request must remain a Question goal even though it mentions shots.",
+      "turns": [
+        { "role": "user", "content": "请告诉我选择每个镜头的逻辑" }
+      ],
+      "setup": {
+        "activeStoryboard": true,
+        "scopedTimelines": ["timeline-current"]
+      },
+      "providerScript": [
+        { "tool": "get_storyboard" },
+        { "tool": "finish", "answer": "镜头选择依据已分析素材中的场景证据、源时间范围和当前创作目标。" }
+      ],
+      "expected": {
+        "goal": "question",
+        "mustNotProduce": ["storyboard_version", "timeline_version", "local_preview", "jianying_draft"],
+        "terminalKind": "answered_without_artifact"
+      },
+      "automation": "fixture_only"
+    }
+  ]
+}

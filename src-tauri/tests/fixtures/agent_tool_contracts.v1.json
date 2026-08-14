@@ -1,0 +1,648 @@
+{
+  "catalogVersion": 1,
+  "implementationSource": "src-tauri/src/agentloop.rs",
+  "argumentConvention": {
+    "location": "top_level",
+    "case": "camelCase",
+    "unknownKeys": "tolerated",
+    "removedMetaKeys": [
+      "goal",
+      "isQuestion",
+      "tool",
+      "reason",
+      "answer",
+      "question",
+      "taskBrief",
+      "clarificationAction",
+      "informationScope"
+    ]
+  },
+  "runtimePolicy": {
+    "maximumSteps": 10,
+    "firstDecision": "ambiguous requests declare goal and isQuestion while choosing the first tool or finish in the same response; deterministic backend goals remain authoritative",
+    "interactiveModelBudgetSeconds": 90,
+    "failedSkillHandling": "return the error to the model transcript and continue within the bounded loop",
+    "automaticSkillRetry": false,
+    "interruptedRunHandling": "needs_review; do not replay unknown side effects"
+  },
+  "tools": [
+    {
+      "name": "get_edit_status",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project_editing_task_and_conversation",
+        "resolution": "reads the latest previous scoped Agent task and its safe artifact identifiers"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again; exact status questions use the deterministic explicit path",
+      "preconditions": ["current project, editing task, and conversation are already validated"],
+      "produces": [],
+      "returns": ["grounded_edit_status_message"]
+    },
+    {
+      "name": "get_asset_health_summary",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project",
+        "resolution": "reads persisted source-health counts, scan state, and safe reason codes"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["current project is already validated"],
+      "produces": [],
+      "returns": ["health_counts", "scan_state", "safe_reason_counts", "reason_evidence_available"]
+    },
+    {
+      "name": "list_assets",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project",
+        "resolution": "projectId comes from LoopState, not model arguments"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again, but the current loop does not automatically retry a failed skill",
+      "preconditions": [
+        "current project is already validated by the Agent entry point"
+      ],
+      "produces": [],
+      "returns": [
+        "asset_summary"
+      ]
+    },
+    {
+      "name": "search_assets",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": { "type": "object", "properties": {}, "required": [] },
+      "scope": { "boundary": "current_project", "resolution": "bounded safe candidate search" },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["current project is validated"],
+      "produces": [],
+      "returns": ["safe_asset_candidates", "next_offset"]
+    },
+    {
+      "name": "search_asset_segments",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": { "type": "object", "properties": {}, "required": ["query"] },
+      "scope": { "boundary": "current_project", "resolution": "evidence-bound source ranges" },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["current project is validated"],
+      "produces": [],
+      "returns": ["safe_source_ranges", "next_offset"]
+    },
+    {
+      "name": "search_music",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"]
+      },
+      "scope": {
+        "boundary": "configured_jamendo_catalog",
+        "resolution": "returns only downloadable CC0 or CC-BY tracks from the configured Provider"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again; the loop does not automatically retry",
+      "preconditions": ["Jamendo client ID is configured"],
+      "produces": [],
+      "returns": ["eligible_tracks"]
+    },
+    {
+      "name": "get_storyboard",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project_and_editing_task",
+        "resolution": "returns only the active storyboard loaded into LoopState"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again, but the current loop does not automatically retry a failed skill",
+      "preconditions": [],
+      "produces": [],
+      "returns": [
+        "storyboard_snapshot_or_null"
+      ]
+    },
+    {
+      "name": "get_timeline",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          }
+        },
+        "required": []
+      },
+      "scope": {
+        "boundary": "timelines_loaded_for_current_storyboard",
+        "resolution": "when timelineVersionId is supplied it must match a scoped timeline; only an omitted id may use the sole scoped timeline"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again, but the current loop does not automatically retry a failed skill",
+      "preconditions": [],
+      "produces": [],
+      "returns": [
+        "timeline_snapshot_or_null"
+      ]
+    },
+    {
+      "name": "get_text_capabilities",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "application_verified_text_matrix",
+        "resolution": "returns backend-owned preview and Jianying delivery recipes"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again; the loop does not automatically retry",
+      "preconditions": [],
+      "produces": [],
+      "returns": ["text_capabilities"]
+    },
+    {
+      "name": "download_music",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": { "trackId": { "type": "string" } },
+        "required": ["trackId"]
+      },
+      "scope": {
+        "boundary": "current_project_and_eligible_jamendo_track",
+        "resolution": "downloads one verified eligible track to a unique project-controlled path"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_unique_download",
+      "retryPolicy": "do not automatically retry; each successful invocation creates a unique local copy",
+      "preconditions": ["track was returned by the configured Jamendo Provider"],
+      "produces": ["audio_asset", "analyze_asset_task"],
+      "returns": ["assetId", "analysisStatus"]
+    },
+    {
+      "name": "use_online_music",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "trackId": { "type": "string" },
+          "timelineVersionId": { "type": "string", "optional": true }
+        },
+        "required": ["trackId"]
+      },
+      "scope": {
+        "boundary": "current_project_and_scoped_timeline",
+        "resolution": "downloads one eligible track, waits for local analysis, and creates a new scoped timeline version"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_asset_and_timeline_version",
+      "retryPolicy": "do not automatically retry after an unknown interruption",
+      "preconditions": ["a scoped timeline exists", "track is eligible", "local media analysis completes"],
+      "produces": ["audio_asset", "timeline_version", "operation_log"],
+      "returns": ["timelineVersionId", "assetId"]
+    },
+    {
+      "name": "request_asset_analysis",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "assetIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "assetIds"
+        ]
+      },
+      "scope": {
+        "boundary": "imported_assets_in_current_project",
+        "resolution": "projectId comes from LoopState and every requested asset is verified against it"
+      },
+      "sideEffect": true,
+      "idempotency": "ready assets and assets with queued or running analysis are skipped; a failed asset can receive a new analysis task",
+      "retryPolicy": "do not automatically retry; a fresh request revalidates the current source file and queues only eligible assets",
+      "preconditions": [
+        "assetIds is non-empty",
+        "every asset belongs to the current project",
+        "every queued asset source file is currently available"
+      ],
+      "produces": [
+        "analyze_asset_task"
+      ],
+      "returns": [
+        "queuedCount"
+      ]
+    },
+    {
+      "name": "generate_storyboard",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "brief": {
+            "type": "string",
+            "optional": true,
+            "fallback": "LoopState.taskBrief"
+          }
+        },
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project_and_editing_task",
+        "resolution": "projectId and editingTaskId come from LoopState; the domain function revalidates ownership"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; a repeated invocation can create another storyboard version",
+      "preconditions": [
+        "brief or current task brief is non-empty",
+        "editing task belongs to the current project",
+        "at least one analyzed media source is available",
+        "configured model Provider is available",
+        "model output passes local storyboard evidence and source-range validation"
+      ],
+      "produces": [
+        "storyboard_version"
+      ],
+      "returns": [
+        "storyboardVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "create_timeline_draft",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "active_storyboard_in_current_project_and_editing_task",
+        "resolution": "the active storyboard from LoopState is passed to the domain function, which revalidates project ownership"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; a repeated invocation creates another timeline version",
+      "preconditions": [
+        "an active storyboard exists",
+        "active storyboard belongs to the current project"
+      ],
+      "produces": [
+        "timeline_version"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "replace_clips",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "shots": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "shotIndex",
+                "assetId",
+                "sourceStartMs",
+                "sourceEndMs"
+              ],
+              "properties": {
+                "shotIndex": { "type": "integer" },
+                "assetId": { "type": "string" },
+                "sourceStartMs": { "type": "integer" },
+                "sourceEndMs": { "type": "integer" }
+              }
+            }
+          },
+          "replacements": {
+            "type": "array",
+            "optional": true,
+            "aliasFor": "shots"
+          }
+        },
+        "requiredAnyOf": [
+          "shots",
+          "replacements"
+        ]
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard_and_assets_in_current_project",
+        "resolution": "timeline is selected only from LoopState; replacement asset lookup includes current projectId and ready analysis status"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every successful invocation creates a new timeline version and operation log",
+      "preconditions": [
+        "a scoped timeline can be selected",
+        "shot indexes exist and are unique",
+        "replacement assets are analyzed and available in the current project",
+        "video source range is valid and exactly equals the replaced timeline slot duration",
+        "image source range is 0 to 0"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "change_clip_duration",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "adjustments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "shotIndex"
+              ],
+              "properties": {
+                "shotIndex": { "type": "integer" },
+                "newDurationMs": { "type": "integer", "optional": true },
+                "newSourceStartMs": { "type": "integer", "optional": true }
+              }
+            }
+          }
+        },
+        "required": [
+          "adjustments"
+        ]
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard_and_original_assets_in_current_project",
+        "resolution": "timeline is selected only from LoopState; asset metadata lookup includes current projectId and ready analysis status"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every successful invocation creates a new timeline version and operation log",
+      "preconditions": [
+        "a scoped timeline can be selected",
+        "shot indexes exist and are unique",
+        "new duration is positive",
+        "new video source window stays inside the clip's previously verified source window and technical media duration",
+        "image source start remains 0"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "reorder_clips",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "order": {
+            "type": "array",
+            "items": { "type": "integer" }
+          }
+        },
+        "required": [
+          "order"
+        ]
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard",
+        "resolution": "timeline is selected only from LoopState"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every successful invocation creates a new timeline version and operation log",
+      "preconditions": [
+        "a scoped timeline can be selected",
+        "order contains every existing shot index exactly once and contains no unknown index"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId"
+      ]
+    },
+    {
+      "name": "replace_text_tracks",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": { "type": "string", "optional": true },
+          "textTracks": { "type": "array" }
+        },
+        "required": ["textTracks"]
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_editing_task",
+        "resolution": "Rust validates all text cues and creates a new scoped timeline version"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every success creates a new version",
+      "preconditions": ["a scoped timeline exists", "text tracks pass backend validation"],
+      "produces": ["timeline_version", "operation_log"],
+      "returns": ["timelineVersionId", "qualityWarnings"]
+    },
+    {
+      "name": "replace_music_tracks",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": { "type": "string", "optional": true },
+          "musicTracks": { "type": "array" }
+        },
+        "required": ["musicTracks"]
+      },
+      "scope": {
+        "boundary": "timeline_and_ready_audio_assets_in_current_project",
+        "resolution": "Rust validates source and timeline ranges and creates a new scoped timeline version"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every success creates a new version",
+      "preconditions": ["a scoped timeline exists", "all audio assets are ready in the current project"],
+      "produces": ["timeline_version", "operation_log"],
+      "returns": ["timelineVersionId"]
+    },
+    {
+      "name": "render_preview",
+      "version": 1,
+      "kind": "delivery",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          }
+        },
+        "required": []
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard",
+        "resolution": "select only a timeline already scoped into LoopState; the delivery tool never creates one implicitly"
+      },
+      "sideEffect": true,
+      "idempotency": "not_guaranteed_overwrites_derived_preview_for_same_timeline",
+      "retryPolicy": "do not automatically replay an interrupted invocation; a fresh request may rerender the scoped timeline",
+      "preconditions": [
+        "a scoped timeline exists",
+        "timeline has clips",
+        "every referenced source media file is available",
+        "FFmpeg is available"
+      ],
+      "produces": [
+        "local_preview",
+        "preview_quality_report",
+        "timeline_status_update"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "create_jianying_draft",
+      "version": 1,
+      "kind": "delivery",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          }
+        },
+        "required": []
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard",
+        "resolution": "select only a timeline already scoped into LoopState; the delivery tool never creates one implicitly"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_unique_external_draft",
+      "retryPolicy": "never automatically replay after interruption; require review or a fresh user request because another draft may already exist",
+      "preconditions": [
+        "a scoped timeline exists",
+        "Jianying Pro 8.0 draft library is available",
+        "all timeline clips are videos",
+        "every referenced source media file is available",
+        "adapter and registration safety checks pass"
+      ],
+      "produces": [
+        "unique_jianying_draft",
+        "jianying_registration_task_when_pending"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "registrationStatus"
+      ]
+    }
+  ],
+  "controlActions": [
+    {
+      "name": "ask_user",
+      "input": ["question"],
+      "effect": "ends the loop with a clarification message and no artifact"
+    },
+    {
+      "name": "finish",
+      "aliases": ["no_action", "done", "empty tool"],
+      "input": ["answer"],
+      "effect": "ends only when the goal's real artifact gate is satisfied; Question may finish with an answer"
+    }
+  ],
+  "knownImplementationNotes": [
+    "skill failures are returned to the model transcript as bounded-loop context; there is not yet a per-tool stable public error-code enum"
+  ]
+}

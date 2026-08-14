@@ -24,5 +24,7 @@ assert.deepEqual(evaluateDocSync(['src/App.tsx'], policy, new Map()).errors, [])
 assert.deepEqual(evaluateDocSync(completeFiles, policy, completeRecord).errors, [])
 assert.match(evaluateDocSync(['src-tauri/src/store.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
 assert.match(evaluateDocSync(['src-tauri/src/commands/media.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
+assert.match(evaluateDocSync(['src-tauri/src/custom_api.rs'], policy, new Map()).errors.join('\n'), /AGENTS\.md/)
+assert.match(evaluateDocSync(['src-tauri/src/music_provider.rs'], policy, new Map()).errors.join('\n'), /docs\/decisions\.md/)
 
 console.log('文档同步检查单元测试通过。')

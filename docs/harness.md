@@ -12,8 +12,8 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 
 | 触发范围 | 必须同步的文档 |
 | --- | --- |
-| Tauri 命令与存储入口（`main.rs`、`lib.rs`、`store.rs`、`oauth.rs`、`commands/`）、`local-store.ts`、`agent-tools.ts` | `docs/architecture.md`、`docs/api.md`、`TASKS.md` |
-| `oauth.rs`、`store.rs` | `AGENTS.md`、`docs/decisions.md` |
+| Tauri 命令与存储入口（`main.rs`、`lib.rs`、`src-tauri/src/*.rs`、`oauth.rs`、`commands/`）、`local-store.ts`、`agent-tools.ts` | `docs/architecture.md`、`docs/api.md`、`TASKS.md` |
+| `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`provider.rs`、`agent.rs` | `AGENTS.md`、`docs/decisions.md` |
 | `package.json`、Cargo、Tauri 配置 | `README.md`、`docs/architecture.md`、`docs/decisions.md`、`TASKS.md` |
 
 每个触发规则的变更集还必须有一份 `docs/changes/YYYY-MM-DD-主题.md` 记录，并在其中列出实际同步的文档。规则必须保持窄且可解释；新增高影响区域时才扩展策略表。

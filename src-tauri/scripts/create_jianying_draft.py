@@ -1,6 +1,7 @@
 import json
 import msvcrt
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -8,7 +9,24 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from pyJianYingDraft import DraftFolder, Timerange, TrackType, VideoMaterial, VideoSegment
+from pyJianYingDraft import (
+    AudioMaterial,
+    AudioSegment,
+    ClipSettings,
+    DraftFolder,
+    FontType,
+    TextBackground,
+    TextBorder,
+    TextIntro,
+    TextOutro,
+    TextSegment,
+    TextShadow,
+    TextStyle,
+    Timerange,
+    TrackType,
+    VideoMaterial,
+    VideoSegment,
+)
 
 
 SOURCE_DURATION_TOLERANCE_US = 50_000
@@ -49,6 +67,178 @@ def create_cover(source, source_start_ms, destination):
 
 def same_path(left, right):
     return os.path.normcase(os.path.normpath(str(left))) == os.path.normcase(os.path.normpath(str(right)))
+
+
+def new_draft_path(root, draft_name):
+    if not isinstance(draft_name, str) or not draft_name or Path(draft_name).name != draft_name:
+        raise RuntimeError("Jianying draft name must be one local directory name.")
+    resolved_root = root.resolve(strict=True)
+    draft_path = (resolved_root / draft_name).resolve(strict=False)
+    if draft_path.parent != resolved_root:
+        raise RuntimeError("Jianying draft path is outside the selected draft root.")
+    return draft_path
+
+
+def text_color(value):
+    value = str(value or "#FFFFFF").lstrip("#")
+    if len(value) != 6:
+        return (1.0, 1.0, 1.0)
+    try:
+        return tuple(int(value[index:index + 2], 16) / 255 for index in (0, 2, 4))
+    except ValueError:
+        return (1.0, 1.0, 1.0)
+
+
+def text_alignment(value):
+    return {"left": 0, "center": 1, "right": 2}.get(value, 1)
+
+
+JIAN_YING_FONT_KEYS = {
+    "jianying_sans_bold": "SourceHanSansCN_Bold",
+    "jianying_sans_regular": "SourceHanSansCN_Regular",
+    "jianying_serif_bold": "SourceHanSerifCN_Bold",
+    "jianying_handwritten": "LXGWWenKai_Bold",
+    "jianying_harmony_bold": "HarmonyOS_Sans_SC_Bold",
+}
+
+
+def jianying_font(font_key):
+    enum_name = JIAN_YING_FONT_KEYS.get(font_key)
+    return getattr(FontType, enum_name, None) if enum_name else None
+
+
+def jianying_text_border(style_data):
+    width = float(style_data.get("strokeWidth", 0))
+    if width <= 0:
+        return None
+    return TextBorder(
+        color=text_color(style_data.get("strokeColor", "#000000")),
+        width=min(100.0, width * 10.0),
+    )
+
+
+def jianying_text_background(style_data):
+    color = style_data.get("backgroundColor")
+    if not color:
+        return None
+    return TextBackground(color=str(color), round_radius=0.16, height=0.14, width=0.14)
+
+
+def jianying_text_shadow(style_data):
+    if not style_data.get("shadow", False):
+        return None
+    return TextShadow()
+
+
+def add_supported_text_animation(segment, animation, phase):
+    if not animation:
+        return
+    template_id = animation.get("templateId")
+    duration = max(0, int(animation.get("durationMs", 0))) * 1000
+    if template_id in ("fade", "wipe"):
+        segment.add_animation(TextIntro.渐显 if phase == "in" else TextOutro.渐隐, duration)
+    elif template_id == "slide_up" and phase == "in":
+        segment.add_animation(TextIntro.向上滑动, duration)
+    elif template_id == "slide_down" and phase == "in":
+        segment.add_animation(TextIntro.向下滑动, duration)
+    elif template_id == "pop" and phase == "in":
+        segment.add_animation(TextIntro.弹入, duration)
+
+
+def escape_text_material_unicode(script):
+    """Keep nested text JSON ASCII-escaped for current Jianying readers."""
+    for material in script.materials.texts:
+        content = material.get("content")
+        if isinstance(content, str):
+            material["content"] = json.dumps(
+                json.loads(content), ensure_ascii=True, separators=(",", ":")
+            )
+
+
+def add_text_tracks(script, tracks):
+    enabled_tracks = [track for track in tracks if track.get("enabled", True)]
+    if not enabled_tracks:
+        return
+    ordered_tracks = sorted(
+        enumerate(enabled_tracks),
+        key=lambda item: (int(item[1].get("layer", 0)), item[0]),
+    )
+    for track_index, track in ordered_tracks:
+        layer = int(track.get("layer", 0))
+        track_name = f"assembly-text-layer-{layer}-{track_index}"
+        script.add_track(TrackType.text, track_name=track_name, relative_index=layer)
+        for cue in track.get("cues", []):
+            duration_ms = int(cue["endMs"]) - int(cue["startMs"])
+            if duration_ms <= 0:
+                raise RuntimeError("Text cue duration must be positive.")
+            style_data = cue.get("style", {})
+            layout = cue.get("layout", {})
+            style = TextStyle(
+                size=max(1.0, float(style_data.get("fontSize", 0.08)) * 100),
+                bold=bool(style_data.get("bold", False)),
+                color=text_color(style_data.get("color")),
+                align=text_alignment(style_data.get("alignment")),
+                letter_spacing=int(style_data.get("letterSpacing", 0)),
+                line_spacing=int(style_data.get("lineSpacing", 0)),
+                auto_wrapping=True,
+                max_line_width=float(layout.get("maxWidth", 0.82)),
+            )
+            segment = TextSegment(
+                cue["text"],
+                Timerange(to_microseconds(int(cue["startMs"])), to_microseconds(duration_ms)),
+                font=jianying_font(style_data.get("fontKey")),
+                style=style,
+                clip_settings=ClipSettings(
+                    transform_x=(float(layout.get("x", 0.5)) - 0.5) * 2,
+                    transform_y=(0.5 - float(layout.get("y", 0.5))) * 2,
+                ),
+                border=jianying_text_border(style_data),
+                background=jianying_text_background(style_data),
+                shadow=jianying_text_shadow(style_data),
+            )
+            add_supported_text_animation(segment, cue.get("entrance"), "in")
+            add_supported_text_animation(segment, cue.get("exit"), "out")
+            script.add_segment(segment, track_name=track_name)
+            escape_text_material_unicode(script)
+
+
+def add_music_tracks(script, tracks):
+    enabled_tracks = [track for track in tracks if track.get("enabled", True)]
+    for track_index, track in enumerate(enabled_tracks):
+        track_name = f"assembly-music-{track_index}"
+        script.add_track(TrackType.audio, track_name=track_name)
+        for cue in track.get("cues", []):
+            source = Path(cue["sourceReference"])
+            if not source.is_file():
+                raise RuntimeError("Music source media is unavailable.")
+            source_start_us = to_microseconds(int(cue["sourceStartMs"]))
+            source_duration_us = to_microseconds(
+                int(cue["sourceEndMs"]) - int(cue["sourceStartMs"])
+            )
+            timeline_start_us = to_microseconds(int(cue["timelineStartMs"]))
+            timeline_end_us = to_microseconds(int(cue["timelineEndMs"]))
+            material = AudioMaterial(str(source))
+            remaining_us = timeline_end_us - timeline_start_us
+            segment_start_us = timeline_start_us
+            while remaining_us > 0:
+                segment_duration_us = min(source_duration_us, remaining_us)
+                if segment_duration_us < remaining_us and not cue.get("loopEnabled", False):
+                    raise RuntimeError("Non-looping music does not cover its timeline range.")
+                segment = AudioSegment(
+                    material,
+                    Timerange(segment_start_us, segment_duration_us),
+                    source_timerange=Timerange(source_start_us, segment_duration_us),
+                    volume=float(cue.get("volume", 1.0)),
+                )
+                is_first = segment_start_us == timeline_start_us
+                is_last = segment_duration_us == remaining_us
+                fade_in_us = to_microseconds(int(cue.get("fadeInMs", 0))) if is_first else 0
+                fade_out_us = to_microseconds(int(cue.get("fadeOutMs", 0))) if is_last else 0
+                if fade_in_us or fade_out_us:
+                    segment.add_fade(fade_in_us, fade_out_us)
+                script.add_segment(segment, track_name=track_name)
+                segment_start_us += segment_duration_us
+                remaining_us -= segment_duration_us
 
 
 def jianying_is_running():
@@ -165,8 +355,8 @@ def registration_result(draft_path, registration_status):
 def main():
     if len(sys.argv) != 2:
         raise RuntimeError("Jianying draft adapter requires a versioned input file.")
-    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-    if payload.get("inputFormatVersion") != 1:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+    if payload.get("inputFormatVersion") not in (1, 2):
         raise RuntimeError("Jianying draft adapter received an unsupported input format.")
     operation = payload.get("operation", "createDraft")
     root = Path(payload["draftRoot"])
@@ -174,6 +364,7 @@ def main():
     registry_path = Path(payload["draftRegistryPath"])
     if not root.is_dir():
         raise RuntimeError("Jianying draft root is unavailable.")
+    draft_path = new_draft_path(root, draft_name)
     if operation == "registerDraft":
         draft_path = Path(payload["draftDirectory"])
         if not (draft_path / "draft_content.json").is_file():
@@ -191,7 +382,7 @@ def main():
         return
     if operation != "createDraft":
         raise RuntimeError("Jianying draft adapter received an unsupported operation.")
-    if (root / draft_name).exists():
+    if draft_path.exists():
         raise RuntimeError("Jianying draft already exists; it was not overwritten.")
     prepared_clips = []
     duration_ms = 0
@@ -214,27 +405,38 @@ def main():
         )
         duration_ms = max(duration_ms, clip["timelineEndMs"])
 
-    script = DraftFolder(str(root)).create_draft(draft_name, 540, 960, 30, allow_replace=False)
-    script.add_track(TrackType.video)
-    for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared_clips:
-        segment = VideoSegment(
-            material,
-            Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
-            source_timerange=Timerange(source_start_us, source_duration_us),
+    try:
+        script = DraftFolder(str(root)).create_draft(
+            draft_name, 540, 960, 30, allow_replace=False
         )
-        script.add_segment(segment)
-    script.save()
-    if payload["clips"]:
-        first_clip = payload["clips"][0]
-        create_cover(Path(first_clip["sourceReference"]), first_clip["sourceStartMs"], root / draft_name / "draft_cover.jpg")
-    draft_path = root / draft_name
-    registration_status = register_when_safe(
-        registry_path,
-        root,
-        draft_path,
-        draft_name,
-        duration_ms,
-    )
+        script.add_track(TrackType.video)
+        for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared_clips:
+            segment = VideoSegment(
+                material,
+                Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
+                source_timerange=Timerange(source_start_us, source_duration_us),
+            )
+            script.add_segment(segment)
+        add_text_tracks(script, payload.get("textTracks", []))
+        add_music_tracks(script, payload.get("musicTracks", []))
+        script.save()
+        if payload["clips"]:
+            first_clip = payload["clips"][0]
+            create_cover(
+                Path(first_clip["sourceReference"]),
+                first_clip["sourceStartMs"],
+                draft_path / "draft_cover.jpg",
+            )
+        registration_status = register_when_safe(
+            registry_path,
+            root,
+            draft_path,
+            draft_name,
+            duration_ms,
+        )
+    except BaseException:
+        shutil.rmtree(draft_path, ignore_errors=True)
+        raise
     print(json.dumps(registration_result(draft_path, registration_status)))
 
 
