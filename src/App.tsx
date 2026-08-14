@@ -300,7 +300,6 @@ function App() {
   const agentEditListenerPromiseRef = useRef<Promise<boolean> | null>(null)
   const activeProject = projects.find((project) => project.id === activeProjectId)
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
-  const hasActiveAgentTask = agentTasks.some(isActiveAgentTask)
   const analyzingAssets = assets.filter((asset) => asset.status === 'analyzing')
   const assetFolders = assetPage.folders
   const assetTree = useMemo(() => buildAssetTree(assetFolders, assets), [assetFolders, assets])
@@ -447,7 +446,7 @@ function App() {
 
   useEffect(() => {
     if (!desktopRuntime || !activeProjectId || !activeEditingSessionId || !activeEditingSession?.conversationId) return
-    if (!isSending && !hasActiveAgentTask) return
+    if (!isSending && activeEditingSession.state !== 'working') return
     const projectId = activeProjectId
     const sessionId = activeEditingSessionId
     const conversationId = activeEditingSession.conversationId
@@ -476,10 +475,18 @@ function App() {
           && observedActiveAgentTaskIdsRef.current.has(task.id)
           && !reconciledAgentTaskIdsRef.current.has(task.id)
         ))
-        if (observedTerminal) {
+        const snapshotHasActiveTask = nextTasks.some(isActiveAgentTask)
+        const persistedWorkingTerminal = !isSending && activeEditingSession.state === 'working' && !snapshotHasActiveTask
+          ? nextTasks.find((task) => (
+              isTerminalAgentTask(task)
+              && !reconciledAgentTaskIdsRef.current.has(task.id)
+            ))
+          : undefined
+        const terminalToReconcile = observedTerminal ?? persistedWorkingTerminal
+        if (terminalToReconcile) {
           reconcileAgentCompletion(
-            { taskId: observedTerminal.id, projectId, sessionId, conversationId },
-            earlyAgentEditEventsRef.current.get(observedTerminal.id),
+            { taskId: terminalToReconcile.id, projectId, sessionId, conversationId },
+            earlyAgentEditEventsRef.current.get(terminalToReconcile.id),
           )
         }
       })
@@ -490,9 +497,10 @@ function App() {
       cancelled = true
       window.clearInterval(intervalId)
     }
-    // Reconciliation is scoped by stable IDs and refs; task rows only decide whether polling stays active.
+    // Composer ownership or the persisted working state keeps this poll alive until
+    // reconciliation finishes; task status changes never control the interval lifetime.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEditingSession?.conversationId, activeEditingSessionId, activeProjectId, desktopRuntime, hasActiveAgentTask, isSending])
+  }, [activeEditingSession?.conversationId, activeEditingSession?.state, activeEditingSessionId, activeProjectId, desktopRuntime, isSending])
 
   useEffect(() => {
     if (!desktopRuntime || !isSending) return
@@ -501,14 +509,8 @@ function App() {
     const pendingTask = agentTasks.find((task) => task.id === pending.taskId)
     if (pendingTask && isTerminalAgentTask(pendingTask)) {
       reconcileAgentCompletion(pending, earlyAgentEditEventsRef.current.get(pending.taskId))
-      return
     }
-    if (!pendingTask && !hasActiveAgentTask) {
-      pendingEditRef.current = null
-      setIsSending(false)
-      setComposerNotice('Agent 已完成，但本地状态没有收到完成事件；已恢复输入框，可切换会话刷新结果。')
-    }
-  }, [agentTasks, desktopRuntime, hasActiveAgentTask, isSending])
+  }, [agentTasks, desktopRuntime, isSending])
 
   useEffect(() => {
     activeTimelineRef.current = timeline?.id ?? null
@@ -1147,6 +1149,7 @@ function App() {
         return
       }
       const taskId = turnResult.agentTaskId
+      if (!taskId) throw new Error('Agent run did not return a task identifier.')
       pendingEditRef.current = { taskId, projectId, sessionId, conversationId }
       observedActiveAgentTaskIdsRef.current.add(taskId)
       const earlyCompletion = earlyAgentEditEventsRef.current.get(taskId)

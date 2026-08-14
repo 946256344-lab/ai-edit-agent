@@ -11,7 +11,9 @@
 - [x] 本项完成门：真实桌面 1440×900 验收确认三个模式立即替换主内容；Agent 模式只显示消息、执行卡与 composer，素材模式显示 308/520/360px 三栏和 100 条有界素材页，成果模式只显示一套 Workflow 与 8 个 storyboard 镜头。`npm run lint`、`npm run build`、`npm run harness:check` 与 `git diff --check` 全部通过。
 - [x] 完成（2026-08-14，P0）：在不生成新产物的前提下完成 Provider 与 Agent 只读链路验收。真实后端状态为自定义 API 已连接、主 Model 已配置、实验性 OAuth 未连接，和 UI 一致；没有读取或输出 API Key。精确“剪好了吗？”增加一对 user/agent 消息但 Agent task 数不变；项目事实问题进入当前 task/conversation，只执行 `get_storyboard → get_timeline → finish`，准确报告 8 个镜头、8 个片段和现有 local preview，且 storyboard/timeline/preview ID 全部不变。
 - [x] 本项完成门：修复状态查询只看最近 Agent task 而忽略当前真实 preview，以及成功 Agent run 未持久化最终回复、conversation 卡在 `working` 的两个 P0 缺陷。终态任务与 `agent-task-result-{agentTaskId}` 回复现于同一事务提交；启动会把历史“终态但无回复”的 working 会话恢复为 `needs_review` 并补固定消息。真实桌面切换模式和刷新后，13 条持久化消息与 13 条可见消息一致，最新完成回复只有 1 条，conversation 保持 `ready`。
-- [ ] 下一步（P0）：用显式、受控请求验证新内部 timeline version 与 local preview 的生成、作用域、版本递增、播放和重启恢复；只创建新本地产物，不覆盖既有版本，不创建 Jianying draft，不执行最终导出或删除。
+- [x] 完成（2026-08-14，P0）：在当前真实剪辑任务中用显式 Agent 请求创建内部 timeline v5 和对应 local preview。项目/task/conversation/storyboard 作用域未变，timeline 仅由 2 个增至 3 个、版本由 v4 增至 v5；旧 v4 timeline 与 preview 文件保留，新旧 preview 均存在。新 preview 为 540×960、29.47 秒，真实播放器进度可前进；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
+- [x] 本项完成门：修复 `submit_conversation_turn.run` 实际返回 `agent_task_id`、前端却读取 `agentTaskId` 导致 pending ID 为 undefined，以及任务快照暂缺、active→terminal、首次快照已 terminal 时过早放弃轮询的 P0 竞态。新增精确序列化测试和前端空 ID 失败门。修复后真实只读 Agent run 的 pending ID 与数据库 task ID 一致，completed 后后端/可见消息同步为 23、回复仅 1 条、conversation 为 ready；WebView 刷新和 Tauri 重启均恢复 v5 preview 与全部消息。
+- [ ] 下一步（P0）：在不重分析全部素材、不创建 Jianying draft 或最终导出的边界内，验证一个受限 timeline 调整工具会只生成单一新版本，并可基于该版本生成、播放和恢复新的 local preview；开始前先选择最小、可逆的调整目标并保存当前 v5 基线。
 
 ### P0：端到端 MVP 重新验收
 

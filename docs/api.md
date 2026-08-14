@@ -122,7 +122,17 @@ type ToolInvocation<TInput, TResult> = {
 
 此 envelope 是通用 Agent 审计层的目标形态。通过作用域校验后，`execute_agent_edit` 会先创建持久化调用，再记录模型选择的允许工具、经脱敏的成功结果或安全失败结果；终态 `completed` 与 `failed` 可包含 `result`，`failed` 的结果仅含工具名、状态和失败代码，`error` 不得含凭据或不必要的本机路径。命令先同步插入 `queued` 调用并立即返回任务 ID，完整流水线在后台线程执行，终态经 `agent-edit-completed` 事件（携带 `AgentEditResult`）回传前端。工具或循环失败时不把技术校验错误直接交给 UI：技能循环内失败只回读安全失败代码供模型继续决策，不再请求独立后续回合，也不会自动重放失败工具；Provider 或模型不可用、或循环最终无法达成目标时，后端保存相同结构的安全失败结果并返回固定诚实降级回复。Agent 单步与 storyboard 模型请求保留 120 秒上限，Agent 循环还以 90 秒模型决策总预算收紧每步实际超时；不再存在独立意图分类请求。启动时仍为 `queued` 或 `running` 的通用调用会变为 `needs_review`，用户可重新发起请求，但系统不会自动重放未知副作用。
 
-前端会缓存最多 20 个先于命令返回到达的 `agent-edit-completed` 事件，并在取得任务 ID 后立即对账；发送中或当前任务仍活跃时还会以 1.2 秒周期读取持久化任务终态。后端完成消息是权威来源，事件只是通知；任一通道先确认终态后，前端按项目、task、conversation 作用域重载消息和产物。仅当任务的 `projectId`/`editingTaskId` 仍等于当前活动作用域时才应用可见产物。模型超时、响应解析失败或循环耗尽且目标仍未满足时，无中间产物为 `failed`，已有真实中间产物为 `partially_completed`，两者结果代码均为 `agent_goal_not_reached`；中间版本保留并接受审计，但回复不得声称最终目标完成。
+`submit_conversation_turn` 的公开判别式返回值为：
+
+```ts
+type ConversationTurnResult =
+  | { kind: 'immediate'; status: 'response' | 'clarification'; message: string }
+  | { kind: 'run'; agentTaskId: string }
+```
+
+`run` 的任务字段固定为 camelCase `agentTaskId`，不得返回内部 Rust/SQLite 命名 `agent_task_id`。前端必须拒绝空任务 ID，不得把 `undefined` 写入 pending/observed task 状态。
+
+前端会缓存最多 20 个先于命令返回到达的 `agent-edit-completed` 事件，并在取得任务 ID 后立即对账；composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时，还会以 1.2 秒周期读取持久化任务终态。一次列表快照尚未出现新任务、或任务由 `queued/running` 变为 terminal，都不得清空 pending 或停止轮询。没有内存 pending 且 conversation 仍为 `working` 时，最新同作用域 terminal task 也必须触发一次恢复对账，不要求前端先观察到其 active 状态。后端完成消息是权威来源，事件只是通知；任一通道先确认终态后，前端按项目、task、conversation 作用域重载消息和产物。仅当任务的 `projectId`/`editingTaskId` 仍等于当前活动作用域时才应用可见产物。模型超时、响应解析失败或循环耗尽且目标仍未满足时，无中间产物为 `failed`，已有真实中间产物为 `partially_completed`，两者结果代码均为 `agent_goal_not_reached`；中间版本保留并接受审计，但回复不得声称最终目标完成。
 
 Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理。显式单命令继续确定性直通；其余请求加载最近会话历史。`fast_goal` 锁定明确目标；模糊请求由首次主模型响应在同一个顶层 JSON 中声明 `goal`/`isQuestion` 并选择首个技能或直接回答，不再先执行一次独立模型分类。最近一次同作用域 `needs_clarification` 会作为结构化标记提供给首次决策，模型结合历史判断当前消息是否为补充 brief。确定性目标不能被模型覆盖；模糊目标一旦声明即锁定。模型最多运行 10 步，真实产物完成门、作用域校验、失败回读和诚实终端回复保持不变。交互模型决策总预算为 90 秒，每步按剩余预算收紧超时；这是协作式边界，不会强制中断已经开始的副作用。
 

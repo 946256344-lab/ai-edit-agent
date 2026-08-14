@@ -20,6 +20,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 - 对话内可折叠 Agent 执行卡：显示安全步骤状态、运行时长和后端确认的真实产物，不展示模型内部推理。
 - Agent、素材、成果三个互斥顶层模式；素材工作台使用完整主区域，成果页集中显示 storyboard、timeline/审计和 preview。
 - 自定义 Provider 的真实桌面只读链路已验收：精确状态查询不创建 Agent task，项目事实问答通过观察工具完成，task 终态、确定性回复和 conversation 状态原子持久化；模式切换和 WebView 刷新后可恢复。
+- 自定义 Provider 的真实桌面写链路已验收：同一 task/storyboard 新建内部 timeline v5 和对应 540 x 960 local preview，旧 v4 timeline/preview 保留；preview 可实际播放，WebView 刷新和 Tauri 重启后恢复。`submit_conversation_turn.run.agentTaskId` 契约和终态轮询竞态已修复并通过无刷新完成对账。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、首页注册及带视频片段打开。
 
 ## 下一阶段
@@ -28,7 +29,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 
 - 使用真实素材和实验性 Provider 手工验证完整工作流。
 - 验证 OAuth 令牌刷新、重启持久性和模型访问。
-- 继续验证 Agent 完成事件主动丢失和快速完成场景；窗口切换、WebView 刷新、终态回复幂等持久化及历史缺失回复恢复已在真实桌面通过。
+- 继续验证 Agent 完成事件主动丢失和修复后快速完成场景；长运行任务的真实 `agentTaskId` 对账、窗口切换、WebView 刷新、Tauri 重启、终态回复幂等持久化及历史缺失回复恢复已在真实桌面通过。
 - 已补齐步骤级工具调用状态、作用域查询、统一状态快照、确定性前置条件提示和回归评测资产；下一步继续实现持久化队列、暂停/恢复与人工审阅后的明确续跑入口。
 - 使用真实桌面 Provider 验证从临时任务切回既有剪辑任务、低置信度路由澄清和新任务自动创建。
 

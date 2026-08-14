@@ -2,6 +2,13 @@
 
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
+## ADR-056：异步 run 的公开任务 ID 与轮询所有权必须一致
+
+- 状态：已实现；真实 Tauri 桌面的 timeline/preview 创建、无刷新终态对账和 Tauri 重启恢复均已验证
+- 决策：`submit_conversation_turn` 的 `run` 结果只能返回 `{ kind: "run", agentTaskId }`，Rust enum 字段必须显式序列化为 camelCase；前端拒绝空 ID。pending task 不得因一次任务列表快照尚未出现该 ID 而被清空，终态轮询由 composer 仍归该请求所有或持久化 conversation 仍为 `working` 决定，不由 task 的 active/terminal 状态决定。没有内存 pending 时，持久化 `working` 允许对最新同作用域 terminal task 做一次恢复对账，不要求先观察到 active 状态。
+- 原因：真实 preview 已在后端完成并持久化，但 Rust enum 只对 variant 使用 `rename_all = "camelCase"`，内部字段仍输出 `agent_task_id`。前端读到 `agentTaskId === undefined`，把 undefined 写入 pending/observed 状态；任务卡可轮询成 completed，但消息和 preview 永远不对账。此前“任务暂缺即放弃”和“active 结束即停止 interval”又放大了该契约错误。
+- 后果：模型、工具和媒体副作用不变；公开响应契约新增精确序列化回归测试，前端对任务 ID 缺失失败封闭。事件继续只作低延迟通知，SQLite 消息、任务和版本仍是恢复事实。真实桌面已验证新内部 timeline v5、对应 local preview、旧版本保留、可播放、刷新/重启恢复，以及修复后只读 Agent run 从 running 到 completed 的 22→23 条消息无刷新一致性。
+
 ## ADR-055：Agent 终态、最终回复与会话恢复必须形成同一事实边界
 
 - 状态：已实现；自定义 Provider 的真实桌面项目事实问答、历史坏记录恢复、模式切换和 WebView 刷新均已验证

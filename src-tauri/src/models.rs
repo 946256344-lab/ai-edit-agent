@@ -554,8 +554,14 @@ pub struct AgentTask {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationTurnResult {
-    Immediate { status: String, message: String },
-    Run { agent_task_id: String },
+    Immediate {
+        status: String,
+        message: String,
+    },
+    Run {
+        #[serde(rename = "agentTaskId")]
+        agent_task_id: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -731,4 +737,26 @@ pub struct VisualEvidence {
     pub(crate) products: Vec<String>,
     #[serde(default)]
     pub(crate) quality_notes: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConversationTurnResult;
+    use serde_json::json;
+
+    #[test]
+    fn conversation_run_result_uses_the_frontend_task_id_contract() {
+        let serialized = serde_json::to_value(ConversationTurnResult::Run {
+            agent_task_id: "agent-task-1".to_owned(),
+        })
+        .expect("serialize conversation run result");
+
+        assert_eq!(
+            serialized,
+            json!({
+                "kind": "run",
+                "agentTaskId": "agent-task-1",
+            })
+        );
+    }
 }
