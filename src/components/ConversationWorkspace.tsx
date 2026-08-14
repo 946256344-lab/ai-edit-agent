@@ -72,7 +72,6 @@ type ConversationWorkspaceProps = {
   storyboardBrief: string
   storyboardError: string | null
   timeline: TimelineVersion | null
-  timelineState: 'not-created' | 'draft' | 'preview-generating' | 'preview-ready' | 'jianying-pending' | 'jianying'
   timelineVersions: TimelineVersion[]
   operationLogs: StoredOperationLog[]
 }
@@ -112,7 +111,6 @@ export function ConversationWorkspace({
   storyboardBrief,
   storyboardError,
   timeline,
-  timelineState,
   timelineVersions,
   operationLogs,
 }: ConversationWorkspaceProps) {

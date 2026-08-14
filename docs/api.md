@@ -4,6 +4,8 @@
 
 桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 是面向未来通用 Agent 工具层的 TypeScript 目标契约；当前 Tauri 命令直接返回领域结果。
 
+2026-08-14 的恢复基线没有新增、删除或修改 Tauri 命令及工具输入/输出；相关 Rust 改动仅为 `rustfmt` 标准格式化。
+
 ## 已实现的 Tauri 命令
 
 | 命令 | 输入 | 结果 | 说明 |

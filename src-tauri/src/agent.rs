@@ -657,14 +657,8 @@ fn run_agent_edit(
                 );
                 let transaction = connection.unchecked_transaction();
                 if let Ok(transaction) = transaction {
-                    let _ = update_agent_task(
-                        &transaction,
-                        agent_task_id,
-                        None,
-                        "failed",
-                        None,
-                        None,
-                    );
+                    let _ =
+                        update_agent_task(&transaction, agent_task_id, None, "failed", None, None);
                     let _ = persist_agent_completion_message(
                         &transaction,
                         agent_task_id,

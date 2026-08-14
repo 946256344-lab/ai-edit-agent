@@ -54,7 +54,7 @@ import {
   startExperimentalOpenAIOAuth,
   submitConversationTurn,
 } from './lib/local-store'
-import type { AgentEditEvent, AssetCollection, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetTaskCenter, ConversationTurnResult, CustomApiStatus, ExperimentalOAuthStatus, JianyingRegistrationStatus, PreviewResult, StoryboardVersion, StoredAgentTask, StoredAsset, StoredEditingSession, StoredMessage, StoredOperationLog, StoredProject, TaskRouteResult, TimelineVersion } from './lib/local-store'
+import type { AgentEditEvent, AssetCollection, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview, AssetTaskCenter, ConversationTurnResult, CustomApiStatus, ExperimentalOAuthStatus, JianyingRegistrationStatus, PreviewResult, StoryboardVersion, StoredAgentTask, StoredAsset, StoredEditingSession, StoredMessage, StoredOperationLog, StoredProject, TaskRouteResult, TimelineVersion } from './lib/local-store'
 
 type EditingSession = {
   id: string
@@ -145,22 +145,6 @@ function formatDuration(durationMs: number | null) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-function formatEvidenceTime(timeMs: number | null) {
-  if (timeMs === null) return '图片'
-  return formatDuration(timeMs)
-}
-
-function visualStatusCopy(status: string) {
-  switch (status) {
-    case 'ready': return '视觉分析完成'
-    case 'running': return '视觉分析中'
-    case 'queued': return '视觉分析排队中'
-    case 'failed': return '视觉分析失败'
-    case 'skipped': return '视觉分析跳过'
-    default: return '视觉分析未开始'
-  }
-}
-
 type PendingAgentEdit = {
   taskId: string
   projectId: string
@@ -177,57 +161,6 @@ function isActiveAgentTask(task: StoredAgentTask) {
 
 function isTerminalAgentTask(task: StoredAgentTask) {
   return !isActiveAgentTask(task)
-}
-
-function getAssetUserJudgments(asset: Asset) {
-  return [
-    asset.favorite ? '收藏' : '',
-    asset.excluded ? '禁止使用' : '允许使用',
-    asset.rating ? `${asset.rating} 星` : '',
-    ...asset.userTags,
-    asset.note ? `备注 · ${asset.note}` : '',
-    asset.collectionIds.length > 0 ? `${asset.collectionIds.length} 个集合` : '',
-  ].filter(Boolean)
-}
-
-function getAssetAnalysisEvidence(asset: Asset) {
-  return [
-    asset.sourceHealthStatus === 'missing' ? '源文件缺失' : '',
-    asset.sourceHealthStatus === 'changed' ? '源文件已变化' : '',
-    asset.sourceHealthStatus === 'unreadable' ? '源文件不可读' : '',
-    asset.status === 'ready' ? '技术分析完成' : '',
-    asset.status === 'failed' ? '无法读取媒体' : '',
-    asset.status === 'queued' ? '等待分析' : '',
-    asset.status === 'analyzing' ? '正在分析' : '',
-    asset.visualStatus === 'ready' ? '视觉分析完成' : '',
-    asset.visualStatus === 'running' ? '视觉分析中' : '',
-    asset.visualStatus === 'queued' ? '视觉分析排队中' : '',
-    asset.visualStatus === 'failed' ? '视觉分析失败' : '',
-    asset.visualStatus === 'skipped' ? '视觉分析跳过' : '',
-    asset.kind === 'other' ? '其他素材' : asset.kind,
-    asset.duration ? `时长 ${asset.duration}` : '',
-    asset.width && asset.height ? `${asset.width} x ${asset.height}` : '',
-    asset.fps ? `${asset.fps.toFixed(1)} fps` : '',
-    asset.hasAudio ? '含音频' : '',
-    asset.keyframeCount ? `${asset.keyframeCount} 关键帧` : '',
-    asset.sceneCount ? `${asset.sceneCount} 镜头` : '',
-    asset.ocrTextCount ? `${asset.ocrTextCount} OCR` : '',
-    asset.visualTagCount ? `${asset.visualTagCount} 视觉标签` : '',
-  ].filter(Boolean)
-}
-
-function getAssetTags(asset: Asset) {
-  return [asset.kind === 'other' ? '其他素材' : asset.kind, asset.duration ? `时长 ${asset.duration}` : '', asset.width && asset.height ? `${asset.width} x ${asset.height}` : '', asset.fps ? `${asset.fps.toFixed(1)} fps` : '', asset.hasAudio ? '含音频' : '', asset.keyframeCount ? `${asset.keyframeCount} 关键帧` : '', asset.sceneCount ? `${asset.sceneCount} 镜头` : '', asset.ocrTextCount ? `${asset.ocrTextCount} OCR` : '', asset.visualTagCount ? `${asset.visualTagCount} 视觉标签` : ''].filter(Boolean)
-}
-
-function isHealthIssue(status: StoredAsset['sourceHealthStatus']) {
-  return status === 'missing' || status === 'changed' || status === 'unreadable'
-}
-
-function formatTimeLabel(timeMs: number | null) {
-  if (timeMs === null) return '图片'
-  const seconds = Math.max(0, Math.floor(timeMs / 1000))
-  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function normalizeFolderPath(path: string) {
@@ -295,49 +228,6 @@ function buildAssetTree(folders: string[], assets: Asset[]) {
   return { root, unfiledCount: assets.filter((asset) => !asset.folderName).length }
 }
 
-function AssetFolderTree({ node, activePath, onSelectFolder, depth = 0 }: {
-  node: AssetTreeNode
-  activePath: string
-  onSelectFolder: (path: string) => void
-  depth?: number
-}) {
-  const isActive = node.path === activePath
-  const hasChildren = node.children.length > 0
-  return <div className="asset-folder-tree-node" data-depth={depth}>
-    <button type="button" className={`asset-folder-tree-item ${isActive ? 'active' : ''}`} onClick={() => onSelectFolder(node.path)}>
-      <span className="asset-folder-tree-chevron">{hasChildren ? '▸' : '•'}</span>
-      <span className="asset-folder-tree-name">{node.name}</span>
-      <small>{node.assetCount}</small>
-    </button>
-    {hasChildren && <div className="asset-folder-tree-children">{node.children.map((child) => <AssetFolderTree key={child.path} node={child} activePath={activePath} onSelectFolder={onSelectFolder} depth={depth + 1} />)}</div>}
-  </div>
-}
-
-function AssetRow({ asset, onSelect }: { asset: Asset; onSelect: (assetId: string) => void }) {
-  const analysisCopy = asset.status === 'ready' ? '技术分析完成' : asset.status === 'failed' ? '无法读取媒体' : asset.status === 'queued' ? '等待分析' : '正在分析'
-  const directory = asset.relativePath ? asset.relativePath.replace(/[\\/][^\\/]+$/, '') || asset.folderName : asset.folderName
-  const userJudgments = getAssetUserJudgments(asset)
-  const analysisEvidence = getAssetAnalysisEvidence(asset)
-  return <button type="button" className="asset asset-readonly" onClick={() => onSelect(asset.id)}><div className={`asset-thumbnail ${asset.color}`}>{asset.thumbnailUrl && <img src={asset.thumbnailUrl} alt="" />}<span>{asset.kind === 'video' ? 'VIDEO' : asset.kind.toUpperCase()}</span>{asset.duration && <time>{asset.duration}</time>}</div><div className="asset-info"><strong>{asset.name}</strong>{directory && <p className="asset-directory" title={asset.relativePath ?? directory}>目录 · {directory}</p>}<div className="asset-info-group"><span className="asset-info-label">用户判断</span><div className="asset-chip-list">{userJudgments.map((tag) => <span key={tag}>{tag}</span>)}</div></div><div className="asset-info-group"><span className="asset-info-label">分析证据</span><div className="asset-chip-list">{analysisEvidence.map((tag) => <span key={tag}>{tag}</span>)}</div></div><small className={asset.status}>{analysisCopy} · {visualStatusCopy(asset.visualStatus)}</small></div></button>
-}
-
-const ASSET_ROW_HEIGHT = 112
-
-function VirtualAssetList({ assets, total, loading, onLoadMore, onSelect }: { assets: Asset[]; total: number; loading: boolean; onLoadMore: () => void; onSelect: (assetId: string) => void }) {
-  const [scrollTop, setScrollTop] = useState(0)
-  const [viewportHeight, setViewportHeight] = useState(480)
-  const overscan = 5
-  const start = Math.max(0, Math.floor(scrollTop / ASSET_ROW_HEIGHT) - overscan)
-  const visibleCount = Math.ceil(viewportHeight / ASSET_ROW_HEIGHT) + overscan * 2
-  const end = Math.min(assets.length, start + visibleCount)
-  return <div className="asset-virtual-scroll" onScroll={(event) => {
-    const element = event.currentTarget
-    setScrollTop(element.scrollTop)
-    setViewportHeight(element.clientHeight)
-    if (!loading && assets.length < total && element.scrollTop + element.clientHeight >= element.scrollHeight - ASSET_ROW_HEIGHT * 4) onLoadMore()
-  }}><div style={{ height: start * ASSET_ROW_HEIGHT }} />{assets.slice(start, end).map((asset) => <div className="asset-virtual-row" key={asset.id}><AssetRow asset={asset} onSelect={onSelect} /></div>)}<div style={{ height: Math.max(0, (assets.length - end) * ASSET_ROW_HEIGHT) }} />{loading && <p className="asset-page-loading">正在加载素材…</p>}</div>
-}
-
 function App() {
   const desktopRuntime = isDesktopRuntime()
   const [projects, setProjects] = useState<StoredProject[]>([])
@@ -347,7 +237,6 @@ function App() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [assetPage, setAssetPage] = useState<Pick<AssetPage, 'total' | 'folders' | 'counts'>>({ total: 0, folders: [], counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
   const [assetPageRevision, setAssetPageRevision] = useState(0)
-  const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
   const [assetTaskCenter, setAssetTaskCenter] = useState<AssetTaskCenter | null>(null)
   const [assetHealth, setAssetHealth] = useState<AssetHealthScanSummary | null>(null)
@@ -427,7 +316,6 @@ function App() {
         && (assetVisualFilter === 'all' || (assetVisualFilter === 'storyboard-ready' ? storyboardReady : asset.visualStatus === assetVisualFilter))
     })
   }, [assetFolderFilter, assetKindFilter, assetSearch, assetStatusFilter, assetVisualFilter, assets])
-  const hasAssetFilters = assetSearch.trim() !== '' || assetKindFilter !== 'all' || assetStatusFilter !== 'all' || assetVisualFilter !== 'all' || assetFolderFilter !== 'all' || assetUserFilter !== 'all' || assetCollectionFilter !== 'all'
   const activeFolderNode = useMemo(() => {
     const stack: Array<{ node: AssetTreeNode; depth: number }> = [{ node: assetTree.root, depth: 0 }]
     while (stack.length > 0) {
@@ -448,34 +336,6 @@ function App() {
     if (nextPreview) setPreviewNonce((nonce) => nonce + 1)
     setPreview(nextPreview)
     setIsRenderingPreview(false)
-  }
-
-  function syncDeliveryStatus(nextStoryboard = storyboard, nextTimeline = timeline, nextPreview = preview) {
-    if (!nextStoryboard) {
-      setDeliveryStatus('等待生成故事板')
-      return
-    }
-    if (!nextTimeline) {
-      setDeliveryStatus('故事板已就绪 · 可创建内部时间线')
-      return
-    }
-    if (timelineState === 'preview-generating') {
-      setDeliveryStatus('预览生成中')
-      return
-    }
-    if (timelineState === 'jianying-pending') {
-      setDeliveryStatus('预览已完成 · 等待剪映注册')
-      return
-    }
-    if (timelineState === 'jianying') {
-      setDeliveryStatus('草稿已交付到剪映')
-      return
-    }
-    if (!nextPreview) {
-      setDeliveryStatus('内部时间线已就绪 · 可生成预览')
-      return
-    }
-    setDeliveryStatus('预览已就绪 · 可交付草稿')
   }
 
   async function applyAgentEditCompletion(pending: PendingAgentEdit, event?: AgentEditEvent) {
@@ -655,7 +515,21 @@ function App() {
   }, [timeline])
 
   useEffect(() => {
-    syncDeliveryStatus()
+    if (!storyboard) {
+      setDeliveryStatus('等待生成故事板')
+    } else if (!timeline) {
+      setDeliveryStatus('故事板已就绪 · 可创建内部时间线')
+    } else if (timelineState === 'preview-generating') {
+      setDeliveryStatus('预览生成中')
+    } else if (timelineState === 'jianying-pending') {
+      setDeliveryStatus('预览已完成 · 等待剪映注册')
+    } else if (timelineState === 'jianying') {
+      setDeliveryStatus('草稿已交付到剪映')
+    } else if (!preview) {
+      setDeliveryStatus('内部时间线已就绪 · 可生成预览')
+    } else {
+      setDeliveryStatus('预览已就绪 · 可交付草稿')
+    }
   }, [storyboard, timeline, preview, timelineState])
 
   useEffect(() => {
@@ -695,7 +569,6 @@ function App() {
     let cancelled = false
     let initialLoad = true
     const refreshAssets = () => {
-      setIsLoadingAssets(true)
       void listAssetPage(projectId, {
         search: assetSearch.trim() || undefined,
         kind: assetKindFilter === 'all' ? undefined : assetKindFilter,
@@ -717,7 +590,7 @@ function App() {
           initialLoad = false
           setAssetPage({ total: page.total, folders: page.folders, counts: page.counts })
         }
-      }).catch(() => undefined).finally(() => { if (!cancelled) setIsLoadingAssets(false) })
+      }).catch(() => undefined)
     }
     const debounceId = window.setTimeout(refreshAssets, 180)
     const intervalId = window.setInterval(refreshAssets, 1500)
@@ -1304,33 +1177,6 @@ function App() {
     }
   }
 
-  async function loadMoreAssets() {
-    if (!activeProjectId || isLoadingAssets || assets.length >= assetPage.total) return
-    const projectId = activeProjectId
-    setIsLoadingAssets(true)
-    try {
-      const page = await listAssetPage(projectId, {
-        search: assetSearch.trim() || undefined,
-        kind: assetKindFilter === 'all' ? undefined : assetKindFilter,
-        analysisStatus: assetStatusFilter === 'all' ? undefined : assetStatusFilter,
-        visualStatus: assetVisualFilter === 'all' ? undefined : assetVisualFilter,
-        folderName: assetFolderFilter === 'all' ? undefined : assetFolderFilter,
-        userFilter: assetUserFilter === 'all' ? undefined : assetUserFilter,
-        collectionId: assetCollectionFilter === 'all' ? undefined : assetCollectionFilter,
-        offset: assets.length,
-        limit: 100,
-      })
-      if (activeProjectRef.current !== projectId) return
-      setAssets((current) => {
-        const existing = new Set(current.map((asset) => asset.id))
-        return [...current, ...page.items.map(toAsset).filter((asset) => !existing.has(asset.id))]
-      })
-      setAssetPage({ total: page.total, folders: page.folders, counts: page.counts })
-    } finally {
-      if (activeProjectRef.current === projectId) setIsLoadingAssets(false)
-    }
-  }
-
   async function retrySelectedAssetAnalysis(assetIds = [...selectedAssetIds]) {
     if (!activeProjectId || assetIds.length === 0 || isRunningAssetBatch) return
     setIsRunningAssetBatch(true)
@@ -1487,7 +1333,6 @@ function App() {
           storyboardBrief={storyboardBrief}
           storyboardError={storyboardError}
           timeline={timeline}
-          timelineState={timelineState}
           timelineVersions={timelineVersions}
           operationLogs={operationLogs}
         />

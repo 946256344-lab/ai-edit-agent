@@ -1,6 +1,9 @@
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
-use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion, TechnicalMetadata};
+use crate::models::{
+    StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
+    TechnicalMetadata,
+};
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -18,7 +21,14 @@ fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>)
     if shot_indices.is_empty() {
         message
     } else {
-        format!("{message} Affected shot indices: {}.", shot_indices.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "))
+        format!(
+            "{message} Affected shot indices: {}.",
+            shot_indices
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -97,7 +107,13 @@ pub(crate) fn request_storyboard(
     );
     let model_name = access
         .custom_config()
-        .map(|config| if config.coarse_visual_model.is_empty() { config.model.as_str() } else { config.coarse_visual_model.as_str() })
+        .map(|config| {
+            if config.coarse_visual_model.is_empty() {
+                config.model.as_str()
+            } else {
+                config.coarse_visual_model.as_str()
+            }
+        })
         .unwrap_or("gpt-5.4");
     let request = serde_json::json!({
         "model": model_name,
@@ -181,7 +197,10 @@ pub(crate) fn validate_storyboard(
     if uncovered.len() != content.uncovered_beat_ids.len()
         || uncovered.iter().any(|id| !beat_ids.contains(id))
     {
-        return Err(storyboard_repair_message("Storyboard uncovered beats are invalid.", content.shots.iter().map(|shot| shot.order_index).collect()));
+        return Err(storyboard_repair_message(
+            "Storyboard uncovered beats are invalid.",
+            content.shots.iter().map(|shot| shot.order_index).collect(),
+        ));
     }
     let covered: std::collections::HashSet<&str> = content
         .shots
@@ -192,7 +211,10 @@ pub(crate) fn validate_storyboard(
         .iter()
         .any(|id| !covered.contains(id) && !uncovered.contains(id))
     {
-        return Err(storyboard_repair_message("Every storyboard beat must be covered or explicitly uncovered.", content.shots.iter().map(|shot| shot.order_index).collect()));
+        return Err(storyboard_repair_message(
+            "Every storyboard beat must be covered or explicitly uncovered.",
+            content.shots.iter().map(|shot| shot.order_index).collect(),
+        ));
     }
     for (index, shot) in content.shots.iter().enumerate() {
         if shot.order_index != index as i64 + 1
@@ -203,24 +225,41 @@ pub(crate) fn validate_storyboard(
             || !beat_ids.contains(shot.beat_id.as_str())
             || !matches!(shot.match_level.as_str(), "direct" | "contextual")
         {
-            return Err(storyboard_repair_message("Storyboard shot fields are invalid.", vec![shot.order_index]));
+            return Err(storyboard_repair_message(
+                "Storyboard shot fields are invalid.",
+                vec![shot.order_index],
+            ));
         }
         if uncovered.contains(shot.beat_id.as_str()) {
-            return Err(storyboard_repair_message("An uncovered beat cannot have a storyboard shot.", vec![shot.order_index]));
+            return Err(storyboard_repair_message(
+                "An uncovered beat cannot have a storyboard shot.",
+                vec![shot.order_index],
+            ));
         }
         let source = sources
             .iter()
             .find(|source| source.asset_id == shot.asset_id)
-            .ok_or_else(|| storyboard_repair_message("Storyboard referenced an unavailable asset.", vec![shot.order_index]))?;
+            .ok_or_else(|| {
+                storyboard_repair_message(
+                    "Storyboard referenced an unavailable asset.",
+                    vec![shot.order_index],
+                )
+            })?;
         if source.kind == "video" {
             let duration = source.duration_ms.ok_or_else(|| {
-                storyboard_repair_message("Storyboard referenced video without a verified duration.", vec![shot.order_index])
+                storyboard_repair_message(
+                    "Storyboard referenced video without a verified duration.",
+                    vec![shot.order_index],
+                )
             })?;
             if shot.source_start_ms < 0
                 || shot.source_end_ms <= shot.source_start_ms
                 || shot.source_end_ms > duration
             {
-                return Err(storyboard_repair_message("Storyboard referenced an invalid video time range.", vec![shot.order_index]));
+                return Err(storyboard_repair_message(
+                    "Storyboard referenced an invalid video time range.",
+                    vec![shot.order_index],
+                ));
             }
             if shot.duration_ms > shot.source_end_ms - shot.source_start_ms {
                 return Err(storyboard_repair_message(
@@ -229,11 +268,18 @@ pub(crate) fn validate_storyboard(
                 ));
             }
         } else if source.kind != "image" || shot.source_start_ms != 0 || shot.source_end_ms != 0 {
-            return Err(storyboard_repair_message("Storyboard image references must use a zero source range.", vec![shot.order_index]));
+            return Err(storyboard_repair_message(
+                "Storyboard image references must use a zero source range.",
+                vec![shot.order_index],
+            ));
         }
     }
-    validate_non_overlapping_video_sources(&content.shots, sources)
-        .map_err(|error| storyboard_repair_message(error, content.shots.iter().map(|shot| shot.order_index).collect()))?;
+    validate_non_overlapping_video_sources(&content.shots, sources).map_err(|error| {
+        storyboard_repair_message(
+            error,
+            content.shots.iter().map(|shot| shot.order_index).collect(),
+        )
+    })?;
     Ok(())
 }
 
@@ -283,11 +329,19 @@ fn normalize_storyboard_candidate(
 ) -> StoryboardContent {
     let mut total_duration = 0_i64;
     for shot in &mut content.shots {
-        if let Some(source) = sources.iter().find(|source| source.asset_id == shot.asset_id) {
+        if let Some(source) = sources
+            .iter()
+            .find(|source| source.asset_id == shot.asset_id)
+        {
             if source.kind == "video" {
                 let duration = source.duration_ms.unwrap_or(0).max(1);
                 let desired_duration = shot.duration_ms.clamp(1, duration);
-                let (mut start, mut end) = choose_storyboard_video_range(source, desired_duration, shot.source_start_ms, shot.source_end_ms);
+                let (mut start, mut end) = choose_storyboard_video_range(
+                    source,
+                    desired_duration,
+                    shot.source_start_ms,
+                    shot.source_end_ms,
+                );
                 if end - start < desired_duration {
                     let fallback_start = (duration.saturating_sub(desired_duration)) / 2;
                     start = fallback_start.clamp(0, duration.saturating_sub(1));
@@ -341,7 +395,8 @@ fn choose_storyboard_video_range(
     };
     segments.sort_by_key(|segment| {
         let segment_duration = (segment.end_ms - segment.start_ms).max(1);
-        let contains_preference = (segment.start_ms..=segment.end_ms).contains(&preferred_midpoint) as i64;
+        let contains_preference =
+            (segment.start_ms..=segment.end_ms).contains(&preferred_midpoint) as i64;
         let duration_penalty = if segment_duration >= desired_duration {
             segment_duration - desired_duration
         } else {
@@ -349,7 +404,12 @@ fn choose_storyboard_video_range(
         };
         let midpoint = segment.start_ms + segment_duration / 2;
         let midpoint_distance = (midpoint - preferred_midpoint).abs();
-        (0_i64 - contains_preference, duration_penalty, midpoint_distance, segment.start_ms)
+        (
+            0_i64 - contains_preference,
+            duration_penalty,
+            midpoint_distance,
+            segment.start_ms,
+        )
     });
 
     let segment = segments[0];
@@ -427,7 +487,11 @@ fn fallback_storyboard(brief: &str, sources: &[StoryboardSource]) -> Option<Stor
                 "This still image supports the requested topic as a stable visual.".to_owned()
             },
             beat_id,
-            match_level: if source.kind == "video" { "contextual".to_owned() } else { "direct".to_owned() },
+            match_level: if source.kind == "video" {
+                "contextual".to_owned()
+            } else {
+                "direct".to_owned()
+            },
         });
         total_duration += shot_duration;
     }
@@ -439,7 +503,10 @@ fn fallback_storyboard(brief: &str, sources: &[StoryboardSource]) -> Option<Stor
         } else {
             brief.chars().take(24).collect()
         },
-        summary: format!("Fallback storyboard built from {} available media sources.", usable_sources.len()),
+        summary: format!(
+            "Fallback storyboard built from {} available media sources.",
+            usable_sources.len()
+        ),
         target_duration_ms,
         script_mode: if total_duration < minimum_storyboard_duration(brief) {
             "key_message".to_owned()

@@ -2,20 +2,19 @@
 
 ## 当前优先级
 
-- [ ] 进行中（2026-08-13）：完善对话完成与项目事实问答机制。Agent run 的最终回复改由后端幂等持久化，完成事件仅作为低延迟通知；前端以任务终态轮询和作用域重载兜底，避免事件丢失后任务卡永久旋转。项目事实问答在已有观察足以回答时立即 `finish`，不使用语义重叠工具重复确认；执行卡为终止步骤显示准确文案。
-- [x] 完成（2026-08-13）：完善项目事实问答路由。保持 `respond/clarify/run` 顶层架构不变，为 question 增加 `informationScope=general|project`；项目问题只允许观察工具且成功观察后才能回答，非法组合限一次纠正并安全降级。新增素材健康汇总、脱敏原因码及原因覆盖率。验证：109 个 Rust 单元测试、2 个契约测试、前端 lint/build、harness 与 diff 检查通过；完成独立审查并修复两项 P1、一项 P2。未重启桌面程序，旧健康记录需重新扫描才会获得原因码。
-- [x] 完成（2026-08-13）：将 Agent 工具失败从单一安全码升级为脱敏结构化诊断；由模型基于真实阶段、计数事实与恢复建议自然表达，模型不可用时保留确定性诚实降级，不写入或发送完整本机路径、媒体证据、用户内容及原始日志。无产物终态仍为 `failed`，明显完成声明会被拒绝；区分无视觉证据与源文件不可访问。验证：生产库 `cargo check --lib` 曾通过、harness 通过、独立审查两项 P1 已修复；最终 Rust 复测被工作区并行素材库改动的 `assets.rs` 借用检查错误阻断。
-- [x] 完成（2026-08-13）：在 Agent 对话中增加可折叠的执行任务卡，基于 `agent_tasks` 与 payload-free `agent_run_steps` 展示当前动作、已完成步骤、运行时长和真实产物状态；工具名映射为用户文案，不展示模型推理、参数、本机路径或媒体证据。验证：`npm run lint`（仅保留既有 Hook 依赖警告）、`npm run build`、`npm run harness:check` 与定向 `git diff --check` 通过。未启动或重启当前桌面程序；桌面视觉交互待后续查看。
-- [x] 修复对话发送链路：保留异步完成事件的早到缓存与任务 ID 对账；启动、窗口聚焦、三秒恢复周期和发送点击会主动促成监听；任务路由前失败不再静默；schema v11 补齐旧 `task_state_snapshots.active_subgoal`，修复现有本机数据库无法刷新 Task Resolver 候选的问题。验证：见 `docs/changes/2026-08-13-conversation-send-listener-retry.md`。
+- [x] 恢复现场（2026-08-14）：在 `codex/recovery-baseline-20260814` 分支提交当前完整工作区，快照 commit 为 `8020d73`。该提交用于回退和审计，不代表可交付版本。
+- [x] 完成（2026-08-14）：恢复绿色构建基线。仅修复前端 TypeScript 契约、未使用代码和 Hook 依赖问题，并统一现有 Rust 格式；未调整 UI 信息架构，未改变 Agent、媒体分析、timeline、preview 或 Jianying 行为。
+- [x] 本项完成门：`npm run lint`、`npm run build`、`cargo fmt --check`、`cargo test`（112 个单元测试 + 2 个契约测试）、`npm run harness:check` 与 `git diff --check` 全部通过；变更形成独立 commit，提交后工作区恢复干净。
+- [ ] 后续但尚未开始：将 Agent、素材和成果改为互斥顶层工作模式，移除重复 Workflow，并在真实桌面应用中重新验收核心闭环。
 
-### P0：端到端 MVP 验收
+### P0：端到端 MVP 重新验收
 
-- [x] 在 Tauri 桌面应用中手工验证完整链路：实验性 Provider 登录、真实媒体分析、证据绑定 storyboard、内部时间线和可播放 preview。
-- [x] 手工验证启动时恢复的媒体分析会显示在右下角任务提示，且 FFmpeg、FFprobe、Tesseract 与 Python 子进程不显示命令行窗口。
-- [x] 手工验证实验性 OAuth 的登录、重启后凭据可用性、刷新令牌和模型访问；不得将其表述为官方 OpenAI 第三方 OAuth。
-- [x] 用真实导入媒体验证实验性视觉分析和 storyboard Provider 响应兼容性。
+- [ ] 在恢复后的 Tauri 桌面应用中重新验证完整链路：实验性 Provider 登录、真实媒体分析、证据绑定 storyboard、内部时间线和可播放 preview。
+- [ ] 重新验证启动时恢复的媒体分析会显示在右下角任务提示，且 FFmpeg、FFprobe、Tesseract 与 Python 子进程不显示命令行窗口。
+- [ ] 重新验证实验性 OAuth 的登录、重启后凭据可用性、刷新令牌和模型访问；不得将其表述为官方 OpenAI 第三方 OAuth。
+- [ ] 用真实导入媒体验证实验性视觉分析和 storyboard Provider 响应兼容性。
 
-验收执行记录（2026-08-05）：`npm run lint`、`npm run build`、`npm run harness:test` 与 `npm run harness:check` 已通过。Tauri 桌面端已完成真实媒体、实验性 OAuth、视觉分析、证据绑定 storyboard、内部时间线、preview、任务恢复提示与无窗口子进程的手工验收。实验性 OAuth 不代表官方 OpenAI 第三方 OAuth。
+历史验收记录（2026-08-05）：当时版本曾通过真实媒体、实验性 OAuth、视觉分析、证据绑定 storyboard、内部时间线、preview、任务恢复提示与无窗口子进程的桌面验收。8 月 5 日之后的 Agent、路由、素材、timeline 和 UI 高风险变更已经使该证据失效，当前版本必须重新验收。
 
 ### P0：Agent 审计与持久化补齐
 
