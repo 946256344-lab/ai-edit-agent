@@ -3194,6 +3194,24 @@ pub(crate) fn search_asset_segments_for_agent(
 
 #[tauri::command]
 pub fn list_assets(app: AppHandle, project_id: String) -> Result<Vec<Asset>, String> {
+    list_assets_snapshot(app, project_id, true)
+}
+
+/// Agent observation must not wake queued analysis work. The desktop asset
+/// browser keeps the historical scheduling behavior through `list_assets`,
+/// while the Agent receives the same persisted snapshot without a side effect.
+pub(crate) fn list_assets_for_agent(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<Asset>, String> {
+    list_assets_snapshot(app, project_id, false)
+}
+
+fn list_assets_snapshot(
+    app: AppHandle,
+    project_id: String,
+    schedule_pending_analysis: bool,
+) -> Result<Vec<Asset>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection.prepare(
         "SELECT id, project_id, kind, display_name, source_reference, folder_reference, analysis_status, metadata_json, created_at, updated_at,
@@ -3261,7 +3279,9 @@ pub fn list_assets(app: AppHandle, project_id: String) -> Result<Vec<Asset>, Str
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     drop(statement);
-    drain_pending_analysis(&app, &project_id)?;
+    if schedule_pending_analysis {
+        drain_pending_analysis(&app, &project_id)?;
+    }
     Ok(assets)
 }
 

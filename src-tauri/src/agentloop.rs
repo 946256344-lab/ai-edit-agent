@@ -9,7 +9,7 @@ use crate::models::{
 use crate::music_provider::{attribution_for, download_track, eligible_track, search_tracks};
 use crate::preview::render_preview;
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
-use crate::storyboard::generate_storyboard;
+use crate::storyboard::generate_storyboard_for_agent;
 use crate::timeline::{
     change_clip_duration, create_timeline_draft, reorder_clips, replace_clips,
     replace_music_tracks, replace_text_tracks, select_timeline_candidate, text_recipe_capabilities,
@@ -104,8 +104,38 @@ pub(crate) struct InitialAgentSkill {
 
 /// Strong editing verbs that imply the user wants an actual timeline change.
 const EDIT_VERBS: &[&str] = &[
-    "替换", "换成", "换掉", "缩短", "加长", "重排", "排序", "去掉", "删除", "删掉", "不要", "精简",
-    "调整", "剪辑", "剪掉", "裁剪", "放慢", "加快", "增加", "减掉",
+    "替换",
+    "换成",
+    "换掉",
+    "缩短",
+    "加长",
+    "重排",
+    "排序",
+    "去掉",
+    "删除",
+    "删掉",
+    "不要",
+    "精简",
+    "调整",
+    "剪辑",
+    "剪掉",
+    "裁剪",
+    "放慢",
+    "加快",
+    "增加",
+    "减掉",
+    "adjust",
+    "shorten",
+    "lengthen",
+    "replace",
+    "reorder",
+    "remove",
+    "delete",
+    "trim",
+    "edit",
+    "cut",
+    "slow down",
+    "speed up",
 ];
 
 /// Creation verbs that imply a concrete deliverable is being requested.
@@ -118,7 +148,351 @@ const CREATE_VERBS: &[&str] = &[
     "做个",
     "做一段",
     "导入",
+    "generate",
+    "create",
+    "render",
+    "make",
+    "import",
 ];
+
+/// Explicit negative side-effect constraints narrow the model's tool set for
+/// one request. They never choose a tool or create an artifact; they only stop
+/// a model decision from performing a side effect the user expressly excluded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RequestToolPolicy {
+    denied_tools: Vec<&'static str>,
+    read_only: bool,
+}
+
+impl RequestToolPolicy {
+    fn from_request(request: &str) -> Self {
+        let mut denied_tools = Vec::new();
+        let read_only = request
+            .split(|character| {
+                matches!(
+                    character,
+                    ';' | '；'
+                        | ':'
+                        | '：'
+                        | '—'
+                        | '–'
+                        | '。'
+                        | '.'
+                        | '!'
+                        | '！'
+                        | '?'
+                        | '？'
+                        | ','
+                        | '，'
+                        | '\n'
+                        | '\r'
+                )
+            })
+            .any(request_clause_requests_read_only);
+        if read_only {
+            denied_tools.extend(EDIT_TOOLS.iter().copied());
+        }
+        if explicitly_denies_target(
+            request,
+            &["预览", "preview"],
+            &[
+                "",
+                "生成",
+                "创建",
+                "渲染",
+                "制作",
+                "做",
+                "generate",
+                "generating",
+                "create",
+                "creating",
+                "render",
+                "rendering",
+                "make",
+                "making",
+            ],
+        ) {
+            denied_tools.push("render_preview");
+        }
+        if explicitly_denies_target(
+            request,
+            &["剪映草稿", "剪映", "jianyingdraft", "jianying"],
+            &[
+                "",
+                "生成",
+                "创建",
+                "制作",
+                "交付",
+                "generate",
+                "generating",
+                "create",
+                "creating",
+                "make",
+                "making",
+                "deliver",
+                "delivering",
+            ],
+        ) {
+            denied_tools.push("create_jianying_draft");
+        }
+        if explicitly_denies_target(
+            request,
+            &[
+                "素材",
+                "media",
+                "asset",
+                "assets",
+                "素材分析",
+                "分析素材",
+                "mediaanalysis",
+                "assetanalysis",
+                "analyzemedia",
+                "reanalyzemedia",
+            ],
+            &[
+                "",
+                "请求",
+                "执行",
+                "重新",
+                "分析",
+                "重新分析",
+                "request",
+                "run",
+                "analyze",
+                "analyzing",
+                "reanalyze",
+                "reanalyzing",
+            ],
+        ) {
+            denied_tools.push("request_asset_analysis");
+            denied_tools.push("download_music");
+            denied_tools.push("use_online_music");
+        }
+        denied_tools.sort_unstable();
+        denied_tools.dedup();
+        Self {
+            denied_tools,
+            read_only,
+        }
+    }
+
+    fn forbids(&self, tool: &str) -> bool {
+        self.denied_tools.contains(&tool)
+    }
+
+    fn forbids_goal(&self, goal: LoopGoal) -> bool {
+        match goal {
+            LoopGoal::Question => false,
+            LoopGoal::Storyboard => self.forbids("generate_storyboard"),
+            LoopGoal::Timeline => self.read_only,
+            LoopGoal::Preview => self.forbids("render_preview"),
+            LoopGoal::JianyingDraft => self.forbids("create_jianying_draft"),
+        }
+    }
+
+    fn prompt_label(&self) -> String {
+        if self.denied_tools.is_empty() {
+            "none".to_owned()
+        } else {
+            self.denied_tools.join(", ")
+        }
+    }
+}
+
+fn request_clause_requests_read_only(clause: &str) -> bool {
+    let compact = clause
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '\'' | '’'))
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let rejects_read_only = [
+        "不是只读",
+        "非只读",
+        "notreadonly",
+        "notareadonly",
+        "isntreadonly",
+        "isntareadonly",
+        "isnotreadonly",
+        "isnotareadonly",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase))
+        || explicitly_denies_target(
+            clause,
+            &["只读", "只读模式", "readonly", "readonlymode"],
+            &[
+                "用",
+                "使用",
+                "采用",
+                "保持",
+                "继续",
+                "设为",
+                "设置为",
+                "use",
+                "using",
+                "in",
+                "keep",
+                "keeping",
+                "keepit",
+                "keepingit",
+                "leave",
+                "leaveit",
+                "set",
+                "setto",
+            ],
+        )
+        || ordered_action_before_target(
+            &compact,
+            &[
+                "不要用",
+                "不用",
+                "别用",
+                "不使用",
+                "不要保持",
+                "不用保持",
+                "别保持",
+                "不保持",
+                "不要设置",
+                "不要设为",
+                "donotuse",
+                "dontuse",
+                "notuse",
+                "donotkeep",
+                "dontkeep",
+                "notkeep",
+                "donotleave",
+                "dontleave",
+                "donotset",
+                "dontset",
+                "donotmake",
+                "dontmake",
+                "notin",
+            ],
+            &["只读", "readonly"],
+        );
+    let explicitly_requests_read_only = compact == "只读"
+        || compact == "readonly"
+        || [
+            "只读检查",
+            "只读查看",
+            "只读查询",
+            "只读确认",
+            "只读审计",
+            "只读模式",
+            "保持只读",
+            "仅只读",
+            "以只读",
+            "readonlycheck",
+            "readonlyinspect",
+            "readonlyquery",
+            "readonlyreview",
+            "readonlyaudit",
+            "readonlymode",
+            "keepitreadonly",
+            "stayreadonly",
+            "readonlyonly",
+            "readonlyrequest",
+        ]
+        .iter()
+        .any(|phrase| compact.contains(phrase))
+        || ordered_action_before_target(
+            &compact,
+            &[
+                "保持",
+                "继续",
+                "设为",
+                "设置为",
+                "以",
+                "keep",
+                "stay",
+                "set",
+                "setto",
+                "make",
+            ],
+            &["只读", "readonly"],
+        );
+    explicitly_requests_read_only && !rejects_read_only
+}
+
+fn ordered_action_before_target(text: &str, actions: &[&str], targets: &[&str]) -> bool {
+    actions.iter().any(|action| {
+        text.find(action).is_some_and(|action_start| {
+            let after_action = &text[action_start + action.len()..];
+            targets.iter().any(|target| after_action.contains(target))
+        })
+    })
+}
+
+fn explicitly_denies_target(request: &str, targets: &[&str], actions: &[&str]) -> bool {
+    let compact = request
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '\'' | '’'))
+        .collect::<String>();
+    let direct_negators = [
+        "不",
+        "不要",
+        "不得",
+        "无需",
+        "不用",
+        "禁止",
+        "别",
+        "不允许",
+        "without",
+    ];
+    let action_negators = [
+        "不",
+        "不要",
+        "不得",
+        "无需",
+        "不用",
+        "禁止",
+        "别",
+        "不允许",
+        "donot",
+        "dont",
+        "mustnot",
+        "not",
+        "noneedto",
+        "noneedfor",
+        "without",
+    ];
+    let articles = ["", "a", "an", "the", "any"];
+    let compact_targets = targets
+        .iter()
+        .map(|target| {
+            target
+                .chars()
+                .filter(|character| {
+                    !character.is_whitespace() && !matches!(character, '-' | '\'' | '’')
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let direct = direct_negators.iter().any(|negator| {
+        articles.iter().any(|article| {
+            compact_targets
+                .iter()
+                .any(|target| compact.contains(&format!("{negator}{article}{target}")))
+        })
+    });
+    direct
+        || action_negators.iter().any(|negator| {
+            actions
+                .iter()
+                .filter(|action| !action.is_empty())
+                .any(|action| {
+                    articles.iter().any(|article| {
+                        compact_targets.iter().any(|target| {
+                            compact.contains(&format!("{negator}{action}{article}{target}"))
+                        })
+                    })
+                })
+        })
+}
 
 /// Question phrasing that usually asks for an explanation instead of an edit.
 const QUESTION_PHRASES: &[&str] = &[
@@ -149,8 +523,14 @@ const QUESTION_PHRASES: &[&str] = &[
 /// Anything else returns `None` so the loop can ask the model to classify.
 fn fast_goal(request: &str) -> Option<LoopGoal> {
     let text = request.trim().to_lowercase();
+    let tool_policy = RequestToolPolicy::from_request(request);
+    if tool_policy.read_only {
+        return Some(LoopGoal::Question);
+    }
     let contains = |words: &[&str]| words.iter().any(|word| text.contains(word));
-    let action_verb = contains(EDIT_VERBS) || contains(CREATE_VERBS);
+    let edit_verb = contains(EDIT_VERBS);
+    let create_verb = contains(CREATE_VERBS);
+    let action_verb = edit_verb || create_verb;
     let question = text.ends_with('？') || text.ends_with('?') || contains(QUESTION_PHRASES);
     if question && !action_verb {
         return Some(LoopGoal::Question);
@@ -158,22 +538,82 @@ fn fast_goal(request: &str) -> Option<LoopGoal> {
     if question {
         return None;
     }
-    if contains(&["预览", "preview", "render"]) {
+    if create_verb && contains(&["预览", "preview"]) && !tool_policy.forbids("render_preview") {
         return Some(LoopGoal::Preview);
     }
-    if contains(&["时间线", "timeline"]) {
+    if action_verb && contains(&["时间线", "timeline"]) {
         return Some(LoopGoal::Timeline);
     }
-    if contains(&["剪映", "jianying", "draft"]) {
+    if create_verb
+        && contains(&["剪映", "jianying", "draft"])
+        && !tool_policy.forbids("create_jianying_draft")
+    {
         return Some(LoopGoal::JianyingDraft);
     }
-    if contains(&["storyboard", "分镜"]) {
+    if create_verb && contains(&["storyboard", "分镜"]) {
         return Some(LoopGoal::Storyboard);
     }
-    if contains(EDIT_VERBS) {
+    if edit_verb {
         return Some(LoopGoal::Timeline);
     }
     None
+}
+
+/// Conservative fallback for questions whose answer depends on current local
+/// project state. The Router normally supplies this bit, but an invalid Router
+/// response must not let the loop answer current-project facts without a real
+/// observation.
+fn request_requires_project_observation(request: &str) -> bool {
+    let policy = RequestToolPolicy::from_request(request);
+    if policy.read_only {
+        return true;
+    }
+    let text = request.trim().to_lowercase();
+    let project_subject = [
+        "当前项目",
+        "本项目",
+        "这个项目",
+        "剪辑任务",
+        "时间线",
+        "timeline",
+        "storyboard",
+        "分镜",
+        "preview",
+        "预览",
+        "素材",
+        "asset",
+        "片段",
+        "clip",
+        "镜头",
+        "shot",
+        "版本",
+        "version",
+    ]
+    .iter()
+    .any(|term| text.contains(term));
+    let current_fact = [
+        "当前",
+        "现在",
+        "现有",
+        "已有",
+        "最新",
+        "多少",
+        "几个",
+        "状态",
+        "是否已经",
+        "有没有",
+        "v几",
+        "current",
+        "existing",
+        "latest",
+        "how many",
+        "count",
+        "status",
+        "which version",
+    ]
+    .iter()
+    .any(|term| text.contains(term));
+    project_subject && current_fact
 }
 
 fn parse_declared_goal(goal: Option<&str>, is_question: Option<bool>) -> Option<LoopGoal> {
@@ -240,11 +680,13 @@ pub(crate) fn decide_conversation_route(
     });
     let pending_clarification =
         load_pending_clarification(connection, project_id, editing_task_id, conversation_id)?;
+    let tool_policy = RequestToolPolicy::from_request(request);
     let pinned_goal = fast_goal(request);
     let prompt = format!(
         "You route one user turn for a local video-editing Agent. Decide whether to respond now, ask a clarification now, or start a real Agent run. Do not claim any artifact that is absent from the authoritative snapshot.\n\n\
          Current request: {request}\nTask brief: {task_brief}\nRecent conversation:\n{history_text}\n\n\
-         Latest scoped run: {latest_run}\nScoped artifacts: {artifacts}\nPending clarification: {pending_clarification}\nBackend-pinned goal: {pinned_goal}\n\n\
+         Latest scoped run: {latest_run}\nScoped artifacts: {artifacts}\nPending clarification: {pending_clarification}\nBackend-pinned goal: {pinned_goal}\n\
+         User-denied side-effect tools for this request: {denied_tools}. Never choose one of these tools or declare a goal whose deliverable requires one of them.\n\n\
          Return one JSON object. route must be respond, clarify, or run.\n\
          For goal=question, include informationScope=general or project. Use general only when the answer does not depend on this project's current assets, tasks, artifacts, counts, state, or failure causes. A project-scoped question must use route=run and observe real state before answering.\n\
          - respond: only for general conversational answers that need no tool or side effect. Include goal=question, isQuestion=true, informationScope=general, answer.\n\
@@ -257,10 +699,12 @@ pub(crate) fn decide_conversation_route(
         artifacts = artifacts,
         pending_clarification = serde_json::to_value(&pending_clarification).unwrap_or(Value::Null),
         pinned_goal = pinned_goal.map(|goal| goal.code()).unwrap_or("pending"),
+        denied_tools = tool_policy.prompt_label(),
         tools = OBSERVATION_TOOLS
             .iter()
             .chain(EDIT_TOOLS.iter())
             .copied()
+            .filter(|tool| !tool_policy.forbids(tool))
             .collect::<Vec<_>>()
             .join(", "),
     );
@@ -335,6 +779,9 @@ pub(crate) fn decide_conversation_route(
             let declared_goal = parse_declared_goal(response.goal.as_deref(), response.is_question)
                 .ok_or_else(|| "Conversation run goal was invalid.".to_owned())?;
             let goal = pinned_goal.unwrap_or(declared_goal);
+            if tool_policy.forbids_goal(goal) {
+                return Err("Conversation run goal was excluded by the user request.".to_owned());
+            }
             if goal == LoopGoal::Question
                 && !question_scope_allows_route(response.information_scope.as_deref(), "run")
             {
@@ -343,6 +790,9 @@ pub(crate) fn decide_conversation_route(
             let tool = response.tool.unwrap_or_default();
             if !OBSERVATION_TOOLS.contains(&tool.as_str()) && !EDIT_TOOLS.contains(&tool.as_str()) {
                 return Err("Conversation run tool was not allowed.".to_owned());
+            }
+            if tool_policy.forbids(&tool) {
+                return Err("Conversation run tool was excluded by the user request.".to_owned());
             }
             let project_fact_question = goal == LoopGoal::Question
                 && response.information_scope.as_deref() == Some("project");
@@ -590,6 +1040,7 @@ struct LoopState<'a> {
     task_brief: String,
     goal: LoopGoal,
     goal_locked: bool,
+    tool_policy: RequestToolPolicy,
     pending_clarification: Option<PendingClarificationSnapshot>,
     run_started_at: Instant,
     run_deadline: Instant,
@@ -684,14 +1135,19 @@ pub(crate) fn run_agent_loop_with_initial_skill(
     initial_skill: Option<InitialAgentSkill>,
 ) -> Result<AgentLoopResult, String> {
     let history = load_message_history(connection, conversation_id, request);
+    let tool_policy = RequestToolPolicy::from_request(request);
     let initial_goal = initial_skill
         .as_ref()
         .map(|skill| skill.goal)
+        .filter(|goal| !tool_policy.forbids_goal(*goal))
         .or_else(|| fast_goal(request));
     let goal = initial_goal.unwrap_or(LoopGoal::Question);
-    let project_fact_question = initial_skill
+    let routed_project_fact_question = initial_skill
         .as_ref()
         .is_some_and(|skill| skill.project_fact_question);
+    let project_fact_question = routed_project_fact_question
+        || (request_requires_project_observation(request)
+            && initial_goal.map_or(true, |goal| goal == LoopGoal::Question));
     let run_started_at = Instant::now();
     let run_deadline = run_started_at + AGENT_RUN_TIMEOUT;
     let pending_clarification =
@@ -706,6 +1162,7 @@ pub(crate) fn run_agent_loop_with_initial_skill(
         task_brief: task_brief.to_owned(),
         goal,
         goal_locked: initial_goal.is_some(),
+        tool_policy,
         pending_clarification,
         run_started_at,
         run_deadline,
@@ -877,6 +1334,7 @@ pub(crate) fn run_explicit_command(
         task_brief: task_brief.to_owned(),
         goal: LoopGoal::Question,
         goal_locked: true,
+        tool_policy: RequestToolPolicy::default(),
         pending_clarification: None,
         run_started_at: Instant::now(),
         run_deadline: Instant::now() + AGENT_RUN_TIMEOUT,
@@ -951,6 +1409,51 @@ enum AgentLoopControl {
     DeadlineExceeded,
 }
 
+fn reject_user_restricted_tool(
+    state: &mut LoopState,
+    transcript: &mut Vec<Value>,
+    step_id: &str,
+    step_number: usize,
+    tool: &str,
+) -> Result<bool, String> {
+    if !state.tool_policy.forbids(tool) {
+        return Ok(false);
+    }
+    finish_agent_run_step(
+        state.connection,
+        state.project_id,
+        state.editing_task_id,
+        state.agent_task_id,
+        step_id,
+        "failed",
+        None,
+        None,
+        Some("user_restricted_tool"),
+    )?;
+    record_agent_diagnostic(
+        state.connection,
+        state.project_id,
+        state.editing_task_id,
+        state.conversation_id,
+        state.agent_task_id,
+        Some(step_number as i64),
+        "tool_error",
+        "user_restricted_tool",
+    )?;
+    state.last_failed_tool_error_code = Some("user_restricted_tool");
+    state.executed_steps.push(ExecutedStepSummary {
+        step_number,
+        tool: tool.to_owned(),
+        status: "blocked".to_owned(),
+        produced_artifact: None,
+    });
+    transcript.push(json!({
+        "role": "system",
+        "content": "The selected side-effect tool is explicitly excluded by the current user request. Do not retry it. Choose an allowed tool that stays within the request, or finish truthfully."
+    }));
+    Ok(true)
+}
+
 fn execute_initial_skill(
     state: &mut LoopState,
     transcript: &mut Vec<Value>,
@@ -965,6 +1468,15 @@ fn execute_initial_skill(
         step_number,
         &initial.tool,
     )?;
+    if reject_user_restricted_tool(
+        state,
+        transcript,
+        &step_id,
+        step_number as usize,
+        &initial.tool,
+    )? {
+        return Ok(());
+    }
     let started_at = Instant::now();
     match apply_skill(state, &initial.tool, &initial.args) {
         Ok(context) => {
@@ -1175,6 +1687,24 @@ fn run_step(
             );
             return Ok(AgentLoopControl::Failed);
         };
+        if state.tool_policy.forbids_goal(goal) {
+            record_agent_diagnostic(
+                state.connection,
+                state.project_id,
+                state.editing_task_id,
+                state.conversation_id,
+                state.agent_task_id,
+                Some(step_number as i64),
+                "model_response",
+                "goal_declaration_restricted",
+            )?;
+            transcript.push(json!({
+                "role": "system",
+                "content": "The declared goal requires a side effect that the current user request explicitly excludes. Choose an allowed goal and tool, or finish truthfully without claiming the excluded deliverable."
+            }));
+            return Ok(AgentLoopControl::Continue);
+        }
+        state.project_fact_question = goal == LoopGoal::Question && state.project_fact_question;
         state.goal = goal;
         state.goal_locked = true;
     }
@@ -1199,7 +1729,20 @@ fn run_step(
     } else {
         "unknown_tool"
     };
-    if recorded_tool != "unknown_tool" {
+    let persisted_step_id = begin_agent_run_step(
+        state.connection,
+        state.project_id,
+        state.editing_task_id,
+        state.agent_task_id,
+        step_number as i64,
+        recorded_tool,
+    )?;
+
+    if reject_user_restricted_tool(state, transcript, &persisted_step_id, step_number, &tool)? {
+        return Ok(AgentLoopControl::Continue);
+    }
+
+    if !state.tool_policy.read_only && recorded_tool != "unknown_tool" {
         if let Some(brief) = step
             .task_brief
             .as_deref()
@@ -1213,14 +1756,6 @@ fn run_step(
             );
         }
     }
-    let persisted_step_id = begin_agent_run_step(
-        state.connection,
-        state.project_id,
-        state.editing_task_id,
-        state.agent_task_id,
-        step_number as i64,
-        recorded_tool,
-    )?;
 
     if tool.is_empty() || tool == "no_action" || tool == "finish" || tool == "done" {
         if state.project_fact_question && !state.successful_observation {
@@ -2255,6 +2790,7 @@ fn build_step_prompt(
         state.project_fact_question,
         state.successful_observation,
     );
+    let denied_tools = state.tool_policy.prompt_label();
     format!(
         "You are Assembly Agent, the local video-editing loop for a project. The requested deliverable \
          for THIS request is: {goal}. You must only call finish after you have REALLY produced that \
@@ -2265,6 +2801,7 @@ fn build_step_prompt(
          Recent conversation history (before this request):\n{history_text}\n\n\
          {clarification_hint}\n\n\
          {project_fact_instruction}\n\n\
+         User-denied side-effect tools for this request: {denied_tools}. These tools are unavailable even if they would normally be a useful follow-up. Do not declare a goal whose deliverable requires a denied tool.\n\n\
          If the requested deliverable above is pending, this first response must BOTH declare goal \
          (question|storyboard|timeline|preview|jianying_draft) and isQuestion, and choose the first \
          skill or finish in the same JSON object. A long narration/script supplied after the Agent asked \
@@ -2280,7 +2817,7 @@ fn build_step_prompt(
           Skills:\n\
           - get_edit_status. no args. Read the latest previous scoped Agent task and report only grounded completion status.\n\
           - get_asset_health_summary. no args. Use for questions about this project's current source-file health, counts, scan state, or unreadable/missing causes. It returns persisted counts and safe reason codes, never paths or raw operating-system errors. Do not infer a specific cause when reasonEvidenceAvailable is false.\n\
-          - list_assets. no args. Use only for a compact status inventory or before requesting analysis.\n\
+           - list_assets. no args. Use only for a compact persisted status inventory or before requesting analysis. This Agent observation never starts or reprioritizes analysis.\n\
           - search_assets. args: query (optional), kind (video|image|audio|other optional), minDurationMs/maxDurationMs (optional), minRating 0..5 (optional), favoriteOnly (optional), tag (optional), collectionId (optional), offset (optional), limit 1..20 (optional). Use for targeted candidate discovery. It excludes user-blocked assets and returns bounded safe summaries, match reason codes and nextOffset; it never returns paths, notes, OCR text or media content.\n\
          - search_asset_segments. args: query (required), assetId (optional), offset (optional), limit 1..20 (optional). Use after candidate discovery when an edit needs exact source windows. It returns evidence-bound sourceStartMs/sourceEndMs, safe visual labels and reason codes; OCR text and paths remain private. Missing, changed, unreadable and user-blocked sources are excluded.\n\
          - search_music. args: query. Search the configured Jamendo catalog. It only returns tracks whose download is allowed and whose license is CC0 or CC-BY; CC-BY attribution is retained on the music cue. Never invent a track or URL.\n\
@@ -2292,7 +2829,7 @@ fn build_step_prompt(
          - get_timeline. args: timelineVersionId (optional).\n\
          - get_text_capabilities. no args. Call this before authoring or revising text when the user cares about fonts, effects, or Jianying delivery. It returns the verified Jianying matrix and local-preview-only options.\n\
          - replace_music_tracks. args: timelineVersionId (optional), musicTracks: [{{id, enabled, cues}}]. Each cue needs id, assetId, sourceStartMs, sourceEndMs, timelineStartMs, timelineEndMs, volume (0..2); loopEnabled, fadeInMs, fadeOutMs are optional. Call get_timeline and list_assets first. Music must use a ready audio asset and stay in the timeline. Set loopEnabled only when a shorter source range must repeat. create_jianying_draft can create a new experimental Jianying music draft from these local assets; never claim playback has been visually reviewed in Jianying.\n\
-         - generate_storyboard. args: brief.\n\
+         - generate_storyboard. args: brief. It consumes only analysis evidence already ready in this project; it never starts or reprioritizes analysis. Request analysis explicitly first only when the user permits it.\n\
          - create_timeline_draft. no args; it uses the active storyboard in this editing task.\n\
          - replace_clips. args: timelineVersionId (optional), shots: [{{shotIndex int, assetId string, sourceStartMs int, sourceEndMs int}}]. A video source range must equal the replaced shot's current duration; images use 0 and 0.\n\
          - change_clip_duration. args: timelineVersionId (optional), adjustments: [{{shotIndex int, newDurationMs int optional, newSourceStartMs int optional}}]. The new source window must stay inside the shot's verified source.\n\
@@ -2316,6 +2853,7 @@ fn build_step_prompt(
         history_text = history_text,
         clarification_hint = clarification_hint,
         project_fact_instruction = project_fact_instruction,
+        denied_tools = denied_tools,
     )
 }
 
@@ -2430,8 +2968,10 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             )
         }
         "list_assets" => {
-            let assets =
-                crate::assets::list_assets(state.app.clone(), state.project_id.to_owned())?;
+            let assets = crate::assets::list_assets_for_agent(
+                state.app.clone(),
+                state.project_id.to_owned(),
+            )?;
             let summary: Vec<Value> = assets
                 .iter()
                 .map(|asset| {
@@ -2554,7 +3094,7 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             if brief.is_empty() {
                 return Err("The user has no video goal to base a storyboard on.".to_owned());
             }
-            let generated = generate_storyboard(
+            let generated = generate_storyboard_for_agent(
                 state.app.clone(),
                 state.project_id.to_owned(),
                 state.editing_task_id.to_owned(),
@@ -3135,6 +3675,132 @@ mod tests {
             fast_goal("你好，介绍一下这个项目"),
             Some(LoopGoal::Question)
         );
+    }
+
+    #[test]
+    fn explicit_negative_side_effects_narrow_the_tool_set_and_goal() {
+        let request = "仅调整当前内部时间线：缩短第 2 个镜头，不生成 preview，不创建 Jianying draft，不分析素材。";
+        let policy = RequestToolPolicy::from_request(request);
+
+        assert!(policy.forbids("render_preview"));
+        assert!(policy.forbids("create_jianying_draft"));
+        assert!(policy.forbids("request_asset_analysis"));
+        assert!(policy.forbids("download_music"));
+        assert!(policy.forbids("use_online_music"));
+        assert!(!policy.forbids("change_clip_duration"));
+        assert!(policy.forbids_goal(LoopGoal::Preview));
+        assert!(!policy.forbids_goal(LoopGoal::Timeline));
+        assert_eq!(fast_goal(request), Some(LoopGoal::Timeline));
+    }
+
+    #[test]
+    fn positive_preview_requests_remain_available() {
+        let policy = RequestToolPolicy::from_request("请为当前时间线生成 preview");
+        assert!(!policy.forbids("render_preview"));
+        assert_eq!(
+            fast_goal("请为当前时间线生成 preview"),
+            Some(LoopGoal::Preview)
+        );
+        assert!(
+            !RequestToolPolicy::from_request("No preview exists; please generate one")
+                .forbids("render_preview")
+        );
+        assert!(
+            RequestToolPolicy::from_request("Do not generate a preview").forbids("render_preview")
+        );
+        assert!(
+            RequestToolPolicy::from_request("Without creating a preview, adjust the timeline")
+                .forbids("render_preview")
+        );
+        assert!(RequestToolPolicy::from_request("Don't render a preview").forbids("render_preview"));
+        let no_analysis = RequestToolPolicy::from_request("Do not analyze media or assets");
+        assert!(no_analysis.forbids("request_asset_analysis"));
+        assert!(no_analysis.forbids("download_music"));
+        assert!(no_analysis.forbids("use_online_music"));
+        assert!(RequestToolPolicy::from_request("Do not reanalyze assets")
+            .forbids("request_asset_analysis"));
+    }
+
+    #[test]
+    fn explicit_read_only_requests_block_every_edit_tool() {
+        let request = "只读检查当前 timeline 版本，不生成 preview，也不要修改任何产物。";
+        let policy = RequestToolPolicy::from_request(request);
+
+        assert!(policy.read_only);
+        assert!(EDIT_TOOLS.iter().all(|tool| policy.forbids(tool)));
+        assert!(!policy.forbids("get_timeline"));
+        assert!(policy.forbids_goal(LoopGoal::Storyboard));
+        assert!(policy.forbids_goal(LoopGoal::Timeline));
+        assert!(policy.forbids_goal(LoopGoal::Preview));
+        assert!(policy.forbids_goal(LoopGoal::JianyingDraft));
+        assert!(!policy.forbids_goal(LoopGoal::Question));
+        assert_eq!(fast_goal(request), Some(LoopGoal::Question));
+        assert!(!RequestToolPolicy::from_request("不是只读，请调整 timeline").read_only);
+        assert_eq!(
+            fast_goal("不是只读，请调整 timeline"),
+            Some(LoopGoal::Timeline)
+        );
+        let english_edit = "This isn't readonly; adjust the timeline";
+        assert!(!RequestToolPolicy::from_request(english_edit).read_only);
+        assert_eq!(fast_goal(english_edit), Some(LoopGoal::Timeline));
+        let chinese_mode_edit = "不要用只读模式，请调整 timeline";
+        assert!(!RequestToolPolicy::from_request(chinese_mode_edit).read_only);
+        assert_eq!(fast_goal(chinese_mode_edit), Some(LoopGoal::Timeline));
+        let english_mode_edit = "Don't use readonly mode; adjust the timeline";
+        assert!(!RequestToolPolicy::from_request(english_mode_edit).read_only);
+        assert_eq!(fast_goal(english_mode_edit), Some(LoopGoal::Timeline));
+        for request in [
+            "This is not in readonly mode; adjust the timeline",
+            "Don't keep it readonly; adjust the timeline",
+            "不要保持只读模式，请调整 timeline",
+        ] {
+            assert!(!RequestToolPolicy::from_request(request).read_only);
+            assert_eq!(fast_goal(request), Some(LoopGoal::Timeline));
+        }
+        for request in [
+            "Keep the current timeline readonly",
+            "保持当前时间线只读",
+            "Don't keep the intro; keep the current timeline readonly",
+            "不要保持片头；保持当前时间线只读",
+            "Don't keep the intro: keep the current timeline readonly",
+            "不要保持片头：保持当前时间线只读",
+            "Don't keep the intro — keep the current timeline readonly",
+        ] {
+            let policy = RequestToolPolicy::from_request(request);
+            assert!(policy.read_only);
+            assert!(EDIT_TOOLS.iter().all(|tool| policy.forbids(tool)));
+            assert_eq!(fast_goal(request), Some(LoopGoal::Question));
+        }
+    }
+
+    #[test]
+    fn current_project_questions_require_observation_when_routing_falls_back() {
+        assert!(request_requires_project_observation(
+            "只读检查当前 timeline 是 v几、包含多少片段？"
+        ));
+        assert!(request_requires_project_observation(
+            "How many clips are in the current timeline?"
+        ));
+        assert_eq!(fast_goal("当前 preview 状态"), None);
+        assert_eq!(fast_goal("当前 timeline 版本"), None);
+        assert_eq!(
+            fast_goal("Adjust the current timeline"),
+            Some(LoopGoal::Timeline)
+        );
+        assert_eq!(
+            fast_goal("Shorten the current clip"),
+            Some(LoopGoal::Timeline)
+        );
+        assert_eq!(
+            fast_goal("Render the current preview"),
+            Some(LoopGoal::Preview)
+        );
+        assert_eq!(fast_goal("Update the current timeline"), None);
+        assert_eq!(fast_goal("Modify the current clip"), None);
+        assert_eq!(fast_goal("Extend the current clip"), None);
+        assert!(!request_requires_project_observation(
+            "请解释 timeline 是什么？"
+        ));
     }
 
     #[test]

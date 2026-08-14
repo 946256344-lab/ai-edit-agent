@@ -2,6 +2,13 @@
 
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
+## ADR-057：显式负向副作用约束必须收窄本轮工具权限
+
+- 状态：已实现；真实 Tauri 只读回归已验证
+- 决策：为普通自然语言请求构造只在本轮有效的 `RequestToolPolicy`。策略只解释明确负向边界，不替模型决定正向工具：否定 preview、Jianying draft、素材分析时分别排除对应写工具；排除素材分析还排除会下载媒体并触发分析的在线音乐工具；显式“只读/readonly”按分句解释，排除全部编辑与交付工具，并阻止模型 `taskBrief` 写回任务。Agent `list_assets` 使用不推进队列的持久化快照，Agent `generate_storyboard` 只消费已就绪证据；分析只能由允许的显式 `request_asset_analysis` 或已声明会触发分析的媒体获取工具发起。`fast_goal` 忽略被否定的 deliverable，且只有带明确动作的产物请求才确定性锁定；名词/状态短句或未覆盖的新动作由同一首轮主模型声明目标。Conversation Router 从首步工具目录过滤并拒绝被排除项及依赖它们的目标，Agent loop 对首次目标声明、路由复用的初始技能和后续每一步在真正执行前再次硬拒绝；越界工具记录安全码 `user_restricted_tool`。路由失败回退到无初始技能 loop 时，显式只读及当前项目事实问题仍保留至少一次成功观察的完成门。
+- 原因：真实 timeline v5 调整请求明确写了“不生成 preview、不创建 Jianying draft、不分析素材”，但旧 `fast_goal` 只要看到 `preview` 就把整轮目标锁成 Preview。`change_clip_duration` 成功后，产物完成门反而迫使模型继续调用 `render_preview`，造成当前请求边界之外的本地产物。只在 prompt 中要求模型“遵守用户意图”不能形成可靠副作用边界。
+- 后果：模型仍可在允许集合内自主观察、编辑和交付，不增加关键词驱动的正向业务直通分支；但不能把被用户排除的“合理后续动作”重新加入计划。真实回归中只读请求只执行 `get_timeline → finish`、操作日志为 0，timeline 与 preview 文件均未改变。
+
 ## ADR-056：异步 run 的公开任务 ID 与轮询所有权必须一致
 
 - 状态：已实现；真实 Tauri 桌面的 timeline/preview 创建、无刷新终态对账和 Tauri 重启恢复均已验证

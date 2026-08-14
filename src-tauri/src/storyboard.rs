@@ -626,6 +626,28 @@ pub fn generate_storyboard(
     editing_task_id: String,
     brief: String,
 ) -> Result<StoryboardVersion, String> {
+    generate_storyboard_internal(app, project_id, editing_task_id, brief, true)
+}
+
+/// Agent storyboard generation consumes only analysis evidence already ready
+/// in the scoped project. Starting or reprioritizing analysis remains an
+/// explicit `request_asset_analysis` tool decision.
+pub(crate) fn generate_storyboard_for_agent(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    brief: String,
+) -> Result<StoryboardVersion, String> {
+    generate_storyboard_internal(app, project_id, editing_task_id, brief, false)
+}
+
+fn generate_storyboard_internal(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    brief: String,
+    schedule_visual_analysis: bool,
+) -> Result<StoryboardVersion, String> {
     log::info!("Starting AI storyboard generation.");
     let brief = brief.trim();
     if brief.is_empty() {
@@ -642,8 +664,10 @@ pub fn generate_storyboard(
     if task_exists != 1 {
         return Err("Editing task does not belong to this project.".to_owned());
     }
-    let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
-    wait_for_visual_batch(&app, priority_batch.as_deref())?;
+    if schedule_visual_analysis {
+        let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
+        wait_for_visual_batch(&app, priority_batch.as_deref())?;
+    }
     let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id)?;
     if sources.is_empty() {
         return if visual_ready_count == 0 {

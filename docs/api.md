@@ -97,7 +97,7 @@ OAuth 命令兼容当前 OpenCode 实现，但不是官方 OpenAI 第三方集�
 
 ## 素材证据与 storyboard
 
-Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 `list_assets` 观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。该工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
+Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
@@ -134,7 +134,9 @@ type ConversationTurnResult =
 
 前端会缓存最多 20 个先于命令返回到达的 `agent-edit-completed` 事件，并在取得任务 ID 后立即对账；composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时，还会以 1.2 秒周期读取持久化任务终态。一次列表快照尚未出现新任务、或任务由 `queued/running` 变为 terminal，都不得清空 pending 或停止轮询。没有内存 pending 且 conversation 仍为 `working` 时，最新同作用域 terminal task 也必须触发一次恢复对账，不要求前端先观察到其 active 状态。后端完成消息是权威来源，事件只是通知；任一通道先确认终态后，前端按项目、task、conversation 作用域重载消息和产物。仅当任务的 `projectId`/`editingTaskId` 仍等于当前活动作用域时才应用可见产物。模型超时、响应解析失败或循环耗尽且目标仍未满足时，无中间产物为 `failed`，已有真实中间产物为 `partially_completed`，两者结果代码均为 `agent_goal_not_reached`；中间版本保留并接受审计，但回复不得声称最终目标完成。
 
-Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理。显式单命令继续确定性直通；其余请求加载最近会话历史。`fast_goal` 锁定明确目标；模糊请求由首次主模型响应在同一个顶层 JSON 中声明 `goal`/`isQuestion` 并选择首个技能或直接回答，不再先执行一次独立模型分类。最近一次同作用域 `needs_clarification` 会作为结构化标记提供给首次决策，模型结合历史判断当前消息是否为补充 brief。确定性目标不能被模型覆盖；模糊目标一旦声明即锁定。模型最多运行 10 步，真实产物完成门、作用域校验、失败回读和诚实终端回复保持不变。交互模型决策总预算为 90 秒，每步按剩余预算收紧超时；这是协作式边界，不会强制中断已经开始的副作用。
+Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理。显式单命令继续确定性直通；其余请求加载最近会话历史。`fast_goal` 只锁定带明确动作的产物请求、明确编辑或清晰问题；仅出现 timeline/preview/storyboard/Jianying 名词的状态短句，以及未覆盖的新动作表达，返回 pending 并由首次主模型响应在同一个顶层 JSON 中声明 `goal`/`isQuestion`、选择首个技能或直接回答，不再用不断扩大的正向关键词表决定工具。最近一次同作用域 `needs_clarification` 会作为结构化标记提供给首次决策，模型结合历史判断当前消息是否为补充 brief。确定性目标不能被模型覆盖；模糊目标一旦声明即锁定。模型最多运行 10 步，真实产物完成门、作用域校验、失败回读和诚实终端回复保持不变。交互模型决策总预算为 90 秒，每步按剩余预算收紧超时；这是协作式边界，不会强制中断已经开始的副作用。
+
+普通自然语言请求会在路由和 Agent loop 中复用同一个请求级工具限制策略。明确“不生成 preview”“不创建 Jianying draft”“不分析素材”时，对应 `render_preview`、`create_jianying_draft`、`request_asset_analysis` 不进入本轮可用工具集合；因为 `download_music` 与 `use_online_music` 会下载媒体并触发本地分析，排除素材分析时两者也不可用。Agent 的 `list_assets` 始终只读持久化快照，`generate_storyboard` 始终只使用已就绪证据，因此不会从观察或 storyboard 生成旁路启动分析。“只读/readonly”请求不允许任何编辑或交付工具，也不接受模型提供的 `taskBrief` 持久化。负向限制不会直接选择替代工具，也不会把少量选项写死为业务流程；它只缩小模型的权限，并在路由目标、首次目标声明、初始技能与每个后续技能执行前校验。被否定的 deliverable 词不参与 `fast_goal` 目标锁定，模型也不得把依赖被禁工具的 deliverable 声明为本轮目标；越界工具以安全码 `user_restricted_tool` 封闭。路由模型返回无效目标或工具而回退到无首步 Agent loop 时，后端会从本轮只读/当前项目事实措辞保守恢复观察门，至少一个真实观察成功前不得 `finish` 回答项目事实。
 
 每轮决策前，后端从当前作用域重建 `AgentStateSnapshot`，仅包含项目/剪辑任务/会话标识、素材可用与分析状态计数、当前真实产物状态、已执行步骤摘要、剩余步数、目标和未满足条件。完整 storyboard/时间线细节不再每轮直接注入；模型需要镜头细节时使用观察工具。确定性前置条件提示负责指出最短合法路径，但已有时间线时允许直接编辑、渲染 preview 或创建 Jianying draft，不强制重建 storyboard。每个循环技能和显式直通技能都写入 `agent_run_steps`：只保存工具名、步骤状态、安全产物类型/ID、安全错误码和时间戳。中断后运行仍进入 `needs_review`，未完成步骤封闭为 `failed/interrupted_requires_review`，绝不自动重放未知副作用。
 

@@ -13,7 +13,9 @@
 - [x] 本项完成门：修复状态查询只看最近 Agent task 而忽略当前真实 preview，以及成功 Agent run 未持久化最终回复、conversation 卡在 `working` 的两个 P0 缺陷。终态任务与 `agent-task-result-{agentTaskId}` 回复现于同一事务提交；启动会把历史“终态但无回复”的 working 会话恢复为 `needs_review` 并补固定消息。真实桌面切换模式和刷新后，13 条持久化消息与 13 条可见消息一致，最新完成回复只有 1 条，conversation 保持 `ready`。
 - [x] 完成（2026-08-14，P0）：在当前真实剪辑任务中用显式 Agent 请求创建内部 timeline v5 和对应 local preview。项目/task/conversation/storyboard 作用域未变，timeline 仅由 2 个增至 3 个、版本由 v4 增至 v5；旧 v4 timeline 与 preview 文件保留，新旧 preview 均存在。新 preview 为 540×960、29.47 秒，真实播放器进度可前进；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
 - [x] 本项完成门：修复 `submit_conversation_turn.run` 实际返回 `agent_task_id`、前端却读取 `agentTaskId` 导致 pending ID 为 undefined，以及任务快照暂缺、active→terminal、首次快照已 terminal 时过早放弃轮询的 P0 竞态。新增精确序列化测试和前端空 ID 失败门。修复后真实只读 Agent run 的 pending ID 与数据库 task ID 一致，completed 后后端/可见消息同步为 23、回复仅 1 条、conversation 为 ready；WebView 刷新和 Tauri 重启均恢复 v5 preview 与全部消息。
-- [ ] 下一步（P0）：在不重分析全部素材、不创建 Jianying draft 或最终导出的边界内，验证一个受限 timeline 调整工具会只生成单一新版本，并可基于该版本生成、播放和恢复新的 local preview；开始前先选择最小、可逆的调整目标并保存当前 v5 基线。
+- [x] 完成（2026-08-14，P0）：以 timeline v5 为基线，用 `change_clip_duration` 只创建 v6；第 2 镜头从 3000 ms 缩短至 2500 ms，源范围从 250–2900 ms 收敛为 250–2750 ms，其他镜头素材与顺序不变，后续片段统一前移 500 ms。timeline 数量仅从 3 增至 4，旧 v5/v4/v3 均保留。v6 local preview 为 540×960、29.3 秒并可实际播放；Tauri 重启和 WebView 刷新后 27 条消息及 v6 preview 恢复，v5/v6 preview 文件同时存在。
+- [x] 本项完成门：首次自然语言调整因模型参数未通过后端校验而安全失败，未产生版本或操作日志；第二次绑定真实 v5 ID 与唯一 adjustment 后成功。该请求明确“不生成 preview”，旧 `fast_goal` 却把否定词中的 preview 锁为完成目标并强制渲染，已新增请求级 `RequestToolPolicy`：负向 preview/Jianying/素材分析约束同时限制路由工具、目标声明与每步执行；排除素材分析也会禁用触发分析的在线媒体获取工具。`fast_goal` 只锁定带明确动作的产物请求或清晰问题，名词/状态短句留给首轮主模型；Agent `list_assets` 现为无调度快照，Agent `generate_storyboard` 只消费已就绪证据。“只读/readonly”按分句解释，禁用全部编辑与交付工具并阻止 `taskBrief` 持久化；路由失败回退仍保留当前项目事实观察门。修复后真实只读回归只执行 `get_timeline → finish`、操作日志 0、版本仍为 v6/v5/v4/v3、preview 文件时间戳不变，后端/界面消息同步为 29；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
+- [ ] 下一步（P0）：对当前 timeline v6 进行只读媒体事实审计，逐镜头核对 storyboard 目的、素材证据、明确源时间范围与 preview 抽帧，确认“选择了什么、为什么选择、实际画面是否一致”；不得重新分析素材、修改 timeline、生成新 preview、创建 Jianying draft 或导出。
 
 ### P0：端到端 MVP 重新验收
 
