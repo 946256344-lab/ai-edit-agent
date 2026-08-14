@@ -342,12 +342,12 @@ export function AssetManagementPanel({
               <strong>{currentTitle}</strong>
               <small>{filteredAssets.length} / {assetPage.total}</small>
             </div>
-            {assetFolderFilter !== 'all' && filteredAssets.length > 0 ? (
+            {filteredAssets.length > 0 ? (
               <div className="asset-list-card__body">
                 {filteredAssets.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.has(asset.id)} onSelectAsset={onSelectAssetEvidence} />)}
               </div>
             ) : (
-              <div className="asset-list-card__empty">{assetFolderFilter === 'all' ? '选择目录树中的文件夹，或者继续导入更多素材。' : '这个文件夹里暂无可显示的素材。'}</div>
+              <div className="asset-list-card__empty">当前筛选没有可显示的素材。</div>
             )}
           </section>
         </section>

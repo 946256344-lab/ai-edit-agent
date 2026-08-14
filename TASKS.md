@@ -5,7 +5,11 @@
 - [x] 恢复现场（2026-08-14）：在 `codex/recovery-baseline-20260814` 分支提交当前完整工作区，快照 commit 为 `8020d73`。该提交用于回退和审计，不代表可交付版本。
 - [x] 完成（2026-08-14）：恢复绿色构建基线。仅修复前端 TypeScript 契约、未使用代码和 Hook 依赖问题，并统一现有 Rust 格式；未调整 UI 信息架构，未改变 Agent、媒体分析、timeline、preview 或 Jianying 行为。
 - [x] 本项完成门：`npm run lint`、`npm run build`、`cargo fmt --check`、`cargo test`（112 个单元测试 + 2 个契约测试）、`npm run harness:check` 与 `git diff --check` 全部通过；变更形成独立 commit，提交后工作区恢复干净。
-- [ ] 后续但尚未开始：将 Agent、素材和成果改为互斥顶层工作模式，移除重复 Workflow，并在真实桌面应用中重新验收核心闭环。
+- [x] 桌面事实基线（2026-08-14）：真实 Tauri 应用成功恢复旧项目的 891 个素材、8 镜头 storyboard、8 片段 timeline 和本地 preview；首个核心阻断是工作模式没有隔离。点击“故事板”只改变标签状态，完整对话、composer 与审计仍在前面，需连续翻页才能到达无基础样式的 storyboard；Workflow 同时在 `App.tsx` 和 `ConversationWorkspace` 渲染。完整证据与根因见 `docs/audits/2026-08-14-desktop-product-baseline.md`。
+- [x] 桌面审计完成门：已按阻断级别记录恢复状态、首个断点、代码根因和历史缺口。真实 preview 画面可加载；Provider、Agent 新请求、完整播放、媒体重新分析和 Jianying 仍未在本轮关闭，继续保留为 P0。
+- [x] 完成（2026-08-14）：恢复互斥顶层工作模式。Agent、素材、成果一次只渲染一个主工作区；素材管理进入完整宽度工作区；成果页集中展示 storyboard、timeline/审计与 preview；只保留一套 Workflow，未改变后端、Agent 工具或持久化行为。
+- [x] 本项完成门：真实桌面 1440×900 验收确认三个模式立即替换主内容；Agent 模式只显示消息、执行卡与 composer，素材模式显示 308/520/360px 三栏和 100 条有界素材页，成果模式只显示一套 Workflow 与 8 个 storyboard 镜头。`npm run lint`、`npm run build`、`npm run harness:check` 与 `git diff --check` 全部通过。
+- [ ] 下一步（P0）：在不生成新产物的前提下，先验证 Provider 状态读取、只读项目事实问答以及 Task Resolver → Conversation Router → Agent run 的任务归属与终态恢复；通过后再用受控请求验证内部 timeline/preview，不触发最终导出、覆盖、删除或 Jianying draft 覆盖。
 
 ### P0：端到端 MVP 重新验收
 

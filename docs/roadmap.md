@@ -18,6 +18,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 - 内部时间线、局部片段替换、540 x 960 preview、质量检查和受限自然语言工具控制。
 - 项目内 Task Resolver：先选择/原子创建剪辑任务，再凭一次性 route receipt 进入 Conversation Router 与 Agent loop；不确定归属先澄清。
 - 对话内可折叠 Agent 执行卡：显示安全步骤状态、运行时长和后端确认的真实产物，不展示模型内部推理。
+- Agent、素材、成果三个互斥顶层模式；素材工作台使用完整主区域，成果页集中显示 storyboard、timeline/审计和 preview。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、首页注册及带视频片段打开。
 
 ## 下一阶段

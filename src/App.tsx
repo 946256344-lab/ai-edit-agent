@@ -260,7 +260,7 @@ function App() {
   const [storyboardError, setStoryboardError] = useState<string | null>(null)
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
-  const [activeView, setActiveView] = useState<'chat' | 'storyboard'>('chat')
+  const [activeView, setActiveView] = useState<'chat' | 'assets' | 'artifacts'>('chat')
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [composerNotice, setComposerNotice] = useState<string | null>(null)
@@ -1030,7 +1030,7 @@ function App() {
         await appendStoredMessage(activeEditingSession.conversationId, sessionId, 'agent', `已根据当前剪辑会话创建故事板 v${generated.versionNumber}。你可以检查镜头，或继续要求创建草稿和预览。`)
       }
       setEditingSessions((current) => current.map((session) => session.id === sessionId ? { ...session, brief } : session))
-      setActiveView('storyboard')
+      setActiveView('artifacts')
     } catch {
       if (activeProjectRef.current === projectId && activeEditingSessionRef.current === sessionId) {
         setStoryboardError('Agent 未能生成可用 storyboard；没有修改现有版本。请确认素材分析已完成后重试。')
@@ -1252,6 +1252,63 @@ function App() {
     return <main className="app-shell browser-notice"><section><span className="eyebrow">DESKTOP APP REQUIRED</span><h1>请在 Windows 桌面应用中运行 Assembly Video Agent</h1><p>浏览器模式不能访问本地项目、媒体文件、FFmpeg 或 AI 凭据，因此不能用于剪辑测试。</p><code>npm run tauri:dev</code></section></main>
   }
 
+  const assetWorkspace = (
+    <AssetManagementPanel
+      activeProjectId={activeProjectId}
+      storeReady={storeState === 'ready'}
+      assetPage={{ total: assetPage.counts.total, counts: assetPage.counts }}
+      assetTree={assetTree}
+      activeFolderNode={activeFolderNode}
+      folderBreadcrumb={folderBreadcrumb}
+      visibleAssetFolders={visibleAssetFolders}
+      filteredAssets={filteredAssets}
+      selectedAssetIds={selectedAssetIds}
+      setSelectedAssetIds={setSelectedAssetIds}
+      assetSearch={assetSearch}
+      setAssetSearch={setAssetSearch}
+      assetKindFilter={assetKindFilter}
+      setAssetKindFilter={setAssetKindFilter}
+      assetStatusFilter={assetStatusFilter}
+      setAssetStatusFilter={setAssetStatusFilter}
+      assetVisualFilter={assetVisualFilter}
+      setAssetVisualFilter={setAssetVisualFilter}
+      assetFolderFilter={assetFolderFilter}
+      setAssetFolderFilter={setAssetFolderFilter}
+      assetUserFilter={assetUserFilter}
+      setAssetUserFilter={setAssetUserFilter}
+      assetCollectionFilter={assetCollectionFilter}
+      setAssetCollectionFilter={setAssetCollectionFilter}
+      assetCollections={assetCollections}
+      assetBatchNotice={assetBatchNotice}
+      isRunningAssetBatch={isRunningAssetBatch}
+      onClearSelection={() => setSelectedAssetIds(new Set())}
+      onRetrySelectedAssetAnalysis={() => void retrySelectedAssetAnalysis()}
+      onSkipSelectedVisualAnalysis={() => void skipSelectedVisualAnalysis()}
+      onApplyUserMetadata={applySelectedUserMetadata}
+      onAddTagToSelected={() => void addTagToSelected()}
+      onAddSelectedToCollection={() => void addSelectedToCollection()}
+      onSelectFolder={selectFolder}
+      onSelectAssetEvidence={(assetId) => void selectAssetEvidence(assetId)}
+      onImportAssets={() => void importAssets()}
+      onImportAssetFolder={() => void importAssetFolder()}
+      onStartAssetHealthScan={() => void startAssetHealthScan(activeProjectId!)}
+      onCancelAssetHealthScan={(taskId) => void cancelAssetHealthScan(activeProjectId!, taskId)}
+      onOpenRelink={() => void relinkAssetFolder()}
+      onConfirmRelink={() => void confirmRelinkAssetFolder()}
+      onCancelRelink={cancelRelinkPreview}
+      assetHealth={assetHealth}
+      assetTaskCenter={assetTaskCenter}
+      assetTaskCenterOpen={assetTaskCenterOpen}
+      setAssetTaskCenterOpen={setAssetTaskCenterOpen}
+      assetRelinkPreview={assetRelinkPreview}
+      assetRelinkSourceDirectory={assetRelinkSourceDirectory}
+      assetRelinkPreserveAnalysis={assetRelinkPreserveAnalysis}
+      setAssetRelinkPreserveAnalysis={setAssetRelinkPreserveAnalysis}
+      setAssetEvidenceNull={() => setAssetEvidence(null)}
+      assetEvidence={assetEvidence}
+    />
+  )
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -1274,31 +1331,14 @@ function App() {
       </aside>
 
       <section className="workspace">
-        <header className="topbar"><div className="crumbs">{activeProject?.name ?? '新本地项目'} <span>/</span> {activeEditingSession?.title ?? '开始剪辑会话'}</div><div className="top-actions"><span className="saved">{storeState === 'ready' ? '本地项目' : '演示模式'}</span>{storyboard && <button className="outline-button" onClick={() => setActiveView('storyboard')}>查看故事板</button>}</div></header>
-        <div className="mode-tabs"><button className={activeView === 'chat' ? 'selected' : ''} onClick={() => setActiveView('chat')}>Agent 对话</button><button className={activeView === 'storyboard' ? 'selected' : ''} onClick={() => setActiveView('storyboard')}>故事板 <span>{storyboard?.shots.length ?? 0}</span></button><div className="timeline-state">{timelineState === 'not-created' ? '尚未创建内部时间线' : timelineState === 'draft' ? `内部时间线 v${timeline?.versionNumber ?? 1}` : timelineState === 'preview-generating' ? '预览生成中' : timelineState === 'preview-ready' ? '预览已生成' : timelineState === 'jianying-pending' ? '剪映草稿已生成 · 退出剪映后自动注册' : '剪映草稿已注册 · 打开剪映查看'}</div></div>
-        <section className="workflow-card">
-          <div className="workflow-card-header">
-            <div>
-              <span className="panel-kicker">Workflow</span>
-              <strong>故事板 → 时间线 → 预览 → 草稿交付</strong>
-            </div>
-            <small>{deliveryStatus}</small>
-          </div>
-          <div className="workflow-actions">
-            <button className="primary-button" onClick={() => void createTimelineFromStoryboard()} disabled={!storyboard || isCreatingTimeline}>{isCreatingTimeline ? '创建中' : '创建时间线'}</button>
-            <button className="outline-button" onClick={() => void renderLocalPreview()} disabled={!timeline || isRenderingPreview}>{isRenderingPreview ? '生成中' : '生成预览'}</button>
-            <button className="outline-button" onClick={() => void createJianyingDelivery()} disabled={!timeline || isCreatingJianyingDraft}>{isCreatingJianyingDraft ? '交付中' : '交付剪映草稿'}</button>
-          </div>
-          <ul className="workflow-summary">
-            <li><b>{assetPage.counts.total}</b><span>素材</span></li>
-            <li><b>{assetPage.counts.ready}</b><span>已分析</span></li>
-            <li><b>{assetPage.counts.failed}</b><span>失败</span></li>
-            <li><b>{storyboard?.shots.length ?? 0}</b><span>镜头</span></li>
-            <li><b>{timeline?.clips.length ?? 0}</b><span>片段</span></li>
-            <li><b>{preview ? preview.qualityReport.checks.length : 0}</b><span>预览检查</span></li>
-          </ul>
-        </section>
-        <ConversationWorkspace
+        <header className="topbar"><div className="crumbs">{activeProject?.name ?? '新 local project'} <span>/</span> {activeEditingSession?.title ?? '开始剪辑会话'}</div><div className="top-actions"><span className="saved">{storeState === 'ready' ? 'local project' : '演示模式'}</span>{storyboard && activeView !== 'artifacts' && <button className="outline-button" onClick={() => setActiveView('artifacts')}>查看成果</button>}</div></header>
+        <div className="mode-tabs">
+          <button className={activeView === 'chat' ? 'selected' : ''} onClick={() => setActiveView('chat')}>Agent</button>
+          <button className={activeView === 'assets' ? 'selected' : ''} onClick={() => setActiveView('assets')}>素材 <span>{assetPage.counts.total}</span></button>
+          <button className={activeView === 'artifacts' ? 'selected' : ''} onClick={() => setActiveView('artifacts')}>成果 <span>{storyboard?.shots.length ?? 0}</span></button>
+          <div className="timeline-state">{timelineState === 'not-created' ? '尚未创建 timeline' : timelineState === 'draft' ? `timeline v${timeline?.versionNumber ?? 1}` : timelineState === 'preview-generating' ? 'preview 生成中' : timelineState === 'preview-ready' ? 'preview 已生成' : timelineState === 'jianying-pending' ? 'Jianying draft 已生成 · 退出 Jianying 后自动注册' : 'Jianying draft 已注册'}</div>
+        </div>
+        {activeView === 'assets' ? assetWorkspace : <ConversationWorkspace
           activeEditingSession={activeEditingSession ? { id: activeEditingSession.id, conversationId: activeEditingSession.conversationId, title: activeEditingSession.title, brief: activeEditingSession.brief } : undefined}
           activeView={activeView}
           agentEditListenerReady={agentEditListenerReady}
@@ -1318,7 +1358,7 @@ function App() {
           onCreateTimelineFromStoryboard={() => void createTimelineFromStoryboard()}
           onGenerateStoryboard={() => void generateStoryboard()}
           onInputChange={(value) => { setInput(value); if (composerNotice) setComposerNotice(null) }}
-          onOpenStoryboard={() => setActiveView('storyboard')}
+          onOpenStoryboard={() => setActiveView('artifacts')}
           onRenderLocalPreview={() => void renderLocalPreview()}
           onSendMessage={sendMessage}
           onSetActiveView={setActiveView}
@@ -1335,64 +1375,10 @@ function App() {
           timeline={timeline}
           timelineVersions={timelineVersions}
           operationLogs={operationLogs}
-        />
+        />}
       </section>
 
       {activeProjectId && assetHealth && assetHealth.missing + assetHealth.changed + assetHealth.unreadable > 0 && <div className="asset-project-actions"><button className="relink-assets-action" onClick={() => void relinkAssetFolder()} disabled={storeState !== 'ready'}>修复源文件位置</button></div>}
-      <AssetManagementPanel
-        activeProjectId={activeProjectId}
-        storeReady={storeState === 'ready'}
-        assetPage={{ total: assetPage.counts.total, counts: assetPage.counts }}
-        assetTree={assetTree}
-        activeFolderNode={activeFolderNode}
-        folderBreadcrumb={folderBreadcrumb}
-        visibleAssetFolders={visibleAssetFolders}
-        filteredAssets={filteredAssets}
-        selectedAssetIds={selectedAssetIds}
-        setSelectedAssetIds={setSelectedAssetIds}
-        assetSearch={assetSearch}
-        setAssetSearch={setAssetSearch}
-        assetKindFilter={assetKindFilter}
-        setAssetKindFilter={setAssetKindFilter}
-        assetStatusFilter={assetStatusFilter}
-        setAssetStatusFilter={setAssetStatusFilter}
-        assetVisualFilter={assetVisualFilter}
-        setAssetVisualFilter={setAssetVisualFilter}
-        assetFolderFilter={assetFolderFilter}
-        setAssetFolderFilter={setAssetFolderFilter}
-        assetUserFilter={assetUserFilter}
-        setAssetUserFilter={setAssetUserFilter}
-        assetCollectionFilter={assetCollectionFilter}
-        setAssetCollectionFilter={setAssetCollectionFilter}
-        assetCollections={assetCollections}
-        assetBatchNotice={assetBatchNotice}
-        isRunningAssetBatch={isRunningAssetBatch}
-        onClearSelection={() => setSelectedAssetIds(new Set())}
-        onRetrySelectedAssetAnalysis={() => void retrySelectedAssetAnalysis()}
-        onSkipSelectedVisualAnalysis={() => void skipSelectedVisualAnalysis()}
-        onApplyUserMetadata={applySelectedUserMetadata}
-        onAddTagToSelected={() => void addTagToSelected()}
-        onAddSelectedToCollection={() => void addSelectedToCollection()}
-        onSelectFolder={selectFolder}
-        onSelectAssetEvidence={(assetId) => void selectAssetEvidence(assetId)}
-        onImportAssets={() => void importAssets()}
-        onImportAssetFolder={() => void importAssetFolder()}
-        onStartAssetHealthScan={() => void startAssetHealthScan(activeProjectId!)}
-        onCancelAssetHealthScan={(taskId) => void cancelAssetHealthScan(activeProjectId!, taskId)}
-        onOpenRelink={() => void relinkAssetFolder()}
-        onConfirmRelink={() => void confirmRelinkAssetFolder()}
-        onCancelRelink={cancelRelinkPreview}
-        assetHealth={assetHealth}
-        assetTaskCenter={assetTaskCenter}
-        assetTaskCenterOpen={assetTaskCenterOpen}
-        setAssetTaskCenterOpen={setAssetTaskCenterOpen}
-        assetRelinkPreview={assetRelinkPreview}
-        assetRelinkSourceDirectory={assetRelinkSourceDirectory}
-        assetRelinkPreserveAnalysis={assetRelinkPreserveAnalysis}
-        setAssetRelinkPreserveAnalysis={setAssetRelinkPreserveAnalysis}
-        setAssetEvidenceNull={() => setAssetEvidence(null)}
-        assetEvidence={assetEvidence}
-      />
 
       {assetPage.counts.analyzing > 0 && <aside className="analysis-activity" aria-live="polite"><header><span className="state-dot working" /><span>正在分析媒体</span><b>{assetPage.counts.analyzing}</b>{assetPage.counts.queued > 0 && <p className="analysis-queue">另 {assetPage.counts.queued} 个排队等待</p>}</header>{analyzingAssets.length > 0 && <ul>{analyzingAssets.slice(0, 3).map((asset) => <li key={asset.id}>{asset.name}</li>)}</ul>}{assetPage.counts.analyzing > analyzingAssets.slice(0, 3).length && <p>另有 {assetPage.counts.analyzing - analyzingAssets.slice(0, 3).length} 个任务正在运行</p>}</aside>}
       {providerOpen && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="模型提供商设置"><section className="provider-modal"><button className="close-button" onClick={() => setProviderOpen(false)} aria-label="关闭">x</button><span className="eyebrow">MODEL ACCESS</span><h2>连接 Agent 模型</h2><p>AI 剪辑 MVP 需要此模型连接。项目文件与原始素材保持在本机；仅在理解需求或分析关键帧时发送最小必要数据。API Key 只保存在 Windows 凭据库。</p><div className="provider-option chosen"><span><strong>OpenAI OAuth</strong><small>实验性 OpenCode 兼容流。令牌只存储在 Windows 凭据库，可能随 OpenAI 服务变更失效。</small></span><b>{oauthStatus.state === 'connected' ? '已连接' : '实验性'}</b></div><p className="oauth-status">{oauthStatus.message ?? '尚未连接。'}</p><button className="primary-button modal-button" onClick={() => void connectExperimentalOpenAI()} disabled={oauthStatus.state === 'pending' || oauthStatus.state === 'connected'}>{oauthStatus.state === 'pending' ? '等待浏览器授权' : oauthStatus.state === 'connected' ? 'OAuth 已连接' : '使用 ChatGPT 登录'}</button>{oauthStatus.state === 'connected' && <button className="outline-button modal-button" onClick={() => void disconnectExperimentalOpenAI()}>退出登录</button>}<div className="provider-divider" /><div className="provider-option chosen"><span><strong>自定义 API</strong><small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。配置后自定义 API 会优先生效。</small></span><b>{customApiStatus.state === 'connected' ? `${customApiStatus.model ?? '已连接'}` : '自定义'}</b></div><p className="oauth-status">{customApiStatus.message ?? '尚未配置。'}{customApiStatus.state === 'connected' && ` 粗视觉：${customApiStatus.coarseVisualModel ?? '使用主 Model'}`}</p><form className="custom-api-form" onSubmit={(event) => { event.preventDefault(); setIsSavingCustomApi(true); void saveCustomConnection(customBaseUrl, customModel, customCoarseVisualModel, customApiKey).then((ok) => { if (ok) { setCustomBaseUrl(''); setCustomModel(''); setCustomCoarseVisualModel(''); setCustomApiKey('') } setIsSavingCustomApi(false) }) }}><label><span>Base URL</span><input value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="off" /></label><label><span>Model（必填，storyboard 与 Agent）</span><input value={customModel} onChange={(event) => setCustomModel(event.target.value)} placeholder="例如 main-model" autoComplete="off" /></label><label><span>粗视觉 Model（可选）</span><input value={customCoarseVisualModel} onChange={(event) => setCustomCoarseVisualModel(event.target.value)} placeholder="留空则使用主 Model" autoComplete="off" /></label><label><span>API Key</span><input type="password" value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} placeholder="sk-..." autoComplete="off" /></label><button className="primary-button modal-button" type="submit" disabled={isSavingCustomApi || !customBaseUrl.trim() || !customModel.trim() || !customApiKey.trim()}>{isSavingCustomApi ? '保存中' : '保存自定义 API'}</button></form>{customApiStatus.state === 'connected' && <button className="outline-button modal-button" onClick={() => void disconnectCustomApi()}>清除自定义 API</button>}<button className="outline-button modal-button" onClick={() => setProviderOpen(false)}>关闭</button></section></div>}
