@@ -2326,26 +2326,14 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
     let agent_task_id = state.agent_task_id().to_owned();
     match tool {
         "get_edit_status" => {
-            let previous = state
-                .connection
-                .query_row(
-                    "SELECT status, result_json FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2 AND conversation_id = ?3 AND id != ?4 AND tool_name NOT IN ('analyze_asset', 'analyze_asset_visual_batch', 'get_edit_status') ORDER BY created_at DESC LIMIT 1",
-                    params![
-                        state.project_id,
-                        state.editing_task_id,
-                        state.conversation_id,
-                        state.agent_task_id
-                    ],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, Option<String>>(1)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|_| "Agent edit status could not be read.".to_owned())?;
-            let message = edit_status_message(previous.as_ref());
+            let message = read_scoped_edit_status(
+                state.app,
+                state.connection,
+                state.project_id,
+                state.editing_task_id,
+                state.conversation_id,
+                Some(state.agent_task_id),
+            )?;
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id: agent_task_id.clone(),
                 message: message.clone(),
@@ -2876,41 +2864,124 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
     }
 }
 
-fn edit_status_message(previous: Option<&(String, Option<String>)>) -> String {
-    let Some((status, result_json)) = previous else {
-        return "当前会话还没有可检查的剪辑任务。".to_owned();
-    };
-    let result = result_json
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<Value>(value).ok());
-    let has_storyboard = result
-        .as_ref()
-        .and_then(|value| value.get("storyboardVersionId"))
-        .is_some_and(|value| !value.is_null());
-    let has_timeline = result
-        .as_ref()
-        .and_then(|value| value.get("timelineVersionId"))
-        .is_some_and(|value| !value.is_null());
-    let has_preview = result
-        .as_ref()
-        .and_then(|value| value.get("previewTimelineVersionId"))
-        .is_some_and(|value| !value.is_null());
-    match status.as_str() {
-        "queued" | "running" => "还没剪好，上一条 Agent 任务仍在处理中。".to_owned(),
-        "needs_clarification" => "还没剪好，上一条 Agent 任务正在等待你补充信息。".to_owned(),
-        "needs_review" => "还没确认完成，上一条 Agent 任务需要审阅后再继续。".to_owned(),
-        "failed" => "还没剪好，上一条 Agent 任务没有完成，也没有把失败当成成功。".to_owned(),
-        "partially_completed" => {
-            "还没完全剪好，但上一条 Agent 任务已经保留了可审阅的中间产物。".to_owned()
-        }
-        "completed" if has_preview => "已经生成可审阅的 local preview。".to_owned(),
-        "completed" if has_timeline => {
-            "已经生成内部时间线，但还没有生成 local preview。".to_owned()
-        }
-        "completed" if has_storyboard => "已经生成 storyboard，但还没有生成内部时间线。".to_owned(),
-        "completed" => "上一条 Agent 请求已完成，但没有生成新的剪辑产物。".to_owned(),
-        _ => "当前剪辑状态暂时无法确认。".to_owned(),
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct EditArtifactState {
+    has_storyboard: bool,
+    has_timeline: bool,
+    has_preview: bool,
+}
+
+fn artifact_status_message(artifacts: EditArtifactState) -> Option<&'static str> {
+    if artifacts.has_preview {
+        Some("已经生成可审阅的 local preview。")
+    } else if artifacts.has_timeline {
+        Some("已经生成内部时间线，但还没有生成 local preview。")
+    } else if artifacts.has_storyboard {
+        Some("已经生成 storyboard，但还没有生成内部时间线。")
+    } else {
+        None
     }
+}
+
+fn edit_status_message(previous_status: Option<&str>, artifacts: EditArtifactState) -> String {
+    let artifact_message = artifact_status_message(artifacts);
+    match previous_status {
+        Some("queued" | "running") => match artifact_message {
+            Some(message) => format!("上一条 Agent 任务仍在处理中；{message}"),
+            None => "还没剪好，上一条 Agent 任务仍在处理中。".to_owned(),
+        },
+        Some("needs_clarification") => match artifact_message {
+            Some(message) => format!("上一条 Agent 任务正在等待你补充信息；{message}"),
+            None => "还没剪好，上一条 Agent 任务正在等待你补充信息。".to_owned(),
+        },
+        Some("needs_review") => match artifact_message {
+            Some(message) => format!("上一条 Agent 任务需要审阅后再继续；{message}"),
+            None => "还没确认完成，上一条 Agent 任务需要审阅后再继续。".to_owned(),
+        },
+        Some("failed") => match artifact_message {
+            Some(message) => format!("上一条 Agent 任务没有完成；{message}"),
+            None => "还没剪好，上一条 Agent 任务没有完成，也没有把失败当成成功。".to_owned(),
+        },
+        Some("partially_completed") => match artifact_message {
+            Some(message) => format!("上一条 Agent 任务只完成了一部分；{message}"),
+            None => "还没完全剪好，上一条 Agent 任务只完成了一部分。".to_owned(),
+        },
+        Some("completed") | None => artifact_message
+            .unwrap_or_else(|| {
+                if previous_status.is_some() {
+                    "上一条 Agent 请求已完成，但当前没有可检查的剪辑产物。"
+                } else {
+                    "当前会话还没有可检查的剪辑任务或产物。"
+                }
+            })
+            .to_owned(),
+        Some(_) => "当前剪辑状态暂时无法确认。".to_owned(),
+    }
+}
+
+pub(crate) fn read_scoped_edit_status(
+    app: &AppHandle,
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+    conversation_id: &str,
+    excluded_agent_task_id: Option<&str>,
+) -> Result<String, String> {
+    let previous_status = connection
+        .query_row(
+            "SELECT status FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2 AND conversation_id = ?3 AND (?4 IS NULL OR id != ?4) AND tool_name NOT IN ('analyze_asset', 'analyze_asset_visual_batch', 'get_edit_status') ORDER BY created_at DESC LIMIT 1",
+            params![project_id, editing_task_id, conversation_id, excluded_agent_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|_| "Agent edit status could not be read.".to_owned())?;
+    let storyboard_id = connection
+        .query_row(
+            "SELECT id FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
+            params![project_id, editing_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|_| "Agent storyboard status could not be read.".to_owned())?;
+    let latest_timeline = storyboard_id
+        .as_deref()
+        .map(|storyboard_id| {
+            connection
+                .query_row(
+                    "SELECT id, status FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
+                    params![project_id, storyboard_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+        })
+        .transpose()
+        .map_err(|_| "Agent timeline status could not be read.".to_owned())?
+        .flatten();
+    let has_preview = latest_timeline
+        .as_ref()
+        .is_some_and(|(timeline_id, status)| {
+            status == "preview_ready"
+                && app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|directory| {
+                        directory
+                            .join("previews")
+                            .join(timeline_id)
+                            .join("preview.mp4")
+                            .is_file()
+                    })
+                    .unwrap_or(false)
+        });
+    Ok(edit_status_message(
+        previous_status.as_deref(),
+        EditArtifactState {
+            has_storyboard: storyboard_id.is_some(),
+            has_timeline: latest_timeline.is_some(),
+            has_preview,
+        },
+    ))
 }
 
 fn select_timeline_for_tool(state: &LoopState, args: &Value) -> Result<TimelineVersion, String> {
@@ -3168,20 +3239,31 @@ mod tests {
     }
 
     #[test]
-    fn edit_status_is_grounded_in_the_previous_persisted_result() {
-        let preview = (
-            "completed".to_owned(),
-            Some(json!({"previewTimelineVersionId":"timeline-1"}).to_string()),
-        );
+    fn edit_status_prefers_current_scoped_artifacts() {
+        let preview = EditArtifactState {
+            has_storyboard: true,
+            has_timeline: true,
+            has_preview: true,
+        };
         assert_eq!(
-            edit_status_message(Some(&preview)),
+            edit_status_message(Some("completed"), preview),
             "已经生成可审阅的 local preview。"
         );
-        let running = ("running".to_owned(), None);
-        assert!(edit_status_message(Some(&running)).contains("仍在处理中"));
-        let failed = ("failed".to_owned(), None);
-        assert!(edit_status_message(Some(&failed)).contains("没有完成"));
-        assert!(edit_status_message(None).contains("没有可检查"));
+        assert!(edit_status_message(Some("running"), preview).contains("仍在处理中"));
+        assert!(edit_status_message(Some("running"), preview).contains("local preview"));
+        assert!(edit_status_message(Some("failed"), preview).contains("没有完成"));
+        assert_eq!(
+            edit_status_message(
+                Some("completed"),
+                EditArtifactState {
+                    has_storyboard: true,
+                    has_timeline: true,
+                    has_preview: false,
+                },
+            ),
+            "已经生成内部时间线，但还没有生成 local preview。"
+        );
+        assert!(edit_status_message(None, EditArtifactState::default()).contains("没有可检查"));
     }
 
     #[test]

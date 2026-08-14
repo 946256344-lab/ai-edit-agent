@@ -1,6 +1,7 @@
 use crate::agentloop::{
-    decide_conversation_route, run_agent_loop, run_agent_loop_with_initial_skill,
-    run_explicit_command, ConversationRouteDecision, InitialAgentSkill,
+    decide_conversation_route, read_scoped_edit_status, run_agent_loop,
+    run_agent_loop_with_initial_skill, run_explicit_command, ConversationRouteDecision,
+    InitialAgentSkill,
 };
 use crate::audit::{record_agent_operation, update_agent_task};
 use crate::db::{now_millis, open_connection};
@@ -8,7 +9,7 @@ use crate::models::{AgentEditResult, ConversationTurnResult, StoryboardVersion, 
 use crate::provider::ModelAccess;
 use crate::storyboard::load_storyboard_version;
 use crate::timeline::{timeline_candidates_for_editing_task, timeline_candidates_for_storyboard};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -103,52 +104,6 @@ fn load_agent_context(
         timelines = vec![timeline];
     }
     Ok((task_brief, storyboard, timelines))
-}
-
-fn scoped_edit_status(
-    connection: &Connection,
-    project_id: &str,
-    editing_task_id: &str,
-    conversation_id: &str,
-) -> Result<String, String> {
-    let row = connection
-        .query_row(
-            "SELECT status, result_json FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2 AND conversation_id = ?3 AND tool_name NOT IN ('analyze_asset', 'analyze_asset_visual_batch', 'get_edit_status') ORDER BY created_at DESC LIMIT 1",
-            params![project_id, editing_task_id, conversation_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-        )
-        .optional()
-        .map_err(|_| "Agent edit status could not be read.".to_owned())?;
-    let Some((status, result_json)) = row else {
-        return Ok("当前会话还没有可检查的剪辑任务。".to_owned());
-    };
-    let result = result_json
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-    let has = |key: &str| {
-        result
-            .as_ref()
-            .and_then(|value| value.get(key))
-            .is_some_and(|value| !value.is_null())
-    };
-    Ok(match status.as_str() {
-        "queued" | "running" => "还没剪好，上一条 Agent 任务仍在处理中。".to_owned(),
-        "needs_clarification" => "还没剪好，上一条 Agent 任务正在等待你补充信息。".to_owned(),
-        "needs_review" => "还没确认完成，上一条 Agent 任务需要审阅后再继续。".to_owned(),
-        "failed" => "还没剪好，上一条 Agent 任务没有完成。".to_owned(),
-        "partially_completed" => "还没完全剪好，但已有可审阅的中间产物。".to_owned(),
-        "completed" if has("previewTimelineVersionId") => {
-            "已经生成可审阅的 local preview。".to_owned()
-        }
-        "completed" if has("timelineVersionId") => {
-            "已经生成内部时间线，但还没有生成 local preview。".to_owned()
-        }
-        "completed" if has("storyboardVersionId") => {
-            "已经生成 storyboard，但还没有生成内部时间线。".to_owned()
-        }
-        "completed" => "上一条 Agent 请求已完成，但没有生成新的剪辑产物。".to_owned(),
-        _ => "当前剪辑状态暂时无法确认。".to_owned(),
-    })
 }
 
 fn safe_tool_failure(tool_name: &str, error: &str) -> serde_json::Value {
@@ -309,23 +264,44 @@ fn finalize_agent_task(
                     &summary,
                 )?;
             }
+            persist_agent_completion_message(
+                &transaction,
+                agent_task_id,
+                project_id,
+                editing_task_id,
+                conversation_id,
+                &result.message,
+            )?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(result)
         }
         Err(error) => {
             let tool_result = safe_tool_failure(tool_name, &error);
+            let transaction = connection
+                .unchecked_transaction()
+                .map_err(|error| error.to_string())?;
             update_agent_task(
-                connection,
+                &transaction,
                 agent_task_id,
                 None,
                 "failed",
                 Some(&tool_result),
                 Some(&error),
             )?;
-            Ok(failed_agent_edit_result(
+            let result = failed_agent_edit_result(
                 agent_task_id.to_owned(),
                 "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
-            ))
+            );
+            persist_agent_completion_message(
+                &transaction,
+                agent_task_id,
+                project_id,
+                editing_task_id,
+                conversation_id,
+                &result.message,
+            )?;
+            transaction.commit().map_err(|error| error.to_string())?;
+            Ok(result)
         }
     }
 }
@@ -404,8 +380,14 @@ pub fn submit_conversation_turn(
         crate::taskrouter::note_task_request(&connection, &project_id, &editing_task_id, &request)?;
     }
     if explicit_tool == Some("get_edit_status") {
-        let message =
-            scoped_edit_status(&connection, &project_id, &editing_task_id, &conversation_id)?;
+        let message = read_scoped_edit_status(
+            &app,
+            &connection,
+            &project_id,
+            &editing_task_id,
+            &conversation_id,
+            None,
+        )?;
         return Ok(ConversationTurnResult::Immediate {
             status: "response".to_owned(),
             message,
@@ -1019,18 +1001,26 @@ mod tests {
     #[test]
     fn unsatisfied_loop_is_persisted_as_failed() {
         let connection = Connection::open_in_memory().expect("open agent task test database");
+        crate::db::migrate(&connection).expect("migrate agent task test database");
         connection
             .execute_batch(
                 "
-                CREATE TABLE agent_tasks (
-                  id TEXT PRIMARY KEY, tool_name TEXT, status TEXT, result_json TEXT,
-                  error_message TEXT, updated_at INTEGER
+                INSERT INTO projects (id, name, created_at, updated_at)
+                VALUES ('project-1', 'Project', 1, 1);
+                INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at)
+                VALUES ('editing-task-1', 'project-1', 'Task', '', 1, 1);
+                INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                VALUES ('conversation-1', 'project-1', 'editing-task-1', 'Conversation', 'working', 1, 1);
+                INSERT INTO agent_tasks (
+                  id, project_id, editing_task_id, conversation_id, tool_name, status,
+                  input_json, created_at, updated_at
+                ) VALUES (
+                  'agent-task-1', 'project-1', 'editing-task-1', 'conversation-1',
+                  'agent_loop', 'running', '{}', 2, 2
                 );
-                INSERT INTO agent_tasks (id, tool_name, status, updated_at)
-                VALUES ('agent-task-1', 'agent_loop', 'running', 0);
                 ",
             )
-            .expect("create agent task test table");
+            .expect("seed agent task test scope");
         let result =
             failed_agent_edit_result("agent-task-1".to_owned(), "本轮没有生成新的 preview。");
 
@@ -1138,6 +1128,65 @@ mod tests {
             )
             .expect("read conversation status after newer request");
         assert_eq!(status_after_newer_request, "working");
+    }
+
+    #[test]
+    fn finalizing_a_successful_agent_task_persists_its_reply_atomically() {
+        let connection = Connection::open_in_memory().expect("open finalized task database");
+        crate::db::migrate(&connection).expect("migrate finalized task database");
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, created_at, updated_at)
+                 VALUES ('project-1', 'Project', 1, 1);
+                 INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at)
+                 VALUES ('task-1', 'project-1', 'Task', '', 1, 1);
+                 INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                 VALUES ('conversation-1', 'project-1', 'task-1', 'Conversation', 'working', 1, 1);
+                 INSERT INTO agent_tasks (
+                   id, project_id, editing_task_id, conversation_id, tool_name, status,
+                   input_json, created_at, updated_at
+                 ) VALUES (
+                   'agent-task-1', 'project-1', 'task-1', 'conversation-1', 'agent_loop',
+                   'running', '{}', 2, 2
+                 );",
+            )
+            .expect("seed finalized task scope");
+
+        let result = AgentEditResult {
+            agent_task_id: "agent-task-1".to_owned(),
+            message: "当前任务事实已经核对完成。".to_owned(),
+            storyboard: None,
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        };
+        finalize_agent_task(
+            &connection,
+            "agent-task-1",
+            "project-1",
+            "task-1",
+            "conversation-1",
+            "agent_loop",
+            Ok(result),
+            "completed",
+            None,
+        )
+        .expect("finalize successful task");
+
+        let (task_status, conversation_status, message_count): (String, String, i64) = connection
+            .query_row(
+                "SELECT agent_tasks.status, conversations.status,
+                        (SELECT COUNT(*) FROM messages WHERE id = 'agent-task-result-agent-task-1')
+                 FROM agent_tasks
+                 JOIN conversations ON conversations.id = agent_tasks.conversation_id
+                 WHERE agent_tasks.id = 'agent-task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read finalized task state");
+        assert_eq!(task_status, "completed");
+        assert_eq!(conversation_status, "ready");
+        assert_eq!(message_count, 1);
     }
 
     #[test]

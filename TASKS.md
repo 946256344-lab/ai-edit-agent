@@ -9,7 +9,9 @@
 - [x] 桌面审计完成门：已按阻断级别记录恢复状态、首个断点、代码根因和历史缺口。真实 preview 画面可加载；Provider、Agent 新请求、完整播放、媒体重新分析和 Jianying 仍未在本轮关闭，继续保留为 P0。
 - [x] 完成（2026-08-14）：恢复互斥顶层工作模式。Agent、素材、成果一次只渲染一个主工作区；素材管理进入完整宽度工作区；成果页集中展示 storyboard、timeline/审计与 preview；只保留一套 Workflow，未改变后端、Agent 工具或持久化行为。
 - [x] 本项完成门：真实桌面 1440×900 验收确认三个模式立即替换主内容；Agent 模式只显示消息、执行卡与 composer，素材模式显示 308/520/360px 三栏和 100 条有界素材页，成果模式只显示一套 Workflow 与 8 个 storyboard 镜头。`npm run lint`、`npm run build`、`npm run harness:check` 与 `git diff --check` 全部通过。
-- [ ] 下一步（P0）：在不生成新产物的前提下，先验证 Provider 状态读取、只读项目事实问答以及 Task Resolver → Conversation Router → Agent run 的任务归属与终态恢复；通过后再用受控请求验证内部 timeline/preview，不触发最终导出、覆盖、删除或 Jianying draft 覆盖。
+- [x] 完成（2026-08-14，P0）：在不生成新产物的前提下完成 Provider 与 Agent 只读链路验收。真实后端状态为自定义 API 已连接、主 Model 已配置、实验性 OAuth 未连接，和 UI 一致；没有读取或输出 API Key。精确“剪好了吗？”增加一对 user/agent 消息但 Agent task 数不变；项目事实问题进入当前 task/conversation，只执行 `get_storyboard → get_timeline → finish`，准确报告 8 个镜头、8 个片段和现有 local preview，且 storyboard/timeline/preview ID 全部不变。
+- [x] 本项完成门：修复状态查询只看最近 Agent task 而忽略当前真实 preview，以及成功 Agent run 未持久化最终回复、conversation 卡在 `working` 的两个 P0 缺陷。终态任务与 `agent-task-result-{agentTaskId}` 回复现于同一事务提交；启动会把历史“终态但无回复”的 working 会话恢复为 `needs_review` 并补固定消息。真实桌面切换模式和刷新后，13 条持久化消息与 13 条可见消息一致，最新完成回复只有 1 条，conversation 保持 `ready`。
+- [ ] 下一步（P0）：用显式、受控请求验证新内部 timeline version 与 local preview 的生成、作用域、版本递增、播放和重启恢复；只创建新本地产物，不覆盖既有版本，不创建 Jianying draft，不执行最终导出或删除。
 
 ### P0：端到端 MVP 重新验收
 

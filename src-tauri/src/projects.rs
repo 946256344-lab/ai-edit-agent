@@ -6,6 +6,104 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::AppHandle;
 use uuid::Uuid;
 
+const MISSING_AGENT_REPLY_MESSAGE: &str = "上一条 Agent 任务已结束，但应用未能恢复其最终回复。请审阅当前 storyboard、时间线和 preview，并重新提问或继续操作。";
+
+fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<usize, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT task.id, task.project_id, task.editing_task_id, task.conversation_id
+             FROM agent_tasks AS task
+             JOIN conversations AS conversation ON conversation.id = task.conversation_id
+             WHERE conversation.status = 'working'
+               AND task.editing_task_id IS NOT NULL
+               AND task.conversation_id IS NOT NULL
+               AND task.status IN ('completed', 'partially_completed', 'failed', 'needs_clarification', 'needs_review')
+               AND task.id = (
+                 SELECT latest.id FROM agent_tasks AS latest
+                 WHERE latest.conversation_id = task.conversation_id
+                 ORDER BY latest.created_at DESC, latest.updated_at DESC, latest.id DESC
+                 LIMIT 1
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM messages
+                 WHERE messages.id = 'agent-task-result-' || task.id
+                   AND messages.conversation_id = task.conversation_id
+               )",
+        )
+        .map_err(|error| error.to_string())?;
+    let missing = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let timestamp = now_millis();
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for (agent_task_id, project_id, editing_task_id, conversation_id) in &missing {
+        transaction
+            .execute(
+                "UPDATE agent_tasks
+                 SET status = 'needs_review',
+                     error_message = COALESCE(error_message, 'The Agent reply was unavailable after task completion.'),
+                     updated_at = ?1
+                 WHERE id = ?2 AND project_id = ?3 AND editing_task_id = ?4 AND conversation_id = ?5",
+                params![timestamp, agent_task_id, project_id, editing_task_id, conversation_id],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES ('agent-task-result-' || ?1, ?2, 'agent', ?3, ?4)",
+                params![
+                    agent_task_id,
+                    conversation_id,
+                    MISSING_AGENT_REPLY_MESSAGE,
+                    timestamp
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "UPDATE conversations SET status = 'review', summary = ?1, updated_at = ?2
+                 WHERE id = ?3 AND project_id = ?4 AND editing_task_id = ?5",
+                params![
+                    MISSING_AGENT_REPLY_MESSAGE,
+                    timestamp,
+                    conversation_id,
+                    project_id,
+                    editing_task_id
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "UPDATE editing_tasks SET updated_at = ?1 WHERE id = ?2 AND project_id = ?3",
+                params![timestamp, editing_task_id, project_id],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "UPDATE projects SET updated_at = ?1 WHERE id = ?2",
+                params![timestamp, project_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(missing.len())
+}
+
 #[tauri::command]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     let connection = open_connection(&app)?;
@@ -17,6 +115,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
         "UPDATE agent_run_steps SET status = 'failed', error_code = COALESCE(error_code, 'interrupted_requires_review'), completed_at = ?1, updated_at = ?1 WHERE status IN ('queued', 'running') AND agent_task_id IN (SELECT id FROM agent_tasks WHERE status = 'needs_review')",
         params![now_millis()],
     ).map_err(|error| error.to_string())?;
+    recover_missing_agent_completion_messages(&connection)?;
     connection.execute(
         "UPDATE conversations SET status = 'review' WHERE status = 'working' AND id IN (SELECT conversation_id FROM agent_tasks WHERE status = 'needs_review' AND conversation_id IS NOT NULL)",
         [],
@@ -524,5 +623,53 @@ mod tests {
         assert_eq!(sessions[0].summary, "Latest summary");
         assert_eq!(sessions[0].status, "working");
         assert_eq!(sessions[0].updated_at, 5);
+    }
+
+    #[test]
+    fn startup_recovery_marks_a_terminal_task_without_a_reply_for_review() {
+        let connection = Connection::open_in_memory().expect("open recovery test database");
+        crate::db::migrate(&connection).expect("create recovery schema");
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, created_at, updated_at)
+                 VALUES ('project-1', 'Project', 1, 1);
+                 INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at)
+                 VALUES ('task-1', 'project-1', 'Task', '', 1, 1);
+                 INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                 VALUES ('conversation-1', 'project-1', 'task-1', 'Conversation', 'working', 1, 1);
+                 INSERT INTO agent_tasks (
+                   id, project_id, editing_task_id, conversation_id, tool_name, status,
+                   input_json, created_at, updated_at
+                 ) VALUES (
+                   'agent-task-1', 'project-1', 'task-1', 'conversation-1', 'agent_loop',
+                   'completed', '{}', 2, 2
+                 );",
+            )
+            .expect("seed missing completion reply");
+
+        assert_eq!(
+            recover_missing_agent_completion_messages(&connection)
+                .expect("recover missing completion reply"),
+            1
+        );
+        assert_eq!(
+            recover_missing_agent_completion_messages(&connection)
+                .expect("repeat completion recovery"),
+            0
+        );
+        let (task_status, conversation_status, message_count): (String, String, i64) = connection
+            .query_row(
+                "SELECT agent_tasks.status, conversations.status,
+                        (SELECT COUNT(*) FROM messages WHERE id = 'agent-task-result-agent-task-1')
+                 FROM agent_tasks
+                 JOIN conversations ON conversations.id = agent_tasks.conversation_id
+                 WHERE agent_tasks.id = 'agent-task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read recovered completion state");
+        assert_eq!(task_status, "needs_review");
+        assert_eq!(conversation_status, "review");
+        assert_eq!(message_count, 1);
     }
 }

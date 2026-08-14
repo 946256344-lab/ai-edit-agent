@@ -2,6 +2,13 @@
 
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
+## ADR-055：Agent 终态、最终回复与会话恢复必须形成同一事实边界
+
+- 状态：已实现；自定义 Provider 的真实桌面项目事实问答、历史坏记录恢复、模式切换和 WebView 刷新均已验证
+- 决策：`finalize_agent_task` 必须在同一 SQLite 事务中写入 Agent task 终态、可选产物审计、确定性 `agent-task-result-{agentTaskId}` 最终回复和 conversation 终态，事务成功后才允许发送 `agent-edit-completed`。启动时若发现仍为 `working` 的 conversation，其最新 Agent task 已终态但缺少确定性回复，则不得静默改成 `ready`：任务改为 `needs_review`，补一条固定恢复消息并把 conversation 标为 `review`。精确完成状态查询以当前 task 的最新真实 storyboard、最新时间线状态和磁盘中实际存在的 preview 为产物事实；最近 Agent task 只说明运行/失败/澄清状态，不能覆盖更可靠的当前产物。
+- 原因：真实桌面验收发现两处此前测试没有覆盖的断裂。第一，已有可播放 preview 时，`get_edit_status` 因最近 task 只产生时间线而错误回答“还没有 preview”。第二，项目事实 Agent run 已完成 `get_storyboard → finish` 并写成 `completed`，但成功路径没有调用最终回复持久化函数，导致回复丢失、conversation 永久 `working`，事件和前端轮询都无法恢复完整事实。
+- 后果：ADR-053 的“持久化事实优先、事件仅通知”现在由成功流水线本身强制落实，而不是只存在于独立 helper 和单测中。崩溃窗口留下的无回复终态不会伪装成正常完成；恢复消息不重构或猜测已丢失的模型回答。没有新增公开命令、schema、Provider 数据或媒体副作用。
+
 ## ADR-054：Agent、素材与成果是互斥顶层工作模式
 
 - 状态：已实现；Agent/素材/成果切换已在真实 Tauri WebView 中验证

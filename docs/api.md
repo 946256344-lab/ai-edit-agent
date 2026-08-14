@@ -10,7 +10,7 @@
 
 | 命令 | 输入 | 结果 | 说明 |
 | --- | --- | --- | --- |
-| `initialize_local_store` | 无 | `StoreStatus` | 创建应用数据目录、打开 SQLite（WAL + busy_timeout）、执行迁移；中断且存在未完成通用 Agent 调用的会话恢复为 `review`，其余 `working` 会话恢复为 `ready`，并每进程恢复一次未完成分析任务（只立即处理前 4 条，其余保持 `queued`），且对状态为 `queued`/`analyzing` 但没有对应 `analyze_asset` 任务的孤立素材补建并排队分析。 |
+| `initialize_local_store` | 无 | `StoreStatus` | 创建应用数据目录、打开 SQLite（WAL + busy_timeout）、执行迁移；中断且存在未完成通用 Agent 调用的会话恢复为 `review`。若 `working` 会话的最新 Agent task 已终态但缺少 `agent-task-result-{agentTaskId}`，任务改为 `needs_review`、写入固定恢复消息且会话改为 `review`，不猜测丢失回答；其余 `working` 会话恢复为 `ready`。每进程还恢复一次未完成分析任务（只立即处理前 4 条，其余保持 `queued`），并对状态为 `queued`/`analyzing` 但没有对应 `analyze_asset` 任务的孤立素材补建并排队分析。 |
 | `create_project` | `{ name }` | `StoredProject` | 拒绝空名称。 |
 | `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
 | `create_editing_task` | `{ projectId, title }` | `StoredEditingTask` | 在既有项目内创建作用域化创作目标。 |
@@ -59,13 +59,13 @@
 | `clear_custom_api` | 无 | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 
-`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、固定诚实消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行完整流水线。终态回复先以 `agent-task-result-{agentTaskId}` 作为消息 ID幂等写入原 conversation，并将仍无更新请求的会话恢复为 `ready`，随后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。未限定的中文“创建草稿”进入 Conversation Router，由模型结合状态选择工具；只有明确“创建剪映草稿”才直通 `create_jianying_draft`，明确“内部时间线”或“时间线”才直通 `create_timeline_draft`。显式“生成预览”或创建 Jianying draft 在请求未携带 storyboard 版本时，仍接受同一项目与剪辑任务内的指定时间线；这类上下文不完整的请求不直接执行，后端把已验证时间线及缺失上下文作为事实提供给模型，由模型在受控工具集中决定下一步；指定时间线不属于当前任务时会被拒绝。后端会归一化常见精确命令，并仅在动作成功后附加经验证的结果消息。`needs_clarification` 不创建产物，只返回一个可执行的中文澄清问题；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。
+`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、固定诚实消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行完整流水线。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。未限定的中文“创建草稿”进入 Conversation Router，由模型结合状态选择工具；只有明确“创建剪映草稿”才直通 `create_jianying_draft`，明确“内部时间线”或“时间线”才直通 `create_timeline_draft`。显式“生成预览”或创建 Jianying draft 在请求未携带 storyboard 版本时，仍接受同一项目与剪辑任务内的指定时间线；这类上下文不完整的请求不直接执行，后端把已验证时间线及缺失上下文作为事实提供给模型，由模型在受控工具集中决定下一步；指定时间线不属于当前任务时会被拒绝。后端会归一化常见精确命令，并仅在动作成功后附加经验证的结果消息。`needs_clarification` 不创建产物，只返回一个可执行的中文澄清问题；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。
 
 Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。
 
 Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴露凭据或完整媒体路径。
 
-“剪好了吗”“完成了吗”等精确状态问题走只读 `get_edit_status` 确定性路径，不调用模型。它只查询同一项目、剪辑任务和会话的上一条 Agent 任务及安全产物标识，区分处理中、待澄清、失败、部分完成、storyboard、内部时间线与 local preview；不会把后台视觉分析任务当作剪辑完成状态。
+“剪好了吗”“完成了吗”等精确状态问题走只读 `get_edit_status` 确定性路径，不调用模型也不创建 Agent task。它读取同一项目、剪辑任务和会话的上一条 Agent task 状态，并以当前 task 最新 storyboard、该 storyboard 最新时间线状态及磁盘实际 preview 文件作为产物事实，区分处理中、待澄清、失败、部分完成、storyboard、内部时间线与 local preview；不会把后台视觉分析任务或较旧 task result 当作当前剪辑完成状态。
 
 ## 会话生命周期
 
