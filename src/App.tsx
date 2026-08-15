@@ -7,14 +7,12 @@ import { listen } from '@tauri-apps/api/event'
 import './App.css'
 import { ConversationWorkspace } from './components/ConversationWorkspace'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
+import type { AssetView } from './components/asset-workspace/AssetBrowser'
 import {
   clearCustomApi,
   clearExperimentalOpenAIOAuth,
-  addAssetsToCollection,
-  addAssetTagBatch,
   confirmAssetRelink,
   createConversation as createStoredConversation,
-  createAssetCollection,
   createEditingSession as createStoredEditingSession,
   createJianyingDraft,
   createMessage as createStoredMessage,
@@ -22,7 +20,6 @@ import {
   createTimelineDraft,
   generateStoryboard as generateStoredStoryboard,
   getAssetEvidence,
-  getAssetTaskCenter,
   getAssetHealthScanSummary,
   startAssetHealthScan,
   cancelAssetHealthScan,
@@ -37,7 +34,6 @@ import {
   isDesktopRuntime,
   listAgentTasks,
   listAssetPage,
-  listAssetCollections,
   listEditingSessions,
   listMessages,
   listOperationLogs,
@@ -45,16 +41,13 @@ import {
   listTimelineVersions,
   previewAssetRelink,
   renderPreview,
-  retryAssetAnalysisBatch,
   resolveConversationTask,
   saveCustomApi,
   setConversationStatus,
-  skipAssetVisualAnalysisBatch,
-  updateAssetUserMetadataBatch,
   startExperimentalOpenAIOAuth,
   submitConversationTurn,
 } from './lib/local-store'
-import type { AgentEditEvent, AssetCollection, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview, AssetTaskCenter, ConversationTurnResult, CustomApiStatus, ExperimentalOAuthStatus, JianyingRegistrationStatus, PreviewResult, StoryboardVersion, StoredAgentTask, StoredAsset, StoredEditingSession, StoredMessage, StoredOperationLog, StoredProject, TaskRouteResult, TimelineVersion } from './lib/local-store'
+import type { AgentEditEvent, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview, ConversationTurnResult, CustomApiStatus, ExperimentalOAuthStatus, JianyingRegistrationStatus, PreviewResult, StoryboardVersion, StoredAgentTask, StoredAsset, StoredEditingSession, StoredMessage, StoredOperationLog, StoredProject, TaskRouteResult, TimelineVersion } from './lib/local-store'
 
 type EditingSession = {
   id: string
@@ -64,28 +57,6 @@ type EditingSession = {
   brief: string
   updated: string
   state: 'ready' | 'working' | 'review'
-}
-
-type Asset = {
-  id: string
-  name: string
-  folderName: string | null
-  relativePath: string | null
-  directoryKey: string | null
-  kind: 'video' | 'image' | 'audio' | 'other'
-  duration: string
-  status: 'ready' | 'analyzing' | 'queued' | 'failed'
-  visualStatus: 'queued' | 'running' | 'ready' | 'failed' | 'skipped'
-  favorite: boolean
-  rating: number
-  note: string
-  excluded: boolean
-  userTags: string[]
-  collectionIds: string[]
-  sourceHealthStatus: StoredAsset['sourceHealthStatus']
-  tags: string[]
-  color: string
-  thumbnailUrl: string | null
 }
 
 type Message = {
@@ -116,27 +87,18 @@ function toMessage(message: StoredMessage): Message {
   }
 }
 
-function toAsset(asset: StoredAsset): Asset {
+function toAsset(asset: StoredAsset): AssetView {
   const kind = asset.kind === 'video' || asset.kind === 'image' || asset.kind === 'audio' ? asset.kind : 'other'
   return {
     id: asset.id,
     name: asset.displayName,
     folderName: asset.folderName,
     relativePath: asset.relativePath,
-    directoryKey: asset.directoryKey,
     kind,
     duration: formatDuration(asset.durationMs),
     status: asset.analysisStatus === 'ready' ? 'ready' : asset.analysisStatus === 'failed' ? 'failed' : asset.analysisStatus === 'queued' ? 'queued' : 'analyzing',
     visualStatus: asset.visualAnalysisStatus,
-    favorite: asset.favorite,
-    rating: asset.rating,
-    note: asset.note,
-    excluded: asset.excluded,
-    userTags: asset.userTags,
-    collectionIds: asset.collectionIds,
     sourceHealthStatus: asset.sourceHealthStatus,
-    tags: [asset.sourceHealthStatus === 'missing' ? '源文件缺失' : asset.sourceHealthStatus === 'changed' ? '源文件已变化' : asset.sourceHealthStatus === 'unreadable' ? '源文件不可读' : '', asset.excluded ? '禁止使用' : '', asset.favorite ? '收藏' : '', asset.rating ? `${asset.rating} 星` : '', ...asset.userTags, kind === 'other' ? '其他素材' : kind, asset.width && asset.height ? `${asset.width} x ${asset.height}` : '', asset.fps ? `${asset.fps.toFixed(1)} fps` : '', asset.hasAudio ? '含音频' : '', asset.keyframeCount ? `${asset.keyframeCount} 关键帧` : '', asset.sceneCount ? `${asset.sceneCount} 镜头` : '', asset.ocrTextCount ? `${asset.ocrTextCount} 文本` : '', asset.visualTagCount ? `${asset.visualTagCount} 视觉标签` : ''].filter(Boolean),
-    color: kind === 'video' ? 'factory' : kind === 'audio' ? 'audio' : kind === 'image' ? 'product' : 'imported',
     thumbnailUrl: asset.thumbnailPath && isDesktopRuntime() ? convertFileSrc(asset.thumbnailPath) : null,
   }
 }
@@ -171,26 +133,13 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [editingSessions, setEditingSessions] = useState<EditingSession[]>([])
   const [activeEditingSessionId, setActiveEditingSessionId] = useState<string | null>(null)
-  const [assets, setAssets] = useState<Asset[]>([])
+  const [assets, setAssets] = useState<AssetView[]>([])
   const [assetPage, setAssetPage] = useState<Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'counts'>>({ total: 0, directories: [], unfiledCount: 0, counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
   const [assetPageRevision, setAssetPageRevision] = useState(0)
-  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
-  const [assetTaskCenter, setAssetTaskCenter] = useState<AssetTaskCenter | null>(null)
   const [assetHealth, setAssetHealth] = useState<AssetHealthScanSummary | null>(null)
-  const [assetTaskCenterOpen, setAssetTaskCenterOpen] = useState(false)
-  const [assetBatchNotice, setAssetBatchNotice] = useState<string | null>(null)
-  const [isRunningAssetBatch, setIsRunningAssetBatch] = useState(false)
   const [assetRelinkPreview, setAssetRelinkPreview] = useState<AssetRelinkPreview | null>(null)
   const [assetRelinkSourceDirectory, setAssetRelinkSourceDirectory] = useState<string | null>(null)
-  const [assetRelinkPreserveAnalysis, setAssetRelinkPreserveAnalysis] = useState<boolean>(true)
-  const [assetSearch, setAssetSearch] = useState('')
-  const [assetKindFilter, setAssetKindFilter] = useState<'all' | Asset['kind']>('all')
-  const [assetStatusFilter, setAssetStatusFilter] = useState<'all' | Asset['status']>('all')
-  const [assetVisualFilter, setAssetVisualFilter] = useState<'all' | 'storyboard-ready' | Asset['visualStatus']>('all')
   const [assetFolderFilter, setAssetFolderFilter] = useState('all')
-  const [assetUserFilter, setAssetUserFilter] = useState<'all' | 'favorite' | 'excluded' | 'available'>('all')
-  const [assetCollectionFilter, setAssetCollectionFilter] = useState('all')
-  const [assetCollections, setAssetCollections] = useState<AssetCollection[]>([])
   const [assetEvidence, setAssetEvidence] = useState<AssetEvidence | null>(null)
   const [storyboard, setStoryboard] = useState<StoryboardVersion | null>(null)
   const [storyboardBrief, setStoryboardBrief] = useState('')
@@ -478,13 +427,7 @@ function App() {
     let cancelled = false
     const refreshAssets = () => {
       void listAssetPage(projectId, {
-        search: assetSearch.trim() || undefined,
-        kind: assetKindFilter === 'all' ? undefined : assetKindFilter,
-        analysisStatus: assetStatusFilter === 'all' ? undefined : assetStatusFilter,
-        visualStatus: assetVisualFilter === 'all' ? undefined : assetVisualFilter,
         directoryKey: assetFolderFilter === 'all' ? undefined : assetFolderFilter,
-        userFilter: assetUserFilter === 'all' ? undefined : assetUserFilter,
-        collectionId: assetCollectionFilter === 'all' ? undefined : assetCollectionFilter,
         offset: 0,
         limit: 100,
       }).then((page) => {
@@ -495,21 +438,10 @@ function App() {
         }
       }).catch(() => undefined)
     }
-    const debounceId = window.setTimeout(refreshAssets, 180)
+    refreshAssets()
     const intervalId = window.setInterval(refreshAssets, 1500)
-    return () => { cancelled = true; window.clearTimeout(debounceId); window.clearInterval(intervalId) }
-  }, [activeProjectId, assetCollectionFilter, assetFolderFilter, assetKindFilter, assetPageRevision, assetSearch, assetStatusFilter, assetUserFilter, assetVisualFilter, desktopRuntime])
-
-  useEffect(() => {
-    if (!desktopRuntime || !activeProjectId) return
-    const projectId = activeProjectId
-    const refreshTaskCenter = () => void getAssetTaskCenter(projectId).then((center) => {
-      if (activeProjectRef.current === projectId) setAssetTaskCenter(center)
-    }).catch(() => undefined)
-    refreshTaskCenter()
-    const intervalId = window.setInterval(refreshTaskCenter, 2000)
-    return () => window.clearInterval(intervalId)
-  }, [activeProjectId, assetPageRevision, desktopRuntime])
+    return () => { cancelled = true; window.clearInterval(intervalId) }
+  }, [activeProjectId, assetFolderFilter, assetPageRevision, desktopRuntime])
 
   useEffect(() => {
     if (!desktopRuntime || !activeProjectId) return
@@ -520,14 +452,6 @@ function App() {
     refresh(); const intervalId = window.setInterval(refresh, 2000)
     return () => window.clearInterval(intervalId)
   }, [activeProjectId, desktopRuntime])
-
-  useEffect(() => {
-    if (!desktopRuntime || !activeProjectId) return
-    const projectId = activeProjectId
-    void listAssetCollections(projectId).then((collections) => {
-      if (activeProjectRef.current === projectId) setAssetCollections(collections)
-    }).catch(() => undefined)
-  }, [activeProjectId, assetPageRevision, desktopRuntime])
 
   useEffect(() => {
     if (!desktopRuntime) return
@@ -554,17 +478,10 @@ function App() {
     setEditingSessions(nextSessions)
     setAssets([])
     setAssetPage({ total: 0, directories: [], unfiledCount: 0, counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
-    setAssetSearch('')
-    setAssetKindFilter('all')
-    setAssetStatusFilter('all')
-    setAssetVisualFilter('all')
     setAssetFolderFilter('all')
-    setAssetUserFilter('all')
-    setAssetCollectionFilter('all')
-    setAssetCollections([])
-    setSelectedAssetIds(new Set())
-    setAssetTaskCenter(null)
-    setAssetBatchNotice(null)
+    setAssetHealth(null)
+    setAssetRelinkPreview(null)
+    setAssetRelinkSourceDirectory(null)
     setAssetEvidence(null)
     if (nextSessions[0]) await selectEditingSession(projectId, nextSessions[0].id, nextSessions)
     else {
@@ -843,7 +760,6 @@ function App() {
     const sources = Array.isArray(selected) ? selected : [selected]
     const imported = await importStoredAssets(projectId, sources)
     if (activeProjectRef.current === projectId) {
-      setAssets((current) => [...imported.map(toAsset), ...current])
       setAssetPageRevision((value) => value + 1)
     }
     await appendStoredMessage(context.conversationId, context.sessionId, 'agent', `已将 ${imported.length} 个素材加入本地分析队列。分析完成前不会影响当前故事板。`)
@@ -873,7 +789,6 @@ function App() {
     const preview = await previewAssetRelink(activeProjectId, selected)
     setAssetRelinkPreview(preview)
     setAssetRelinkSourceDirectory(selected)
-    setAssetRelinkPreserveAnalysis(true)
     if (!preview.matches.length) {
       window.alert('没有找到可安全重链路的素材。请选择保留原有文件夹结构的素材根目录。')
       return
@@ -882,9 +797,9 @@ function App() {
 
   async function confirmRelinkAssetFolder() {
     if (!desktopRuntime || !activeProjectId || !assetRelinkSourceDirectory || !assetRelinkPreview) return
-    const result = await confirmAssetRelink(activeProjectId, assetRelinkSourceDirectory, assetRelinkPreview.matches.map((match) => match.assetId), assetRelinkPreserveAnalysis)
+    const result = await confirmAssetRelink(activeProjectId, assetRelinkSourceDirectory, assetRelinkPreview.matches.map((match) => match.assetId), true)
     if (activeProjectRef.current === activeProjectId) setAssetPageRevision((value) => value + 1)
-    window.alert(assetRelinkPreserveAnalysis ? `已重新链路 ${result.relinkedCount} 个素材并保留分析信息。` : `已重新链路 ${result.relinkedCount} 个素材，并按批次重新分析。`)
+    window.alert(`已重新链路 ${result.relinkedCount} 个素材并保留分析信息。`)
     setAssetRelinkPreview(null)
     setAssetRelinkSourceDirectory(null)
   }
@@ -907,6 +822,7 @@ function App() {
 
   function selectFolder(path: string) {
     setAssetEvidence(null)
+    if (path === assetFolderFilter) return
     setAssets([])
     setAssetFolderFilter(path)
   }
@@ -1082,133 +998,37 @@ function App() {
     }
   }
 
-  async function retrySelectedAssetAnalysis(assetIds = [...selectedAssetIds]) {
-    if (!activeProjectId || assetIds.length === 0 || isRunningAssetBatch) return
-    setIsRunningAssetBatch(true)
-    setAssetBatchNotice(null)
-    try {
-      const result = await retryAssetAnalysisBatch(activeProjectId, assetIds)
-      setAssetBatchNotice(`已将 ${result.updatedCount} 个素材加入技术分析队列，${result.skippedCount} 个无需重复排队。`)
-      setSelectedAssetIds(new Set())
-      setAssetPageRevision((value) => value + 1)
-    } catch {
-      setAssetBatchNotice('批量重试未执行。请检查素材是否仍在当前项目且源文件可用。')
-    } finally {
-      setIsRunningAssetBatch(false)
-    }
-  }
-
-  async function skipSelectedVisualAnalysis() {
-    if (!activeProjectId || selectedAssetIds.size === 0 || isRunningAssetBatch) return
-    if (!window.confirm(`将跳过所选 ${selectedAssetIds.size} 个素材的视觉分析，并清除这些素材已有的视觉标签。技术分析结果会保留。是否继续？`)) return
-    setIsRunningAssetBatch(true)
-    setAssetBatchNotice(null)
-    try {
-      const result = await skipAssetVisualAnalysisBatch(activeProjectId, [...selectedAssetIds])
-      setAssetBatchNotice(`已跳过 ${result.updatedCount} 个素材的视觉分析，${result.skippedCount} 个不适用或已经跳过。`)
-      setSelectedAssetIds(new Set())
-      setAssetPageRevision((value) => value + 1)
-    } catch {
-      setAssetBatchNotice('批量跳过未执行。所选素材可能已不属于当前项目。')
-    } finally {
-      setIsRunningAssetBatch(false)
-    }
-  }
-
-  async function applySelectedUserMetadata(fields: { favorite?: boolean; rating?: number; note?: string; excluded?: boolean }, successMessage: string) {
-    if (!activeProjectId || selectedAssetIds.size === 0 || isRunningAssetBatch) return
-    setIsRunningAssetBatch(true)
-    try {
-      await updateAssetUserMetadataBatch(activeProjectId, [...selectedAssetIds], fields)
-      setAssetBatchNotice(successMessage)
-      setAssetPageRevision((value) => value + 1)
-    } catch { setAssetBatchNotice('用户素材信息未更新，请检查当前选择。') }
-    finally { setIsRunningAssetBatch(false) }
-  }
-
-  async function addTagToSelected() {
-    if (!activeProjectId || selectedAssetIds.size === 0) return
-    const tag = window.prompt('输入用户标签（最多 64 个字符）')?.trim()
-    if (!tag) return
-    try { const result = await addAssetTagBatch(activeProjectId, [...selectedAssetIds], tag); setAssetBatchNotice(`已为 ${result.updatedCount} 个素材添加标签“${tag}”。`); setAssetPageRevision((value) => value + 1) }
-    catch { setAssetBatchNotice('标签未添加，请检查名称与当前选择。') }
-  }
-
-  async function addSelectedToCollection() {
-    if (!activeProjectId || selectedAssetIds.size === 0) return
-    let collectionId: string | undefined = assetCollections[0]?.id
-    if (assetCollections.length > 0) {
-      const choice = window.prompt(`输入集合名称；已有：${assetCollections.map((collection) => collection.name).join('、')}`)?.trim()
-      if (!choice) return
-      collectionId = assetCollections.find((collection) => collection.name.toLocaleLowerCase('zh-CN') === choice.toLocaleLowerCase('zh-CN'))?.id
-      if (!collectionId) collectionId = (await createAssetCollection(activeProjectId, choice)).id
-    } else {
-      const name = window.prompt('输入新集合名称')?.trim()
-      if (!name) return
-      collectionId = (await createAssetCollection(activeProjectId, name)).id
-    }
-    if (!collectionId) return
-    const result = await addAssetsToCollection(activeProjectId, collectionId, [...selectedAssetIds])
-    setAssetBatchNotice(`已将 ${result.updatedCount} 个素材加入集合。`)
-    setAssetPageRevision((value) => value + 1)
-  }
-
   if (!desktopRuntime) {
     return <main className="app-shell browser-notice"><section><span className="eyebrow">DESKTOP APP REQUIRED</span><h1>请在 Windows 桌面应用中运行 Assembly Video Agent</h1><p>浏览器模式不能访问本地项目、媒体文件、FFmpeg 或 AI 凭据，因此不能用于剪辑测试。</p><code>npm run tauri:dev</code></section></main>
   }
 
   const assetWorkspace = (
     <AssetManagementPanel
-      activeProjectId={activeProjectId}
-      storeReady={storeState === 'ready'}
-      assetPage={{ total: assetPage.total, counts: assetPage.counts }}
-      assetDirectories={assetPage.directories}
-      unfiledAssetCount={assetPage.unfiledCount}
-      visibleAssets={assets}
-      selectedAssetIds={selectedAssetIds}
-      setSelectedAssetIds={setSelectedAssetIds}
-      assetSearch={assetSearch}
-      setAssetSearch={setAssetSearch}
-      assetKindFilter={assetKindFilter}
-      setAssetKindFilter={setAssetKindFilter}
-      assetStatusFilter={assetStatusFilter}
-      setAssetStatusFilter={setAssetStatusFilter}
-      assetVisualFilter={assetVisualFilter}
-      setAssetVisualFilter={setAssetVisualFilter}
-      assetFolderFilter={assetFolderFilter}
-      setAssetFolderFilter={setAssetFolderFilter}
-      assetUserFilter={assetUserFilter}
-      setAssetUserFilter={setAssetUserFilter}
-      assetCollectionFilter={assetCollectionFilter}
-      setAssetCollectionFilter={setAssetCollectionFilter}
-      assetCollections={assetCollections}
-      assetBatchNotice={assetBatchNotice}
-      isRunningAssetBatch={isRunningAssetBatch}
-      onClearSelection={() => setSelectedAssetIds(new Set())}
-      onRetrySelectedAssetAnalysis={() => void retrySelectedAssetAnalysis()}
-      onSkipSelectedVisualAnalysis={() => void skipSelectedVisualAnalysis()}
-      onApplyUserMetadata={applySelectedUserMetadata}
-      onAddTagToSelected={() => void addTagToSelected()}
-      onAddSelectedToCollection={() => void addSelectedToCollection()}
-      onSelectFolder={selectFolder}
-      onSelectAssetEvidence={(assetId) => void selectAssetEvidence(assetId)}
-      onImportAssets={() => void importAssets()}
-      onImportAssetFolder={() => void importAssetFolder()}
-      onStartAssetHealthScan={() => void startAssetHealthScan(activeProjectId!)}
-      onCancelAssetHealthScan={(taskId) => void cancelAssetHealthScan(activeProjectId!, taskId)}
-      onOpenRelink={() => void relinkAssetFolder()}
-      onConfirmRelink={() => void confirmRelinkAssetFolder()}
-      onCancelRelink={cancelRelinkPreview}
-      assetHealth={assetHealth}
-      assetTaskCenter={assetTaskCenter}
-      assetTaskCenterOpen={assetTaskCenterOpen}
-      setAssetTaskCenterOpen={setAssetTaskCenterOpen}
-      assetRelinkPreview={assetRelinkPreview}
-      assetRelinkSourceDirectory={assetRelinkSourceDirectory}
-      assetRelinkPreserveAnalysis={assetRelinkPreserveAnalysis}
-      setAssetRelinkPreserveAnalysis={setAssetRelinkPreserveAnalysis}
-      setAssetEvidenceNull={() => setAssetEvidence(null)}
-      assetEvidence={assetEvidence}
+      model={{
+        projectId: activeProjectId,
+        storeReady: storeState === 'ready',
+        page: { total: assetPage.total, counts: assetPage.counts },
+        directories: assetPage.directories,
+        unfiledAssetCount: assetPage.unfiledCount,
+        assets,
+        selectedDirectoryKey: assetFolderFilter,
+        health: assetHealth,
+        relinkPreview: assetRelinkPreview,
+        hasRelinkSource: Boolean(assetRelinkSourceDirectory),
+        evidence: assetEvidence,
+      }}
+      actions={{
+        selectDirectory: selectFolder,
+        inspectAsset: (assetId) => void selectAssetEvidence(assetId),
+        closeEvidence: () => setAssetEvidence(null),
+        importFiles: () => void importAssets(),
+        importFolder: () => void importAssetFolder(),
+        startHealthScan: () => { if (activeProjectId) void startAssetHealthScan(activeProjectId) },
+        cancelHealthScan: (taskId) => { if (activeProjectId) void cancelAssetHealthScan(activeProjectId, taskId) },
+        openRelink: () => void relinkAssetFolder(),
+        confirmRelink: () => void confirmRelinkAssetFolder(),
+        cancelRelink: cancelRelinkPreview,
+      }}
     />
   )
 
@@ -1280,8 +1100,6 @@ function App() {
           operationLogs={operationLogs}
         />}
       </section>
-
-      {activeProjectId && assetHealth && assetHealth.missing + assetHealth.changed + assetHealth.unreadable > 0 && <div className="asset-project-actions"><button className="relink-assets-action" onClick={() => void relinkAssetFolder()} disabled={storeState !== 'ready'}>修复源文件位置</button></div>}
 
       {assetPage.counts.analyzing > 0 && <aside className="analysis-activity" aria-live="polite"><header><span className="state-dot working" /><span>正在分析媒体</span><b>{assetPage.counts.analyzing}</b>{assetPage.counts.queued > 0 && <p className="analysis-queue">另 {assetPage.counts.queued} 个排队等待</p>}</header>{analyzingAssets.length > 0 && <ul>{analyzingAssets.slice(0, 3).map((asset) => <li key={asset.id}>{asset.name}</li>)}</ul>}{assetPage.counts.analyzing > analyzingAssets.slice(0, 3).length && <p>另有 {assetPage.counts.analyzing - analyzingAssets.slice(0, 3).length} 个任务正在运行</p>}</aside>}
       {providerOpen && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="模型提供商设置"><section className="provider-modal"><button className="close-button" onClick={() => setProviderOpen(false)} aria-label="关闭">x</button><span className="eyebrow">MODEL ACCESS</span><h2>连接 Agent 模型</h2><p>AI 剪辑 MVP 需要此模型连接。项目文件与原始素材保持在本机；仅在理解需求或分析关键帧时发送最小必要数据。API Key 只保存在 Windows 凭据库。</p><div className="provider-option chosen"><span><strong>OpenAI OAuth</strong><small>实验性 OpenCode 兼容流。令牌只存储在 Windows 凭据库，可能随 OpenAI 服务变更失效。</small></span><b>{oauthStatus.state === 'connected' ? '已连接' : '实验性'}</b></div><p className="oauth-status">{oauthStatus.message ?? '尚未连接。'}</p><button className="primary-button modal-button" onClick={() => void connectExperimentalOpenAI()} disabled={oauthStatus.state === 'pending' || oauthStatus.state === 'connected'}>{oauthStatus.state === 'pending' ? '等待浏览器授权' : oauthStatus.state === 'connected' ? 'OAuth 已连接' : '使用 ChatGPT 登录'}</button>{oauthStatus.state === 'connected' && <button className="outline-button modal-button" onClick={() => void disconnectExperimentalOpenAI()}>退出登录</button>}<div className="provider-divider" /><div className="provider-option chosen"><span><strong>自定义 API</strong><small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。配置后自定义 API 会优先生效。</small></span><b>{customApiStatus.state === 'connected' ? `${customApiStatus.model ?? '已连接'}` : '自定义'}</b></div><p className="oauth-status">{customApiStatus.message ?? '尚未配置。'}{customApiStatus.state === 'connected' && ` 粗视觉：${customApiStatus.coarseVisualModel ?? '使用主 Model'}`}</p><form className="custom-api-form" onSubmit={(event) => { event.preventDefault(); setIsSavingCustomApi(true); void saveCustomConnection(customBaseUrl, customModel, customCoarseVisualModel, customApiKey).then((ok) => { if (ok) { setCustomBaseUrl(''); setCustomModel(''); setCustomCoarseVisualModel(''); setCustomApiKey('') } setIsSavingCustomApi(false) }) }}><label><span>Base URL</span><input value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="off" /></label><label><span>Model（必填，storyboard 与 Agent）</span><input value={customModel} onChange={(event) => setCustomModel(event.target.value)} placeholder="例如 main-model" autoComplete="off" /></label><label><span>粗视觉 Model（可选）</span><input value={customCoarseVisualModel} onChange={(event) => setCustomCoarseVisualModel(event.target.value)} placeholder="留空则使用主 Model" autoComplete="off" /></label><label><span>API Key</span><input type="password" value={customApiKey} onChange={(event) => setCustomApiKey(event.target.value)} placeholder="sk-..." autoComplete="off" /></label><button className="primary-button modal-button" type="submit" disabled={isSavingCustomApi || !customBaseUrl.trim() || !customModel.trim() || !customApiKey.trim()}>{isSavingCustomApi ? '保存中' : '保存自定义 API'}</button></form>{customApiStatus.state === 'connected' && <button className="outline-button modal-button" onClick={() => void disconnectCustomApi()}>清除自定义 API</button>}<button className="outline-button modal-button" onClick={() => setProviderOpen(false)}>关闭</button></section></div>}
