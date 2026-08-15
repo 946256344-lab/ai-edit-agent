@@ -11,7 +11,7 @@
 
 ```powershell
 git fetch origin
-git worktree add ..\worktrees\素材目录 -b feature/asset-tree origin/master
+git worktree add ..\worktrees\<task-slug> -b feature/<task-slug> origin/master
 ```
 
 只有单 Agent 且当前工作区干净时，才可在当前目录创建分支：

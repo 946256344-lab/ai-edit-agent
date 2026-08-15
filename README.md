@@ -49,6 +49,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 - `docs/roadmap.md`：里程碑和未实现能力。
 - `TASKS.md`：当前可执行任务与待决问题。
 - `docs/harness.md`：架构改动与文档同步的检查规则和 Agent 审查 loop。
+- `docs/audits/`：只读媒体事实审计报告（timeline、素材范围和 preview 渲染校验）。
 - `docs/codebase/`：面向 IDE 阅读和新成员上手的七份源码地图；建议从 `STRUCTURE.md` 和 `ARCHITECTURE.md` 开始。
 
 ### AI Agent 接手顺序

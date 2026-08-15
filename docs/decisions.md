@@ -1,5 +1,12 @@
 # 技术决策记录
 
+## ADR-064：`source_end_ms` 在内部时间线存储但 preview 渲染不强制执行
+
+- 状态：已记录（2026-08-15 只读媒体事实审计发现）
+- 决策：`TimelineClip.source_end_ms` 由 `create_timeline_draft` 和 `change_clip_duration` 写入并持久化，但 `preview.rs::render_timeline_clip` 生成 FFmpeg 命令时仅使用 `source_start_ms` 和 `timeline_duration`（`-ss … -t …`），从不传入 `source_end_ms`。这是当前实现状态，不是主动架构决策；`source_end_ms` 约束对 preview 渲染静默失效。
+- 原因：`create_timeline_draft` 允许 `timeline_slot_dur ≠ src_clip_dur`（storyboard 插槽时长与素材实际使用范围可以不同），这是有意设计；但 preview 渲染从未收到对应的 `source_end_ms` 约束，导致 shots 4–8 等片段在 preview 中实际渲染了超出约定源范围的内容。shot1/shot3 因 `timeline_duration < available_src_dur` 所以偶然正确，不应依赖该巧合。完整证据见 `docs/audits/2026-08-15-timeline-v6-media-fact-audit.md`。
+- 后果：修复需要在 `render_timeline_clip` 中计算 `max_src_dur = (source_end_ms - source_start_ms) / 1000.0`，并与 `timeline_duration` 取 `min` 作为 `-t` 参数，保证渲染内容不超出 `source_end_ms`。此修复不改变 SQLite schema、公开命令或 Agent 工具接口，仅影响 preview 渲染行为；已作为 P0 项在独立修复分支中跟踪。
+
 ## ADR-063：多 Agent 协作使用单一流程与薄工具入口
 
 - 状态：已采用（2026-08-15）
