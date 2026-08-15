@@ -39,7 +39,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 
 - 模型交互总决策预算 90 秒；单步/Storyboard 调用有独立上限。
 - 粗视觉连续三次失败后熔断 60 秒；交互请求优先于未开始的视觉请求。
-- FFprobe/FFmpeg/Tesseract 使用硬超时和 Windows 子进程树终止请求。
+- 素材分析中的 FFprobe/FFmpeg/Tesseract 使用硬超时和 Windows 子进程树终止请求；preview 与 Jianying 的部分同步交付进程仍无超时，见 `CONCERNS.md`。
 - Agent 工具失败不无限自动重试；中断 run 转 `needs_review`。
 - 素材技术分析和视觉分析有独立恢复 worker；Jianying 注册可延迟重试。
 - Tauri 事件不是事实存储；Agent 完成依靠 SQLite + 轮询恢复。

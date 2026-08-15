@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "stagedRuntimeFiles": [
+    ".githooks/pre-commit",
+    ".harness/architecture-budgets.json",
+    ".harness/agent-context.json",
+    ".harness/doc-sync-policy.json",
+    "scripts/check-architecture-budgets.mjs",
+    "scripts/check-agent-contracts.mjs",
+    "scripts/check-doc-sync.mjs"
+  ],
+  "stagedHook": {
+    "path": ".githooks/pre-commit",
+    "requiredCommands": [
+      "node scripts/check-architecture-budgets.mjs --staged",
+      "node scripts/check-agent-contracts.mjs --staged",
+      "node scripts/check-doc-sync.mjs --staged"
+    ]
+  },
+  "requiredInstructionFiles": [
+    "AGENTS.md",
+    "src/AGENTS.md",
+    "src-tauri/src/AGENTS.md"
+  ],
+  "codebaseDocs": [
+    "STACK.md",
+    "STRUCTURE.md",
+    "ARCHITECTURE.md",
+    "CONVENTIONS.md",
+    "INTEGRATIONS.md",
+    "TESTING.md",
+    "CONCERNS.md"
+  ],
+  "taskWindow": {
+    "path": "TASKS.md",
+    "start": "<!-- ACTIVE_TASKS_START -->",
+    "end": "<!-- ACTIVE_TASKS_END -->",
+    "maxNonEmptyLines": 8,
+    "maxCharacters": 2800
+  },
+  "scopes": [
+    {
+      "id": "frontend",
+      "root": "src",
+      "instructions": "src/AGENTS.md",
+      "requiredDocs": [
+        "docs/codebase/STRUCTURE.md",
+        "docs/codebase/CONVENTIONS.md",
+        "docs/codebase/ARCHITECTURE.md"
+      ],
+      "verify": ["npm run lint", "npm run build"]
+    },
+    {
+      "id": "rust-backend",
+      "root": "src-tauri/src",
+      "instructions": "src-tauri/src/AGENTS.md",
+      "requiredDocs": [
+        "docs/codebase/ARCHITECTURE.md",
+        "docs/codebase/INTEGRATIONS.md",
+        "docs/codebase/TESTING.md",
+        "docs/codebase/CONCERNS.md"
+      ],
+      "verify": [
+        "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
+        "cargo check --manifest-path src-tauri/Cargo.toml",
+        "cargo test --manifest-path src-tauri/Cargo.toml"
+      ]
+    }
+  ],
+  "boundaries": {
+    "tauriInvoke": {
+      "roots": ["src"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+      "allowedPaths": ["src/lib/local-store.ts"]
+    },
+    "windowsProcess": {
+      "roots": ["src-tauri/src"],
+      "extensions": [".rs"],
+      "allowedPaths": ["src-tauri/src/process.rs"]
+    },
+    "credentialAccess": {
+      "roots": ["src-tauri/src"],
+      "extensions": [".rs"],
+      "allowedPaths": [
+        "src-tauri/src/oauth.rs",
+        "src-tauri/src/custom_api.rs",
+        "src-tauri/src/music_provider.rs"
+      ]
+    },
+    "httpAccess": {
+      "roots": ["src-tauri/src"],
+      "extensions": [".rs"],
+      "allowedPaths": [
+        "src-tauri/src/oauth.rs",
+        "src-tauri/src/music_provider.rs",
+        "src-tauri/src/provider.rs"
+      ]
+    }
+  }
+}

@@ -27,6 +27,7 @@
 - `src/lib/local-store.ts` 是前端唯一 Tauri 命令桥；函数名用前端 camelCase，命令字符串保持 Rust snake_case。
 - Rust 模块默认私有，以 `pub(crate)` 暴露跨模块能力；只有 Tauri 命令或 crate 入口使用 `pub`。
 - `lib.rs` 是 IDE 模块索引和命令注册事实来源。
+- 编码 Agent 先读根 `AGENTS.md` 和 `TASKS.md` 当前窗口，再读目标路径最近的 `AGENTS.md`；长期文档按入口路由加载，不把历史记录全部当当前需求。
 
 ## 4）错误和日志约定
 
@@ -54,6 +55,7 @@
 - 跨模块 Agent 契约放 `src-tauri/tests/`，fixture 带版本号。
 - Python 适配器用 `unittest.mock` 隔离 Jianying/进程/文件系统。
 - Node harness 用 `node:assert/strict`，真实桌面用 WebView2 CDP。
+- `agent:check` 对分层指令、当前任务窗口、IPC、Rust 外部边界和工具目录执行 fail-closed 检查；合法边界变化必须修改配置与负向测试。
 - 当前没有覆盖率阈值或前端组件测试框架。[TODO]
 
 ## 7）证据
@@ -64,3 +66,4 @@
 - `src-tauri/src/lib.rs`
 - `src-tauri/src/audit.rs`
 - `AGENTS.md`
+- `.harness/agent-context.json`

@@ -1,7 +1,15 @@
 # 任务清单
 
-## 当前优先级
+## 当前任务窗口
 
+<!-- ACTIVE_TASKS_START -->
+- [ ] 下一项产品工作：对当前 timeline v6 进行只读媒体事实审计；不得重新分析素材、修改 timeline、生成新 preview、创建 Jianying draft 或导出。
+<!-- ACTIVE_TASKS_END -->
+
+## 最近完成与历史执行记录
+
+- [x] 完成（2026-08-15，P0）：把被动 Markdown 约束工程化。根、`src/`、`src-tauri/src/` 分层 Agent 指令与有界当前任务窗口负责按需加载；机器清单和 pre-commit 自动阻止代码地图增生、JS/TS 绕过 Tauri bridge、动态/间接/未注册 IPC、API 文档漂移、外部进程/凭据/网络所有权扩散、Agent 工具目录漂移，以及配置相对 `HEAD` 放宽。检查器/配置部分暂存会失败；本地 hook 仍不是不可绕过的安全沙箱，Windows CI 留作后续。
+- [x] 本项完成门：`agent:test/check`、`harness:test/check/staged`、提交 hook、前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python 测试、七份代码地图 exact-file/evidence、diff 与独立审查均通过。审查发现并关闭嵌套文件、动态 import、bridge alias、裸命令注册、grouped Rust import、清单 ratchet、staged/worktree 和入口措辞问题；没有改变产品运行行为、SQLite schema 或用户数据。Rust 仅保留已记录的 `PartiallyDone` 既存 warning。
 - [x] 完成（2026-08-15，P0）：建立全仓库代码地图与 IDE 导航注释。以真实源码为依据梳理 React/Tauri 启动、conversation/task 路由、Agent loop、素材分析、storyboard、timeline、preview、Jianying、Provider、SQLite 和测试边界；`docs/codebase/` 固定为七份学习文档，前后端关键入口补充只解释职责、调用方向和副作用边界的导航型注释。同步清除 `agent-tools.ts` 的历史接口草图，明确 9 个观察技能、12 个编辑/交付技能、fixture canonical controls 与 production alias 的真实关系；未改变公开命令、持久化 schema、业务行为或用户数据。
 - [x] 本项完成门：七份代码库文档通过 exact-file/inquiry/evidence 检查；代码注释与实际调用链一致、不复述语法、不掩盖巨型模块债务。前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python adapter 测试、harness test/check 与 diff 检查通过；独立审查三轮发现并关闭 control alias、状态工具、可信边界、Task Resolver 澄清/receipt 时序、SQLite 与术语精度问题。后端巨型模块只形成有边界、有顺序的拆分路线，不在缺少完整 scripted Agent runner 时盲拆；Rust 仍有既存 `PartiallyDone` 未构造 warning，已记录为债务。
 - [x] 完成（2026-08-15，P0）：收敛前端编排边界并建立可执行的架构约束。`App.tsx` 从约 1110 行降至 515 行，只保留项目、剪辑任务、conversation、消息路由和工作区组合；Provider、素材、成果交付、Agent task 终态对账分别进入具名 controller。删除 296 行且混合 Agent/成果模式的 `ConversationWorkspace`，改为互斥工作区与独立侧栏、顶栏、Provider、分析提示组件；现有项目、会话、素材、storyboard、timeline、preview、Jianying 与 Agent 任务契约不变。
@@ -23,8 +31,6 @@
 - [x] 本项完成门：修复 `submit_conversation_turn.run` 实际返回 `agent_task_id`、前端却读取 `agentTaskId` 导致 pending ID 为 undefined，以及任务快照暂缺、active→terminal、首次快照已 terminal 时过早放弃轮询的 P0 竞态。新增精确序列化测试和前端空 ID 失败门。修复后真实只读 Agent run 的 pending ID 与数据库 task ID 一致，completed 后后端/可见消息同步为 23、回复仅 1 条、conversation 为 ready；WebView 刷新和 Tauri 重启均恢复 v5 preview 与全部消息。
 - [x] 完成（2026-08-14，P0）：以 timeline v5 为基线，用 `change_clip_duration` 只创建 v6；第 2 镜头从 3000 ms 缩短至 2500 ms，源范围从 250–2900 ms 收敛为 250–2750 ms，其他镜头素材与顺序不变，后续片段统一前移 500 ms。timeline 数量仅从 3 增至 4，旧 v5/v4/v3 均保留。v6 local preview 为 540×960、29.3 秒并可实际播放；Tauri 重启和 WebView 刷新后 27 条消息及 v6 preview 恢复，v5/v6 preview 文件同时存在。
 - [x] 本项完成门：首次自然语言调整因模型参数未通过后端校验而安全失败，未产生版本或操作日志；第二次绑定真实 v5 ID 与唯一 adjustment 后成功。该请求明确“不生成 preview”，旧 `fast_goal` 却把否定词中的 preview 锁为完成目标并强制渲染，已新增请求级 `RequestToolPolicy`：负向 preview/Jianying/素材分析约束同时限制路由工具、目标声明与每步执行；排除素材分析也会禁用触发分析的在线媒体获取工具。`fast_goal` 只锁定带明确动作的产物请求或清晰问题，名词/状态短句留给首轮主模型；Agent `list_assets` 现为无调度快照，Agent `generate_storyboard` 只消费已就绪证据。“只读/readonly”按分句解释，禁用全部编辑与交付工具并阻止 `taskBrief` 持久化；路由失败回退仍保留当前项目事实观察门。修复后真实只读回归只执行 `get_timeline → finish`、操作日志 0、版本仍为 v6/v5/v4/v3、preview 文件时间戳不变，后端/界面消息同步为 29；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
-- [ ] 下一步（P0）：对当前 timeline v6 进行只读媒体事实审计，逐镜头核对 storyboard 目的、素材证据、明确源时间范围与 preview 抽帧，确认“选择了什么、为什么选择、实际画面是否一致”；不得重新分析素材、修改 timeline、生成新 preview、创建 Jianying draft 或导出。
-
 ### P0：端到端 MVP 重新验收
 
 - [ ] 在恢复后的 Tauri 桌面应用中重新验证完整链路：实验性 Provider 登录、真实媒体分析、证据绑定 storyboard、内部时间线和可播放 preview。

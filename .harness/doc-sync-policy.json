@@ -58,6 +58,26 @@
         "docs/harness.md",
         "TASKS.md"
       ]
+    },
+    {
+      "id": "agent-context-guardrails",
+      "sources": [
+        ".harness/agent-context.json",
+        ".githooks/pre-commit",
+        "AGENTS.md",
+        "src/AGENTS.md",
+        "src-tauri/src/AGENTS.md",
+        "scripts/check-agent-contracts.mjs",
+        "scripts/test-agent-contracts.mjs"
+      ],
+      "requiredDocs": [
+        "AGENTS.md",
+        "README.md",
+        "docs/architecture.md",
+        "docs/decisions.md",
+        "docs/harness.md",
+        "TASKS.md"
+      ]
     }
   ],
   "changeRecordDirectory": "docs/changes"

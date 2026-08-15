@@ -22,6 +22,7 @@
 | TypeScript 未开启 `strict` 总开关 | 当前只启用了若干局部严格选项 | `tsconfig.app.json` | null、函数参数方差等类型缺口不能由现有 build 完整发现 | 单独建立迁移基线后逐项开启，不在一次提交中制造大量无关修复 |
 | `PartiallyDone` 分支未构造 | 终态枚举保留了未使用变体 | `agentloop.rs`、`cargo check` | 每次 Rust 构建产生 dead-code warning，可能遮蔽新增警告 | 确认不再需要后删除，或在真实部分完成路径中明确使用并补测试 |
 | ADR 编号/状态不完全整齐 | 连续恢复期频繁追加 | `docs/decisions.md` | 新成员难判断取代关系 | 单独做文档索引，不重写历史 ADR 正文 |
+| Agent 语义理解不可机器证明 | Markdown 和正则检查只能提供入口与边界 | 三份 `AGENTS.md`、`.harness/agent-context.json` | Agent 可能满足字面检查却误解产品目标 | 保持当前窗口短小、重要规则下沉 Rust/测试、用独立审查与真实验收闭环 |
 | 扫描包含自定义 target | 构建目录名不等于默认 `target/` | `src-tauri/target-mvp-verify/` | 代码度量被二进制污染 | 更新扫描排除或把 target 移至统一构建缓存 |
 
 ## 3）安全关注
@@ -30,7 +31,9 @@
 | --- | --- | --- | --- | --- |
 | 自定义 Provider URL 只校验非空 | OWASP A10/配置风险 | `custom_api::validate_input` | 用户显式配置、凭据在 Credential Manager | 待确认 HTTP/localhost 边界，见问题 2 |
 | 实验性 OAuth 依赖非官方稳定契约 | N/A | `oauth.rs`、`provider.rs` | 明确标为实验性、失败封闭 | 上游 URL/scope/model 可变化，仍需真实刷新验证 |
+| Jamendo 凭据缺失与读取失败未区分 | 配置/诊断 | `music_provider.rs` | 保存失败返回 `failed`，不泄露凭据 | 状态读取把所有 keyring 错误都映射为 `disconnected`，应增加安全原因状态 |
 | 外部进程终止不能保证完整 | N/A | `process.rs` | 超时、`taskkill /T /F`、不无限等待 | 终止失败后缺少系统级孤儿进程观测 |
+| preview/Jianying 部分同步进程无超时 | 可用性 | `preview.rs`、`jianying.rs` | 统一无窗口创建，素材分析阶段已有超时 | FFmpeg/Python 异常挂起时可能阻塞交付；应复用可终止的超时执行器 |
 | 本地路径可能进入内部错误 | OWASP A09/隐私 | 多个 `Result<T,String>` | UI 固定文案、审计安全码、禁止模型原文日志 | 新日志/诊断必须持续审查，不应输出底层 error 原文 |
 | Google Fonts 产生网络请求 | 隐私/供应链 | `src/index.css` | CSP 仅允许指定字体域 | 离线/严格本地产品是否应内置字体尚未决策 |
 
@@ -74,6 +77,7 @@
 | 领域模块清晰、`App.tsx` 聚焦组合 | 前端已明显分层，Rust 的 `agentloop.rs` / `assets.rs` 仍是物理热点 | 按第 6 节渐进搬迁，不一次重写 |
 | “严格 TypeScript 检查” | build 有多项严格选项，但 `tsconfig.app.json` 未开启 `strict` | 先建立迁移基线，再决定启用顺序 |
 | 版本化 Agent fixture 防止工具/场景回归 | 工具目录契约可执行，完整 scripted Provider 多步 runner 尚未实现 | 增加可注入 decision seam 与临时 SQLite runner |
+| 另一编码 Agent 可从文档接手 | 分层入口和硬门已建立，但未提交工作、隐含用户意图和真实桌面状态仍不能只靠文档恢复 | 交接时保持 Git 状态、当前任务窗口、变更记录和验收证据准确 |
 | Windows 本地产品可独立安装运行 | 当前安装包未捆绑 FFmpeg、Tesseract、Python/Jianying adapter 运行时 | 先完成探测矩阵，再选择捆绑或安装引导 |
 
 ## 9）证据
@@ -85,3 +89,4 @@
 - `src-tauri/tests/fixtures/README.md`
 - `src/lib/local-store.ts`
 - `git log -20`（2026-08-15 扫描）
+- `.harness/agent-context.json`

@@ -9,6 +9,7 @@
 - Rust 是可信执行边界：校验作用域、访问 SQLite/文件、运行媒体进程、调用 Provider、创建版本和审计。
 - 模型只在封闭技能空间中选择动作；真实产物完成门由 Rust 判断。
 - storyboard、timeline、preview、Jianying draft 是逐级派生关系；内部 timeline 是事实来源。
+- 编码 Agent 的上下文按根/React/Rust 三层加载；机器 harness 只强制可确定的跨层所有权，不能替代领域测试。
 
 ## 2）总览
 
@@ -155,6 +156,7 @@ assets.rs
 - SQL 分散在多个领域模块，跨表事务移动时容易破坏原子性。
 - Agent fixture 目前验证白名单结构，但完整多轮 provider-script runner 尚未实现。
 - 前端已分层，但 `App.tsx` 仍承担 task/conversation 编排并接近硬预算。
+- Agent 交接仍依赖准确的 Git 状态、当前任务窗口和验收证据；机器检查不能证明模型理解了全部产品语义。
 
 ## 9）证据
 
@@ -165,3 +167,4 @@ assets.rs
 - `src-tauri/src/taskrouter.rs`
 - `src/App.tsx`
 - `src/hooks/useAgentRunReconciliation.ts`
+- `.harness/agent-context.json`

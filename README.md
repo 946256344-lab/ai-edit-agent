@@ -50,6 +50,15 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 - `docs/harness.md`：架构改动与文档同步的检查规则和 Agent 审查 loop。
 - `docs/codebase/`：面向 IDE 阅读和新成员上手的七份源码地图；建议从 `STRUCTURE.md` 和 `ARCHITECTURE.md` 开始。
 
+### AI Agent 接手顺序
+
+1. 读根 `AGENTS.md` 与 `TASKS.md` 的 `ACTIVE_TASKS` 当前窗口。
+2. 修改前端时读 `src/AGENTS.md`；修改 Rust 时读 `src-tauri/src/AGENTS.md`。
+3. 从 `docs/codebase/STRUCTURE.md` 定位代码，再按根指令的路由只加载相关长期文档。
+4. 修改前运行 `npm run agent:check` 确认基线，修改后运行范围测试和 `npm run harness:check`。
+
+这能让另一个编码 Agent 高可靠接手已提交、任务窗口明确的工作，但不是仅靠文档保证的“无缝记忆迁移”。交接时还必须保留干净或有说明的 Git 状态、准确的当前目标、未决问题、变更记录和可复现测试结果。
+
 ## 文档同步 Harness
 
 首次建立 Git 基线后，运行以下命令启用并验证提交前的文档同步检查：
@@ -57,9 +66,10 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 ```powershell
 npm run harness:install
 npm run architecture:check
+npm run agent:check
 npm run harness:check
 ```
 
-`architecture:check` 会阻止 `App.tsx`、工作区组件、领域 controller、命令桥接和当前 Rust 热点超过只降不升的结构预算；`harness:check` 还会检查高影响架构改动是否在同一 Git 变更集更新对应文档和 `docs/changes/` 记录。详细规则见 `docs/harness.md`。
+`architecture:check` 会阻止 `App.tsx`、工作区组件、领域 controller、命令桥接和当前 Rust 热点超过只降不升的结构预算；`agent:check` 会核对分层指令、当前任务窗口、IPC/命令/API、Rust 外部边界和 Agent 工具目录；`harness:check` 汇总这些硬门，并检查高影响架构改动是否在同一 Git 变更集更新对应文档和 `docs/changes/` 记录。详细规则见 `docs/harness.md`。
 
 真实桌面前端回归可在以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 Tauri dev 后运行 `npm run tauri:verify`。脚本只切换工作区、开合目录和打开/关闭 Provider 弹窗，不发送 Agent 请求，不导入、生成或交付产物。

@@ -46,6 +46,7 @@ npm install
 npm run tauri:dev
 npm run lint
 npm run build
+npm run agent:check
 npm run harness:test
 npm run harness:check
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -71,4 +72,5 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 - `src-tauri/Cargo.toml`
 - `src-tauri/tauri.conf.json`
 - `src-tauri/src/process.rs`
+- `.harness/agent-context.json`
 - `README.md`

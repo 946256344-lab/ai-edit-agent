@@ -1,3 +1,5 @@
 #!/bin/sh
 
-npm run harness:staged
+node scripts/check-architecture-budgets.mjs --staged || exit 1
+node scripts/check-agent-contracts.mjs --staged || exit 1
+node scripts/check-doc-sync.mjs --staged || exit 1
