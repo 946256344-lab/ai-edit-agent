@@ -60,7 +60,6 @@ const EDIT_VERBS: &[&str] = &[
     "不要",
     "精简",
     "调整",
-    "剪辑",
     "剪掉",
     "裁剪",
     "放慢",
@@ -571,8 +570,9 @@ pub(super) fn parse_declared_goal(
     }
 }
 
-pub(super) fn pinned_goal_allows_response(pinned_goal: Option<LoopGoal>) -> bool {
-    pinned_goal.is_none() || pinned_goal == Some(LoopGoal::Question)
+/// fast_goal 是提示而非硬阻断；模型选择 respond 路由时不拒绝，让纠偏逻辑决定。
+pub(super) fn pinned_goal_allows_response(_pinned_goal: Option<LoopGoal>) -> bool {
+    true
 }
 
 impl LoopGoal {

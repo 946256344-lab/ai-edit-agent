@@ -8,6 +8,9 @@
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-15，robustness）：在 `agentloop.rs::decide_conversation_route` 和 `taskrouter.rs::resolve_conversation_task` 实现 validate-then-correct 模式。首次模型响应验证失败时，将错误原因作为纠偏提示反馈给模型并重试一次，而非直接 fail-closed；`try_build_route_decision` 封装路由决策构建与验证，失败原因字符串即作为纠偏提示。同步将 `fast_goal` 降级为纯提示、将 `AGENT_RUN_TIMEOUT` 从 90 s 提升至 300 s、从 `EDIT_VERBS` 移除"剪辑"避免过度触发，并对两个文件应用 `#[rustfmt::skip]` 保持紧凑布局通过架构预算。不修改公开命令、SQLite schema、工具白名单或用户数据。
+- [x] 本项完成门：129 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness test/check 与 diff 检查通过；架构预算 `agentloop.rs`（3598 行 / 148495 字符）与 `taskrouter.rs` 均在预算内。
+
 - [x] 完成（2026-08-15，bugfix）：修复 `preview.rs::render_timeline_clip` 的 FFmpeg `-t` 参数未收敛到源范围的问题。`-t` 改为 `min(source_end_ms - source_start_ms, timeline_end_ms - timeline_start_ms)`；将测试模块提取为独立 `preview_tests.rs`（`#[path]` 挂载），`preview.rs` 行数从 1094 降回 608；新增 `render_timeline_clip_clamps_duration_to_source_range` 回归测试。不修改公开命令、schema 或现有 preview 文件。
 - [x] 完成（2026-08-15，只读审计）：对 timeline v6 进行只读媒体事实审计。全部 8 个 asset `ready`/`online`/未 excluded；v5→v6 变更仅 shot2 缩短 500 ms，与 TASKS.md 记录一致；时间线 0–31,689 ms 连续无间隙；所有 source_start ≥ 0，source_end ≤ asset_dur。发现系统性问题：`preview.rs::render_timeline_clip` 未将 `source_end_ms` 传给 FFmpeg，shot1/shot3 实际可用素材短于 timeline slot，shots 4–8 的 source_end 约束静默失效。完整证据见 `docs/audits/2026-08-15-timeline-v6-media-fact-audit.md`。
 - [x] 本项完成门：只读查询 SQLite，未修改任何数据库记录；未重新分析素材、未修改 timeline、未生成 preview、未创建 Jianying draft、未导出。

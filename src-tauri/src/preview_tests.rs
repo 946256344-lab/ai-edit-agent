@@ -126,8 +126,7 @@ fn render_timeline_clip_clamps_duration_to_source_range() {
         timeline_end_ms: 3_000,
         on_screen_text: String::new(),
     };
-    render_timeline_clip(&source, "video", &clip, &destination)
-        .expect("render source-bound clip");
+    render_timeline_clip(&source, "video", &clip, &destination).expect("render source-bound clip");
     assert!(
         destination.is_file(),
         "timeline render must create an MP4 clip"
@@ -291,8 +290,7 @@ fn music_filter_trims_loops_and_delays_in_milliseconds() {
 
 #[test]
 fn ffmpeg_mixes_a_looped_music_cue_into_a_playable_preview() {
-    let directory =
-        std::env::temp_dir().join(format!("assembly-music-preview-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("assembly-music-preview-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).expect("create music preview test directory");
     let video = directory.join("video.mp4");
     let audio = directory.join("audio.wav");
@@ -408,8 +406,7 @@ fn disabled_music_tracks_do_not_create_a_replacement_preview() {
 
 #[test]
 fn ass_text_tracks_use_the_local_libass_filter() {
-    let directory =
-        std::env::temp_dir().join(format!("assembly-text-preview-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("assembly-text-preview-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).expect("create text preview test directory");
     let ass_path = directory.join("text.ass");
     let track = TextTrack {

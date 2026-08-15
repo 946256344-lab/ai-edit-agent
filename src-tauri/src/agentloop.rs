@@ -47,7 +47,7 @@ const MAX_STEPS: usize = 10;
 const AGENT_STEP_TIMEOUT: Duration = Duration::from_secs(120);
 /// Cooperative budget for model decisions in one interactive Agent run. Domain
 /// tools keep their own bounded timeouts and are never killed mid-side-effect.
-const AGENT_RUN_TIMEOUT: Duration = Duration::from_secs(90);
+const AGENT_RUN_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 pub(crate) enum ConversationRouteDecision {
@@ -115,7 +115,7 @@ pub(crate) fn decide_conversation_route(
             },
         )
         .optional()
-        .map_err(|_| "Conversation run status could not be read.".to_owned())?;
+        .map_err(|_| "Run status could not be read.".to_owned())?;
     let artifacts = json!({
         "storyboard": storyboard.map(|value| json!({"id": value.id, "versionNumber": value.version_number})),
         "timeline": timelines.iter().max_by_key(|value| value.version_number).map(|value| json!({"id": value.id, "versionNumber": value.version_number})),
@@ -159,98 +159,42 @@ pub(crate) fn decide_conversation_route(
     });
     let body = post_model_payload(access, &request_body, Some(AGENT_RUN_TIMEOUT))?;
     let text = model_response_json_text(access, &body)
-        .ok_or_else(|| "Conversation route response did not contain JSON.".to_owned())?;
-    let mut raw: Value = serde_json::from_str(&text)
-        .map_err(|_| "Conversation route response was malformed.".to_owned())?;
+        .ok_or_else(|| "Route response had no JSON.".to_owned())?;
+    let mut raw: Value =
+        serde_json::from_str(&text).map_err(|_| "Route response was malformed.".to_owned())?;
     let mut response: ConversationRouteResponse = serde_json::from_value(raw.clone())
-        .map_err(|_| "Conversation route response schema was invalid.".to_owned())?;
-    if response.route == "respond" && response.information_scope.as_deref() == Some("project") {
-        let timeout = remaining_model_timeout(route_deadline, Instant::now())
-            .ok_or_else(|| "Conversation route correction budget was exhausted.".to_owned())?;
-        let correction_prompt = format!(
-            "{prompt}\n\nYour previous response declared informationScope=project with route=respond. That combination is invalid because project facts require observation. Return one corrected JSON object using route=run, goal=question, isQuestion=true, informationScope=project, and choose the single best first observation tool. Do not answer the user's question yet."
-        );
-        let correction_body = json!({
-            "model": "gpt-5.4",
-            "store": false,
-            "stream": true,
-            "input": [{ "role": "user", "content": [{ "type": "input_text", "text": correction_prompt }] }],
-            "text": { "format": { "type": "json_object" } }
-        });
-        let body = post_model_payload(access, &correction_body, Some(timeout))?;
-        let text = model_response_json_text(access, &body)
-            .ok_or_else(|| "Conversation route correction did not contain JSON.".to_owned())?;
-        raw = serde_json::from_str(&text)
-            .map_err(|_| "Conversation route correction was malformed.".to_owned())?;
-        response = serde_json::from_value(raw.clone())
-            .map_err(|_| "Conversation route correction schema was invalid.".to_owned())?;
+        .map_err(|_| "Route response schema invalid.".to_owned())?;
+    // 纠偏重试：验证失败时把错误原因反馈给模型。
+    match try_build_route_decision(
+        &response,
+        &raw,
+        pinned_goal,
+        &tool_policy,
+        &pending_clarification,
+    ) {
+        Ok(d) => return Ok(d),
+        Err(hint) => {
+            let timeout = remaining_model_timeout(route_deadline, Instant::now())
+                .ok_or_else(|| "Route correction budget exhausted.".to_owned())?;
+            let prev = serde_json::to_string(&raw).unwrap_or_else(|_| "{}".to_owned());
+            let cp = format!("{prompt}\n\nYour previous response: {prev}\n\nIssue: {hint} Return corrected JSON only.");
+            let cb = json!({"model":"gpt-5.4","store":false,"stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":cp}]}],"text":{"format":{"type":"json_object"}}});
+            let rb = post_model_payload(access, &cb, Some(timeout))?;
+            let rt = model_response_json_text(access, &rb)
+                .ok_or_else(|| "Route correction had no JSON.".to_owned())?;
+            raw = serde_json::from_str(&rt)
+                .map_err(|_| "Route correction was malformed.".to_owned())?;
+            response = serde_json::from_value(raw.clone())
+                .map_err(|_| "Route correction schema invalid.".to_owned())?;
+        }
     }
-    match response.route.as_str() {
-        "respond" => {
-            let resolved_clarification_id = clarification_resolution(
-                pending_clarification.as_ref(),
-                response.clarification_action.as_deref(),
-            )?;
-            let answer = response.answer.unwrap_or_default();
-            if answer.trim().is_empty()
-                || response.tool.is_some()
-                || parse_declared_goal(response.goal.as_deref(), response.is_question)
-                    != Some(LoopGoal::Question)
-                || !question_scope_allows_route(response.information_scope.as_deref(), "respond")
-                || !pinned_goal_allows_response(pinned_goal)
-            {
-                return Err("Conversation response route was invalid.".to_owned());
-            }
-            Ok(ConversationRouteDecision::Respond {
-                message: answer,
-                resolved_clarification_id,
-            })
-        }
-        "clarify" => {
-            let question = response.question.or(response.answer).unwrap_or_default();
-            if question.trim().is_empty() || response.tool.is_some() {
-                return Err("Conversation clarification route was invalid.".to_owned());
-            }
-            Ok(ConversationRouteDecision::Clarify(question))
-        }
-        "run" => {
-            let resolved_clarification_id = clarification_resolution(
-                pending_clarification.as_ref(),
-                response.clarification_action.as_deref(),
-            )?;
-            let declared_goal = parse_declared_goal(response.goal.as_deref(), response.is_question)
-                .ok_or_else(|| "Conversation run goal was invalid.".to_owned())?;
-            let goal = pinned_goal.unwrap_or(declared_goal);
-            if tool_policy.forbids_goal(goal) {
-                return Err("Conversation run goal was excluded by the user request.".to_owned());
-            }
-            if goal == LoopGoal::Question
-                && !question_scope_allows_route(response.information_scope.as_deref(), "run")
-            {
-                return Err("Conversation question information scope was invalid.".to_owned());
-            }
-            let tool = response.tool.unwrap_or_default();
-            if !OBSERVATION_TOOLS.contains(&tool.as_str()) && !EDIT_TOOLS.contains(&tool.as_str()) {
-                return Err("Conversation run tool was not allowed.".to_owned());
-            }
-            if tool_policy.forbids(&tool) {
-                return Err("Conversation run tool was excluded by the user request.".to_owned());
-            }
-            let project_fact_question = goal == LoopGoal::Question
-                && response.information_scope.as_deref() == Some("project");
-            if project_fact_question && !OBSERVATION_TOOLS.contains(&tool.as_str()) {
-                return Err("Conversation project question must begin with observation.".to_owned());
-            }
-            Ok(ConversationRouteDecision::Run {
-                goal,
-                tool,
-                args: step_args(&raw),
-                project_fact_question,
-                resolved_clarification_id,
-            })
-        }
-        _ => Err("Conversation route was unknown.".to_owned()),
-    }
+    try_build_route_decision(
+        &response,
+        &raw,
+        pinned_goal,
+        &tool_policy,
+        &pending_clarification,
+    )
 }
 
 fn clarification_resolution(
@@ -260,7 +204,61 @@ fn clarification_resolution(
     match (pending, action) {
         (None, None | Some("keep")) | (Some(_), Some("keep")) => Ok(None),
         (Some(pending), Some("resolve")) => Ok(Some(pending.id.clone())),
-        _ => Err("Conversation clarification action was invalid.".to_owned()),
+        _ => Err("Clarification action was invalid.".to_owned()),
+    }
+}
+
+/// 路由决策构建器；失败原因字符串即作为纠偏提示。
+#[rustfmt::skip]
+fn try_build_route_decision(
+    response: &ConversationRouteResponse, raw: &Value, pinned_goal: Option<LoopGoal>,
+    tool_policy: &RequestToolPolicy, pending_clarification: &Option<PendingClarificationSnapshot>,
+) -> Result<ConversationRouteDecision, String> {
+    match response.route.as_str() {
+        "respond" => {
+            let resolved = clarification_resolution(pending_clarification.as_ref(), response.clarification_action.as_deref())?;
+            let answer = response.answer.as_deref().unwrap_or("").to_owned();
+            if answer.trim().is_empty() || response.tool.is_some()
+                || parse_declared_goal(response.goal.as_deref(), response.is_question) != Some(LoopGoal::Question)
+                || !question_scope_allows_route(response.information_scope.as_deref(), "respond")
+                || !pinned_goal_allows_response(pinned_goal) {
+                return Err("route=respond: answer empty, tool present, or wrong goal/scope/pinned.".to_owned());
+            }
+            Ok(ConversationRouteDecision::Respond { message: answer, resolved_clarification_id: resolved })
+        }
+        "clarify" => {
+            let question = response.question.clone().or_else(|| response.answer.clone()).unwrap_or_default();
+            if question.trim().is_empty() || response.tool.is_some() {
+                return Err("route=clarify: empty question or tool present.".to_owned());
+            }
+            Ok(ConversationRouteDecision::Clarify(question))
+        }
+        "run" => {
+            let resolved = clarification_resolution(pending_clarification.as_ref(), response.clarification_action.as_deref())?;
+            let declared = parse_declared_goal(response.goal.as_deref(), response.is_question);
+            // pinned_goal 优先；declared 仅作后备，避免 pinned 存在时因模型漏填 goal 而失败
+            let goal = pinned_goal.or(declared)
+                .ok_or_else(|| "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned())?;
+            if tool_policy.forbids_goal(goal) {
+                return Err(format!("goal='{}' is user-denied.", goal.code()));
+            }
+            if goal == LoopGoal::Question && !question_scope_allows_route(response.information_scope.as_deref(), "run") {
+                return Err("route=run question: informationScope must be general or project.".to_owned());
+            }
+            let tool = response.tool.clone().unwrap_or_default();
+            if !OBSERVATION_TOOLS.contains(&tool.as_str()) && !EDIT_TOOLS.contains(&tool.as_str()) {
+                let allowed = OBSERVATION_TOOLS.iter().chain(EDIT_TOOLS.iter()).copied()
+                    .filter(|t| !tool_policy.forbids(t)).collect::<Vec<_>>().join(", ");
+                return Err(format!("tool='{tool}' not in allowed list. Use one of: {allowed}."));
+            }
+            if tool_policy.forbids(&tool) { return Err(format!("tool='{tool}' is user-denied.")); }
+            let pfq = goal == LoopGoal::Question && response.information_scope.as_deref() == Some("project");
+            if pfq && !OBSERVATION_TOOLS.contains(&tool.as_str()) {
+                return Err("project-scoped question must start with an observation tool.".to_owned());
+            }
+            Ok(ConversationRouteDecision::Run { goal, tool, args: step_args(raw), project_fact_question: pfq, resolved_clarification_id: resolved })
+        }
+        r => Err(format!("route='{r}' unknown. Must be respond, clarify, or run.")),
     }
 }
 
@@ -965,7 +963,7 @@ fn run_step(
                 "model_response",
                 "decision_json_missing",
             );
-            return Err("Agent-loop step response did not contain JSON.".to_owned());
+            return Err("Step response had no JSON.".to_owned());
         }
     };
     record_agent_diagnostic(
@@ -1585,12 +1583,12 @@ fn load_asset_availability(
 ) -> Result<AssetAvailabilitySnapshot, String> {
     let mut statement = connection
         .prepare("SELECT analysis_status, source_reference FROM assets WHERE project_id = ?1")
-        .map_err(|_| "Agent asset availability could not be read.".to_owned())?;
+        .map_err(|_| "Asset availability unreadable.".to_owned())?;
     let rows = statement
         .query_map(params![project_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|_| "Agent asset availability could not be read.".to_owned())?;
+        .map_err(|_| "Asset availability unreadable.".to_owned())?;
     let mut snapshot = AssetAvailabilitySnapshot {
         total_count: 0,
         usable_count: 0,
@@ -1600,7 +1598,7 @@ fn load_asset_availability(
     };
     for row in rows {
         let (analysis_status, source_reference) =
-            row.map_err(|_| "Agent asset availability could not be read.".to_owned())?;
+            row.map_err(|_| "Asset availability unreadable.".to_owned())?;
         let source_available = Path::new(&source_reference).is_file();
         snapshot.total_count += 1;
         if !source_available {
@@ -1625,7 +1623,7 @@ fn current_artifact_presence(state: &LoopState) -> Result<ArtifactPresenceSnapsh
                 params![storyboard.id, state.project_id, state.editing_task_id],
                 |row| row.get::<_, bool>(0),
             )
-            .map_err(|_| "Agent storyboard state could not be read.".to_owned())?;
+            .map_err(|_| "Storyboard state unreadable.".to_owned())?;
         VersionArtifactSnapshot {
             exists,
             version_id: exists.then(|| storyboard.id.clone()),
@@ -1655,7 +1653,7 @@ fn current_artifact_presence(state: &LoopState) -> Result<ArtifactPresenceSnapsh
                 params![timeline.id, state.project_id, state.editing_task_id],
                 |row| row.get::<_, bool>(0),
             )
-            .map_err(|_| "Agent timeline state could not be read.".to_owned())?;
+            .map_err(|_| "Timeline state unreadable.".to_owned())?;
         exists.then_some(timeline)
     } else {
         None
@@ -1731,7 +1729,7 @@ fn jianying_presence(
              WHERE project_id = ?1 AND tool_name = 'register_jianying_draft'
              ORDER BY created_at DESC",
         )
-        .map_err(|_| "Agent Jianying draft state could not be read.".to_owned())?;
+        .map_err(|_| "Jianying draft state unreadable.".to_owned())?;
     let rows = statement
         .query_map(params![project_id], |row| {
             Ok((
@@ -1740,10 +1738,10 @@ fn jianying_presence(
                 row.get::<_, Option<String>>(2)?,
             ))
         })
-        .map_err(|_| "Agent Jianying draft state could not be read.".to_owned())?;
+        .map_err(|_| "Jianying draft state unreadable.".to_owned())?;
     for row in rows {
         let (task_status, input_json, result_json) =
-            row.map_err(|_| "Agent Jianying draft state could not be read.".to_owned())?;
+            row.map_err(|_| "Jianying draft state unreadable.".to_owned())?;
         let input: Value = match serde_json::from_str(&input_json) {
             Ok(value) => value,
             Err(_) => continue,
@@ -2254,7 +2252,7 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
                 .ok_or_else(|| "Timeline has no clips for music.".to_owned())?;
             let source_duration = asset
                 .duration_ms
-                .ok_or_else(|| "Downloaded music has no verified duration.".to_owned())?;
+                .ok_or_else(|| "Music has no verified duration.".to_owned())?;
             let source_end = source_duration.min(timeline_duration);
             let asset_id = asset.id.clone();
             let result = replace_music_tracks(
@@ -2352,7 +2350,7 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             let query = args
                 .get("query")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "search_asset_segments needs a query.".to_owned())?;
+                .ok_or_else(|| "Segments query required.".to_owned())?;
             let results = crate::assets::search_asset_segments_for_agent(
                 &state.connection,
                 state.project_id,
@@ -3139,11 +3137,12 @@ mod tests {
     }
 
     #[test]
-    fn only_question_goals_allow_a_pinned_immediate_response() {
+    fn pinned_goal_allows_response_is_always_true() {
+        // fast_goal 已降级为提示；纠偏逻辑在 try_build_route_decision 处理。
         assert!(pinned_goal_allows_response(None));
         assert!(pinned_goal_allows_response(Some(LoopGoal::Question)));
-        assert!(!pinned_goal_allows_response(Some(LoopGoal::Preview)));
-        assert!(!pinned_goal_allows_response(Some(LoopGoal::Timeline)));
+        assert!(pinned_goal_allows_response(Some(LoopGoal::Preview)));
+        assert!(pinned_goal_allows_response(Some(LoopGoal::Timeline)));
     }
 
     #[test]

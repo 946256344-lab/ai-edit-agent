@@ -245,3 +245,4 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 
 维护记录（2026-08-15）：render_timeline_clip 的 FFmpeg -t 参数改为 min(source_range, timeline_slot)，防止源素材短于时间线槽位时生成黑帧；测试模块提取为独立 preview_tests.rs，preview.rs 预算从 1015 降至 608 行。
+维护记录（2026-08-15）：agentloop.rs::decide_conversation_route 和 taskrouter.rs::resolve_conversation_task 新增 validate-then-correct 重试逻辑；路由验证失败时把错误原因反馈给模型后重试一次，不改变公开命令或运行时边界。
