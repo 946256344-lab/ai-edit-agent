@@ -211,3 +211,6 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 ## 开发期文档同步 Harness
 
 `npm run harness:check` 不属于桌面应用 API；它是仓库开发期的 Git 变更集检查。规则定义在 `.harness/doc-sync-policy.json`，检查高影响 Tauri 命令、持久化、OAuth/安全和运行时配置变动是否同步更新本文档及其他要求的 Markdown。触发规则时，变更集还必须包含一份 `docs/changes/` 记录。详细的执行与 Agent 审查 loop 见 `docs/harness.md`。
+
+
+维护记录（2026-08-15）：preview render_preview 命令不变；render_timeline_clip 内部实现修复 -t 参数截断，不影响公开 API。

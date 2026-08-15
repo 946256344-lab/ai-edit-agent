@@ -78,8 +78,14 @@
     },
     {
       "path": "src-tauri/src/preview.rs",
-      "maxLines": 1015,
-      "maxCharacters": 36886,
+      "maxLines": 608,
+      "maxCharacters": 22055,
+      "maxLineLength": 408
+    },
+    {
+      "path": "src-tauri/src/preview_tests.rs",
+      "maxLines": 489,
+      "maxCharacters": 14932,
       "maxLineLength": 408
     }
   ],

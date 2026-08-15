@@ -86,3 +86,6 @@ npm run harness:test
 5. 连续通过硬检查、独立审查和验证后才结束；三轮后仍有阻塞问题时，记录未决项并交给用户判断。
 
 不要让实现 Agent 以自己的结论作为唯一验收。独立审查者应在新上下文中仅获取需求、diff、变更记录和相关文档，以降低自我确认偏差。
+
+
+维护记录（2026-08-15）：architecture-budgets.json 新增 src-tauri/src/preview_tests.rs 预算条目（489 行），preview.rs 预算从 1015 收紧至 608 行。

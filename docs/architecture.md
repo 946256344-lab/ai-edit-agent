@@ -207,3 +207,8 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 
 项目事实问答证据门不新增顶层 route：`project + respond` 在原 90 秒预算内最多纠正一次；项目问答的首步和后续技能均为只读观察，且至少一次观察成功后才能结束回答。Conversation Router 返回无效目标/工具而降级为无初始技能 loop 时，后端仍会从显式只读或当前项目的产物、数量、版本、状态措辞保守恢复该证据门，不能因路由失败直接 `finish` 猜测。循环提示明确要求：一次成功观察已经包含用户所问的数量、状态或事实时，下一步直接 `finish` 并基于该结果回答，不调用语义重叠的观察工具只为重复确认；只有明确缺少被问事实时才继续观察。纠正或观察仍失败时封闭失败，不展示模型猜测。
+
+维护记录（2026-08-15）： 的 FFmpeg `-t` 参数改为 `min(source_range, timeline_slot)`，防止源素材短于时间线槽位时生成黑帧。测试模块提取为独立 `preview_tests.rs`，`preview.rs` 预算从 1015 降至 608 行。
+
+
+维护记录（2026-08-15）：render_timeline_clip 的 FFmpeg -t 参数改为 min(source_range, timeline_slot)，防止源素材短于时间线槽位时生成黑帧；测试模块提取为独立 preview_tests.rs，preview.rs 预算从 1015 降至 608 行。

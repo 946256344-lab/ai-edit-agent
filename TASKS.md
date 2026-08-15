@@ -8,6 +8,8 @@
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-15，bugfix）：修复 `preview.rs::render_timeline_clip` 的 FFmpeg `-t` 参数未收敛到源范围的问题。`-t` 改为 `min(source_end_ms - source_start_ms, timeline_end_ms - timeline_start_ms)`；将测试模块提取为独立 `preview_tests.rs`（`#[path]` 挂载），`preview.rs` 行数从 1094 降回 608；新增 `render_timeline_clip_clamps_duration_to_source_range` 回归测试。不修改公开命令、schema 或现有 preview 文件。
+
 - [x] 完成（2026-08-15，工程流程）：建立 Cursor、Codex、Claude Code、OpenCode 共用的协作标准。`CONTRIBUTING.md` 是分支、worktree、验证、提交、PR 与合并唯一事实源，工具入口只引用规则且不分配固定职责；pre-commit 新增受保护分支、允许前缀和本地 `origin/master` 祖先硬门，PR 模板要求边界与验证证据。未改变产品运行时、用户数据或 master。
 - [x] 本项完成门：分支策略正负测试、Agent 入口引用与 ratchet、architecture/doc-sync harness、前端 lint/build 和 diff 检查通过；远端 GitHub master 保护与 Windows CI 仍为明确 TODO，本地 hook 可被 `--no-verify` 绕过。
 - [x] 完成（2026-08-15，P0）：落地后端热点第一条物理边界。`agentloop/policy.rs` 独占工具白名单、负向约束、目标解析、真实产物完成门和固定诚实降级文案，只依赖 `AgentEditResult`；父 `agentloop.rs` 保留 Router、状态、prompt、有界循环和技能执行，从 4264 行降至 3599 行。公开命令、SQLite schema、工具名、最大步数、Provider、媒体处理和用户数据均未改变。
