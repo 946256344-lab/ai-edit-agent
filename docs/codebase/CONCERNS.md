@@ -4,7 +4,7 @@
 
 | 严重度 | 关注点 | 证据 | 影响 | 建议动作 |
 | --- | --- | --- | --- | --- |
-| 高 | `agentloop.rs` 4264 行，混合路由、权限、prompt、快照、循环、技能派发和测试 | `src-tauri/src/agentloop.rs` | 改一个工具可能影响完成门、只读门和错误恢复 | 先抽纯 policy/router/state，再搬 executor；每步保持 fixture 和终态测试 |
+| 高 | `agentloop.rs` 3599 行，仍混合路由、prompt、快照、循环、技能派发和测试；纯 policy 已提取 | `src-tauri/src/agentloop.rs`、`agentloop/policy.rs` | executor 改动仍可能污染路由和状态恢复 | policy 保持无副作用；后续抽 router/state，最后搬 executor |
 | 高 | `assets.rs` 4114 行，混合六类领域职责和两类 worker | `src-tauri/src/assets.rs` | 导入、目录、分析或健康变更互相污染 | 按 import/technical/visual/library/health/metadata 拆子模块 |
 | 高 | 完整 Agent 多步 fixture 不能执行 | `src-tauri/tests/fixtures/README.md` | prompt/schema/状态组合回归只能靠局部测试和实机发现 | 增加 scripted decision seam 与临时 SQLite runner |
 | 高 | 生产安装包不供应媒体/Python 运行时 | `README.md`、`src-tauri/tauri.conf.json` | 开发机可用不代表用户机器可用 | 先做运行时探测矩阵，再决定捆绑或安装引导 |
@@ -57,7 +57,7 @@
 
 ## 6）后端拆分顺序
 
-1. `agentloop/policy.rs`：只搬常量、`RequestToolPolicy`、goal 纯函数和单测。
+1. [已完成] `agentloop/policy.rs`：已搬工具常量、`RequestToolPolicy`、goal/完成门纯函数；行为测试继续从父模块覆盖公开运行语义。
 2. `assets/library.rs`：只搬安全路径/目录投影和只读搜索，保持 Tauri 命令在原模块转发。
 3. `agentloop/router.rs` 与 `state.rs`：保留公开 crate 函数签名。
 4. `assets/technical.rs` 与 `visual.rs`：每次只迁移一个 worker，验证启动恢复和熔断。
@@ -66,15 +66,14 @@
 
 ## 7）`[ASK USER]` 问题
 
-1. [ASK USER] 后端拆分优先级：先处理副作用风险更高的 `agentloop.rs`，还是先处理最影响素材迭代的 `assets.rs`？建议先 `agentloop/policy`，随后 `assets/library`，交替做纯边界。
-2. [ASK USER] 自定义模型是否必须支持局域网 `http://`/localhost？这决定 Base URL 应强制 HTTPS，还是允许显式不安全本地连接。
-3. [ASK USER] `src/lib/agent-tools.ts` 未来要成为可发布 SDK 契约，还是仅作为 IDE 镜像？建议由版本化 Rust fixture 自动生成，避免第三份手工白名单。
+1. [ASK USER] 自定义模型是否必须支持局域网 `http://`/localhost？这决定 Base URL 应强制 HTTPS，还是允许显式不安全本地连接。
+2. [ASK USER] `src/lib/agent-tools.ts` 未来要成为可发布 SDK 契约，还是仅作为 IDE 镜像？建议由版本化 Rust fixture 自动生成，避免第三份手工白名单。
 
 ## 8）意图与现实偏差
 
 | 长期意图 | 当前现实 | 处理方向 |
 | --- | --- | --- |
-| 领域模块清晰、`App.tsx` 聚焦组合 | 前端已明显分层，Rust 的 `agentloop.rs` / `assets.rs` 仍是物理热点 | 按第 6 节渐进搬迁，不一次重写 |
+| 领域模块清晰、`App.tsx` 聚焦组合 | 前端已明显分层，Agent 纯 policy 已独立；父 `agentloop.rs` / `assets.rs` 仍是物理热点 | 下一步 `assets/library`，再按第 6 节交替渐进搬迁 |
 | “严格 TypeScript 检查” | build 有多项严格选项，但 `tsconfig.app.json` 未开启 `strict` | 先建立迁移基线，再决定启用顺序 |
 | 版本化 Agent fixture 防止工具/场景回归 | 工具目录契约可执行，完整 scripted Provider 多步 runner 尚未实现 | 增加可注入 decision seam 与临时 SQLite runner |
 | 另一编码 Agent 可从文档接手 | 分层入口和硬门已建立，但未提交工作、隐含用户意图和真实桌面状态仍不能只靠文档恢复 | 交接时保持 Git 状态、当前任务窗口、变更记录和验收证据准确 |
@@ -85,6 +84,7 @@
 - 2026-08-15 终端扫描输出（目录树、代码度量、最近 20 次提交与高变更文件）
 - `.harness/architecture-budgets.json`
 - `src-tauri/src/agentloop.rs`
+- `src-tauri/src/agentloop/policy.rs`
 - `src-tauri/src/assets.rs`
 - `src-tauri/tests/fixtures/README.md`
 - `src/lib/local-store.ts`

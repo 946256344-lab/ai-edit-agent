@@ -1,3 +1,5 @@
+//! 版本化内部 timeline 的创建、片段替换、时长调整、排序、文字和音乐编辑。
+//! 每次编辑都创建新版本并校验素材作用域与源时间范围，不覆盖旧版本。
 use crate::db::{now_millis, open_connection};
 use crate::models::{
     LatestTimeline, MusicTrack, PreviewQualityReport, PreviewResult, TechnicalMetadata,
@@ -56,6 +58,7 @@ fn storyboard_text_tracks(storyboard: &crate::models::StoryboardVersion) -> Vec<
 }
 
 #[tauri::command]
+/// 从指定 storyboard 创建新的 timeline v1；镜头源范围来自 storyboard 证据，不从文件名推断。
 pub fn create_timeline_draft(
     app: AppHandle,
     project_id: String,
@@ -66,6 +69,7 @@ pub fn create_timeline_draft(
     if storyboard.project_id != project_id {
         return Err("Storyboard does not belong to this project.".to_owned());
     }
+    // timeline 区间首尾相接，源区间保持不变；后续编辑也只创建新版本，不修改此版本。
     let mut cursor = 0_i64;
     let clips = storyboard
         .shots
@@ -727,8 +731,7 @@ pub(crate) fn replace_music_tracks(
     )
 }
 
-/// Replace one or more existing shots (each keeps its timeline slot duration)
-/// and persist a single new timeline version with an audit log.
+/// 替换一个或多个镜头并保持各自槽位时长，在一次事务中写入新版本和审计。
 pub(crate) fn replace_clips(
     connection: &Connection,
     project_id: &str,
@@ -819,9 +822,7 @@ pub(crate) fn replace_clips(
     )
 }
 
-/// Retime selected shots (new duration and/or new source start) within their
-/// verified source range and persist a single new timeline version with an
-/// audit log. Subsequent shots shift to keep the sequence contiguous.
+/// 在已验证源范围内重定时镜头并生成一个新版本；后续片段平移以保持连续。
 pub(crate) fn change_clip_duration(
     connection: &Connection,
     project_id: &str,
@@ -918,8 +919,7 @@ pub(crate) fn change_clip_duration(
     )
 }
 
-/// Reorder the existing shots (order must be a full permutation of shot indexes)
-/// and persist a single new timeline version with an audit log.
+/// 仅接受全部镜头索引的完整排列，并在一次事务中写入新版本和审计。
 pub(crate) fn reorder_clips(
     connection: &Connection,
     project_id: &str,

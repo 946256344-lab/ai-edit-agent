@@ -1,3 +1,4 @@
+// 应用侧栏：切换 local project、剪辑任务与顶层工作区，不拥有数据加载逻辑。
 import type { StoredProject } from '../lib/local-store'
 import type { EditingSessionView } from './workspace-types'
 

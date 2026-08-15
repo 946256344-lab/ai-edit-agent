@@ -1,3 +1,6 @@
+//! Rust 后端与 Tauri 命令边界共享的可序列化领域类型。
+//! 本文件只描述数据形状，不放数据库查询、文件操作或外部调用。
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]

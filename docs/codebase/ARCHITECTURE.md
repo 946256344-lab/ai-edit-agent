@@ -107,7 +107,8 @@ flowchart TD
 | React controllers | 领域投影、轮询、用户动作编排 | SQL、模型 prompt | `src/hooks/` |
 | `taskrouter` | task 归属和 receipt | 具体工具选择 | `src-tauri/src/taskrouter.rs` |
 | `agent` | conversation 决策入口、run 生命周期、原子终态 | 媒体实现 | `src-tauri/src/agent.rs` |
-| `agentloop` | 目标、权限、状态、技能选择和派发 | 任意文件/SQL 自由访问 | `src-tauri/src/agentloop.rs` |
+| `agentloop/policy` | 工具授权、请求负向约束、目标与真实产物完成门 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
+| `agentloop` 父模块 | Router、状态、prompt、技能选择和派发 | 绕过 policy 或任意 SQL 自由访问 | `src-tauri/src/agentloop.rs` |
 | 领域模块 | 作用域校验后的领域读写 | 用户意图分类 | `assets.rs`、`timeline.rs` 等 |
 | `provider` | 可替换模型传输和调度 | 产物完成事实 | `src-tauri/src/provider.rs` |
 | `db` / `audit` | schema、连接策略、安全审计 | UI 文案与模型原文 | `db.rs`、`audit.rs` |
@@ -130,7 +131,7 @@ flowchart TD
 
 ```text
 agentloop.rs
-  -> agentloop/policy.rs       负向约束、工具集合、目标门
+  -> agentloop/policy.rs       已完成：负向约束、工具集合、目标门
   -> agentloop/router.rs       Conversation Router schema/校验
   -> agentloop/state.rs        历史、快照、产物完成事实
   -> agentloop/prompt.rs       prompt 与安全失败上下文
@@ -147,11 +148,11 @@ assets.rs
   -> assets/mod.rs             保持现有 Tauri 命令 re-export
 ```
 
-推荐顺序：先提取无副作用的 policy/目录投影纯函数，再提取只读查询，然后搬 worker，最后才移动事务和命令入口。每一步保持 `lib.rs` 注册名、TypeScript wrapper、SQL schema 和 fixture 不变。
+`agentloop/policy.rs` 已完成纯迁移。下一步提取 `assets/library.rs` 的安全目录投影/只读查询，再处理 Agent router/state；然后搬 worker，最后才移动事务和命令入口。每一步保持 `lib.rs` 注册名、TypeScript wrapper、SQL schema 和 fixture 不变。
 
 ## 8）已知架构风险
 
-- `agentloop.rs` 4264 行、`assets.rs` 4114 行，单文件内变化耦合和审查面过大。
+- `agentloop.rs` 已从 4264 行降至 3599 行，但 Router、状态、prompt、循环、executor 和测试仍耦合；`assets.rs` 仍为 4114 行热点。
 - `timeline.rs` 1848 行同时含镜头、文本、音乐和查询；应在前两个热点稳定后处理。
 - SQL 分散在多个领域模块，跨表事务移动时容易破坏原子性。
 - Agent fixture 目前验证白名单结构，但完整多轮 provider-script runner 尚未实现。
@@ -163,6 +164,7 @@ assets.rs
 - `src-tauri/src/lib.rs`
 - `src-tauri/src/agent.rs`
 - `src-tauri/src/agentloop.rs`
+- `src-tauri/src/agentloop/policy.rs`
 - `src-tauri/src/assets.rs`
 - `src-tauri/src/taskrouter.rs`
 - `src/App.tsx`

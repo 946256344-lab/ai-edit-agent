@@ -1,3 +1,4 @@
+// 负责 Agent task 的事件/轮询竞态对账、持久化终态恢复和当前作用域可见产物更新。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'

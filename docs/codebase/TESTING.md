@@ -39,14 +39,14 @@
 ## 4）Mock 与隔离
 
 - Rust 测试主要把验证逻辑作为纯函数调用，数据库测试构造临时 SQLite 状态。
-- Agent contract test 直接读取 `agentloop.rs` 常量和 JSON fixture，防止白名单漂移。
+- Agent contract test 直接读取 `agentloop/policy.rs` 的工具常量并与 JSON fixture 对账，防止白名单漂移。
 - Python 使用 `patch` 替换 `DraftFolder`、进程查询和注册函数，并使用 `TemporaryDirectory`。
 - WebView 脚本不 mock Tauri；它连接真实桌面窗口，但刻意不发送 Agent 请求或创建产物。
 
 ## 5）质量信号与缺口
 
 - 架构预算和文档同步已进入本地 pre-commit。
-- 分层 Agent 指令、IPC/注册/API 对账、进程/凭据/HTTP 所有权和工具目录一致性也进入同一 pre-commit；配置相对 `HEAD` 只允许收紧，staged 运行文件必须完整暂存。它只覆盖可机器判定的结构事实。
+- 分层 Agent 指令、源码顶部中文职责导航、IPC/注册/API 对账、进程/凭据/HTTP 所有权和工具目录一致性也进入同一 pre-commit；配置相对 `HEAD` 只允许收紧，staged 运行文件必须完整暂存。它只覆盖可机器判定的结构事实，不能判断注释语义是否准确。
 - 没有覆盖率工具、覆盖率阈值或当前覆盖率报告。[TODO]
 - 没有 GitHub Actions/其他 CI；检查依赖开发者本机 hook。[TODO]
 - 完整 Agent 多步 transcript、事件主动丢失、worker 崩溃恢复没有可重复的全自动 runner。

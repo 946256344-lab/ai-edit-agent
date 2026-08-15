@@ -38,6 +38,12 @@
     "maxNonEmptyLines": 8,
     "maxCharacters": 2800
   },
+  "sourceNavigation": {
+    "roots": ["src", "scripts", "src-tauri/src", "src-tauri/scripts", "src-tauri/tests"],
+    "files": [".githooks/pre-commit", "index.html", "vite.config.ts", "src-tauri/build.rs"],
+    "extensions": [".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".css", ".html"],
+    "maxHeadLines": 16
+  },
   "scopes": [
     {
       "id": "frontend",

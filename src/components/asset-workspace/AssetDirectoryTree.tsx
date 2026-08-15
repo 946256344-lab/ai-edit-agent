@@ -1,3 +1,4 @@
+// 可开合素材目录树：expandedFolderIds 是唯一展开状态，aria-expanded 与条件渲染同步。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssetTreeNode } from './asset-directory-model'
 

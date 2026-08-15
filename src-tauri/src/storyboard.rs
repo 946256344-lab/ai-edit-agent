@@ -1,3 +1,6 @@
+//! 只使用已就绪真实媒体证据生成版本化 storyboard，并校验证据源时间范围。
+//! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
+
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
 use crate::models::{

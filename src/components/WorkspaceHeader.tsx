@@ -1,3 +1,4 @@
+// 当前项目/任务的顶栏摘要和主工作区切换器，不拥有导航状态。
 import type { WorkspaceView } from './workspace-types'
 
 export type WorkspaceHeaderModel = {

@@ -1,3 +1,4 @@
+// 只读展示当前 conversation 的 Agent task、操作日志和 timeline 版本审计信息。
 import type { StoredAgentTask, StoredOperationLog, TimelineVersion } from '../lib/local-store'
 
 type AgentAuditPanelProps = {

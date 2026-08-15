@@ -1,3 +1,4 @@
+// 根据变更文件判断必须同步的长期文档和变更记录，防止契约修改只停留在代码里。
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'

@@ -42,9 +42,15 @@
     },
     {
       "path": "src-tauri/src/agentloop.rs",
-      "maxLines": 4264,
-      "maxCharacters": 172026,
+      "maxLines": 3599,
+      "maxCharacters": 148499,
       "maxLineLength": 1403
+    },
+    {
+      "path": "src-tauri/src/agentloop/policy.rs",
+      "maxLines": 674,
+      "maxCharacters": 18439,
+      "maxLineLength": 181
     },
     {
       "path": "src-tauri/src/assets.rs",

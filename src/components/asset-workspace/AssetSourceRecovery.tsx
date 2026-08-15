@@ -1,3 +1,4 @@
+// 显式素材来源健康检查与重链路确认界面；不会自动重分析或改写未确认路径。
 import type { AssetHealthScanSummary, AssetRelinkPreview } from '../../lib/local-store'
 
 type AssetSourceRecoveryProps = {

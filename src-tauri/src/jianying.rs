@@ -1,3 +1,6 @@
+//! Jianying draft 的单向创建、回滚与延迟注册边界。
+//! 每次交付创建唯一新目录，绝不覆盖或反向同步已有 Jianying 项目。
+
 use crate::db::{now_millis, open_connection};
 use crate::models::{JianyingDraftResult, JianyingRegistrationStatus, TimelineVersion};
 use crate::process::hidden_command;

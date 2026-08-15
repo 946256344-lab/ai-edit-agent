@@ -1,3 +1,5 @@
+"""验证 Jianying 适配器的目录安全、版本交接、注册与失败回滚行为。"""
+
 import json
 import sys
 import unittest

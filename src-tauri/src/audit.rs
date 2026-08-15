@@ -1,3 +1,6 @@
+//! Agent task、运行步骤、诊断与操作日志的持久化查询边界。
+//! 审计只保存结构化状态和安全错误码，不保存 prompt、模型原文或媒体证据。
+
 use crate::db::{now_millis, open_connection};
 use crate::models::{AgentDiagnostic, AgentRunStep, AgentTask, OperationLog};
 use rusqlite::{params, Connection};

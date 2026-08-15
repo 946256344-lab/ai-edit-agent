@@ -1,8 +1,7 @@
-"""One-way Jianying adapter invoked by the Rust delivery boundary.
+"""由 Rust 交付边界调用的单向 Jianying 适配器。
 
-The adapter consumes a versioned local JSON handoff, creates a unique draft,
-and registers it only when Jianying is closed. It is not an application entry
-point and must never overwrite or synchronize an existing Jianying project.
+适配器读取版本化本地 JSON 交接数据，创建唯一新草稿，并且只在 Jianying 关闭时注册。
+它不是应用入口，绝不能覆盖已有 Jianying 项目，也不负责反向同步用户在 Jianying 内的编辑。
 """
 
 import json

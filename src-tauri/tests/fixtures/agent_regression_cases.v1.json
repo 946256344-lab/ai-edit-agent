@@ -1,6 +1,6 @@
 {
   "suiteVersion": 1,
-  "target": "src-tauri/src/agentloop.rs",
+  "target": "src-tauri/src/agentloop.rs + src-tauri/src/agentloop/policy.rs",
   "executionModel": {
     "kind": "fixture_contract",
     "currentAutomation": "cargo test validates fixture structure and coverage; a scripted ToolDecisionProvider-equivalent loop harness is not implemented",

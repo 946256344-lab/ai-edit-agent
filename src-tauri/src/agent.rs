@@ -1,3 +1,6 @@
+//! 对话提交、异步 Agent task 生命周期与终态事务边界。
+//! 这里负责任务落库和恢复，不决定模型应该调用哪个具体领域技能。
+
 use crate::agentloop::{
     decide_conversation_route, read_scoped_edit_status, run_agent_loop,
     run_agent_loop_with_initial_skill, run_explicit_command, ConversationRouteDecision,
@@ -14,10 +17,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-/// Deterministic single-command path. These exact phrases bypass the model
-/// loop entirely and run the matching skill directly so the outcome message is
-/// always grounded in a real, audited artifact. Every other request goes
-/// through the bounded goal-driven loop in `agentloop.rs`.
+/// 精确单命令绕过模型并直接执行具名技能；其他请求统一进入有界 Agent loop。
 pub(crate) fn explicit_command_tool(request: &str) -> Option<&'static str> {
     let normalized = request.trim().trim_matches(|character: char| {
         matches!(
@@ -183,10 +183,7 @@ fn replace_pending_clarification(
     Ok(())
 }
 
-/// Persists the finished state of the agent task and audits the operation only
-/// when the pipeline actually produced a real artifact. Errors are recorded
-/// with a safe, technical-code result and surfaced as a fixed honest message;
-/// the model is never asked to spin a narrative about an unperformed edit.
+/// 原子提交 task 终态、真实产物审计、确定性回复和 conversation 终态；失败只保存安全码。
 fn finalize_agent_task(
     connection: &Connection,
     agent_task_id: &str,
@@ -344,6 +341,7 @@ pub fn execute_agent_edit(
 }
 
 #[tauri::command]
+/// 统一对话入口：先消费绑定完整请求与作用域的一次性 receipt，随后才允许写消息或运行技能。
 pub fn submit_conversation_turn(
     app: AppHandle,
     project_id: String,
@@ -637,6 +635,7 @@ fn run_agent_edit(
                     "pipeline_error",
                     "pipeline_execution_failed",
                 );
+                // 失败终态和确定性回复必须一起提交；不能留下“task 已失败但 conversation 永远 working”。
                 let transaction = connection.unchecked_transaction();
                 if let Ok(transaction) = transaction {
                     let _ =
@@ -676,6 +675,7 @@ fn persist_agent_completion_message(
     if message.is_empty() {
         return Err("Agent completion message cannot be empty.".to_owned());
     }
+    // 由 task ID 派生稳定主键，使事件、轮询和重启恢复重复对账时仍只会插入一次回复。
     let message_id = format!("agent-task-result-{agent_task_id}");
     let timestamp = now_millis();
     let inserted = connection

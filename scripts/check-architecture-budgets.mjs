@@ -1,3 +1,4 @@
+// 执行只降不升的文件/目录预算和跨层禁用规则，阻止已拆分职责重新膨胀。
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { extname, join, relative, resolve } from 'node:path'

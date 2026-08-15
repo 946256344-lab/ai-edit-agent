@@ -1,3 +1,4 @@
+// Provider controller：管理连接状态、设置弹窗与显式登录/保存/清除动作，不读取明文凭据。
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { listen } from '@tauri-apps/api/event'

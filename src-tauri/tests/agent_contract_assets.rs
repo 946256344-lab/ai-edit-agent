@@ -1,9 +1,11 @@
+//! 验证 Agent 技能白名单、版本化契约与高风险回归用例始终同步。
+
 use serde_json::Value;
 use std::collections::BTreeSet;
 
 const CONTRACT_FIXTURE: &str = include_str!("fixtures/agent_tool_contracts.v1.json");
 const REGRESSION_FIXTURE: &str = include_str!("fixtures/agent_regression_cases.v1.json");
-const AGENT_LOOP_SOURCE: &str = include_str!("../src/agentloop.rs");
+const AGENT_POLICY_SOURCE: &str = include_str!("../src/agentloop/policy.rs");
 
 fn parse_fixture(raw: &str, label: &str) -> Value {
     serde_json::from_str(raw).unwrap_or_else(|error| panic!("{label} must be valid JSON: {error}"))
@@ -19,10 +21,10 @@ fn required_string<'a>(value: &'a Value, field: &str, label: &str) -> &'a str {
 
 fn source_tool_names(constant_name: &str) -> BTreeSet<String> {
     let declaration = format!("const {constant_name}:");
-    let start = AGENT_LOOP_SOURCE
+    let start = AGENT_POLICY_SOURCE
         .find(&declaration)
-        .unwrap_or_else(|| panic!("{constant_name} must exist in agentloop.rs"));
-    let tail = &AGENT_LOOP_SOURCE[start..];
+        .unwrap_or_else(|| panic!("{constant_name} must exist in agentloop/policy.rs"));
+    let tail = &AGENT_POLICY_SOURCE[start..];
     let values_start = tail
         .find("= &[")
         .unwrap_or_else(|| panic!("{constant_name} must use an array literal"));
@@ -44,6 +46,10 @@ fn tool_contract_catalog_matches_the_agent_loop_whitelist() {
     assert_eq!(
         fixture.get("catalogVersion").and_then(Value::as_u64),
         Some(1)
+    );
+    assert_eq!(
+        fixture.get("implementationSource").and_then(Value::as_str),
+        Some("src-tauri/src/agentloop/policy.rs")
     );
 
     let tools = fixture

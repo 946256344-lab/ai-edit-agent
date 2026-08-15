@@ -1,3 +1,4 @@
+// 校验 Agent 上下文入口、IPC/进程/网络所有权、工具目录与文档结构没有漂移。
 import { execFileSync } from 'node:child_process'
 import { extname, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -34,7 +35,7 @@ function stagedFileContent(filePath) {
 
 function loadRepository(staged) {
   const files = repositoryFiles(staged)
-  const relevantExtensions = new Set(['.md', '.json', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.rs'])
+  const relevantExtensions = new Set(['.md', '.json', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.rs', '.py', '.css', '.html'])
   const contents = new Map()
   for (const filePath of files) {
     if (!relevantExtensions.has(extname(filePath)) && !filePath.startsWith('docs/codebase/') && filePath !== '.githooks/pre-commit') {
@@ -68,6 +69,21 @@ function sortedUnique(values) {
 
 function sameValues(left, right) {
   return JSON.stringify(sortedUnique(left)) === JSON.stringify(sortedUnique(right))
+}
+
+function hasChineseNavigation(filePath, content, maxHeadLines) {
+  const head = content.replaceAll('\r\n', '\n').split('\n').slice(0, maxHeadLines).join('\n')
+  const chinese = '[\\u3400-\\u9fff]'
+  if (filePath.endsWith('.py')) {
+    return new RegExp(`(?:^\\s*#|\"\"\"|''')[\\s\\S]{0,1200}${chinese}`, 'm').test(head)
+  }
+  if (filePath.endsWith('.html')) {
+    return new RegExp(`<!--[\\s\\S]{0,1200}${chinese}`).test(head)
+  }
+  if (filePath === '.githooks/pre-commit') {
+    return new RegExp(`^\\s*#[^!\\n]*${chinese}`, 'm').test(head)
+  }
+  return new RegExp(`^\\s*(?://[/!]?|/\\*+|\\*)[^\\n]*${chinese}`, 'm').test(head)
 }
 
 function registeredCommands(content) {
@@ -173,6 +189,17 @@ export function evaluateAgentContracts(contents, config) {
     }
   }
 
+  const navigation = config.sourceNavigation
+  if (navigation) {
+    for (const [filePath, content] of contents) {
+      const inRoot = navigation.roots.some((rootPath) => filePath.startsWith(`${rootPath}/`))
+      const isExactFile = navigation.files.includes(filePath)
+      if (((inRoot && navigation.extensions.includes(extname(filePath))) || isExactFile) && !hasChineseNavigation(filePath, content, navigation.maxHeadLines)) {
+        errors.push(`手写源码缺少文件顶部中文职责导航：${filePath}`)
+      }
+    }
+  }
+
   checkBoundary(contents, config.boundaries.tauriInvoke, /\binvoke\s*(?:<|\()|(?:import|export)\s*\{[^}]*\binvoke\b[^}]*\}\s*from\s*['"]@tauri-apps\/api\/core|import\s*\*\s*as\s+\w+\s+from\s*['"]@tauri-apps\/api\/core|import\s*\(\s*['"]@tauri-apps\/api\/core|__TAURI_INTERNALS__/, 'Tauri invoke', errors)
   checkBoundary(contents, config.boundaries.windowsProcess, /\bCommand::new\s*\(|(?:std|tokio)::(?:process\b|\{[^}]*\bprocess\s*::)/, 'Windows 外部进程创建', errors)
   checkBoundary(contents, config.boundaries.credentialAccess, /\bkeyring::|\bEntry::new\s*\(/, 'Credential Manager 访问', errors)
@@ -206,7 +233,9 @@ export function evaluateAgentContracts(contents, config) {
     errors.push(`公开 Tauri 命令未写入 docs/api.md：${command}`)
   }
 
-  const rustTools = contents.get('src-tauri/src/agentloop.rs') ?? ''
+  // 工具授权事实必须留在纯策略模块；父循环仍负责解析 canonical control 及兼容别名。
+  const rustPolicy = contents.get('src-tauri/src/agentloop/policy.rs') ?? ''
+  const rustLoop = contents.get('src-tauri/src/agentloop.rs') ?? ''
   const typeScriptTools = contents.get('src/lib/agent-tools.ts') ?? ''
   let fixture
   try {
@@ -218,8 +247,8 @@ export function evaluateAgentContracts(contents, config) {
   const fixtureTools = Array.isArray(fixture.tools) ? fixture.tools : []
   const fixtureControls = Array.isArray(fixture.controlActions) ? fixture.controlActions : []
   const checks = [
-    ['观察工具', rustArray(rustTools, 'OBSERVATION_TOOLS'), literalValues(typeScriptTools, 'AgentObservationToolName'), fixtureTools.filter((tool) => tool.kind === 'observation').map((tool) => tool.name)],
-    ['编辑/交付工具', rustArray(rustTools, 'EDIT_TOOLS'), literalValues(typeScriptTools, 'AgentSideEffectToolName'), fixtureTools.filter((tool) => tool.kind !== 'observation').map((tool) => tool.name)],
+    ['观察工具', rustArray(rustPolicy, 'OBSERVATION_TOOLS'), literalValues(typeScriptTools, 'AgentObservationToolName'), fixtureTools.filter((tool) => tool.kind === 'observation').map((tool) => tool.name)],
+    ['编辑/交付工具', rustArray(rustPolicy, 'EDIT_TOOLS'), literalValues(typeScriptTools, 'AgentSideEffectToolName'), fixtureTools.filter((tool) => tool.kind !== 'observation').map((tool) => tool.name)],
     ['控制动作', fixtureControls.map((tool) => tool.name), literalValues(typeScriptTools, 'AgentControlToolName'), fixtureControls.map((tool) => tool.name)],
     ['控制动作别名', fixtureControls.flatMap((tool) => tool.aliases ?? []).filter((name) => name !== 'empty tool'), literalValues(typeScriptTools, 'AgentControlToolAlias'), fixtureControls.flatMap((tool) => tool.aliases ?? []).filter((name) => name !== 'empty tool')],
   ]
@@ -228,7 +257,7 @@ export function evaluateAgentContracts(contents, config) {
       errors.push(`${label}在 Rust、TypeScript 与版本化 fixture 之间发生漂移。`)
     }
   }
-  const runtimeControls = runtimeControlNames(rustTools)
+  const runtimeControls = runtimeControlNames(`${rustPolicy}\n${rustLoop}`)
   const contractControls = fixtureControls.flatMap((tool) => [tool.name, ...(tool.aliases ?? [])]).filter((name) => name !== 'empty tool')
   if (!sameValues(runtimeControls, contractControls)) {
     errors.push('Rust 接受的控制动作与 TypeScript/版本化 fixture 发生漂移。')
@@ -265,6 +294,20 @@ export function evaluateAgentContextRatchet(config, baseline) {
   for (const field of ['maxNonEmptyLines', 'maxCharacters']) {
     if (!Number.isInteger(config.taskWindow[field]) || config.taskWindow[field] > baseline.taskWindow[field]) {
       errors.push(`不得放宽当前任务窗口 ${field}。`)
+    }
+  }
+  if (baseline.sourceNavigation) {
+    if (!config.sourceNavigation) {
+      errors.push('不得移除中文源码导航门。')
+    } else {
+      for (const field of ['roots', 'files', 'extensions']) {
+        for (const value of missingValues(config.sourceNavigation[field], baseline.sourceNavigation[field])) {
+          errors.push(`不得缩小中文源码导航 ${field}：${value}`)
+        }
+      }
+      if (!Number.isInteger(config.sourceNavigation.maxHeadLines) || config.sourceNavigation.maxHeadLines > baseline.sourceNavigation.maxHeadLines) {
+        errors.push('不得放宽中文源码导航最大头部行数。')
+      }
     }
   }
   for (const previousScope of baseline.scopes ?? []) {

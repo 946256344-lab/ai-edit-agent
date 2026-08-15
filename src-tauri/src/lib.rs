@@ -1,45 +1,42 @@
-//! Desktop backend and local trust boundary.
+//! 桌面后端入口与本地可信边界。
 //!
-//! Follow a user request from [`taskrouter`] (task ownership), through
-//! [`agent`] (conversation/run lifecycle), into [`agentloop`] (bounded skill
-//! selection). The Rust modules below together form the local trusted boundary:
-//! each owning module may access SQLite, source media, external processes, or
-//! deliverables only for its scoped responsibility. `run` registers the stable
-//! Tauri command surface consumed by `src/lib/local-store.ts`.
+//! 阅读一次请求时，从 [`taskrouter`]（任务归属）进入 [`agent`]（会话/运行生命周期），
+//! 再到 [`agentloop`]（有界技能循环）。下列模块共同组成可信边界：每个模块只能为自己的
+//! 职责访问 SQLite、源媒体、外部进程或产物；`run` 注册前端 bridge 使用的稳定 Tauri 命令面。
 
-/// Conversation routing, asynchronous Agent task lifecycle, and atomic finalization.
+/// 对话路由、异步 Agent task 生命周期与原子终态提交。
 mod agent;
-/// Bounded goal loop, request policy, state snapshots, prompts, and skill dispatch.
+/// 有界目标循环、请求策略、状态快照、prompt 与技能派发。
 mod agentloop;
-/// Asset import, analysis workers, safe library projections, health, and recovery.
+/// 素材导入、分析 worker、安全素材库投影、健康与恢复。
 mod assets;
-/// Payload-free Agent steps, diagnostics, task status, and operation records.
+/// 不含 payload 的 Agent 步骤、诊断、任务状态与操作记录。
 mod audit;
-/// Custom OpenAI-compatible credential commands and stored configuration.
+/// 自定义 OpenAI 兼容凭据命令与配置。
 mod custom_api;
-/// SQLite location, connection policy, and append-only schema migrations.
+/// SQLite 位置、连接策略与只追加 schema 迁移。
 mod db;
-/// One-way Jianying draft creation and deferred registration.
+/// 单向 Jianying draft 创建与延迟注册。
 mod jianying;
-/// Serializable domain and Tauri boundary types; no persistence behavior belongs here.
+/// 可序列化领域/Tauri 边界类型；本模块不放持久化行为。
 mod models;
-/// Jamendo credential, search, eligibility, and bounded download adapter.
+/// Jamendo 凭据、搜索、授权资格与有界下载适配器。
 mod music_provider;
-/// Experimental loopback PKCE flow and Windows Credential Manager access.
+/// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;
-/// FFmpeg preview rendering, text/music composition, and quality inspection.
+/// FFmpeg preview 渲染、文字/音乐合成与质量检查。
 mod preview;
-/// Hidden Windows child-process construction and bounded process execution.
+/// 隐藏 Windows 子进程的创建与有界执行。
 mod process;
-/// Project/task/conversation/message commands and startup recovery coordination.
+/// Project/task/conversation/message 命令与启动恢复协调。
 mod projects;
-/// Replaceable model transport, priority gate, timeout, fallback, and circuit breaker.
+/// 可替换模型传输、优先级门、超时、回退与熔断。
 mod provider;
-/// Evidence-backed storyboard proposal, validation, versioning, and lookup.
+/// 基于证据的 storyboard 提案、校验、版本与查询。
 mod storyboard;
-/// Project-level task resolution, snapshots, pending routes, and one-use receipts.
+/// 项目内任务归属、快照、pending route 与一次性 receipt。
 mod taskrouter;
-/// Internal timeline creation, validated edits, text/music tracks, and version queries.
+/// 内部 timeline 创建、校验编辑、文字/音乐轨与版本查询。
 mod timeline;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

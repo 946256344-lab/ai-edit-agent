@@ -1,8 +1,6 @@
 /**
- * IDE-facing mirror of the bounded Agent skill space. Execution authority is
- * the Rust OBSERVATION_TOOLS/EDIT_TOOLS whitelist; the versioned fixture under
- * src-tauri/tests/fixtures must change with that whitelist. These names are
- * internal model skills, not commands that React may invoke directly.
+ * 供 IDE 导航的 Agent 技能名称镜像。真正执行授权属于 Rust policy.rs 的白名单；
+ * 白名单变化时必须同步版本化 fixture。这些是模型内部技能，不是 React 可直接调用的命令。
  */
 export type AgentObservationToolName =
   | 'get_edit_status'

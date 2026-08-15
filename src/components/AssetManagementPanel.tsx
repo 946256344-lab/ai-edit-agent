@@ -1,3 +1,4 @@
+// 素材管理组合组件：连接目录树、直属素材列表、证据 Inspector 和来源恢复面板。
 import { useMemo } from 'react'
 import type { AssetDirectory, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview } from '../lib/local-store'
 import { AssetBrowser } from './asset-workspace/AssetBrowser'

@@ -1,3 +1,4 @@
+// 素材工作区 controller：拥有目录选择、分页轮询、证据查看、健康检查和显式重链路状态。
 import { useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'

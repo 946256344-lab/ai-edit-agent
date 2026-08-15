@@ -1,9 +1,7 @@
-//! SQLite location, connection policy, and schema migration boundary.
+//! SQLite 文件位置、连接策略与 schema 迁移边界。
 //!
-//! Domain SQL remains in its owning module. Commands that need SQLite open the
-//! same local database through this module so WAL, busy timeout, foreign keys,
-//! and migrations are applied consistently. Cross-table domain transactions
-//! must stay intact when large modules are later split.
+//! 领域 SQL 留在所属模块；所有命令都经这里打开同一个本地数据库，以统一启用 WAL、
+//! busy timeout、外键和迁移。后续拆分巨型模块时，跨表领域事务必须保持完整。
 
 use rusqlite::{params, Connection};
 use std::{

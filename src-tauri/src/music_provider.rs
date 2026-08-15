@@ -1,3 +1,6 @@
+//! Jamendo 音乐搜索、授权资格、下载与凭据状态适配器。
+//! 下载后的音频仍通过素材模块登记并进入本地分析与审计流程。
+
 use crate::assets::store_downloaded_audio;
 use crate::models::Asset;
 use keyring::Entry;

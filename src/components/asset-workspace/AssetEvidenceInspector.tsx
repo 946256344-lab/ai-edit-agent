@@ -1,3 +1,4 @@
+// 只读展示所选素材的技术元数据、关键帧、OCR 和视觉证据。
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { AssetEvidence } from '../../lib/local-store'
 

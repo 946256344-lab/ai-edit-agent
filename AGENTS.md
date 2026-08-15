@@ -29,7 +29,7 @@
 - 保持 React 19、TypeScript 和 Rust 现有模式；纯类型导入使用 `import type`，避免无用途的泛化抽象和依赖。
 - `src/App.tsx` 只做组合；领域状态进 controller，展示进 component。应用 Tauri command/raw `invoke` 只经 `src/lib/local-store.ts`；dialog、opener、event 与 `convertFileSrc` 等既有 Tauri service API 按目录规则使用。
 - Rust 是可信执行边界。外部进程、凭据、网络、SQLite 事务和工具副作用遵守 `src-tauri/src/AGENTS.md`。
-- 注释解释“为什么存在边界、谁拥有事实、失败如何恢复”，不逐行翻译代码。
+- 全部手写源码模块顶部保留中文职责导航；注释解释“为什么存在边界、谁拥有事实、失败如何恢复”，不逐行翻译代码。
 - 架构、公开契约、持久化或任务状态变化时，同步长期文档和 `docs/changes/`。`.harness/doc-sync-policy.json` 是最低同步要求。
 
 ## 完成门

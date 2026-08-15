@@ -1,3 +1,4 @@
+// 验证文档同步规则能识别受控源码、必需文档和变更记录缺失。
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { evaluateDocSync } from './check-doc-sync.mjs'
@@ -25,6 +26,7 @@ assert.deepEqual(evaluateDocSync(['src/App.tsx'], policy, new Map()).errors, [])
 assert.deepEqual(evaluateDocSync(completeFiles, policy, completeRecord).errors, [])
 assert.match(evaluateDocSync(['src-tauri/src/store.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
 assert.match(evaluateDocSync(['src-tauri/src/commands/media.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
+assert.match(evaluateDocSync(['src-tauri/src/agentloop/policy.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
 assert.match(evaluateDocSync(['src-tauri/src/custom_api.rs'], policy, new Map()).errors.join('\n'), /AGENTS\.md/)
 assert.match(evaluateDocSync(['src-tauri/src/music_provider.rs'], policy, new Map()).errors.join('\n'), /docs\/decisions\.md/)
 assert.match(evaluateDocSync(['scripts/check-agent-contracts.mjs'], policy, new Map()).errors.join('\n'), /docs\/harness\.md/)

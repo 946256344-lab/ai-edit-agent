@@ -1,3 +1,4 @@
+//! 消息写入前的任务归属与一次性 receipt 边界；只选作用域，不选择 Agent 工具。
 use crate::agent::explicit_command_tool;
 use crate::db::{now_millis, open_connection};
 use crate::models::TaskRouteResult;
@@ -95,9 +96,7 @@ pub fn resolve_conversation_task(
     });
     let pending = load_pending_task_route(&connection, &project_id)?;
 
-    // Exact single commands intentionally operate on the explicitly selected
-    // task. This preserves the provider-free status path and never guesses a
-    // different task for a side effect.
+    // 精确单命令只使用用户显式选中的 task；无 Provider 状态路径也绝不猜测另一个作用域。
     if pending.is_none() && explicit_command_tool(request).is_some() {
         if let Some(candidate) = selected_candidate(&candidates, active_task_id.as_deref()) {
             let result = result_for_candidate(

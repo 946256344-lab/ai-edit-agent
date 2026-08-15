@@ -1,3 +1,6 @@
+//! 实验性 OAuth 的 loopback PKCE 流程、令牌刷新与系统凭据存取边界。
+//! 这是可替换 Provider 的实验入口，不应表述为官方第三方 OpenAI OAuth。
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use keyring::Entry;
 use rand::{distr::Alphanumeric, Rng};

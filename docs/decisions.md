@@ -9,9 +9,16 @@
 - 原因：旧根指令虽然记录了大量正确规则，却把产品意图、前端竞态、后端事务和工具循环堆在一个长文件里；模型需要主动发现并完整保留所有段落，且违反规则仍可能通过编译。Markdown 适合解释语义，不适合作为唯一执行门。
 - 后果：另一个 AI Agent 可以从三个短入口和当前任务窗口稳定定位所需事实，明显降低接手时的上下文噪声；越过已知所有者或发生契约漂移会在本地 hook 失败。清单相对 Git `HEAD` 只允许收紧，pre-commit 直接执行三份 staged 检查并拒绝运行文件部分暂存；本地 hook 仍可被人为 `--no-verify` 绕过，后续需 Windows CI 提供仓库外执行门。该方案不改变产品运行行为、SQLite schema 或用户数据，也不声称能证明模型真正理解了文档；复杂业务语义仍需要受限后端、测试、变更记录、可复现验收与独立审查。
 
+## ADR-062：先提取 Agent 纯策略边界，并统一中文源码导航
+
+- 状态：已实现
+- 决策：保留 `src-tauri/src/agentloop.rs` 作为现有父模块和 crate API 入口，新建 `src-tauri/src/agentloop/policy.rs`，只迁移工具白名单、`RequestToolPolicy`、`LoopGoal`、目标解析/完成门和固定诚实降级文案。子模块只依赖 `AgentEditResult` 数据类型，不持有 SQLite、文件系统、Tauri、Provider 或外部进程能力。Agent fixture 与检查器改从 policy 读取白名单；父模块和子模块分别建立只降不升预算。所有手写源码模块增加中文职责导航，关键权限、事务、恢复和算法增加就地解释，但禁止逐行翻译明显语法；`agent:check` 在文件头 16 行内检查中文注释，并以相对 `HEAD` 棘轮阻止移除或放宽受控目录、扩展名和头部范围。
+- 原因：策略和副作用执行混在 4264 行文件中，使负向约束、只读门和真实产物门难以独立审查。先搬纯函数能在不改变运行契约的前提下降低耦合，同时为后续 AI Agent 和人工 IDE 学习提供可靠入口。
+- 后果：`agentloop.rs` 降至 3599 行，新增 674 行纯 policy；没有改变 Tauri 命令、SQLite schema、工具名称、模型步数、Provider 选择、媒体处理或用户数据。`src-tauri/src/**/*.rs` 现在也触发桌面契约文档同步，避免后续子模块绕过文档门。下一步优先提取 `assets/library`，再继续 Agent router/state；executor 与事务最后移动。
+
 ## ADR-061：以可验证代码地图和 IDE 导航注释指导后端渐进拆分
 
-- 状态：已实现代码地图与注释；后端物理拆分待按路线逐项执行
+- 状态：已实现代码地图与注释；`agentloop/policy` 第一阶段物理拆分已完成
 - 决策：`docs/codebase/` 固定包含技术栈、结构、架构、约定、集成、测试和关注点七份源码学习文档，每项非平凡结论必须引用当前文件或终端证据。Rust `lib.rs` 作为 crate 级 IDE 导航入口，为每个模块标注职责；前端 controller 导出点标注状态所有权和副作用边界。`src/lib/agent-tools.ts` 只作为 IDE 目标类型镜像并与当前 Rust 技能白名单对齐，不取得执行授权。后端热点不一次性重写：`agentloop.rs` 按 policy/router/state/prompt/executor，`assets.rs` 按 import/technical/visual/library/health/metadata 渐进提取，公开命令由 `mod.rs` 保持稳定。
 - 原因：仅知道“文件很大”不足以安全拆分。两个热点分别耦合 Agent 完成门与媒体 worker/路径事实，盲拆会破坏一次性 route receipt、原子终态、负向副作用门、分析恢复或目录脱敏。面向 IDE 的真实调用图能先建立共同语言，再用现有测试逐块搬迁。
 - 后果：本阶段不改变 Tauri 命令、SQLite schema、Agent 工具执行集合、媒体处理或用户数据。代码注释只解释所有权、依赖方向和恢复边界，不复述语法。后续新功能不得继续写入被冻结热点；拆分每一步必须同步 fixture、文档并执行 Rust/前端/harness/真实受影响路径验证。

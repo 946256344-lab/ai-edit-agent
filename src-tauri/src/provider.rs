@@ -1,3 +1,6 @@
+//! 模型 Provider 选择、请求调度、HTTP 传输和安全响应解析边界。
+//! `ModelAccess` 统一决定自定义 API 与实验性 OAuth 的选择及失败封闭规则。
+
 use crate::custom_api::{chat_endpoint, CustomApiConfig};
 use crate::oauth::AuthorizedOAuth;
 use serde_json::{json, Value};
@@ -119,8 +122,7 @@ fn http_agent() -> &'static ureq::Agent {
     HTTP_AGENT.get_or_init(|| ureq::AgentBuilder::new().build())
 }
 
-/// The active model access: the experimental OpenAI OAuth Responses flow, or a
-/// user-configured OpenAI-compatible custom API (base URL + API key).
+/// 当前模型访问入口：实验性 OAuth Responses 流程，或用户配置的 OpenAI 兼容 API。
 pub(crate) enum ModelAccess {
     OAuth(AuthorizedOAuth),
     Custom(CustomApiConfig),
@@ -128,6 +130,7 @@ pub(crate) enum ModelAccess {
 
 impl ModelAccess {
     pub(crate) fn resolve() -> Result<Self, String> {
+        // 只有“明确未配置”才回退 OAuth；凭据读取失败通过 Result 直接封闭，不能静默换 Provider。
         if let Some(access) = Self::configured_custom(crate::custom_api::custom_config())? {
             return Ok(access);
         }

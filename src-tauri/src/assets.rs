@@ -1,3 +1,5 @@
+//! 素材导入、技术/视觉分析队列、素材库查询、健康检查与重链路边界。
+//! 原始媒体不在这里被删除；目录响应只公开脱敏后的相对结构。
 use crate::db::{now_millis, open_connection};
 use crate::models::{
     Asset, AssetCollection, AssetDirectory, AssetEvidence, AssetHealthScanStart,
@@ -1769,10 +1771,7 @@ fn enqueue_technical_analysis(app: &AppHandle, assets: &[Asset]) -> Result<(), S
     Ok(())
 }
 
-/// Queues a fresh local analysis only for assets already owned by this project.
-/// It is deliberately a controlled tool boundary: the model chooses *which*
-/// imported evidence to inspect, while Rust owns filesystem access and task
-/// persistence. Active analyses are never duplicated.
+/// 只为本项目已有素材排队新分析；Rust 负责路径/任务，且绝不重复 active 分析。
 pub(crate) fn request_asset_analysis(
     app: &AppHandle,
     project_id: &str,
@@ -2326,9 +2325,7 @@ pub(crate) fn store_downloaded_audio(
     Ok(asset)
 }
 
-/// Wait only in a background Agent action for the already-queued analysis of a
-/// freshly downloaded track. This never retries a failed analysis and keeps the
-/// ready gate that protects timelines and delivery tools.
+/// 只在后台 Agent action 等待已排队下载音乐；失败不重试，ready 门保持不变。
 pub(crate) fn wait_for_asset_ready(
     app: &AppHandle,
     project_id: &str,
@@ -2958,6 +2955,7 @@ fn legacy_drive_parent(normalized: &str) -> Option<(String, Vec<String>)> {
 }
 
 fn legacy_asset_directories(rows: &[(String, String)]) -> HashMap<String, String> {
+    // 旧数据只在同一安全卷根内恢复相对树；多根加稳定命名空间，响应绝不暴露盘符或 UNC 根。
     let mut root_groups = HashMap::<String, Vec<(String, Vec<String>)>>::new();
     for (id, source) in rows {
         if let Some((root, parts)) = legacy_source_parent(source) {
@@ -3335,9 +3333,7 @@ pub fn list_assets(app: AppHandle, project_id: String) -> Result<Vec<Asset>, Str
     list_assets_snapshot(app, project_id, true)
 }
 
-/// Agent observation must not wake queued analysis work. The desktop asset
-/// browser keeps the historical scheduling behavior through `list_assets`,
-/// while the Agent receives the same persisted snapshot without a side effect.
+/// Agent 观察不得唤醒分析；桌面列表保留旧调度行为，Agent 只读同一持久化快照。
 pub(crate) fn list_assets_for_agent(
     app: AppHandle,
     project_id: String,
@@ -3427,6 +3423,7 @@ fn list_assets_snapshot(
 }
 
 #[tauri::command]
+/// 返回一个有界素材页和目录投影；目录筛选按“直属素材”语义执行，而不是递归混入后代。
 pub fn list_asset_page(
     app: AppHandle,
     project_id: String,

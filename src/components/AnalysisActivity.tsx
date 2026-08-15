@@ -1,3 +1,4 @@
+// 右下角素材分析活动提示，只投影 controller 已提供的队列计数和当前素材。
 import type { AssetView } from './asset-workspace/AssetBrowser'
 
 type AnalysisActivityProps = {

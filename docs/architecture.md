@@ -26,7 +26,7 @@ React 19 + TypeScript + Vite
   `- src/oauth.rs         实验性 OpenCode 兼容 OAuth/PKCE
 ```
 
-面向源码学习的分层调用图、模块职责、集成、测试和风险清单位于 `docs/codebase/`。该目录只描述可从当前源码和终端验证的现实；本文继续承担长期产品架构和安全边界。Rust crate 的 `lib.rs` 为每个模块提供 IDE hover 导航注释，前端领域 controller 的导出 hook 也标注了状态所有权和副作用边界。
+面向源码学习的分层调用图、模块职责、集成、测试和风险清单位于 `docs/codebase/`。该目录只描述可从当前源码和终端验证的现实；本文继续承担长期产品架构和安全边界。全部手写源码模块顶部提供中文职责导航，Rust crate 的 `lib.rs` 提供模块索引；权限、事务、恢复和非直观算法只在关键位置补解释，不逐行复述语法。
 
 `App.tsx` 在 Tauri 环境中通过 `local-store.ts` 加载项目、剪辑任务、会话和消息。剪辑任务是项目内的创作目标；会话、storyboard、timeline 和 preview 均被限制在该任务内，素材保持项目级复用。自然语言消息先经项目内 Task Resolver 选择已有任务、创建新任务或澄清，目标任务确定后才写入其 conversation；首次消息或导入仍会在需要时创建项目、任务和会话。
 
@@ -49,7 +49,7 @@ docs/{architecture,api,...}.md   按需读取的长期事实和历史决策
 .harness/agent-context.json      机器可读清单、作用域与允许列表
 ```
 
-支持分层 `AGENTS.md` 的编码 Agent 会按目标路径获得就近约束；其他 Agent 必须手动读取根入口、当前任务窗口和目标目录指令。`scripts/check-agent-contracts.mjs` 在工作区和暂存区验证三类约束：上下文文件及七份代码地图完整、当前任务窗口有界；React 只能经 `local-store.ts` 调用 Tauri，公开命令在 bridge/`lib.rs`/`docs/api.md` 间可对账；外部进程、Credential Manager、HTTP/网络传输与 Agent 工具目录不能跨越既定所有者。它不尝试用正则证明业务语义正确，语义仍由 Rust 校验、测试、真实桌面验收和独立审查负责。
+支持分层 `AGENTS.md` 的编码 Agent 会按目标路径获得就近约束；其他 Agent 必须手动读取根入口、当前任务窗口和目标目录指令。`scripts/check-agent-contracts.mjs` 在工作区和暂存区验证：上下文文件及七份代码地图完整、当前任务窗口有界、全部受控手写源码顶部存在中文职责导航；React 只能经 `local-store.ts` 调用 Tauri，公开命令在 bridge/`lib.rs`/`docs/api.md` 间可对账；外部进程、Credential Manager、HTTP/网络传输与 Agent 工具目录不能跨越既定所有者。它不尝试用正则证明注释或业务语义正确，语义仍由类型、Rust 校验、测试、真实桌面验收和独立审查负责。
 
 这套结构把接手成本收敛为“先定位，再按风险加载”。清单与 Git `HEAD` 比较，只允许缩小任务窗口和可信允许范围；pre-commit 直接运行并要求 staged 检查器/配置与 working tree 一致。它仍不承诺仅阅读文档即可无状态地续写任何未提交工作；可靠交接还要求工作区干净、当前任务窗口准确、变更记录和测试结果可复现。
 
@@ -136,7 +136,7 @@ Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段�
 
 Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
 
-当前物理模块边界仍未等于理想职责边界：`agentloop.rs` 同时包含 conversation route、请求工具策略、目标完成门、状态快照、prompt、循环与技能派发；`assets.rs` 同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。两者已被架构预算冻结，但冻结不等于完成拆分。后续按 `docs/codebase/ARCHITECTURE.md` 的子模块路线逐步搬迁：先纯策略/纯投影，再只读查询，再 worker，最后移动事务和技能派发；保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
+`agentloop` 的第一条物理边界已经落地：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析、真实产物完成门和固定降级文案，不能访问数据库、文件、Tauri、Provider 或外部进程；父 `agentloop.rs` 仍包含 conversation route、状态快照、prompt、循环与技能派发。`assets.rs` 仍同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。热点均受只降不升预算保护，下一步按 `docs/codebase/ARCHITECTURE.md` 先提取 `assets/library` 的纯目录投影/只读查询，再继续 router/state；worker、事务与技能派发最后移动。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
 
 仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 

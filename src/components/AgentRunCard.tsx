@@ -1,3 +1,4 @@
+// 展示单个 Agent task 的状态和 payload-free 运行步骤，不负责轮询终态或修改产物。
 import { useEffect, useMemo, useState } from 'react'
 import { listAgentRunSteps } from '../lib/local-store'
 import type { StoredAgentRunStep, StoredAgentTask } from '../lib/local-store'

@@ -1,3 +1,6 @@
+//! Windows 外部进程统一入口：隐藏控制台窗口，并为可控调用提供超时与回收。
+//! 业务模块不得自行创建 Command，以免重新引入可见窗口或无限等待。
+
 use std::{
     ffi::OsStr,
     process::{Child, Command, Output, Stdio},

@@ -28,7 +28,7 @@
 ## 模块演进
 
 - `lib.rs` 是模块索引和 Tauri 命令注册事实来源；公开命令必须同步 `src/lib/local-store.ts`（如有 UI 调用）和 `docs/api.md`。
-- `agentloop.rs` 与 `assets.rs` 是受预算保护的热点。新增职责前先按 `docs/codebase/CONCERNS.md` 的顺序抽取纯 policy/library 边界，不得提高预算掩盖增长。
+- `agentloop.rs` 与 `assets.rs` 是受预算保护的热点。Agent 的纯请求策略、工具白名单和真实产物完成门已进入 `agentloop/policy.rs`；继续拆分前按 `docs/codebase/CONCERNS.md` 的顺序迁移 router/state/executor，素材侧先抽 library，不得提高预算掩盖增长。
 - Agent 工具白名单、`src/lib/agent-tools.ts` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json` 必须保持一致。
 - 注释优先说明作用域、事务顺序、幂等性、恢复和隐私理由。
 

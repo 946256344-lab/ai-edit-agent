@@ -1,3 +1,4 @@
+// 应用组合根：选择当前项目/任务/会话并装配各领域 controller 与互斥工作区。
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'

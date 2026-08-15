@@ -1,3 +1,4 @@
+// 连接 Tauri WebView 调试端点，执行最小页面加载与运行时错误烟雾检查。
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import process from 'node:process'

@@ -1,3 +1,4 @@
+/* 全局字体、颜色基线和浏览器默认样式重置。 */
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap');
 
 :root { font-family: Manrope, "Microsoft YaHei", sans-serif; color: #e9e7e0; background: #121312; font-synthesis: none; text-rendering: optimizeLegibility; }

@@ -1,3 +1,4 @@
+// 显示当前目录的直属素材卡片和分页动作，不负责目录过滤或后台轮询。
 import type { StoredAsset } from '../../lib/local-store'
 
 export type AssetView = {

@@ -1,4 +1,5 @@
 #!/bin/sh
+# 提交前只检查暂存快照，确保架构预算、Agent 边界和文档同步均通过。
 
 node scripts/check-architecture-budgets.mjs --staged || exit 1
 node scripts/check-agent-contracts.mjs --staged || exit 1

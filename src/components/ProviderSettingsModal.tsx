@@ -1,3 +1,4 @@
+// Provider 设置弹窗只编辑 controller 草稿并触发显式动作，关闭时不自动保存。
 import type { ProviderController } from '../hooks/useProviderController'
 
 type ProviderSettingsModalProps = {

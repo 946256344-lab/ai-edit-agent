@@ -1,3 +1,4 @@
+// React 启动入口：挂载根组件和全局样式，不持有任何领域状态。
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

@@ -1,3 +1,6 @@
+//! local project、剪辑任务、conversation、消息与启动恢复的命令边界。
+//! 启动恢复只协调领域模块，不猜测丢失的模型回答或覆盖用户数据。
+
 use crate::assets::resume_incomplete_analysis;
 use crate::db::{now_millis, open_connection};
 use crate::jianying::resume_pending_jianying_registrations;

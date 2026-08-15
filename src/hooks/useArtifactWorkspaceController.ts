@@ -1,3 +1,4 @@
+// 成果工作区 controller：加载 storyboard/timeline/preview，并发起具名交付命令。
 import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'

@@ -1,6 +1,6 @@
 {
   "catalogVersion": 1,
-  "implementationSource": "src-tauri/src/agentloop.rs",
+  "implementationSource": "src-tauri/src/agentloop/policy.rs",
   "argumentConvention": {
     "location": "top_level",
     "case": "camelCase",

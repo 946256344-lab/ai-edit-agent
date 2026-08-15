@@ -1,3 +1,4 @@
+//! 从已持久化 timeline 生成可重建的低清 preview；不负责最终导出或覆盖用户文件。
 use crate::db::open_connection;
 use crate::models::{
     MusicTrack, PreviewQualityCheck, PreviewQualityReport, PreviewResult, TextAnimation, TextCue,
@@ -10,7 +11,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use tauri::{AppHandle, Manager};
 
 fn preview_directory(app: &AppHandle, timeline_version_id: &str) -> Result<PathBuf, String> {

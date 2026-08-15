@@ -1,3 +1,4 @@
+// 用合成仓库验证架构预算检查器会对增长、删除预算和解析失败保持封闭。
 import assert from 'node:assert/strict'
 import { evaluateArchitecture, evaluateBudgetRatchet } from './check-architecture-budgets.mjs'
 

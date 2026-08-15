@@ -1,7 +1,7 @@
+// 前端唯一的应用 Tauri command bridge：集中公开类型和静态命令名，不承载 UI 状态。
 import { invoke } from '@tauri-apps/api/core'
 
 export type StoreStatus = { databaseReady: boolean; schemaVersion: number }
-
 export type ExperimentalOAuthStatus = {
   state: 'disconnected' | 'pending' | 'connected' | 'failed'
   message: string | null

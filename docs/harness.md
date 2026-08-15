@@ -25,7 +25,7 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 - `App.tsx` 的行数、字符总量、最长单行、`useState`、`useEffect` 和所有 async 声明上限；
 - `src/components/**/*.tsx` 与 `src/hooks/**/*.{ts,tsx}` 的单文件行数、字符总量和最长单行上限，避免通过压缩代码绕过行数门；
 - 核心工作区组件的一至两个顶层领域 props；props 签名无法解析时检查直接失败，不把未知结构误当作零 props；
-- `local-store.ts` 和现有 Rust 热点的行数、字符总量与最长单行只降不升棘轮；
+- `local-store.ts`、父 `agentloop.rs`、纯 `agentloop/policy.rs` 和其他 Rust 热点的行数、字符总量与最长单行只降不升棘轮；
 - 受保护文件删除或改名时必须通过永久保留的 `budgetReplacements` 显式指向新预算，把旧路径加入 `forbiddenPaths`，并让新目标以不放宽的值继承全部数值指标和原路径跨层禁止规则；目录预算即使暂时为空也作为防回归墓碑保留；
 - 已删除 `ConversationWorkspace` 不得恢复，Agent 对账、素材分页、成果交付和 Provider 状态不得回流 `App.tsx`。
 
@@ -35,13 +35,16 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 
 - 根、`src/`、`src-tauri/src/` 三份指令存在；`docs/codebase/` 只能包含指定七份地图且每份有证据章节；
 - `TASKS.md` 的 `ACTIVE_TASKS` 标记唯一、顺序正确，且非空行数和总字符数都不超过上限；
+- Rust、TypeScript/React、Node、Python、HTML、Shell 与 CSS 受控手写源码的顶部 16 行内存在中文职责导航；
 - `src/lib/local-store.ts` 是唯一前端 `invoke` 所有者，所有被调用命令必须在 `lib.rs` 注册，所有已注册公开命令必须出现在 `docs/api.md`；
 - 外部进程、`keyring`/`Entry::new` 与 HTTP/网络传输只能出现在清单允许的 Rust 边界；
-- Rust 观察/编辑工具白名单、TypeScript IDE 镜像和版本化 Agent fixture 的名称完全一致。
+- `agentloop/policy.rs` 的 Rust 观察/编辑工具白名单、TypeScript IDE 镜像和版本化 Agent fixture 的名称完全一致。
+
+桌面契约文档触发器同时匹配 `src-tauri/src/*.rs` 与 `src-tauri/src/**/*.rs`，因此后续提取的 Rust 子模块不能绕过架构/API/TASKS/变更记录同步。
 
 这些规则故意只覆盖可以确定性判断的架构事实。新增合法边界时必须同时修改机器清单、测试、ADR 和变更记录；不能为了让检查通过而扩大通配允许范围。
 
-Agent 上下文清单还与 Git `HEAD` 基线执行只收紧 ratchet：既有指令、作用域、必读文档、验证命令、受检扩展名和暂存运行文件不得移除；任务窗口上限不得提高；可信边界不得增加允许路径。pre-commit 直接运行三份 staged 检查脚本，不再通过可改写的 npm 别名间接调用；检查器要求 hook、三份检查器及其机器配置在部分暂存时与 index 完全一致，避免使用 working-tree 强版本放过 staged 弱版本。
+Agent 上下文清单还与 Git `HEAD` 基线执行只收紧 ratchet：既有指令、作用域、必读文档、验证命令、受检扩展名、中文导航范围和暂存运行文件不得移除；任务窗口与导航头部行数上限不得提高；可信边界不得增加允许路径。pre-commit 直接运行三份 staged 检查脚本，不再通过可改写的 npm 别名间接调用；检查器要求 hook、三份检查器及其机器配置在部分暂存时与 index 完全一致，避免使用 working-tree 强版本放过 staged 弱版本。
 
 本地 Git hook 不是对恶意修改仓库本身的安全沙箱，开发者也可用 `--no-verify` 绕过；当前仓库尚无 CI，这是 `docs/codebase/CONCERNS.md` 已记录的剩余风险。这里的目标是阻止编码 Agent 的无意漂移，并让合法放宽必须显式留下配置、测试、ADR 和审查证据。
 

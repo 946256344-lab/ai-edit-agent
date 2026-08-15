@@ -7,6 +7,7 @@
         "src-tauri/src/main.rs",
         "src-tauri/src/lib.rs",
         "src-tauri/src/*.rs",
+        "src-tauri/src/**/*.rs",
         "src-tauri/src/commands/**/*.rs",
         "src/lib/local-store.ts",
         "src/lib/agent-tools.ts"

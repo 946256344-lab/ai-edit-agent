@@ -1,3 +1,4 @@
+// 成果工作区：集中展示 storyboard、timeline、preview 和交付审计，不直接调用后端命令。
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { AgentAuditPanel } from './AgentAuditPanel'
 import type {

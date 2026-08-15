@@ -8,6 +8,8 @@
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-15，P0）：落地后端热点第一条物理边界。`agentloop/policy.rs` 独占工具白名单、负向约束、目标解析、真实产物完成门和固定诚实降级文案，只依赖 `AgentEditResult`；父 `agentloop.rs` 保留 Router、状态、prompt、有界循环和技能执行，从 4264 行降至 3599 行。公开命令、SQLite schema、工具名、最大步数、Provider、媒体处理和用户数据均未改变。
+- [x] 本项完成门：全部手写 Rust、TypeScript/React、Node、Python、HTML、Shell 与 CSS 源码已有中文职责导航，关键权限/事务/恢复/算法补就地说明；`agent:check` 与 pre-commit 新增强制导航和只收紧 ratchet。前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python 测试、agent/harness/diff 与独立审查通过；仅保留既有 `PartiallyDone` dead-code warning。下一步按路线提取 `assets/library.rs`。
 - [x] 完成（2026-08-15，P0）：把被动 Markdown 约束工程化。根、`src/`、`src-tauri/src/` 分层 Agent 指令与有界当前任务窗口负责按需加载；机器清单和 pre-commit 自动阻止代码地图增生、JS/TS 绕过 Tauri bridge、动态/间接/未注册 IPC、API 文档漂移、外部进程/凭据/网络所有权扩散、Agent 工具目录漂移，以及配置相对 `HEAD` 放宽。检查器/配置部分暂存会失败；本地 hook 仍不是不可绕过的安全沙箱，Windows CI 留作后续。
 - [x] 本项完成门：`agent:test/check`、`harness:test/check/staged`、提交 hook、前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python 测试、七份代码地图 exact-file/evidence、diff 与独立审查均通过。审查发现并关闭嵌套文件、动态 import、bridge alias、裸命令注册、grouped Rust import、清单 ratchet、staged/worktree 和入口措辞问题；没有改变产品运行行为、SQLite schema 或用户数据。Rust 仅保留已记录的 `PartiallyDone` 既存 warning。
 - [x] 完成（2026-08-15，P0）：建立全仓库代码地图与 IDE 导航注释。以真实源码为依据梳理 React/Tauri 启动、conversation/task 路由、Agent loop、素材分析、storyboard、timeline、preview、Jianying、Provider、SQLite 和测试边界；`docs/codebase/` 固定为七份学习文档，前后端关键入口补充只解释职责、调用方向和副作用边界的导航型注释。同步清除 `agent-tools.ts` 的历史接口草图，明确 9 个观察技能、12 个编辑/交付技能、fixture canonical controls 与 production alias 的真实关系；未改变公开命令、持久化 schema、业务行为或用户数据。

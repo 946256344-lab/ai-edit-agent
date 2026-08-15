@@ -1,3 +1,6 @@
+//! 自定义 OpenAI 兼容 Provider 的配置与 Windows Credential Manager 凭据边界。
+//! API Key 只进入系统凭据库，不进入 SQLite、日志或前端持久化。
+
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 

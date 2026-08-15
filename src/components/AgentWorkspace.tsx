@@ -1,3 +1,4 @@
+// Agent 对话工作区：渲染消息、执行卡和 composer，所有状态与动作由 model/actions 注入。
 import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
 import type { StoryboardVersion, StoredAgentTask } from '../lib/local-store'

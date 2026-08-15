@@ -1,3 +1,4 @@
+// 将后端安全目录键投影为可递归渲染的树，并计算祖先/后代关系。
 import type { AssetDirectory } from '../../lib/local-store'
 
 export type AssetTreeNode = {
