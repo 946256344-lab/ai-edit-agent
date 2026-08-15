@@ -2,6 +2,8 @@
 
 ## 当前优先级
 
+- [x] 完成（2026-08-15，P0）：收敛前端编排边界并建立可执行的架构约束。`App.tsx` 从约 1110 行降至 515 行，只保留项目、剪辑任务、conversation、消息路由和工作区组合；Provider、素材、成果交付、Agent task 终态对账分别进入具名 controller。删除 296 行且混合 Agent/成果模式的 `ConversationWorkspace`，改为互斥工作区与独立侧栏、顶栏、Provider、分析提示组件；现有项目、会话、素材、storyboard、timeline、preview、Jianying 与 Agent 任务契约不变。
+- [x] 本项完成门：Provider 与 Agent task 对账内部状态不再由 `App.tsx` 持有；Agent/成果工作区各自只有 `model/actions` 两个领域入口。机器可读架构预算已接入 `harness:check`、`harness:staged` 与 pre-commit，以只降不升的行数/字符/最长单行、props/state/effect/async、禁止路径和跨层调用约束阻止反向膨胀；语法无法解析、rest props、删除/改名预算或不完整迁移均 fail-closed。前端 lint/build、harness test/check、diff 检查、真实 Tauri 项目恢复/互斥模式/素材目录开合/Provider 模态回归均通过；独立审查三轮发现的 props、async/压缩代码、预算删除与迁移绕过均已补回归并关闭。
 - [x] 完成（2026-08-15，P0）：重建最小、Agent-first 的素材工作区。保留后端目录投影、素材分页、分析证据、源文件健康检查与显式重链路，不删除素材、分析结果或任何后端能力；前端删除搜索/组合筛选、收藏/评分/标签/集合、批量操作和任务中心，只保留导入、可开合目录树、当前目录直属素材、证据 Inspector 与异常恢复。`AssetManagementPanel` 从约 500 行、50 个扁平 props 收敛为 116 行和 `model/actions` 两个领域入口，`App.tsx` 素材 state 从约 20 个减至 8 个必要状态。
 - [x] 本项完成门：安全导入根首次进入自动展开、子目录默认折叠，局部 `expandedFolderIds` 只保存真实开合状态，`toggleAssetFolder` 单一动作驱动条件渲染，`aria-expanded` 与画面一致。真实 Tauri 验证 891 条素材、根目录展开、子目录折叠/展开、跨两次 1.5 秒轮询保持状态；当前 106 条目录折叠后仍保留已加载的 100/106 条，切换目录立即清空旧卡片并落到 72/72 条直属素材；证据 Inspector 成功显示真实关键帧/OCR，控制台无错误。前端 lint/build、harness 与 diff 检查通过；harness 未触发独立审查规则，因为公开桌面命令、Rust、`local-store.ts` 和 Agent 契约均未变化。
 - [x] 完成（2026-08-15，P0）：恢复按文件夹导入时的本地相对文件树。当前真实项目 891 条素材的旧 `folder_reference` 均指向没有可展示 `file_name` 的 UNC share 根，但全部源引用已通过安全卷分组和相对结构恢复为 1 个安全导入根、10 个一级子目录和 2 个二级子目录，无需重新导入或重新分析。修复严格目录投影把 891 条全部归为“未归类”、`list_asset_page` 只返回根文件夹名、前端又以完整目录键二次过滤造成子目录空列表和错误计数的问题；目录契约现显式区分安全目录键、相对文件路径和直属素材计数，每级只显示直属子文件夹与直属素材，不暴露 server/share、盘符或绝对路径。

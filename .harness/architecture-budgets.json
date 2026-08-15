@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "pathBudgets": [
+    {
+      "path": "src/App.tsx",
+      "maxLines": 520,
+      "maxCharacters": 21858,
+      "maxLineLength": 180,
+      "maxUseState": 14,
+      "maxUseEffect": 1,
+      "maxAsyncFunctions": 12
+    },
+    {
+      "path": "src/components/AgentWorkspace.tsx",
+      "maxTopLevelProps": 2
+    },
+    {
+      "path": "src/components/ArtifactsWorkspace.tsx",
+      "maxTopLevelProps": 2
+    },
+    {
+      "path": "src/components/AssetManagementPanel.tsx",
+      "maxTopLevelProps": 2
+    },
+    {
+      "path": "src/components/AppSidebar.tsx",
+      "maxTopLevelProps": 2
+    },
+    {
+      "path": "src/components/WorkspaceHeader.tsx",
+      "maxTopLevelProps": 2
+    },
+    {
+      "path": "src/components/ProviderSettingsModal.tsx",
+      "maxTopLevelProps": 1
+    },
+    {
+      "path": "src/lib/local-store.ts",
+      "maxLines": 562,
+      "maxCharacters": 21511,
+      "maxLineLength": 364
+    },
+    {
+      "path": "src-tauri/src/agentloop.rs",
+      "maxLines": 4264,
+      "maxCharacters": 172026,
+      "maxLineLength": 1403
+    },
+    {
+      "path": "src-tauri/src/assets.rs",
+      "maxLines": 4114,
+      "maxCharacters": 175087,
+      "maxLineLength": 735
+    },
+    {
+      "path": "src-tauri/src/timeline.rs",
+      "maxLines": 1848,
+      "maxCharacters": 74216,
+      "maxLineLength": 643
+    },
+    {
+      "path": "src-tauri/src/taskrouter.rs",
+      "maxLines": 1356,
+      "maxCharacters": 53934,
+      "maxLineLength": 625
+    },
+    {
+      "path": "src-tauri/src/agent.rs",
+      "maxLines": 1247,
+      "maxCharacters": 46950,
+      "maxLineLength": 242
+    },
+    {
+      "path": "src-tauri/src/preview.rs",
+      "maxLines": 1015,
+      "maxCharacters": 36886,
+      "maxLineLength": 408
+    }
+  ],
+  "directoryBudgets": [
+    {
+      "directory": "src/components",
+      "extensions": [".tsx"],
+      "maxLines": 220,
+      "maxCharacters": 14000,
+      "maxLineLength": 180
+    },
+    {
+      "directory": "src/hooks",
+      "extensions": [".ts", ".tsx"],
+      "maxLines": 380,
+      "maxCharacters": 16000,
+      "maxLineLength": 180
+    }
+  ],
+  "forbiddenPaths": [
+    "src/components/ConversationWorkspace.tsx"
+  ],
+  "forbiddenText": [
+    {
+      "path": "src/App.tsx",
+      "text": "agent-edit-completed",
+      "message": "Agent task 终态监听必须留在 useAgentRunReconciliation。"
+    },
+    {
+      "path": "src/App.tsx",
+      "text": "listAssetPage",
+      "message": "素材分页与轮询必须留在 useAssetWorkspaceController。"
+    },
+    {
+      "path": "src/App.tsx",
+      "text": "createTimelineDraft",
+      "message": "成果创建与交付必须留在 useArtifactWorkspaceController。"
+    },
+    {
+      "path": "src/App.tsx",
+      "text": "getExperimentalOpenAIOAuthStatus",
+      "message": "Provider 状态与凭据入口必须留在 useProviderController。"
+    }
+  ],
+  "budgetReplacements": []
+}

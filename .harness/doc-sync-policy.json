@@ -44,6 +44,20 @@
         "docs/decisions.md",
         "TASKS.md"
       ]
+    },
+    {
+      "id": "architecture-guardrails",
+      "sources": [
+        ".harness/architecture-budgets.json",
+        "scripts/check-architecture-budgets.mjs",
+        "scripts/test-architecture-budgets.mjs"
+      ],
+      "requiredDocs": [
+        "docs/architecture.md",
+        "docs/decisions.md",
+        "docs/harness.md",
+        "TASKS.md"
+      ]
     }
   ],
   "changeRecordDirectory": "docs/changes"

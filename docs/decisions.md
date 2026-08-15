@@ -2,6 +2,13 @@
 
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
+## ADR-060：前端按领域 controller 收敛，并以架构预算阻止反向膨胀
+
+- 状态：已实现，真实 Tauri 回归待本变更关闭
+- 决策：`App.tsx` 只保留项目、剪辑任务、conversation、消息路由和三种工作区的顶层组合。Provider、素材、成果交付和 Agent task 终态对账分别由 `useProviderController`、`useAssetWorkspaceController`、`useArtifactWorkspaceController` 与 `useAgentRunReconciliation` 独占；Agent 与成果模式拆为互斥的 `AgentWorkspace`/`ArtifactsWorkspace`，核心工作区使用 `model/actions` 等一至两个顶层领域入口，删除承载两种模式和大量扁平 props 的 `ConversationWorkspace`。`.harness/architecture-budgets.json` 对入口与组件/controller 的行数、字符总量、最长单行、顶层 props、state/effect/async 声明，以及命令桥接和当前 Rust 热点设置只降不升的硬门；无法解析受保护 props 签名或使用 rest props 时 fail-closed。受保护文件迁移必须显式声明并永久保留 replacement、新目标预算与旧路径禁用记录，新目标继承全部旧数值上限和跨层禁止规则。`harness:check` 和 pre-commit 均执行该门。
+- 原因：Markdown 能表达边界，但不能阻止后续迭代把新状态、副作用和 props 再次塞回单体文件。此前素材管理虽然已有 Agent-first 决策，仍在连续功能叠加中增长成约 500 行/50 props，并破坏最初简单的目录开合。必须同时减少当前耦合并让越界增长自动失败。
+- 后果：Provider、素材和成果的状态与副作用各自只有一个具名 controller 入口；这些 hooks 仍由 `App.tsx` 调用，因此本决策约束职责和依赖方向，不声称隔离 React 顶层重渲染。Agent 对账原有真实 task ID、早到事件、`working` 恢复和作用域门保持不变。预算不是语义正确性的替代品；检查会与 Git `HEAD` 比较并拒绝提高已有数值、移除指标或撤掉禁止项，超过预算必须拆分。现有超大 Rust 模块先被冻结在当前行数，后续按子领域逐个拆分，不能继续把新行为写入热点文件。没有改变 Tauri API、SQLite schema、媒体处理、Provider 选择或工具副作用。
+
 ## ADR-059：素材工作区重建为最小目录浏览器
 
 - 状态：已实现，真实 Tauri 交互验收通过

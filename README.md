@@ -55,7 +55,10 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ```powershell
 npm run harness:install
+npm run architecture:check
 npm run harness:check
 ```
 
-高影响的架构改动必须在同一 Git 变更集更新对应文档和 `docs/changes/` 记录。详细规则见 `docs/harness.md`。
+`architecture:check` 会阻止 `App.tsx`、工作区组件、领域 controller、命令桥接和当前 Rust 热点超过只降不升的结构预算；`harness:check` 还会检查高影响架构改动是否在同一 Git 变更集更新对应文档和 `docs/changes/` 记录。详细规则见 `docs/harness.md`。
+
+真实桌面前端回归可在以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 Tauri dev 后运行 `npm run tauri:verify`。脚本只切换工作区、开合目录和打开/关闭 Provider 弹窗，不发送 Agent 请求，不导入、生成或交付产物。

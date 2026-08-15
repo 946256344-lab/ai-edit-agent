@@ -11,7 +11,9 @@
 ```text
 React 19 + TypeScript + Vite
 |
-|- src/App.tsx            工作区组合与展示状态
+|- src/App.tsx            项目/会话/消息入口与顶层工作区组合
+|- src/hooks/             Provider、素材、成果交付与 Agent 终态对账 controller
+|- src/components/        互斥工作区和单一职责展示组件
 |- src/lib/local-store.ts Tauri 命令 TypeScript 桥接
 |- src/lib/agent-tools.ts Agent 工具的目标契约
 `- src-tauri/             Rust 命令、SQLite、媒体工具与 OAuth 边界
@@ -24,7 +26,9 @@ React 19 + TypeScript + Vite
   `- src/oauth.rs         实验性 OpenCode 兼容 OAuth/PKCE
 ```
 
-`App.tsx` 在 Tauri 环境中通过 `local-store.ts` 加载项目、剪辑任务、会话、消息和素材。剪辑任务是项目内的创作目标；会话、storyboard、timeline 和 preview 均被限制在该任务内，素材保持项目级复用。自然语言消息先经项目内 Task Resolver 选择已有任务、创建新任务或澄清，目标任务确定后才写入其 conversation；首次消息或导入仍会在需要时创建项目、任务和会话。顶层工作区按 Agent、素材、成果三种互斥模式渲染：`ConversationWorkspace` 在 Agent 模式只展示消息流、执行卡和 composer，在成果模式集中展示唯一 Workflow、storyboard、timeline/审计与 preview；`AssetManagementPanel` 只在素材模式占用完整主工作区。素材面板通过 `model/actions` 领域边界组合目录、直属素材、证据和源恢复；真实开合状态由 `AssetDirectoryTree` 局部拥有，不进入 `App.tsx`。`App.tsx` 保留项目选择、模式编排、Provider 模态与必要领域状态编排。
+`App.tsx` 在 Tauri 环境中通过 `local-store.ts` 加载项目、剪辑任务、会话和消息。剪辑任务是项目内的创作目标；会话、storyboard、timeline 和 preview 均被限制在该任务内，素材保持项目级复用。自然语言消息先经项目内 Task Resolver 选择已有任务、创建新任务或澄清，目标任务确定后才写入其 conversation；首次消息或导入仍会在需要时创建项目、任务和会话。
+
+前端按“入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview、Jianying 状态及交付动作；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。Agent、素材、成果三种顶层模式互斥渲染为 `AgentWorkspace`、`AssetManagementPanel` 和 `ArtifactsWorkspace`；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
 
 Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许作用域内的本地派生媒体协议。
 
@@ -111,7 +115,7 @@ Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段�
 
 Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
 
-仓库还包含开发期文档同步 harness。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档。`check-doc-sync.mjs` 对 Git 变更集执行硬检查，`.githooks/pre-commit` 检查暂存区；`docs/changes/` 保存可审计的架构变更记录。对于触发规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
+仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 
 导入后，每个素材会创建 `analyze_asset` 持久化任务。启动时会恢复未完成分析、取消同一素材的重复任务，并额外补齐“只有 `queued`/`analyzing` 素材但没有对应分析任务”的孤立行（例如导入被中断时），让这类素材也能真正完成分析而不是永远显示在“正在分析媒体”提示里。分析队列以有界批次推进避免打满 CPU：技术分析最多 2 个 worker（`MAX_TECHNICAL_ANALYSIS_WORKERS`），启动恢复只先处理前 4 条（`STARTUP_ANALYSIS_BATCH`），其余保持 `queued`，待用户查看某项目时由 `list_assets` 轮询每次再排空至多 4 条（`DRAIN_ANALYSIS_BATCH`）。FFprobe、缩略图、场景扫描、回退抽帧与 Tesseract 分别有 20、30、45、20、20 秒硬超时；任一阶段超时都会使技术分析失败而队列继续，OCR 正常完成但未识别文字仍不失败。Windows 超时会以无窗口的 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用不会无限等待，因此不能保证该进程树已退出。启动把中断的本地 `running` 任务重排为 `queued`。`list_assets` 只返回持久化的分析状态，不再对所有源路径同步 `stat`；实际分析和交付工具才校验文件，避免大批量失联素材令 1.5 秒轮询阻塞。单素材首次分析只扫描视频前 30 秒（`SCENE_SCAN_CAP_SECONDS`）、最多生成 4 张关键帧，视频 OCR 只处理前 2 张；视觉分析独立在后台批次完成。SQLite 连接启用 WAL 与 5 秒 busy_timeout（`db.rs::open_connection`），消除并发写导致的 `database is locked`。前端轮询活动项目素材状态，并在右下角显示最多三个正在分析的显示名及任务总数；不展示源路径。生成的缩略图与关键帧位于应用数据目录，通过作用域 Tauri asset 协议展示；UI 不接收或展示原始源路径。Windows 上所有外部命令均通过 `process::hidden_command` 使用无控制台窗口标志执行，避免媒体分析或 Jianying 适配器闪现命令行。
 

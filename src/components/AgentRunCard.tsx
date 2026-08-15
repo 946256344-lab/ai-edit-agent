@@ -133,8 +133,27 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
           <span><strong>{toolLabel(step.toolName)}</strong><small>{stepStatusCopy(step.status)}</small></span>
         </li>)}</ol>
         : <p className="agent-run-waiting">任务已进入本地队列，正在等待第一个安全步骤。</p>}
-      {artifacts.length > 0 && <div className="agent-run-artifacts"><strong>真实产物</strong><ul>{artifacts.map((artifact) => <li key={artifact}><span>✓</span>{ARTIFACT_LABELS[artifact] ?? '本地产物'}</li>)}</ul>{hasStoryboard && <button type="button" onClick={onOpenStoryboard}>查看 storyboard</button>}</div>}
-      {(task.status === 'needs_clarification' || task.status === 'needs_review') && <p className="agent-run-attention">{task.status === 'needs_clarification' ? '请在对话中回答 Agent 提出的问题后继续。' : '上次执行意外中断，现有产物未自动重放，请检查后重新运行。'}</p>}
+      {artifacts.length > 0 && (
+        <div className="agent-run-artifacts">
+          <strong>真实产物</strong>
+          <ul>
+            {artifacts.map((artifact) => (
+              <li key={artifact}>
+                <span>✓</span>
+                {ARTIFACT_LABELS[artifact] ?? '本地产物'}
+              </li>
+            ))}
+          </ul>
+          {hasStoryboard && <button type="button" onClick={onOpenStoryboard}>查看 storyboard</button>}
+        </div>
+      )}
+      {(task.status === 'needs_clarification' || task.status === 'needs_review') && (
+        <p className="agent-run-attention">
+          {task.status === 'needs_clarification'
+            ? '请在对话中回答 Agent 提出的问题后继续。'
+            : '上次执行意外中断，现有产物未自动重放，请检查后重新运行。'}
+        </p>
+      )}
       {(task.status === 'failed' || task.status === 'cancelled') && <p className="agent-run-attention error">任务未完成；现有 storyboard、时间线和 preview 不会被自动覆盖。</p>}
     </div>}
   </section>
