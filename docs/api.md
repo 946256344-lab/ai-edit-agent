@@ -32,7 +32,7 @@
 | `preview_collect_project_media` | `{ projectId }` | `{ collectableCount, unavailableCount, totalBytes }` | 用户发起收集前逐项复核源文件并估算复制量；不写文件。 |
 | `collect_project_media` | `{ projectId, destinationDirectory }` | `{ copiedCount, unavailableCount, outputDirectory }` | 在用户选择目录下创建 UUID 命名的新包，复制当前可读源文件并写无原路径 manifest；不覆盖已有文件、不改写项目引用，操作日志只记录计数。 |
 | `list_assets` | `{ projectId }` | `StoredAsset[]` | 返回文件夹名、相对路径、技术分析状态、独立视觉分析状态和安全证据计数，不向 UI 暴露源引用或即时源文件探测结果；若该项目仍有 `queued` 分析任务且没有正在运行的分析 worker，顺带排空至多 4 条。实际分析和交付工具使用素材前会验证源文件。 |
-| `list_asset_page` | `{ projectId, search?, kind?, analysisStatus?, visualStatus?, folderName?, offset, limit }` | `AssetPage` | 面向素材库 UI 的有界分页查询，`limit` 强制为 1–200；搜索、类型、技术状态、视觉状态、storyboard 可用性和文件夹条件在 SQLite 执行。返回当前页摘要、匹配总数、项目级技术状态计数和安全文件夹名，不返回源引用。 |
+| `list_asset_page` | `{ projectId, search?, kind?, analysisStatus?, visualStatus?, directoryKey?, offset, limit }` | `AssetPage` | 面向素材库 UI 的有界分页查询，`limit` 强制为 1–200；搜索、类型、技术状态、视觉状态、storyboard 可用性和直属目录条件在 SQLite 执行。每个 item 返回安全 `directoryKey`，页面同时返回权威 `directories: { key, name, parentKey, directAssetCount }[]` 与 `unfiledCount`；目录节点来自完整项目投影，不依赖当前页且不返回源引用、盘符或绝对路径。 |
 | `get_asset_task_center` | `{ projectId }` | `AssetTaskCenter` | 返回项目级技术/视觉任务的排队、运行、失败、跳过计数，以及最多 50 条只含安全原因码的最近失败；不返回后台错误原文、路径或媒体证据。 |
 | `retry_asset_analysis_batch` | `{ projectId, assetIds }` | `BatchAssetActionResult` | 用户批量重试技术分析，每次最多 200 条；只处理当前项目、源文件仍可用且未 ready/active 的素材，活动任务不重复创建，并写入用户操作审计。 |
 | `skip_asset_visual_analysis_batch` | `{ projectId, assetIds }` | `BatchAssetActionResult` | 用户明确确认后批量跳过视觉分析，每次最多 200 条；仅修改当前项目技术 `ready` 的图片/视频，保留技术证据、清除视觉标签并写入用户操作审计。在途视觉批次不得覆盖显式用户跳过。 |
@@ -177,7 +177,7 @@ Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理�
 
 ## 导入、时间线与 preview 规则
 
-文件夹导入会递归记录支持的视频、图片和音频引用，不复制或修改源文件。`StoredAsset` 仅暴露 `folderName` 与 `relativePath`，不暴露绝对源路径；同时返回 `analysisStatus` 与 `visualAnalysisStatus`，使 UI 能按真实技术/视觉状态筛选。分析会写入时长、尺寸、帧率、音频、缩略图、关键帧、场景、OCR 和视觉标签计数。资产响应将活动分析任务映射为 `queued` 或 `analyzing`；初始化会恢复未完成任务、取消同一素材的重复任务，并为状态为 `queued`/`analyzing` 但没有任何对应分析任务的孤立素材补建并排队分析。桌面 UI 轮询 `list_assets`，在右下角展示活动分析数量和最多三个显示名，任务完成后自动移除；该提示不增加新的 Tauri 命令。
+文件夹导入会递归记录支持的视频、图片和音频引用，不复制或修改源文件。`StoredAsset` 暴露安全的导入根名 `folderName`、根内 `relativePath` 和素材直属目录 `directoryKey`，不暴露绝对源路径或盘符。新文件夹导入直接从保存的根引用生成这些字段；旧记录若根引用缺失或误存为无法展示的根，只能在至少两条源引用具有同一安全卷标识（普通/扩展盘符或 UNC server/share）时，以路径结构确定性重建安全相对树，不能按文件名或媒体内容猜测。回退先剥离卷标识再分组，卷标识本身不进入公开目录键；单组有共同父目录时以其最末级作为导入根，没有可公开共同父目录时使用固定“导入素材”根。存在多个可恢复卷组时，每组都强制进入独立的“导入素材 N”命名空间，避免同名相对树碰撞。某条无法安全解析的记录只让自身留在“未归类素材”，不会阻止其他安全记录恢复。同时返回 `analysisStatus` 与 `visualAnalysisStatus`，使 UI 能按真实技术/视觉状态筛选。分析会写入时长、尺寸、帧率、音频、缩略图、关键帧、场景、OCR 和视觉标签计数。资产响应将活动分析任务映射为 `queued` 或 `analyzing`；初始化会恢复未完成任务、取消同一素材的重复任务，并为状态为 `queued`/`analyzing` 但没有任何对应分析任务的孤立素材补建并排队分析。桌面 UI 轮询 `list_assets`，在右下角展示活动分析数量和最多三个显示名，任务完成后自动移除；该提示不增加新的 Tauri 命令。
 
 `change_clip_duration` 对视频保存实际使用的源窗口：`sourceEndMs = sourceStartMs + timelineDurationMs`；图片仍使用零源范围。新起点不得早于变更前已验证窗口的 `sourceStartMs`，新结束点不得晚于其 `sourceEndMs` 或素材技术时长，因此缩短或移动镜头不会越出已验证范围。
 

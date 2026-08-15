@@ -1,11 +1,13 @@
+import { useMemo } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
-import type { AssetCollection, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview, AssetTaskCenter, StoredAsset } from '../lib/local-store'
+import type { AssetCollection, AssetDirectory, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview, AssetTaskCenter, StoredAsset } from '../lib/local-store'
 
 type AssetView = {
   id: string
   name: string
   folderName: string | null
   relativePath: string | null
+  directoryKey: string | null
   kind: 'video' | 'image' | 'audio' | 'other'
   duration: string
   status: 'ready' | 'analyzing' | 'queued' | 'failed'
@@ -25,7 +27,7 @@ type AssetView = {
 type AssetTreeNode = {
   name: string
   path: string
-  assetCount: number
+  directAssetCount: number
   children: AssetTreeNode[]
 }
 
@@ -33,11 +35,9 @@ type AssetManagementPanelProps = {
   activeProjectId: string | null
   storeReady: boolean
   assetPage: Pick<AssetPage, 'total' | 'counts'>
-  assetTree: { root: AssetTreeNode; unfiledCount: number }
-  activeFolderNode: AssetTreeNode
-  folderBreadcrumb: string[]
-  visibleAssetFolders: AssetTreeNode[]
-  filteredAssets: AssetView[]
+  assetDirectories: AssetDirectory[]
+  unfiledAssetCount: number
+  visibleAssets: AssetView[]
   selectedAssetIds: Set<string>
   setSelectedAssetIds: (value: Set<string>) => void
   assetSearch: string
@@ -111,6 +111,31 @@ function healthLabel(status: StoredAsset['sourceHealthStatus']) {
   }
 }
 
+function buildAssetTree(directories: AssetDirectory[]) {
+  const root: AssetTreeNode = { name: '素材目录', path: 'all', directAssetCount: 0, children: [] }
+  const nodes = new Map<string, AssetTreeNode>()
+  for (const directory of directories) {
+    nodes.set(directory.key, {
+      name: directory.name,
+      path: directory.key,
+      directAssetCount: directory.directAssetCount,
+      children: [],
+    })
+  }
+  for (const directory of directories) {
+    const node = nodes.get(directory.key)
+    if (!node) continue
+    const parent = directory.parentKey ? nodes.get(directory.parentKey) : root
+    ;(parent ?? root).children.push(node)
+  }
+  const sortChildren = (node: AssetTreeNode) => {
+    node.children.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+    for (const child of node.children) sortChildren(child)
+  }
+  sortChildren(root)
+  return { root, nodes }
+}
+
 function AssetFolderTree({ node, activePath, onSelectFolder, depth = 0 }: {
   node: AssetTreeNode
   activePath: string
@@ -123,7 +148,7 @@ function AssetFolderTree({ node, activePath, onSelectFolder, depth = 0 }: {
       <button type="button" className={`asset-tree-row ${isActive ? 'is-active' : ''}`} onClick={() => onSelectFolder(node.path)}>
         <span className="asset-tree-caret">{node.children.length > 0 ? '▸' : '•'}</span>
         <span className="asset-tree-name">{node.name}</span>
-        <small>{node.assetCount}</small>
+        <small>{node.directAssetCount}</small>
       </button>
       {node.children.length > 0 && (
         <div className="asset-tree-children">
@@ -174,11 +199,9 @@ export function AssetManagementPanel({
   activeProjectId,
   storeReady,
   assetPage,
-  assetTree,
-  activeFolderNode,
-  folderBreadcrumb,
-  visibleAssetFolders,
-  filteredAssets,
+  assetDirectories,
+  unfiledAssetCount,
+  visibleAssets,
   selectedAssetIds,
   setSelectedAssetIds,
   assetSearch,
@@ -225,7 +248,15 @@ export function AssetManagementPanel({
   assetEvidence,
 }: AssetManagementPanelProps) {
   const hasFilters = assetSearch.trim() !== '' || assetKindFilter !== 'all' || assetStatusFilter !== 'all' || assetVisualFilter !== 'all' || assetFolderFilter !== 'all' || assetUserFilter !== 'all' || assetCollectionFilter !== 'all'
-  const allVisibleSelected = filteredAssets.length > 0 && filteredAssets.every((asset) => selectedAssetIds.has(asset.id))
+  const { root: assetTreeRoot, nodes: assetTreeNodes } = useMemo(() => buildAssetTree(assetDirectories), [assetDirectories])
+  const activeFolderNode = assetFolderFilter === 'all' || assetFolderFilter === '__unfiled__' ? null : assetTreeNodes.get(assetFolderFilter) ?? null
+  const folderBreadcrumb = assetFolderFilter === 'all'
+    ? ['全部素材']
+    : assetFolderFilter === '__unfiled__'
+      ? ['全部素材', '未归类素材']
+      : ['全部素材', ...assetFolderFilter.split('\\')]
+  const visibleAssetFolders = activeFolderNode?.children ?? (assetFolderFilter === 'all' ? assetTreeRoot.children : [])
+  const allVisibleSelected = visibleAssets.length > 0 && visibleAssets.every((asset) => selectedAssetIds.has(asset.id))
   const healthIssues = assetHealth ? assetHealth.missing + assetHealth.changed + assetHealth.unreadable : 0
   const currentTitle = assetFolderFilter === 'all'
     ? '全部素材'
@@ -270,12 +301,12 @@ export function AssetManagementPanel({
             <div className="asset-filter-grid">
               <label><span>技术状态</span><select value={assetStatusFilter} onChange={(event) => setAssetStatusFilter(event.target.value as typeof assetStatusFilter)}><option value="all">全部状态</option><option value="ready">已分析</option><option value="analyzing">分析中</option><option value="queued">排队中</option><option value="failed">失败</option></select></label>
               <label><span>视觉状态</span><select value={assetVisualFilter} onChange={(event) => setAssetVisualFilter(event.target.value as typeof assetVisualFilter)}><option value="all">全部视觉状态</option><option value="storyboard-ready">可用于 storyboard</option><option value="ready">视觉完成</option><option value="running">视觉分析中</option><option value="queued">视觉排队中</option><option value="failed">视觉失败</option><option value="skipped">视觉跳过</option></select></label>
-              <label><span>素材文件夹</span><select value={assetFolderFilter} onChange={(event) => onSelectFolder(event.target.value)}><option value="all">全部文件夹</option><option value="__unfiled__">未归类素材</option>{assetTree.root.children.map((node) => <option key={node.path} value={node.path}>{node.name}</option>)}</select></label>
+              <label><span>素材文件夹</span><select value={assetFolderFilter} onChange={(event) => onSelectFolder(event.target.value)}><option value="all">全部文件夹</option>{unfiledAssetCount > 0 && <option value="__unfiled__">未归类素材</option>}{assetDirectories.map((directory) => <option key={directory.key} value={directory.key}>{directory.key.replaceAll('\\', ' / ')}</option>)}</select></label>
               <label><span>用户状态</span><select value={assetUserFilter} onChange={(event) => setAssetUserFilter(event.target.value as typeof assetUserFilter)}><option value="all">全部用户状态</option><option value="favorite">已收藏</option><option value="available">允许使用</option><option value="excluded">禁止使用</option></select></label>
               <label><span>素材集合</span><select value={assetCollectionFilter} onChange={(event) => setAssetCollectionFilter(event.target.value)}><option value="all">全部集合</option>{assetCollections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}（{collection.assetCount}）</option>)}</select></label>
             </div>
             <div className="asset-filter-summary">
-              <span>已加载 {filteredAssets.length} / 匹配 {assetPage.total}</span>
+              <span>已加载 {visibleAssets.length} / 匹配 {assetPage.total}</span>
               {hasFilters && <button onClick={() => { setAssetSearch(''); setAssetKindFilter('all'); setAssetStatusFilter('all'); setAssetVisualFilter('all'); setAssetFolderFilter('all'); setAssetUserFilter('all'); setAssetCollectionFilter('all') }}>清空筛选</button>}
             </div>
           </section>
@@ -285,7 +316,7 @@ export function AssetManagementPanel({
               <strong>{currentTitle}</strong>
               <p>{folderBreadcrumb.join(' / ')}</p>
             </div>
-            <small>{assetFolderFilter === 'all' ? `${assetTree.root.assetCount} 个目录分支` : assetFolderFilter === '__unfiled__' ? `${assetTree.unfiledCount} 个未归类素材` : `${activeFolderNode.assetCount} 个直属素材`}</small>
+            <small>{assetFolderFilter === 'all' ? `${assetTreeRoot.children.length} 个导入根 · ${assetPage.counts.total} 个素材` : assetFolderFilter === '__unfiled__' ? `${unfiledAssetCount} 个未归类素材` : `${activeFolderNode?.directAssetCount ?? 0} 个直属素材`}</small>
           </section>
 
           <section className="asset-tree-card">
@@ -294,14 +325,14 @@ export function AssetManagementPanel({
               <small>只展示层级结构，不混入分析结果</small>
             </div>
             <div className="asset-tree-card__body">
-              {assetTree.root.children.length > 0 ? assetTree.root.children.map((node) => <AssetFolderTree key={node.path} node={node} activePath={assetFolderFilter} onSelectFolder={onSelectFolder} />) : <p className="asset-empty-hint">导入文件夹后，这里会按层级显示目录。</p>}
+              {assetTreeRoot.children.length > 0 ? assetTreeRoot.children.map((node) => <AssetFolderTree key={node.path} node={node} activePath={assetFolderFilter} onSelectFolder={onSelectFolder} />) : <p className="asset-empty-hint">导入文件夹后，这里会按层级显示目录。</p>}
             </div>
             {visibleAssetFolders.length > 0 && (
               <div className="asset-folder-strip">
                 {visibleAssetFolders.slice(0, 4).map((folder) => (
                   <button key={folder.path} className="asset-folder-pill" onClick={() => { setAssetEvidenceNull(); onSelectFolder(folder.path) }}>
                     <span>{folder.name}</span>
-                    <small>{folder.assetCount}</small>
+                    <small>{folder.directAssetCount}</small>
                   </button>
                 ))}
               </div>
@@ -312,7 +343,7 @@ export function AssetManagementPanel({
         <section className="asset-workbench__center">
           <section className="asset-selection-card">
             <label>
-              <input type="checkbox" checked={allVisibleSelected} onChange={(event) => setSelectedAssetIds(event.target.checked ? new Set(filteredAssets.slice(0, 200).map((asset) => asset.id)) : new Set())} />
+              <input type="checkbox" checked={allVisibleSelected} onChange={(event) => setSelectedAssetIds(event.target.checked ? new Set(visibleAssets.slice(0, 200).map((asset) => asset.id)) : new Set())} />
               选择已加载素材
             </label>
             <span>{selectedAssetIds.size} 个已选择</span>
@@ -340,11 +371,11 @@ export function AssetManagementPanel({
           <section className="asset-list-card">
             <div className="asset-list-card__head">
               <strong>{currentTitle}</strong>
-              <small>{filteredAssets.length} / {assetPage.total}</small>
+              <small>{visibleAssets.length} / {assetPage.total}</small>
             </div>
-            {filteredAssets.length > 0 ? (
+            {visibleAssets.length > 0 ? (
               <div className="asset-list-card__body">
-                {filteredAssets.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.has(asset.id)} onSelectAsset={onSelectAssetEvidence} />)}
+                {visibleAssets.map((asset) => <AssetCard key={asset.id} asset={asset} selected={selectedAssetIds.has(asset.id)} onSelectAsset={onSelectAssetEvidence} />)}
               </div>
             ) : (
               <div className="asset-list-card__empty">当前筛选没有可显示的素材。</div>

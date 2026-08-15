@@ -1,10 +1,10 @@
 use crate::db::{now_millis, open_connection};
 use crate::models::{
-    Asset, AssetCollection, AssetEvidence, AssetHealthScanStart, AssetHealthScanSummary, AssetPage,
-    AssetRelinkMatch, AssetRelinkPreview, AssetRelinkResult, AssetStatusCounts, AssetTaskCenter,
-    AssetTaskFailure, AssetTaskStageCounts, BatchAssetActionResult, CollectProjectMediaPreview,
-    CollectProjectMediaResult, KeyframeMetadata, OcrEvidence, SceneSegment, TechnicalMetadata,
-    VisualEvidence,
+    Asset, AssetCollection, AssetDirectory, AssetEvidence, AssetHealthScanStart,
+    AssetHealthScanSummary, AssetPage, AssetRelinkMatch, AssetRelinkPreview, AssetRelinkResult,
+    AssetStatusCounts, AssetTaskCenter, AssetTaskFailure, AssetTaskStageCounts,
+    BatchAssetActionResult, CollectProjectMediaPreview, CollectProjectMediaResult,
+    KeyframeMetadata, OcrEvidence, SceneSegment, TechnicalMetadata, VisualEvidence,
 };
 use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
 use crate::provider::{
@@ -2254,13 +2254,19 @@ pub(crate) fn store_assets(
             .and_then(|name| name.to_str())
             .ok_or_else(|| "A selected file name is invalid.".to_owned())?
             .to_owned();
+        let source_reference = source.to_string_lossy().into_owned();
+        let folder_reference = folder_reference.map(|path| path.to_string_lossy().into_owned());
+        let directory_key = asset_safe_directory(&source_reference, folder_reference.as_deref());
+        let (folder_name, relative_path) =
+            asset_public_folder_metadata(directory_key.as_deref(), &display_name);
         let asset = Asset {
             id: Uuid::new_v4().to_string(),
             project_id: project_id.to_owned(),
             kind: asset_kind(&source),
             display_name,
-            folder_name: None,
-            relative_path: None,
+            folder_name,
+            relative_path,
+            directory_key,
             analysis_status: "queued".to_owned(),
             visual_analysis_status: "queued".to_owned(),
             duration_ms: None,
@@ -2286,7 +2292,7 @@ pub(crate) fn store_assets(
         };
         transaction.execute(
             "INSERT INTO assets (id, project_id, kind, display_name, source_reference, folder_reference, analysis_status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![asset.id, asset.project_id, asset.kind, asset.display_name, source.to_string_lossy(), folder_reference.map(|path| path.to_string_lossy().into_owned()), asset.analysis_status, asset.created_at, asset.updated_at],
+            params![asset.id, asset.project_id, asset.kind, asset.display_name, source_reference, folder_reference, asset.analysis_status, asset.created_at, asset.updated_at],
         ).map_err(|error| error.to_string())?;
         let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
         transaction.execute(
@@ -2840,24 +2846,23 @@ pub(crate) fn get_asset_health_summary_for_agent(
     }))
 }
 
-fn asset_folder_metadata(
-    source_reference: &str,
-    folder_reference: Option<String>,
+fn asset_public_folder_metadata(
+    directory_key: Option<&str>,
+    display_name: &str,
 ) -> (Option<String>, Option<String>) {
-    let Some(folder_reference) = folder_reference else {
+    let Some(directory_key) = directory_key else {
         return (None, None);
     };
-    let folder = Path::new(&folder_reference);
-    let folder_name = folder
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned);
-    let relative_path = Path::new(source_reference)
-        .strip_prefix(folder)
-        .ok()
-        .and_then(|path| path.to_str())
-        .map(str::to_owned);
-    (folder_name, relative_path)
+    let (folder_name, relative_directory) = directory_key
+        .split_once('\\')
+        .map_or((directory_key, None), |(root, relative)| {
+            (root, Some(relative))
+        });
+    let relative_path = relative_directory.map_or_else(
+        || display_name.to_owned(),
+        |directory| format!("{directory}\\{display_name}"),
+    );
+    (Some(folder_name.to_owned()), Some(relative_path))
 }
 
 fn asset_safe_directory(source_reference: &str, folder_reference: Option<&str>) -> Option<String> {
@@ -2875,44 +2880,130 @@ fn asset_safe_directory(source_reference: &str, folder_reference: Option<&str>) 
     })
 }
 
-fn legacy_asset_directories(rows: &[(String, String)]) -> HashMap<String, String> {
-    let parents = rows
+fn safe_legacy_parent_parts(parts: &[&str]) -> Option<Vec<String>> {
+    let mut parts = parts
         .iter()
-        .map(|(_, source)| {
-            source
-                .replace('/', "\\")
-                .split('\\')
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|parts| parts.len() > 1)
-        .map(|mut parts| {
-            parts.pop();
-            parts
-        })
+        .filter(|part| !part.is_empty())
+        .map(|part| (*part).to_owned())
         .collect::<Vec<_>>();
-    if parents.len() < 2 {
-        return HashMap::new();
+    parts.pop()?;
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|part| part == "." || part == ".." || part.contains(':'))
+    {
+        return None;
     }
-    let mut common = parents[0].len();
-    for parts in &parents[1..] {
-        common = common.min(parts.len());
-        common = (0..common)
-            .take_while(|index| parents[0][*index].eq_ignore_ascii_case(&parts[*index]))
-            .count();
+    Some(parts)
+}
+
+fn legacy_source_parent(source: &str) -> Option<(String, Vec<String>)> {
+    let normalized = source.replace('/', "\\");
+    let lower = normalized.to_ascii_lowercase();
+    if lower.starts_with(r"\\?\unc\") {
+        let parts = normalized[8..].split('\\').collect::<Vec<_>>();
+        let (server, share) = (*parts.first()?, *parts.get(1)?);
+        if server.is_empty()
+            || share.is_empty()
+            || [server, share]
+                .iter()
+                .any(|part| *part == "." || *part == ".." || part.contains(':'))
+        {
+            return None;
+        }
+        return Some((
+            format!(
+                "unc:{}\\{}",
+                server.to_ascii_lowercase(),
+                share.to_ascii_lowercase()
+            ),
+            safe_legacy_parent_parts(&parts[2..])?,
+        ));
     }
-    let base = common.saturating_sub(1);
-    rows.iter()
-        .filter_map(|(id, source)| {
-            let mut parts = source
-                .replace('/', "\\")
-                .split('\\')
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            parts.pop()?;
-            (parts.len() > base).then(|| (id.clone(), parts[base..].join("\\")))
-        })
-        .collect()
+    if lower.starts_with(r"\\?\") {
+        return legacy_drive_parent(&normalized[4..]);
+    }
+    if normalized.starts_with(r"\\") {
+        let parts = normalized[2..].split('\\').collect::<Vec<_>>();
+        let (server, share) = (*parts.first()?, *parts.get(1)?);
+        if server.is_empty()
+            || share.is_empty()
+            || [server, share]
+                .iter()
+                .any(|part| *part == "." || *part == ".." || part.contains(':'))
+        {
+            return None;
+        }
+        return Some((
+            format!(
+                "unc:{}\\{}",
+                server.to_ascii_lowercase(),
+                share.to_ascii_lowercase()
+            ),
+            safe_legacy_parent_parts(&parts[2..])?,
+        ));
+    }
+    legacy_drive_parent(&normalized)
+}
+
+fn legacy_drive_parent(normalized: &str) -> Option<(String, Vec<String>)> {
+    let (drive, relative) = normalized.split_once('\\')?;
+    if drive.len() != 2 || !drive.ends_with(':') {
+        return None;
+    }
+    Some((
+        format!("drive:{}", drive.to_ascii_lowercase()),
+        safe_legacy_parent_parts(&relative.split('\\').collect::<Vec<_>>())?,
+    ))
+}
+
+fn legacy_asset_directories(rows: &[(String, String)]) -> HashMap<String, String> {
+    let mut root_groups = HashMap::<String, Vec<(String, Vec<String>)>>::new();
+    for (id, source) in rows {
+        if let Some((root, parts)) = legacy_source_parent(source) {
+            root_groups
+                .entry(root)
+                .or_default()
+                .push((id.clone(), parts));
+        }
+    }
+    let mut directories = HashMap::new();
+    let mut groups = root_groups
+        .into_iter()
+        .filter(|(_, group)| group.len() >= 2)
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| left.0.cmp(&right.0));
+    let group_count = groups.len();
+    for (group_index, (_, group)) in groups.into_iter().enumerate() {
+        let namespace = (group_count > 1).then(|| format!("导入素材 {}", group_index + 1));
+        let mut common = group[0].1.len();
+        for (_, parts) in &group[1..] {
+            common = common.min(parts.len());
+            common = (0..common)
+                .take_while(|index| group[0].1[*index].eq_ignore_ascii_case(&parts[*index]))
+                .count();
+        }
+        if common == 0 {
+            let root = namespace.unwrap_or_else(|| "导入素材".to_owned());
+            directories.extend(
+                group
+                    .into_iter()
+                    .map(|(id, parts)| (id, format!("{root}\\{}", parts.join("\\")))),
+            );
+            continue;
+        }
+        let base = common.saturating_sub(1);
+        directories.extend(group.into_iter().filter_map(|(id, parts)| {
+            (parts.len() > base).then(|| {
+                let relative = parts[base..].join("\\");
+                let directory = namespace
+                    .as_deref()
+                    .map_or(relative.clone(), |root| format!("{root}\\{relative}"));
+                (id, directory)
+            })
+        }));
+    }
+    directories
 }
 
 fn project_asset_directories(
@@ -2933,18 +3024,65 @@ fn project_asset_directories(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let legacy = rows
-        .iter()
-        .filter(|(_, _, root)| root.is_none())
-        .map(|(id, source, _)| (id.clone(), source.clone()))
-        .collect::<Vec<_>>();
-    let mut directories = legacy_asset_directories(&legacy);
+    Ok(resolve_asset_directories(rows))
+}
+
+fn resolve_asset_directories(
+    rows: Vec<(String, String, Option<String>)>,
+) -> HashMap<String, String> {
+    let mut directories = HashMap::new();
+    let mut unresolved = Vec::new();
     for (id, source, root) in rows {
         if let Some(directory) = asset_safe_directory(&source, root.as_deref()) {
             directories.insert(id, directory);
+        } else {
+            unresolved.push((id, source));
         }
     }
-    Ok(directories)
+    directories.extend(legacy_asset_directories(&unresolved));
+    directories
+}
+
+fn asset_directory_nodes(asset_directories: &HashMap<String, String>) -> Vec<AssetDirectory> {
+    let mut nodes = HashMap::<String, (String, usize)>::new();
+    for directory in asset_directories.values() {
+        let normalized = directory.replace('/', "\\").trim_matches('\\').to_owned();
+        let segments = normalized
+            .split('\\')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if segments.is_empty() {
+            continue;
+        }
+        let mut key = String::new();
+        for segment in segments {
+            if !key.is_empty() {
+                key.push('\\');
+            }
+            key.push_str(segment);
+            nodes
+                .entry(key.to_lowercase())
+                .or_insert_with(|| (key.clone(), 0));
+        }
+        if let Some((_, direct_asset_count)) = nodes.get_mut(&key.to_lowercase()) {
+            *direct_asset_count += 1;
+        }
+    }
+    let mut directories = nodes
+        .into_values()
+        .filter_map(|(key, direct_asset_count)| {
+            let name = key.rsplit('\\').next()?.to_owned();
+            let parent_key = key.rsplit_once('\\').map(|(parent, _)| parent.to_owned());
+            Some(AssetDirectory {
+                key,
+                name,
+                parent_key,
+                direct_asset_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    directories.sort_by(|left, right| left.key.to_lowercase().cmp(&right.key.to_lowercase()));
+    directories
 }
 
 pub(crate) fn search_assets_for_agent(
@@ -3213,6 +3351,7 @@ fn list_assets_snapshot(
     schedule_pending_analysis: bool,
 ) -> Result<Vec<Asset>, String> {
     let connection = open_connection(&app)?;
+    let asset_directories = project_asset_directories(&connection, &project_id)?;
     let mut statement = connection.prepare(
         "SELECT id, project_id, kind, display_name, source_reference, folder_reference, analysis_status, metadata_json, created_at, updated_at,
          coalesce((SELECT favorite FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0),
@@ -3227,19 +3366,21 @@ fn list_assets_snapshot(
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
-            let source_reference: String = row.get(4)?;
-            let folder_reference: Option<String> = row.get(5)?;
+            let id: String = row.get(0)?;
+            let display_name: String = row.get(3)?;
+            let directory_key = asset_directories.get(&id).cloned();
             let (folder_name, relative_path) =
-                asset_folder_metadata(&source_reference, folder_reference);
+                asset_public_folder_metadata(directory_key.as_deref(), &display_name);
             let metadata: TechnicalMetadata =
                 serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default();
             Ok(Asset {
-                id: row.get(0)?,
+                id,
                 project_id: row.get(1)?,
                 kind: row.get(2)?,
-                display_name: row.get(3)?,
+                display_name,
                 folder_name,
                 relative_path,
+                directory_key,
                 analysis_status: row.get(6)?,
                 visual_analysis_status: metadata.visual_analysis_status.clone(),
                 duration_ms: metadata.duration_ms,
@@ -3293,7 +3434,7 @@ pub fn list_asset_page(
     kind: Option<String>,
     analysis_status: Option<String>,
     visual_status: Option<String>,
-    folder_name: Option<String>,
+    directory_key: Option<String>,
     user_filter: Option<String>,
     collection_id: Option<String>,
     offset: usize,
@@ -3312,7 +3453,7 @@ pub fn list_asset_page(
             "queued" | "running" | "ready" | "failed" | "skipped" | "storyboard-ready"
         )
     });
-    let folder_name = folder_name
+    let directory_key = directory_key
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let user_filter =
@@ -3322,7 +3463,7 @@ pub fn list_asset_page(
         .filter(|value| !value.is_empty());
     let connection = open_connection(&app)?;
     let asset_directories = project_asset_directories(&connection, &project_id)?;
-    let folder_asset_ids = if let Some(folder) = folder_name.as_deref() {
+    let folder_asset_ids = if let Some(folder) = directory_key.as_deref() {
         let ids = if folder == "__unfiled__" {
             let mut statement = connection
                 .prepare("SELECT id FROM assets WHERE project_id = ?1")
@@ -3393,19 +3534,21 @@ pub fn list_asset_page(
                 offset as i64,
             ],
             |row| {
-                let source_reference: String = row.get(4)?;
-                let folder_reference: Option<String> = row.get(5)?;
+                let id: String = row.get(0)?;
+                let display_name: String = row.get(3)?;
+                let directory_key = asset_directories.get(&id).cloned();
                 let (folder_name, relative_path) =
-                    asset_folder_metadata(&source_reference, folder_reference);
+                    asset_public_folder_metadata(directory_key.as_deref(), &display_name);
                 let metadata: TechnicalMetadata =
                     serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default();
                 Ok(Asset {
-                    id: row.get(0)?,
+                    id,
                     project_id: row.get(1)?,
                     kind: row.get(2)?,
-                    display_name: row.get(3)?,
+                    display_name,
                     folder_name,
                     relative_path,
+                    directory_key,
                     analysis_status: row.get(6)?,
                     visual_analysis_status: metadata.visual_analysis_status.clone(),
                     duration_ms: metadata.duration_ms,
@@ -3454,20 +3597,16 @@ pub fn list_asset_page(
             |row| Ok(AssetStatusCounts { total: row.get::<_, i64>(0)? as usize, ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize }),
         )
         .map_err(|error| error.to_string())?;
-    let mut folders = asset_directories.values().cloned().collect::<Vec<_>>();
-    folders.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
-    folders.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let directories = asset_directory_nodes(&asset_directories);
     let unfiled_count = counts.total.saturating_sub(asset_directories.len());
-    if unfiled_count > 0 {
-        folders.push("__unfiled__".to_owned());
-    }
     drain_pending_analysis(&app, &project_id)?;
     Ok(AssetPage {
         items,
         total: total as usize,
         offset,
         limit,
-        folders,
+        directories,
+        unfiled_count,
         counts,
     })
 }
@@ -3765,5 +3904,211 @@ mod tests {
             Some(r"campaign\opening")
         );
         assert!(directories.values().all(|value| !value.contains(":")));
+    }
+
+    #[test]
+    fn legacy_paths_without_a_shared_parent_stay_unfiled() {
+        let rows = vec![
+            ("a".to_owned(), r"D:\campaign\workers\a.mp4".to_owned()),
+            ("b".to_owned(), r"E:\archive\opening\b.mp4".to_owned()),
+        ];
+        assert!(legacy_asset_directories(&rows).is_empty());
+    }
+
+    #[test]
+    fn legacy_unc_and_extended_paths_stay_unfiled_without_leaking_roots() {
+        let unc_rows = vec![
+            (
+                "a".to_owned(),
+                r"\\server-a\share\campaign\a.mp4".to_owned(),
+            ),
+            (
+                "b".to_owned(),
+                r"\\server-b\share\campaign\b.mp4".to_owned(),
+            ),
+        ];
+        let extended_rows = vec![
+            ("a".to_owned(), r"\\?\D:\campaign\a.mp4".to_owned()),
+            ("b".to_owned(), r"\\?\E:\campaign\b.mp4".to_owned()),
+        ];
+        assert!(legacy_asset_directories(&unc_rows).is_empty());
+        assert!(legacy_asset_directories(&extended_rows).is_empty());
+    }
+
+    #[test]
+    fn same_unc_share_recovers_only_safe_relative_directories() {
+        let rows = vec![
+            (
+                "a".to_owned(),
+                r"\\server\share\campaign\workers\a.mp4".to_owned(),
+            ),
+            (
+                "b".to_owned(),
+                r"\\server\share\campaign\opening\b.mp4".to_owned(),
+            ),
+        ];
+        let directories = legacy_asset_directories(&rows);
+        assert_eq!(
+            directories.get("a").map(String::as_str),
+            Some(r"campaign\workers")
+        );
+        assert_eq!(
+            directories.get("b").map(String::as_str),
+            Some(r"campaign\opening")
+        );
+        assert!(directories.values().all(|value| !value.contains(':')));
+        assert!(directories
+            .values()
+            .all(|value| !value.to_ascii_lowercase().contains("server")));
+    }
+
+    #[test]
+    fn unc_share_root_uses_a_synthetic_label_without_leaking_the_share() {
+        let rows = vec![
+            (
+                "a".to_owned(),
+                r"\\server\private-share\workers\a.mp4".to_owned(),
+            ),
+            (
+                "b".to_owned(),
+                r"\\server\private-share\opening\b.mp4".to_owned(),
+            ),
+        ];
+        let directories = legacy_asset_directories(&rows);
+        assert_eq!(
+            directories.get("a").map(String::as_str),
+            Some(r"导入素材\workers")
+        );
+        assert_eq!(
+            directories.get("b").map(String::as_str),
+            Some(r"导入素材\opening")
+        );
+        assert!(directories
+            .values()
+            .all(|value| !value.contains("private-share") && !value.contains("server")));
+    }
+
+    #[test]
+    fn unsafe_legacy_rows_do_not_hide_a_safe_drive_tree() {
+        let rows = vec![
+            ("a".to_owned(), r"D:\campaign\workers\a.mp4".to_owned()),
+            ("b".to_owned(), r"D:\campaign\opening\b.mp4".to_owned()),
+            (
+                "unc".to_owned(),
+                r"\\server\share\campaign\c.mp4".to_owned(),
+            ),
+        ];
+        let directories = legacy_asset_directories(&rows);
+        assert_eq!(directories.len(), 2);
+        assert_eq!(
+            directories.get("a").map(String::as_str),
+            Some(r"campaign\workers")
+        );
+        assert_eq!(
+            directories.get("b").map(String::as_str),
+            Some(r"campaign\opening")
+        );
+        assert!(!directories.contains_key("unc"));
+    }
+
+    #[test]
+    fn multiple_safe_roots_cannot_merge_identical_relative_trees() {
+        let rows = vec![
+            (
+                "d-workers".to_owned(),
+                r"D:\one\campaign\workers\a.mp4".to_owned(),
+            ),
+            (
+                "d-opening".to_owned(),
+                r"D:\one\campaign\opening\b.mp4".to_owned(),
+            ),
+            (
+                "e-workers".to_owned(),
+                r"E:\two\campaign\workers\c.mp4".to_owned(),
+            ),
+            (
+                "e-opening".to_owned(),
+                r"E:\two\campaign\opening\d.mp4".to_owned(),
+            ),
+        ];
+        let directories = legacy_asset_directories(&rows);
+        assert_eq!(directories.len(), 4);
+        assert_eq!(
+            directories.get("d-workers").map(String::as_str),
+            Some(r"导入素材 1\campaign\workers")
+        );
+        assert_eq!(
+            directories.get("e-workers").map(String::as_str),
+            Some(r"导入素材 2\campaign\workers")
+        );
+        assert_ne!(directories.get("d-opening"), directories.get("e-opening"));
+        assert!(directories.values().all(|value| !value.contains(':')));
+    }
+
+    #[test]
+    fn folder_import_metadata_keeps_the_root_and_exact_relative_directory() {
+        let source = r"D:\media\campaign\workers\day-one\clip.mp4";
+        let root = r"D:\media\campaign";
+        let directory_key = asset_safe_directory(source, Some(root));
+        let (folder_name, relative_path) =
+            asset_public_folder_metadata(directory_key.as_deref(), "clip.mp4");
+        assert_eq!(folder_name.as_deref(), Some("campaign"));
+        assert_eq!(relative_path.as_deref(), Some(r"workers\day-one\clip.mp4"));
+        assert_eq!(directory_key.as_deref(), Some(r"campaign\workers\day-one"));
+    }
+
+    #[test]
+    fn unusable_drive_root_falls_back_to_the_common_import_tree() {
+        let rows = vec![
+            (
+                "a".to_owned(),
+                r"D:\editing\campaign\workers\a.mp4".to_owned(),
+                Some(r"D:\".to_owned()),
+            ),
+            (
+                "b".to_owned(),
+                r"D:\editing\campaign\opening\b.mp4".to_owned(),
+                Some(r"D:\".to_owned()),
+            ),
+        ];
+        let directories = resolve_asset_directories(rows);
+        assert_eq!(
+            directories.get("a").map(String::as_str),
+            Some(r"campaign\workers")
+        );
+        assert_eq!(
+            directories.get("b").map(String::as_str),
+            Some(r"campaign\opening")
+        );
+        assert!(directories.values().all(|value| !value.contains(':')));
+    }
+
+    #[test]
+    fn directory_nodes_include_ancestors_and_authoritative_direct_counts() {
+        let directories = HashMap::from([
+            ("a".to_owned(), r"campaign\workers".to_owned()),
+            ("b".to_owned(), r"campaign\workers\day-one".to_owned()),
+            ("c".to_owned(), r"campaign\workers\day-one".to_owned()),
+            ("d".to_owned(), r"campaign\opening".to_owned()),
+        ]);
+        let nodes = asset_directory_nodes(&directories);
+        let count = |key: &str| {
+            nodes
+                .iter()
+                .find(|node| node.key == key)
+                .map(|node| node.direct_asset_count)
+        };
+        assert_eq!(nodes.len(), 4);
+        assert_eq!(count("campaign"), Some(0));
+        assert_eq!(count(r"campaign\workers"), Some(1));
+        assert_eq!(count(r"campaign\workers\day-one"), Some(2));
+        assert_eq!(count(r"campaign\opening"), Some(1));
+        assert_eq!(
+            nodes
+                .iter()
+                .find(|node| node.key == r"campaign\workers\day-one")
+                .and_then(|node| node.parent_key.as_deref()),
+            Some(r"campaign\workers")
+        );
     }
 }

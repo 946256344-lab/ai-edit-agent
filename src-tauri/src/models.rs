@@ -98,6 +98,7 @@ pub struct Asset {
     pub display_name: String,
     pub folder_name: Option<String>,
     pub relative_path: Option<String>,
+    pub directory_key: Option<String>,
     pub analysis_status: String,
     pub visual_analysis_status: String,
     pub duration_ms: Option<i64>,
@@ -124,12 +125,22 @@ pub struct Asset {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssetDirectory {
+    pub key: String,
+    pub name: String,
+    pub parent_key: Option<String>,
+    pub direct_asset_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssetPage {
     pub items: Vec<Asset>,
     pub total: usize,
     pub offset: usize,
     pub limit: usize,
-    pub folders: Vec<String>,
+    pub directories: Vec<AssetDirectory>,
+    pub unfiled_count: usize,
     pub counts: AssetStatusCounts,
 }
 

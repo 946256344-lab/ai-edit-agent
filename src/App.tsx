@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -71,6 +71,7 @@ type Asset = {
   name: string
   folderName: string | null
   relativePath: string | null
+  directoryKey: string | null
   kind: 'video' | 'image' | 'audio' | 'other'
   duration: string
   status: 'ready' | 'analyzing' | 'queued' | 'failed'
@@ -122,6 +123,7 @@ function toAsset(asset: StoredAsset): Asset {
     name: asset.displayName,
     folderName: asset.folderName,
     relativePath: asset.relativePath,
+    directoryKey: asset.directoryKey,
     kind,
     duration: formatDuration(asset.durationMs),
     status: asset.analysisStatus === 'ready' ? 'ready' : asset.analysisStatus === 'failed' ? 'failed' : asset.analysisStatus === 'queued' ? 'queued' : 'analyzing',
@@ -163,71 +165,6 @@ function isTerminalAgentTask(task: StoredAgentTask) {
   return !isActiveAgentTask(task)
 }
 
-function normalizeFolderPath(path: string) {
-  return path.replace(/[\\/]+/g, '\\').replace(/^\\+|\\+$/g, '')
-}
-
-function splitFolderPath(path: string) {
-  return normalizeFolderPath(path).split('\\').filter(Boolean)
-}
-
-type AssetTreeNode = {
-  name: string
-  path: string
-  assetCount: number
-  children: AssetTreeNode[]
-}
-
-function buildAssetTree(folders: string[], assets: Asset[]) {
-  const root: AssetTreeNode = { name: '素材目录', path: 'all', assetCount: 0, children: [] }
-  const nodes = new Map<string, AssetTreeNode>()
-  const ensureNode = (path: string, name: string, parent: AssetTreeNode) => {
-    let node = nodes.get(path)
-    if (!node) {
-      node = { name, path, assetCount: 0, children: [] }
-      nodes.set(path, node)
-      parent.children.push(node)
-    }
-    return node
-  }
-  const folderPaths = new Set<string>()
-  for (const folder of folders) {
-    const normalized = normalizeFolderPath(folder)
-    if (normalized && normalized !== '__unfiled__') folderPaths.add(normalized)
-  }
-  for (const asset of assets) {
-    if (asset.folderName) folderPaths.add(normalizeFolderPath(asset.folderName))
-  }
-  for (const folder of folderPaths) {
-    const segments = splitFolderPath(folder)
-    if (!segments.length) continue
-    let parent = root
-    let currentPath = ''
-    for (const segment of segments) {
-      currentPath = currentPath ? `${currentPath}\\${segment}` : segment
-      parent = ensureNode(currentPath, segment, parent)
-    }
-  }
-  for (const asset of assets) {
-    if (!asset.folderName) {
-      root.assetCount += 1
-      continue
-    }
-    let currentPath = ''
-    for (const segment of splitFolderPath(asset.folderName)) {
-      currentPath = currentPath ? `${currentPath}\\${segment}` : segment
-      const node = nodes.get(currentPath)
-      if (node) node.assetCount += 1
-    }
-  }
-  const sortNode = (node: AssetTreeNode) => {
-    node.children.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
-    for (const child of node.children) sortNode(child)
-  }
-  sortNode(root)
-  return { root, unfiledCount: assets.filter((asset) => !asset.folderName).length }
-}
-
 function App() {
   const desktopRuntime = isDesktopRuntime()
   const [projects, setProjects] = useState<StoredProject[]>([])
@@ -235,7 +172,7 @@ function App() {
   const [editingSessions, setEditingSessions] = useState<EditingSession[]>([])
   const [activeEditingSessionId, setActiveEditingSessionId] = useState<string | null>(null)
   const [assets, setAssets] = useState<Asset[]>([])
-  const [assetPage, setAssetPage] = useState<Pick<AssetPage, 'total' | 'folders' | 'counts'>>({ total: 0, folders: [], counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
+  const [assetPage, setAssetPage] = useState<Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'counts'>>({ total: 0, directories: [], unfiledCount: 0, counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
   const [assetPageRevision, setAssetPageRevision] = useState(0)
   const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
   const [assetTaskCenter, setAssetTaskCenter] = useState<AssetTaskCenter | null>(null)
@@ -301,36 +238,6 @@ function App() {
   const activeProject = projects.find((project) => project.id === activeProjectId)
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
   const analyzingAssets = assets.filter((asset) => asset.status === 'analyzing')
-  const assetFolders = assetPage.folders
-  const assetTree = useMemo(() => buildAssetTree(assetFolders, assets), [assetFolders, assets])
-  const filteredAssets = useMemo(() => {
-    const search = assetSearch.trim().toLocaleLowerCase('zh-CN')
-    return assets.filter((asset) => {
-      const searchTarget = `${asset.name} ${asset.folderName ?? ''} ${asset.relativePath ?? ''}`.toLocaleLowerCase('zh-CN')
-      const storyboardReady = (asset.kind === 'video' || asset.kind === 'image') && asset.status === 'ready' && asset.visualStatus === 'ready' && asset.tags.some((tag) => tag.endsWith('视觉标签'))
-      return (!search || searchTarget.includes(search))
-        && (assetKindFilter === 'all' || asset.kind === assetKindFilter)
-        && (assetStatusFilter === 'all' || asset.status === assetStatusFilter)
-        && (assetFolderFilter === 'all' || (assetFolderFilter === '__unfiled__' ? asset.folderName === null : asset.folderName === assetFolderFilter))
-        && (assetVisualFilter === 'all' || (assetVisualFilter === 'storyboard-ready' ? storyboardReady : asset.visualStatus === assetVisualFilter))
-    })
-  }, [assetFolderFilter, assetKindFilter, assetSearch, assetStatusFilter, assetVisualFilter, assets])
-  const activeFolderNode = useMemo(() => {
-    const stack: Array<{ node: AssetTreeNode; depth: number }> = [{ node: assetTree.root, depth: 0 }]
-    while (stack.length > 0) {
-      const current = stack.pop()
-      if (!current) break
-      if (current.node.path === assetFolderFilter) return current.node
-      for (const child of current.node.children) stack.push({ node: child, depth: current.depth + 1 })
-    }
-    return assetTree.root
-  }, [assetFolderFilter, assetTree.root])
-  const visibleAssetFolders = useMemo(() => activeFolderNode.children, [activeFolderNode])
-  const folderBreadcrumb = useMemo(() => {
-    if (assetFolderFilter === 'all') return ['全部素材']
-    if (assetFolderFilter === '__unfiled__') return ['全部素材', '未归类素材']
-    return ['全部素材', ...assetFolderFilter.split('\\')]
-  }, [assetFolderFilter])
   function applyPreview(nextPreview: PreviewResult | null) {
     if (nextPreview) setPreviewNonce((nonce) => nonce + 1)
     setPreview(nextPreview)
@@ -569,14 +476,13 @@ function App() {
     if (!desktopRuntime || !activeProjectId) return
     const projectId = activeProjectId
     let cancelled = false
-    let initialLoad = true
     const refreshAssets = () => {
       void listAssetPage(projectId, {
         search: assetSearch.trim() || undefined,
         kind: assetKindFilter === 'all' ? undefined : assetKindFilter,
         analysisStatus: assetStatusFilter === 'all' ? undefined : assetStatusFilter,
         visualStatus: assetVisualFilter === 'all' ? undefined : assetVisualFilter,
-        folderName: assetFolderFilter === 'all' ? undefined : assetFolderFilter,
+        directoryKey: assetFolderFilter === 'all' ? undefined : assetFolderFilter,
         userFilter: assetUserFilter === 'all' ? undefined : assetUserFilter,
         collectionId: assetCollectionFilter === 'all' ? undefined : assetCollectionFilter,
         offset: 0,
@@ -584,13 +490,8 @@ function App() {
       }).then((page) => {
         if (!cancelled && activeProjectRef.current === projectId) {
           const nextItems = page.items.map(toAsset)
-          setAssets((current) => {
-            if (initialLoad) return nextItems
-            const refreshedIds = new Set(nextItems.map((asset) => asset.id))
-            return [...nextItems, ...current.filter((asset) => !refreshedIds.has(asset.id))]
-          })
-          initialLoad = false
-          setAssetPage({ total: page.total, folders: page.folders, counts: page.counts })
+          setAssets(nextItems)
+          setAssetPage({ total: page.total, directories: page.directories, unfiledCount: page.unfiledCount, counts: page.counts })
         }
       }).catch(() => undefined)
     }
@@ -652,7 +553,7 @@ function App() {
     const nextSessions = storedSessions.map(toEditingSession)
     setEditingSessions(nextSessions)
     setAssets([])
-    setAssetPage({ total: 0, folders: [], counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
+    setAssetPage({ total: 0, directories: [], unfiledCount: 0, counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 } })
     setAssetSearch('')
     setAssetKindFilter('all')
     setAssetStatusFilter('all')
@@ -1006,7 +907,8 @@ function App() {
 
   function selectFolder(path: string) {
     setAssetEvidence(null)
-    setAssetFolderFilter(path === 'all' || path === '__unfiled__' ? path : normalizeFolderPath(path))
+    setAssets([])
+    setAssetFolderFilter(path)
   }
 
 
@@ -1259,12 +1161,10 @@ function App() {
     <AssetManagementPanel
       activeProjectId={activeProjectId}
       storeReady={storeState === 'ready'}
-      assetPage={{ total: assetPage.counts.total, counts: assetPage.counts }}
-      assetTree={assetTree}
-      activeFolderNode={activeFolderNode}
-      folderBreadcrumb={folderBreadcrumb}
-      visibleAssetFolders={visibleAssetFolders}
-      filteredAssets={filteredAssets}
+      assetPage={{ total: assetPage.total, counts: assetPage.counts }}
+      assetDirectories={assetPage.directories}
+      unfiledAssetCount={assetPage.unfiledCount}
+      visibleAssets={assets}
       selectedAssetIds={selectedAssetIds}
       setSelectedAssetIds={setSelectedAssetIds}
       assetSearch={assetSearch}

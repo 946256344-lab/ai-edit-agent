@@ -70,6 +70,7 @@ export type StoredAsset = {
   displayName: string
   folderName: string | null
   relativePath: string | null
+  directoryKey: string | null
   analysisStatus: 'queued' | 'analyzing' | 'ready' | 'failed'
   visualAnalysisStatus: 'queued' | 'running' | 'ready' | 'failed' | 'skipped'
   durationMs: number | null
@@ -94,12 +95,20 @@ export type StoredAsset = {
   updatedAt: number
 }
 
+export type AssetDirectory = {
+  key: string
+  name: string
+  parentKey: string | null
+  directAssetCount: number
+}
+
 export type AssetPage = {
   items: StoredAsset[]
   total: number
   offset: number
   limit: number
-  folders: string[]
+  directories: AssetDirectory[]
+  unfiledCount: number
   counts: { total: number; ready: number; analyzing: number; queued: number; failed: number }
 }
 
@@ -418,7 +427,7 @@ export async function listAssets(projectId: string) {
   return invoke<StoredAsset[]>('list_assets', { projectId })
 }
 
-export async function listAssetPage(projectId: string, options: { search?: string; kind?: StoredAsset['kind']; analysisStatus?: StoredAsset['analysisStatus']; visualStatus?: StoredAsset['visualAnalysisStatus'] | 'storyboard-ready'; folderName?: string; userFilter?: 'favorite' | 'excluded' | 'available'; collectionId?: string; offset: number; limit: number }) {
+export async function listAssetPage(projectId: string, options: { search?: string; kind?: StoredAsset['kind']; analysisStatus?: StoredAsset['analysisStatus']; visualStatus?: StoredAsset['visualAnalysisStatus'] | 'storyboard-ready'; directoryKey?: string; userFilter?: 'favorite' | 'excluded' | 'available'; collectionId?: string; offset: number; limit: number }) {
   requireDesktopRuntime()
   return invoke<AssetPage>('list_asset_page', { projectId, ...options })
 }
