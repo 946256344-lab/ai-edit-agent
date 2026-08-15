@@ -1,5 +1,11 @@
 # 文档同步 Harness
 
+## 多 Agent 分支与入口门
+
+`CONTRIBUTING.md` 是分支、worktree、验证、提交和 PR 的唯一流程。Claude Code、Cursor、OpenCode 的薄入口必须持续引用 `AGENTS.md`、`CONTRIBUTING.md` 和 `TASKS.md`；`.harness/agent-context.json` 会检查这些引用并以只收紧 ratchet 防止移除。
+
+`.harness/branch-policy.json` 规定受保护分支和允许前缀，并相对 Git `HEAD` 拒绝降低版本、更换远端基线、移除受保护分支或扩大允许前缀。`npm run branch:check` 拒绝 detached HEAD、`master`/`main`、未知前缀和未包含本地 `origin/master` 的任务分支，`npm run branch:test` 提供纯负向回归。pre-commit 先执行分支检查，再检查暂存快照。它不会自动 fetch，也可被 `--no-verify` 绕过，不能替代 GitHub 远端分支保护。
+
 ## 目的
 
 本 harness 同时约束代码结构增长、Agent 编程上下文和文档同步。它将架构、公开工具契约、持久化、Provider/凭据安全和桌面运行时的高影响改动，与同一 Git 变更集中的 Markdown 更新绑定；以机器可读预算阻止入口、组件、controller 和已有后端热点继续膨胀，并阻止编码 Agent 绕过已声明的 IPC、进程、凭据、网络与工具目录边界。可预测脚本负责硬门，独立上下文的 Agent 审查负责语义一致性。

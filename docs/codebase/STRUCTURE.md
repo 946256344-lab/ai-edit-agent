@@ -8,10 +8,12 @@
 | `src-tauri/src/` | 本地可信边界：命令、SQLite、Agent、媒体和交付 | `src-tauri/src/lib.rs` |
 | `src-tauri/scripts/` | Rust 调用的 Jianying Python 适配器及测试 | `src-tauri/scripts/create_jianying_draft.py` |
 | `src-tauri/tests/` | Rust 集成契约和版本化 Agent fixture | `src-tauri/tests/agent_contract_assets.rs` |
-| `scripts/` | 开发期架构、文档和真实 WebView 检查 | `package.json` |
-| `.harness/` | 机器可读架构预算、Agent 上下文清单与文档同步策略 | `.harness/architecture-budgets.json`、`.harness/agent-context.json` |
+| `scripts/` | 开发期分支、架构、文档和真实 WebView 检查 | `package.json` |
+| `.harness/` | 机器可读分支策略、架构预算、Agent 上下文清单与文档同步策略 | `.harness/branch-policy.json`、`.harness/architecture-budgets.json`、`.harness/agent-context.json` |
 | `docs/` | 长期架构、API、ADR、路线图、审计与变更记录 | `docs/architecture.md` |
 | `AGENTS.md`、`src/AGENTS.md`、`src-tauri/src/AGENTS.md` | 编码 Agent 的全局入口与目录级就近约束 | 三份指令文件 |
+| `CONTRIBUTING.md`、`CLAUDE.md`、`.cursor/rules/`、`opencode.json` | 唯一协作流程与各工具薄入口，不分配固定职责 | `.harness/agent-context.json` |
+| `.github/pull_request_template.md` | PR 目标、边界、风险和验证证据模板 | `CONTRIBUTING.md` |
 | `public/`、`src/assets/` | 静态前端资源 | `vite.config.ts`、`src/main.tsx` |
 
 `dist/`、`src-tauri/target*/`、`src-tauri/gen/` 是构建或生成产物，不是源架构。自定义 `target-mvp-verify/` 会干扰通用扫描，应在度量时排除。

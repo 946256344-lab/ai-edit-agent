@@ -64,12 +64,20 @@
       "id": "agent-context-guardrails",
       "sources": [
         ".harness/agent-context.json",
+        ".harness/branch-policy.json",
         ".githooks/pre-commit",
         "AGENTS.md",
+        "CONTRIBUTING.md",
+        "CLAUDE.md",
+        ".cursor/rules/project-workflow.mdc",
+        "opencode.json",
+        ".github/pull_request_template.md",
         "src/AGENTS.md",
         "src-tauri/src/AGENTS.md",
         "scripts/check-agent-contracts.mjs",
-        "scripts/test-agent-contracts.mjs"
+        "scripts/test-agent-contracts.mjs",
+        "scripts/check-branch-policy.mjs",
+        "scripts/test-branch-policy.mjs"
       ],
       "requiredDocs": [
         "AGENTS.md",

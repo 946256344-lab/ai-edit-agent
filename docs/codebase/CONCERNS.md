@@ -8,7 +8,7 @@
 | 高 | `assets.rs` 4114 行，混合六类领域职责和两类 worker | `src-tauri/src/assets.rs` | 导入、目录、分析或健康变更互相污染 | 按 import/technical/visual/library/health/metadata 拆子模块 |
 | 高 | 完整 Agent 多步 fixture 不能执行 | `src-tauri/tests/fixtures/README.md` | prompt/schema/状态组合回归只能靠局部测试和实机发现 | 增加 scripted decision seam 与临时 SQLite runner |
 | 高 | 生产安装包不供应媒体/Python 运行时 | `README.md`、`src-tauri/tauri.conf.json` | 开发机可用不代表用户机器可用 | 先做运行时探测矩阵，再决定捆绑或安装引导 |
-| 中 | 没有 CI 和覆盖率阈值 | `.githooks/pre-commit`、`package.json`，且仓库无 `.github/workflows/` | 本地 hook 可被跳过，回归证据不统一 | 建立 Windows lint/build/Rust/Python/harness CI |
+| 中 | 没有 CI、远端分支保护和覆盖率阈值 | `.githooks/pre-commit`、`.harness/branch-policy.json`，且仓库无 `.github/workflows/` | 本地 hook 可被跳过，回归证据不统一 | 在 GitHub 启用 master 保护，并建立 Windows lint/build/Rust/Python/harness CI |
 | 中 | `timeline.rs` 1848 行，文本、音乐、镜头编辑共存 | `src-tauri/src/timeline.rs` | 下一轮轨道能力会继续膨胀 | 在 Agent/assets 稳定后按 editing/text/music/repository 拆 |
 | 中 | 前端入口仍接近预算 | `App.tsx` 515 行；artifact controller 363 行 | 新功能可能再次把 task 和产物职责混回 | 下一次功能前拆 conversation/task controller 与 artifact 子域 |
 

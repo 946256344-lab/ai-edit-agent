@@ -7,6 +7,7 @@
 | TypeScript 静态检查 | Oxlint + `tsc -b` | `npm run lint`、`npm run build` |
 | 架构/文档规则 | Node `assert/strict` | `npm run harness:test`、`npm run harness:check` |
 | Agent 上下文/跨层契约 | Node `assert/strict` | `npm run agent:test`、`npm run agent:check` |
+| 分支协作策略 | Node `assert/strict` + Git | `npm run branch:test`、`npm run branch:check` |
 | Rust 单元/集成 | Cargo 内建 test harness | `cargo test --manifest-path src-tauri/Cargo.toml` |
 | Rust 格式 | rustfmt | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` |
 | Python adapter | `unittest` + `unittest.mock` | `python -m unittest discover -s src-tauri/scripts -p "test_*.py"` |
@@ -20,7 +21,7 @@
 - 跨模块契约：`src-tauri/tests/agent_contract_assets.rs`。
 - Agent fixture：`src-tauri/tests/fixtures/*.v1.json`，白名单变化必须同步 fixture。
 - Python：`src-tauri/scripts/test_create_jianying_draft.py`。
-- 开发 harness：`scripts/test-architecture-budgets.mjs`、`scripts/test-agent-contracts.mjs`、`scripts/test-doc-sync.mjs`。
+- 开发 harness：`scripts/test-architecture-budgets.mjs`、`scripts/test-agent-contracts.mjs`、`scripts/test-branch-policy.mjs`、`scripts/test-doc-sync.mjs`。
 - 桌面 smoke：`scripts/verify-tauri-webview.mjs`，要求真实 Tauri/WebView 和已有本地项目。
 
 ## 3）范围矩阵
@@ -48,7 +49,7 @@
 - 架构预算和文档同步已进入本地 pre-commit。
 - 分层 Agent 指令、源码顶部中文职责导航、IPC/注册/API 对账、进程/凭据/HTTP 所有权和工具目录一致性也进入同一 pre-commit；配置相对 `HEAD` 只允许收紧，staged 运行文件必须完整暂存。它只覆盖可机器判定的结构事实，不能判断注释语义是否准确。
 - 没有覆盖率工具、覆盖率阈值或当前覆盖率报告。[TODO]
-- 没有 GitHub Actions/其他 CI；检查依赖开发者本机 hook。[TODO]
+- 没有 GitHub Actions/其他 CI 或已提交的远端分支保护配置；本地分支与 staged 检查可被 `--no-verify` 跳过。[TODO]
 - 完整 Agent 多步 transcript、事件主动丢失、worker 崩溃恢复没有可重复的全自动 runner。
 - `tauri:verify` 依赖已有包含 891 条素材的本机项目，不是自包含 fixture。
 - 当前测试数量应以实际 `cargo test`/Python 输出为准，不在本文写死，避免随新增测试失真。
@@ -70,3 +71,4 @@
 - `scripts/verify-tauri-webview.mjs`
 - `.githooks/pre-commit`
 - `.harness/agent-context.json`
+- `.harness/branch-policy.json`

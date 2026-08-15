@@ -1,5 +1,9 @@
 # 架构
 
+## 开发协作边界
+
+`CONTRIBUTING.md` 是分支、worktree、验证、提交与 PR 的唯一流程；`AGENTS.md`、`CLAUDE.md`、Cursor rule 和 `opencode.json` 只是薄入口。`.harness/branch-policy.json` 与 pre-commit 禁止直接在 `master`/`main` 提交、拒绝未知分支前缀，并要求当前任务分支包含本地 `origin/master`。检查不执行网络操作，远端基线由开发者先 `git fetch origin` 更新；GitHub 分支保护仍是独立的远端 TODO。
+
 ## 状态
 
 仓库已实现 React/Tauri 桌面基础、SQLite 本地持久化、媒体分析、证据绑定 storyboard、内部时间线、preview 和实验性 Jianying draft 创建。本文件同时描述当前实现与仍待完成的生产能力；标记为 `TODO` 的项目尚未实现或尚未验证。

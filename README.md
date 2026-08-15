@@ -42,6 +42,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 文档
 
+- `CONTRIBUTING.md`：所有人类与编码 Agent 共用的分支、验证、提交和 PR 流程。
 - `docs/architecture.md`：现有架构、数据流和技术约束。
 - `docs/decisions.md`：架构决策记录（ADR）。
 - `docs/api.md`：已实现的 Tauri 命令和 Agent 工具契约。
@@ -52,10 +53,12 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ### AI Agent 接手顺序
 
-1. 读根 `AGENTS.md` 与 `TASKS.md` 的 `ACTIVE_TASKS` 当前窗口。
+1. 读根 `AGENTS.md`、`CONTRIBUTING.md` 与 `TASKS.md` 的 `ACTIVE_TASKS` 当前窗口。
 2. 修改前端时读 `src/AGENTS.md`；修改 Rust 时读 `src-tauri/src/AGENTS.md`。
 3. 从 `docs/codebase/STRUCTURE.md` 定位代码，再按根指令的路由只加载相关长期文档。
 4. 修改前运行 `npm run agent:check` 确认基线，修改后运行范围测试和 `npm run harness:check`。
+
+Cursor、Claude Code 和 OpenCode 分别通过 `.cursor/rules/project-workflow.mdc`、`CLAUDE.md` 和 `opencode.json` 加载同一组权威文件；这些入口不保存第二份流程。并行任务采用“一任务一分支一 worktree”，禁止直接在 `master`/`main` 提交。完整命令见 `CONTRIBUTING.md`。
 
 这能让另一个编码 Agent 高可靠接手已提交、任务窗口明确的工作，但不是仅靠文档保证的“无缝记忆迁移”。交接时还必须保留干净或有说明的 Git 状态、准确的当前目标、未决问题、变更记录和可复现测试结果。
 
@@ -65,6 +68,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ```powershell
 npm run harness:install
+npm run branch:check
 npm run architecture:check
 npm run agent:check
 npm run harness:check

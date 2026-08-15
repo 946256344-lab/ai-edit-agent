@@ -2,16 +2,19 @@
   "version": 1,
   "stagedRuntimeFiles": [
     ".githooks/pre-commit",
+    ".harness/branch-policy.json",
     ".harness/architecture-budgets.json",
     ".harness/agent-context.json",
     ".harness/doc-sync-policy.json",
     "scripts/check-architecture-budgets.mjs",
     "scripts/check-agent-contracts.mjs",
+    "scripts/check-branch-policy.mjs",
     "scripts/check-doc-sync.mjs"
   ],
   "stagedHook": {
     "path": ".githooks/pre-commit",
     "requiredCommands": [
+      "node scripts/check-branch-policy.mjs",
       "node scripts/check-architecture-budgets.mjs --staged",
       "node scripts/check-agent-contracts.mjs --staged",
       "node scripts/check-doc-sync.mjs --staged"
@@ -19,8 +22,30 @@
   },
   "requiredInstructionFiles": [
     "AGENTS.md",
+    "CONTRIBUTING.md",
+    "CLAUDE.md",
+    ".cursor/rules/project-workflow.mdc",
+    "opencode.json",
     "src/AGENTS.md",
     "src-tauri/src/AGENTS.md"
+  ],
+  "workflowEntrypoints": [
+    {
+      "path": "AGENTS.md",
+      "requiredReferences": ["CONTRIBUTING.md", "TASKS.md"]
+    },
+    {
+      "path": "CLAUDE.md",
+      "requiredReferences": ["AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
+    },
+    {
+      "path": ".cursor/rules/project-workflow.mdc",
+      "requiredReferences": ["alwaysApply: true", "AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
+    },
+    {
+      "path": "opencode.json",
+      "requiredReferences": ["AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
+    }
   ],
   "codebaseDocs": [
     "STACK.md",

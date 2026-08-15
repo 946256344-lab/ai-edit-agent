@@ -35,7 +35,7 @@ function stagedFileContent(filePath) {
 
 function loadRepository(staged) {
   const files = repositoryFiles(staged)
-  const relevantExtensions = new Set(['.md', '.json', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.rs', '.py', '.css', '.html'])
+  const relevantExtensions = new Set(['.md', '.mdc', '.json', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.rs', '.py', '.css', '.html'])
   const contents = new Map()
   for (const filePath of files) {
     if (!relevantExtensions.has(extname(filePath)) && !filePath.startsWith('docs/codebase/') && filePath !== '.githooks/pre-commit') {
@@ -135,6 +135,14 @@ export function evaluateAgentContracts(contents, config) {
   for (const filePath of requiredFiles) {
     if (!contents.get(filePath)?.trim()) {
       errors.push(`缺少 Agent 上下文文件：${filePath}`)
+    }
+  }
+  for (const entrypoint of config.workflowEntrypoints ?? []) {
+    const content = contents.get(entrypoint.path) ?? ''
+    for (const reference of entrypoint.requiredReferences) {
+      if (!content.includes(reference)) {
+        errors.push(`协作入口 ${entrypoint.path} 缺少权威引用：${reference}`)
+      }
     }
   }
   const stagedHook = contents.get(config.stagedHook.path) ?? ''
@@ -282,6 +290,16 @@ export function evaluateAgentContextRatchet(config, baseline) {
   }
   for (const value of missingValues(config.requiredInstructionFiles, baseline.requiredInstructionFiles)) {
     errors.push(`不得移除既有 Agent 指令：${value}`)
+  }
+  for (const previousEntrypoint of baseline.workflowEntrypoints ?? []) {
+    const currentEntrypoint = (config.workflowEntrypoints ?? []).find((entrypoint) => entrypoint.path === previousEntrypoint.path)
+    if (!currentEntrypoint) {
+      errors.push(`不得移除协作入口：${previousEntrypoint.path}`)
+      continue
+    }
+    for (const reference of missingValues(currentEntrypoint.requiredReferences, previousEntrypoint.requiredReferences)) {
+      errors.push(`不得移除 ${previousEntrypoint.path} 的权威引用：${reference}`)
+    }
   }
   if (!sameValues(config.codebaseDocs, baseline.codebaseDocs)) {
     errors.push('固定七份代码库地图清单不得增删。')

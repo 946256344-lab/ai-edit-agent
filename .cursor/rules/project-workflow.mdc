@@ -1,0 +1,6 @@
+---
+description: Assembly Video Agent 的产品边界、当前任务与统一协作流程入口
+alwaysApply: true
+---
+
+开始修改前读取并遵守 @AGENTS.md、@CONTRIBUTING.md 和 @TASKS.md。进入 src 或 src-tauri/src 时继续读取该目录的 AGENTS.md。本文件不复制规则；冲突时以更具体目录的 AGENTS.md 和 CONTRIBUTING.md 中的协作流程为准。

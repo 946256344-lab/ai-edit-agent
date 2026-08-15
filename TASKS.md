@@ -8,6 +8,8 @@
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-15，工程流程）：建立 Cursor、Codex、Claude Code、OpenCode 共用的协作标准。`CONTRIBUTING.md` 是分支、worktree、验证、提交、PR 与合并唯一事实源，工具入口只引用规则且不分配固定职责；pre-commit 新增受保护分支、允许前缀和本地 `origin/master` 祖先硬门，PR 模板要求边界与验证证据。未改变产品运行时、用户数据或 master。
+- [x] 本项完成门：分支策略正负测试、Agent 入口引用与 ratchet、architecture/doc-sync harness、前端 lint/build 和 diff 检查通过；远端 GitHub master 保护与 Windows CI 仍为明确 TODO，本地 hook 可被 `--no-verify` 绕过。
 - [x] 完成（2026-08-15，P0）：落地后端热点第一条物理边界。`agentloop/policy.rs` 独占工具白名单、负向约束、目标解析、真实产物完成门和固定诚实降级文案，只依赖 `AgentEditResult`；父 `agentloop.rs` 保留 Router、状态、prompt、有界循环和技能执行，从 4264 行降至 3599 行。公开命令、SQLite schema、工具名、最大步数、Provider、媒体处理和用户数据均未改变。
 - [x] 本项完成门：全部手写 Rust、TypeScript/React、Node、Python、HTML、Shell 与 CSS 源码已有中文职责导航，关键权限/事务/恢复/算法补就地说明；`agent:check` 与 pre-commit 新增强制导航和只收紧 ratchet。前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python 测试、agent/harness/diff 与独立审查通过；仅保留既有 `PartiallyDone` dead-code warning。下一步按路线提取 `assets/library.rs`。
 - [x] 完成（2026-08-15，P0）：把被动 Markdown 约束工程化。根、`src/`、`src-tauri/src/` 分层 Agent 指令与有界当前任务窗口负责按需加载；机器清单和 pre-commit 自动阻止代码地图增生、JS/TS 绕过 Tauri bridge、动态/间接/未注册 IPC、API 文档漂移、外部进程/凭据/网络所有权扩散、Agent 工具目录漂移，以及配置相对 `HEAD` 放宽。检查器/配置部分暂存会失败；本地 hook 仍不是不可绕过的安全沙箱，Windows CI 留作后续。

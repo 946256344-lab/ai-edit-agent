@@ -4,7 +4,7 @@
 
 ## 开始任何修改
 
-1. 阅读 `TASKS.md` 的 `ACTIVE_TASKS` 标记区；只把该区视为当前工作，后面的内容是历史与后续计划。
+1. 阅读 `CONTRIBUTING.md` 和 `TASKS.md` 的 `ACTIVE_TASKS` 标记区；前者是分支、验证、提交与 PR 的唯一流程，后者只有标记区是当前工作。
 2. 修改 `src/` 时完整阅读 `src/AGENTS.md`；修改 `src-tauri/src/` 时完整阅读 `src-tauri/src/AGENTS.md`。同时修改两侧时两份都读。
 3. 用 `docs/codebase/STRUCTURE.md` 定位实现；只有碰到相应边界时才读取长期文档：
    - 产品与运行链路：`docs/architecture.md`
@@ -13,6 +13,7 @@
    - 验证与机器约束：`docs/harness.md`
    - 当前实现风险：`docs/codebase/CONCERNS.md`
 4. 非简单任务先更新当前任务窗口。未知行为写成 `TODO` 或请求确认，不得补写想象中的事实。
+5. 每个独立任务使用独立任务分支；并行 Agent 使用独立 worktree。不得直接在 `master`/`main` 提交或推送。
 
 ## 全局不可破坏规则
 

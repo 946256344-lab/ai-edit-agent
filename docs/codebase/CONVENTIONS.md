@@ -52,6 +52,8 @@
 
 ## 6）测试约定
 
+- 分支、提交和 PR 只以根 `CONTRIBUTING.md` 为准；每个并行任务使用独立分支与 worktree，不在工具入口复制规则或固定分配 Agent 职责。
+- `npm run branch:check` 要求任务分支使用允许前缀、不是 `master`/`main`，并包含本地 `origin/master`；运行前由开发者显式 fetch。
 - Rust 单元测试与模块共置在 `#[cfg(test)] mod tests`。
 - 跨模块 Agent 契约放 `src-tauri/tests/`，fixture 带版本号。
 - Python 适配器用 `unittest.mock` 隔离 Jianying/进程/文件系统。
@@ -68,3 +70,5 @@
 - `src-tauri/src/audit.rs`
 - `AGENTS.md`
 - `.harness/agent-context.json`
+- `CONTRIBUTING.md`
+- `.harness/branch-policy.json`

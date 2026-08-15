@@ -12,6 +12,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 
 已具备：
 
+- 多 Agent 共用的单一协作流程、Cursor/Claude Code/OpenCode 薄入口、任务分支 pre-commit 硬门和 PR 模板；远端 master 分支保护与 Windows CI 仍待配置。
 - Tauri 2、Windows MSI/NSIS 打包、SQLite 迁移和本地项目/剪辑任务/会话持久化。
 - 原生媒体导入、源引用可用性检测、FFprobe、FFmpeg 缩略图/关键帧/场景候选和英文 OCR。
 - 实验性 OAuth PKCE、Windows Credential Manager、最小帧视觉证据和证据校验 storyboard。

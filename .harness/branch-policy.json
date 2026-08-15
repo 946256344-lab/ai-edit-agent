@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "baseBranch": "origin/master",
+  "protectedBranches": ["master", "main"],
+  "allowedPrefixes": [
+    "codex/",
+    "cursor/",
+    "claude/",
+    "opencode/",
+    "feature/",
+    "fix/",
+    "refactor/",
+    "docs/",
+    "chore/"
+  ]
+}

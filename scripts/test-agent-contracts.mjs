@@ -11,6 +11,9 @@ const config = {
     requiredCommands: ['node check.mjs --staged'],
   },
   requiredInstructionFiles: ['AGENTS.md', 'src/AGENTS.md', 'src-tauri/src/AGENTS.md'],
+  workflowEntrypoints: [
+    { path: 'AGENTS.md', requiredReferences: ['TASKS.md'] },
+  ],
   codebaseDocs,
   taskWindow: {
     path: 'TASKS.md',
@@ -39,7 +42,7 @@ const config = {
 
 function validRepository() {
   return new Map([
-    ['AGENTS.md', '# Root'],
+    ['AGENTS.md', '# Root\nTASKS.md'],
     ['.githooks/pre-commit', '# 中文提交门。\nnode check.mjs --staged || exit 1'],
     ['src/AGENTS.md', '# Frontend'],
     ['src-tauri/src/AGENTS.md', '# Rust'],
@@ -66,6 +69,7 @@ function errorsFor(mutator) {
 
 assert.deepEqual(evaluateAgentContracts(validRepository(), config).errors, [])
 assert.match(errorsFor((repository) => repository.set('src/AGENTS.md', '')), /缺少 Agent 上下文文件/)
+assert.match(errorsFor((repository) => repository.set('AGENTS.md', '# Root')), /缺少权威引用/)
 assert.match(errorsFor((repository) => repository.set('docs/codebase/NOTES.md', 'temporary')), /只能保留清单内七份文档/)
 assert.match(errorsFor((repository) => repository.set('docs/codebase/notes/EXTRA.md', 'temporary')), /只能保留清单内七份文档/)
 assert.match(errorsFor((repository) => repository.set('TASKS.md', '# Tasks\n<!-- ACTIVE_TASKS_START -->\n<!-- ACTIVE_TASKS_END -->')), /当前任务窗口不能为空/)
@@ -103,6 +107,8 @@ assert.match(changedConfig((next) => { next.taskWindow.maxCharacters += 1 }), /�
 assert.match(changedConfig((next) => { next.boundaries.tauriInvoke.allowedPaths.push('src/Bad.tsx') }), /不得扩大 tauriInvoke 允许路径/)
 assert.match(changedConfig((next) => { next.boundaries.windowsProcess.extensions = [] }), /不得移除 windowsProcess 受检扩展名/)
 assert.match(changedConfig((next) => { next.requiredInstructionFiles = [] }), /不得移除既有 Agent 指令/)
+assert.match(changedConfig((next) => { next.workflowEntrypoints = [] }), /不得移除协作入口/)
+assert.match(changedConfig((next) => { next.workflowEntrypoints[0].requiredReferences = [] }), /不得移除 .* 的权威引用/)
 assert.match(changedConfig((next) => { delete next.sourceNavigation }), /不得移除中文源码导航门/)
 assert.match(changedConfig((next) => { next.sourceNavigation.maxHeadLines += 1 }), /不得放宽中文源码导航/)
 assert.match(changedConfig((next) => { next.stagedHook.requiredCommands = [] }), /不得移除提交钩子命令/)

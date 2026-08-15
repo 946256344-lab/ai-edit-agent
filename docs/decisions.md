@@ -1,5 +1,12 @@
 # 技术决策记录
 
+## ADR-063：多 Agent 协作使用单一流程与薄工具入口
+
+- 状态：已采用（2026-08-15）
+- 决策：`CONTRIBUTING.md` 独占分支、worktree、验证、提交、PR 和合并规则；Codex 使用根/目录 `AGENTS.md`，Claude Code、Cursor、OpenCode 分别用 `CLAUDE.md`、`.cursor/rules/project-workflow.mdc`、`opencode.json` 引用同一事实源，不复制流程、不固定分配工具职责。每个并行任务使用独立分支和 worktree。`.harness/branch-policy.json`、Node 负向测试和 pre-commit 阻止在 `master`/`main` 直接提交、非法前缀及未包含本地 `origin/master` 的分支。
+- 原因：多份独立规则会随工具和会话漂移；仅靠 Markdown 提醒又容易被编码 Agent 忽略。单一事实源降低维护成本，薄入口解决各工具发现机制差异，确定性脚本把可验证流程变成提交门。
+- 后果：本地提交前必须先更新远端引用并使用任务分支；检查不联网，也不能阻止 `--no-verify`，因此 GitHub 的 master 分支保护、必需检查和 PR 审查仍需在远端设置。此决策不改变产品运行时、SQLite、公开命令、媒体或用户数据。
+
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
 ## ADR-062：编码 Agent 上下文必须分层，并把关键文档边界变成提交硬门
