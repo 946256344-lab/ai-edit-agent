@@ -66,8 +66,8 @@
 
 ## 7）`[ASK USER]` 问题
 
-1. [ASK USER] 自定义模型是否必须支持局域网 `http://`/localhost？这决定 Base URL 应强制 HTTPS，还是允许显式不安全本地连接。
-2. [ASK USER] `src/lib/agent-tools.ts` 未来要成为可发布 SDK 契约，还是仅作为 IDE 镜像？建议由版本化 Rust fixture 自动生成，避免第三份手工白名单。
+1. [ASK USER] 自定义模型是否必须支持局域网 `http://`/localhost？这决定 Base URL 应强制 HTTPS，还是允许显式不安全本地连接。（已列入 `TASKS.md` 待决问题，阻断 `custom_api.rs` URL 校验加固）
+2. [ASK USER] `src/lib/agent-tools.ts` 未来要成为可发布 SDK 契约，还是仅作为 IDE 镜像？建议由版本化 Rust fixture 自动生成，避免第三份手工白名单。（已列入 `TASKS.md` 待决问题，阻断 agent-tools 生成/删除决策）
 
 ## 8）意图与现实偏差
 

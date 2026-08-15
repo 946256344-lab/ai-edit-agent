@@ -3,11 +3,13 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 下一项产品工作：对当前 timeline v6 进行只读媒体事实审计；不得重新分析素材、修改 timeline、生成新 preview、创建 Jianying draft 或导出。
+（暂无活动任务）
 <!-- ACTIVE_TASKS_END -->
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-15，只读审计）：对 timeline v6 进行只读媒体事实审计。全部 8 个 asset `ready`/`online`/未 excluded；v5→v6 变更仅 shot2 缩短 500 ms，与 TASKS.md 记录一致；时间线 0–31,689 ms 连续无间隙；所有 source_start ≥ 0，source_end ≤ asset_dur。发现系统性问题：`preview.rs::render_timeline_clip` 未将 `source_end_ms` 传给 FFmpeg，shot1/shot3 实际可用素材短于 timeline slot，shots 4–8 的 source_end 约束静默失效。完整证据见 `docs/audits/2026-08-15-timeline-v6-media-fact-audit.md`。
+- [x] 本项完成门：只读查询 SQLite，未修改任何数据库记录；未重新分析素材、未修改 timeline、未生成 preview、未创建 Jianying draft、未导出。
 - [x] 完成（2026-08-15，工程流程）：建立 Cursor、Codex、Claude Code、OpenCode 共用的协作标准。`CONTRIBUTING.md` 是分支、worktree、验证、提交、PR 与合并唯一事实源，工具入口只引用规则且不分配固定职责；pre-commit 新增受保护分支、允许前缀和本地 `origin/master` 祖先硬门，PR 模板要求边界与验证证据。未改变产品运行时、用户数据或 master。
 - [x] 本项完成门：分支策略正负测试、Agent 入口引用与 ratchet、architecture/doc-sync harness、前端 lint/build 和 diff 检查通过；远端 GitHub master 保护与 Windows CI 仍为明确 TODO，本地 hook 可被 `--no-verify` 绕过。
 - [x] 完成（2026-08-15，P0）：落地后端热点第一条物理边界。`agentloop/policy.rs` 独占工具白名单、负向约束、目标解析、真实产物完成门和固定诚实降级文案，只依赖 `AgentEditResult`；父 `agentloop.rs` 保留 Router、状态、prompt、有界循环和技能执行，从 4264 行降至 3599 行。公开命令、SQLite schema、工具名、最大步数、Provider、媒体处理和用户数据均未改变。
@@ -22,19 +24,8 @@
 - [x] 本项完成门：安全导入根首次进入自动展开、子目录默认折叠，局部 `expandedFolderIds` 只保存真实开合状态，`toggleAssetFolder` 单一动作驱动条件渲染，`aria-expanded` 与画面一致。真实 Tauri 验证 891 条素材、根目录展开、子目录折叠/展开、跨两次 1.5 秒轮询保持状态；当前 106 条目录折叠后仍保留已加载的 100/106 条，切换目录立即清空旧卡片并落到 72/72 条直属素材；证据 Inspector 成功显示真实关键帧/OCR，控制台无错误。前端 lint/build、harness 与 diff 检查通过；harness 未触发独立审查规则，因为公开桌面命令、Rust、`local-store.ts` 和 Agent 契约均未变化。
 - [x] 完成（2026-08-15，P0）：恢复按文件夹导入时的本地相对文件树。当前真实项目 891 条素材的旧 `folder_reference` 均指向没有可展示 `file_name` 的 UNC share 根，但全部源引用已通过安全卷分组和相对结构恢复为 1 个安全导入根、10 个一级子目录和 2 个二级子目录，无需重新导入或重新分析。修复严格目录投影把 891 条全部归为“未归类”、`list_asset_page` 只返回根文件夹名、前端又以完整目录键二次过滤造成子目录空列表和错误计数的问题；目录契约现显式区分安全目录键、相对文件路径和直属素材计数，每级只显示直属子文件夹与直属素材，不暴露 server/share、盘符或绝对路径。
 - [x] 本项完成门：128 个 Rust 单元测试、2 个契约测试、前端 lint/build、Rust fmt、harness 与独立审查通过；真实 Tauri 素材页显示 13 个目录节点（1 个安全导入根、10 个一级目录、2 个二级目录），`unfiledCount=0`。进入一个子目录时后端和界面均显示 72 条直属素材；进入直属素材为 0 的父目录时仍显示 4 个子文件夹且不残留旧卡片；切换目录时会先清空旧页。891 条素材、分析证据、timeline 与 preview 均未改变。下一阶段再单独决定哪些素材管理控件删除。
-- [x] 恢复现场（2026-08-14）：在 `codex/recovery-baseline-20260814` 分支提交当前完整工作区，快照 commit 为 `8020d73`。该提交用于回退和审计，不代表可交付版本。
-- [x] 完成（2026-08-14）：恢复绿色构建基线。仅修复前端 TypeScript 契约、未使用代码和 Hook 依赖问题，并统一现有 Rust 格式；未调整 UI 信息架构，未改变 Agent、媒体分析、timeline、preview 或 Jianying 行为。
-- [x] 本项完成门：`npm run lint`、`npm run build`、`cargo fmt --check`、`cargo test`（112 个单元测试 + 2 个契约测试）、`npm run harness:check` 与 `git diff --check` 全部通过；变更形成独立 commit，提交后工作区恢复干净。
-- [x] 桌面事实基线（2026-08-14）：真实 Tauri 应用成功恢复旧项目的 891 个素材、8 镜头 storyboard、8 片段 timeline 和本地 preview；首个核心阻断是工作模式没有隔离。点击“故事板”只改变标签状态，完整对话、composer 与审计仍在前面，需连续翻页才能到达无基础样式的 storyboard；Workflow 同时在 `App.tsx` 和 `ConversationWorkspace` 渲染。完整证据与根因见 `docs/audits/2026-08-14-desktop-product-baseline.md`。
-- [x] 桌面审计完成门：已按阻断级别记录恢复状态、首个断点、代码根因和历史缺口。真实 preview 画面可加载；Provider、Agent 新请求、完整播放、媒体重新分析和 Jianying 仍未在本轮关闭，继续保留为 P0。
-- [x] 完成（2026-08-14）：恢复互斥顶层工作模式。Agent、素材、成果一次只渲染一个主工作区；素材管理进入完整宽度工作区；成果页集中展示 storyboard、timeline/审计与 preview；只保留一套 Workflow，未改变后端、Agent 工具或持久化行为。
-- [x] 本项完成门：真实桌面 1440×900 验收确认三个模式立即替换主内容；Agent 模式只显示消息、执行卡与 composer，素材模式显示 308/520/360px 三栏和 100 条有界素材页，成果模式只显示一套 Workflow 与 8 个 storyboard 镜头。`npm run lint`、`npm run build`、`npm run harness:check` 与 `git diff --check` 全部通过。
-- [x] 完成（2026-08-14，P0）：在不生成新产物的前提下完成 Provider 与 Agent 只读链路验收。真实后端状态为自定义 API 已连接、主 Model 已配置、实验性 OAuth 未连接，和 UI 一致；没有读取或输出 API Key。精确“剪好了吗？”增加一对 user/agent 消息但 Agent task 数不变；项目事实问题进入当前 task/conversation，只执行 `get_storyboard → get_timeline → finish`，准确报告 8 个镜头、8 个片段和现有 local preview，且 storyboard/timeline/preview ID 全部不变。
-- [x] 本项完成门：修复状态查询只看最近 Agent task 而忽略当前真实 preview，以及成功 Agent run 未持久化最终回复、conversation 卡在 `working` 的两个 P0 缺陷。终态任务与 `agent-task-result-{agentTaskId}` 回复现于同一事务提交；启动会把历史“终态但无回复”的 working 会话恢复为 `needs_review` 并补固定消息。真实桌面切换模式和刷新后，13 条持久化消息与 13 条可见消息一致，最新完成回复只有 1 条，conversation 保持 `ready`。
-- [x] 完成（2026-08-14，P0）：在当前真实剪辑任务中用显式 Agent 请求创建内部 timeline v5 和对应 local preview。项目/task/conversation/storyboard 作用域未变，timeline 仅由 2 个增至 3 个、版本由 v4 增至 v5；旧 v4 timeline 与 preview 文件保留，新旧 preview 均存在。新 preview 为 540×960、29.47 秒，真实播放器进度可前进；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
-- [x] 本项完成门：修复 `submit_conversation_turn.run` 实际返回 `agent_task_id`、前端却读取 `agentTaskId` 导致 pending ID 为 undefined，以及任务快照暂缺、active→terminal、首次快照已 terminal 时过早放弃轮询的 P0 竞态。新增精确序列化测试和前端空 ID 失败门。修复后真实只读 Agent run 的 pending ID 与数据库 task ID 一致，completed 后后端/可见消息同步为 23、回复仅 1 条、conversation 为 ready；WebView 刷新和 Tauri 重启均恢复 v5 preview 与全部消息。
-- [x] 完成（2026-08-14，P0）：以 timeline v5 为基线，用 `change_clip_duration` 只创建 v6；第 2 镜头从 3000 ms 缩短至 2500 ms，源范围从 250–2900 ms 收敛为 250–2750 ms，其他镜头素材与顺序不变，后续片段统一前移 500 ms。timeline 数量仅从 3 增至 4，旧 v5/v4/v3 均保留。v6 local preview 为 540×960、29.3 秒并可实际播放；Tauri 重启和 WebView 刷新后 27 条消息及 v6 preview 恢复，v5/v6 preview 文件同时存在。
-- [x] 本项完成门：首次自然语言调整因模型参数未通过后端校验而安全失败，未产生版本或操作日志；第二次绑定真实 v5 ID 与唯一 adjustment 后成功。该请求明确“不生成 preview”，旧 `fast_goal` 却把否定词中的 preview 锁为完成目标并强制渲染，已新增请求级 `RequestToolPolicy`：负向 preview/Jianying/素材分析约束同时限制路由工具、目标声明与每步执行；排除素材分析也会禁用触发分析的在线媒体获取工具。`fast_goal` 只锁定带明确动作的产物请求或清晰问题，名词/状态短句留给首轮主模型；Agent `list_assets` 现为无调度快照，Agent `generate_storyboard` 只消费已就绪证据。“只读/readonly”按分句解释，禁用全部编辑与交付工具并阻止 `taskBrief` 持久化；路由失败回退仍保留当前项目事实观察门。修复后真实只读回归只执行 `get_timeline → finish`、操作日志 0、版本仍为 v6/v5/v4/v3、preview 文件时间戳不变，后端/界面消息同步为 29；未创建 Jianying draft、未最终导出、未删除或重新分析素材。
+> 2026-08-14 及更早的条目已归档至 [`docs/changes/TASK_HISTORY.md`](docs/changes/TASK_HISTORY.md)。
+
 ### P0：端到端 MVP 重新验收
 
 - [ ] 在恢复后的 Tauri 桌面应用中重新验证完整链路：实验性 Provider 登录、真实媒体分析、证据绑定 storyboard、内部时间线和可播放 preview。
@@ -147,3 +138,5 @@
 - [ ] 哪些视觉分析模型应本地运行，哪些可发送到托管 Provider？
 - [ ] voice API 的鉴权、端点、请求/响应、音色目录和异步任务模型是什么？
 - [ ] 除本地媒体存储外，生产应用是否还需要完整离线模式？
+- [ ] 自定义模型 API 是否必须支持局域网 `http://`/localhost？（影响 Base URL 校验策略；见 `docs/codebase/CONCERNS.md` §7，阻断 `custom_api.rs` URL 校验加固）
+- [ ] `src/lib/agent-tools.ts` 应成为可发布 SDK 契约还是仅作 IDE 镜像？（建议由 Rust fixture 自动生成；见 `docs/codebase/CONCERNS.md` §7，阻断 agent-tools 生成/删除决策）

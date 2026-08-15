@@ -12,6 +12,7 @@
    - 架构取舍或依赖：`docs/decisions.md`
    - 验证与机器约束：`docs/harness.md`
    - 当前实现风险：`docs/codebase/CONCERNS.md`
+   - 只读媒体事实审计报告：`docs/audits/`
 4. 非简单任务先更新当前任务窗口。未知行为写成 `TODO` 或请求确认，不得补写想象中的事实。
 5. 每个独立任务使用独立任务分支；并行 Agent 使用独立 worktree。不得直接在 `master`/`main` 提交或推送。
 

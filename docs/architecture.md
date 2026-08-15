@@ -10,6 +10,25 @@
 
 2026-08-15 的素材前端重建保留后端目录投影、桌面命令、持久化 schema、Agent 工具、媒体处理和交付行为，只删除违背 Agent-first 边界的人工素材管理界面。
 
+| 能力 | 状态 | 备注 |
+|---|---|---|
+| React/Tauri 桌面壳、SQLite、迁移 | ✅ 已实现 | |
+| 媒体分析（FFprobe/FFmpeg/Tesseract/视觉批次）| ✅ 已实现 | |
+| 素材目录树、分页、健康扫描、重链路 | ✅ 已实现 | |
+| 证据绑定 storyboard | ✅ 已实现 | |
+| 版本化内部时间线（视频/文本/音乐轨）| ✅ 已实现 | |
+| FFmpeg preview（含文本轨 ASS / 音乐混音）| ✅ 已实现 | |
+| Jianying 仅视频 + 受限文本草稿 | ✅ 已实现（实验性）| |
+| Jamendo 在线音乐下载 | ✅ 已实现（实验性）| Jianying UI 试听待验收 |
+| Task Resolver + Conversation Router + Agent loop | ✅ 已实现 | |
+| 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
+| 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
+| 视觉质量评分 / 语义重复检测 | ⚠️ 部分实现 | 仅单帧低分辨率候选 |
+| 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
+| Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
+| Voice API | ❌ TODO | 契约待获取 |
+| Windows CI / 远端分支保护 | ❌ TODO | |
+
 ## 当前组成
 
 ```text
@@ -122,6 +141,8 @@ storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只�
 
 ## 当前实现细节
 
+### 素材库
+
 schema v12 将收藏、评分、备注、禁止使用、用户标签和素材集合保存在独立关系表中，不进入会被重新分析替换的 `assets.metadata_json`。这些能力保留为 Agent/诊断契约，不在人工素材工作区提供搜索、筛选、批量整理或集合管理入口。“禁止使用”仍从后续 storyboard 候选中硬排除，但不改写历史产物；既有数据、同项目校验和数量型审计均保持不变。
 
 Agent 通过受限只读 `search_assets` 做目标化候选发现，而不是把整个素材库注入模型。查询可组合媒体类型、时长、最低评分、收藏、标签、集合和游标，单页最多 20 条；结果按收藏、评分和更新时间稳定排序并给出固定命中原因码。工具自动排除用户禁止使用的素材，不返回源路径、用户备注正文、OCR 正文、媒体内容或完整视觉证据。`list_assets` 继续只用于紧凑状态盘点和分析排队前观察。
@@ -140,15 +161,23 @@ Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段�
 
 Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
 
-`agentloop` 的第一条物理边界已经落地：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析、真实产物完成门和固定降级文案，不能访问数据库、文件、Tauri、Provider 或外部进程；父 `agentloop.rs` 仍包含 conversation route、状态快照、prompt、循环与技能派发。`assets.rs` 仍同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。热点均受只降不升预算保护，下一步按 `docs/codebase/ARCHITECTURE.md` 先提取 `assets/library` 的纯目录投影/只读查询，再继续 router/state；worker、事务与技能派发最后移动。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
+`agentloop` 的第一条物理边界已经落地：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析、真实产物完成门和固定降级文案，不能访问数据库、文件、Tauri、Provider 或外部进程；父 `agentloop.rs` 仍包含 conversation route、状态快照、prompt、循环与技能派发。`assets.rs` 仍同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。热点均受只降不升预算保护，下一步按 `docs/codebase/CONCERNS.md` §6 的顺序渐进拆分。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
 
 仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 
+### 媒体分析队列
+
 导入后，每个素材会创建 `analyze_asset` 持久化任务。启动时会恢复未完成分析、取消同一素材的重复任务，并额外补齐“只有 `queued`/`analyzing` 素材但没有对应分析任务”的孤立行（例如导入被中断时），让这类素材也能真正完成分析而不是永远显示在“正在分析媒体”提示里。分析队列以有界批次推进避免打满 CPU：技术分析最多 2 个 worker（`MAX_TECHNICAL_ANALYSIS_WORKERS`），启动恢复只先处理前 4 条（`STARTUP_ANALYSIS_BATCH`），其余保持 `queued`，待用户查看某项目时由 `list_assets` 轮询每次再排空至多 4 条（`DRAIN_ANALYSIS_BATCH`）。FFprobe、缩略图、场景扫描、回退抽帧与 Tesseract 分别有 20、30、45、20、20 秒硬超时；任一阶段超时都会使技术分析失败而队列继续，OCR 正常完成但未识别文字仍不失败。Windows 超时会以无窗口的 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用不会无限等待，因此不能保证该进程树已退出。启动把中断的本地 `running` 任务重排为 `queued`。`list_assets` 只返回持久化的分析状态，不再对所有源路径同步 `stat`；实际分析和交付工具才校验文件，避免大批量失联素材令 1.5 秒轮询阻塞。单素材首次分析只扫描视频前 30 秒（`SCENE_SCAN_CAP_SECONDS`）、最多生成 4 张关键帧，视频 OCR 只处理前 2 张；视觉分析独立在后台批次完成。SQLite 连接启用 WAL 与 5 秒 busy_timeout（`db.rs::open_connection`），消除并发写导致的 `database is locked`。前端轮询活动项目素材状态，并在右下角显示最多三个正在分析的显示名及任务总数；不展示源路径。生成的缩略图与关键帧位于应用数据目录，通过作用域 Tauri asset 协议展示；UI 不接收或展示原始源路径。Windows 上所有外部命令均通过 `process::hidden_command` 使用无控制台窗口标志执行，避免媒体分析或 Jianying 适配器闪现命令行。
+
+### 视觉分析
 
 当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 只使用视觉状态为 `ready` 且有视觉证据的素材；brief 会优先推进并有界等待最高相关视觉批次。候选多帧精检仍为 TODO。
 
+### Provider 认证
+
 实验性 OAuth 使用系统浏览器 loopback PKCE 流程，回调校验 state，并通过原生 Windows `keyring` 后端保存凭据。该流程只用于个人测试，不是官方通用 OpenAI 第三方 OAuth。前端通过 Tauri 事件接收状态，并以轮询作为恢复路径；模型弹窗在已连接状态下可调用 `clear_experimental_openai_oauth` 删除凭据并退出登录。同时支持自定义 OpenAI 兼容 API：用户在模型弹窗填写 Base URL、Model 与 API Key，`save_custom_api` 把三者一并保存到 Windows Credential Manager（`clear_custom_api` 可清除）。`ModelAccess::resolve()` 在自定义 API 已配置时优先使用它，否则回退到实验性 OAuth；自定义 API 经 `{baseUrl}/chat/completions` 以 Bearer API Key 鉴权，Rust 侧把 Responses 风格载荷转换为 chat/completions 的 `messages`/`response_format`。API Key 与 OAuth 令牌一律不进 SQLite、浏览器存储、日志或工具结果。视觉分析请求带 30 秒超时，失败或未连接时以 `visualAnalysisNote` 随素材证据返回原因，避免分析线程无限阻塞。
+
+### Agent 循环与请求策略
 
 自然语言编辑控制器（`agent.rs`）把请求分为两条路径。显式单命令走 `run_explicit_command` 确定性直通路径；其余请求进入 `run_agent_loop`。循环加载最近 12 条、总字符预算 8000 的会话历史。`fast_goal` 只锁定带明确动作的产物请求、明确编辑或清晰提问；仅含产物名词的状态短句和快路径未覆盖的自然语言动作保持 pending，不用扩张正向关键词表猜工具。模糊请求不再消耗独立分类调用，而由首次主模型响应同时声明 `goal`/`isQuestion` 并选择第一个技能或直接 `finish`，随后目标锁定且不能被模型改写。schema v7 的 `pending_clarifications` 按项目、剪辑任务和会话保存尚未回答的问题、来源、目标与生命周期；该结构化状态而非消息顺序启发式进入路由和 Agent 状态快照。长段创作文案即使标题使用修辞疑问句，也应结合待澄清问题和历史理解。模型最多编排 10 步；`finish`/`no_action`/`done` 仍只有在真实产物满足门时才结束。每步参数保持 JSON 顶层，技能继续复用作用域、范围、版本和审计边界。
 
@@ -157,6 +186,8 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 交互 Agent 的模型决策共享 90 秒协作式总预算，每次 Provider 请求取 120 秒单步上限与剩余预算的较小值；达到预算后不启动新的模型调用或副作用，但不会强杀已经开始的 FFmpeg、下载、preview 或 Jianying 副作用。安全诊断只记录固定数字耗时与错误码。Provider 调度在请求边界让交互模型调用优先于尚未开始的粗视觉调用；粗视觉连续三次失败后熔断 60 秒，期间批次保持 `queued`，冷却后只允许一个半开探测并恢复 worker。已经开始的视觉请求允许完成，避免取消未知网络状态。
 
 “剪好了吗”“完成了吗”等精确状态问题是无需模型判断的只读单命令：`get_edit_status` 在同一项目、剪辑任务和会话内读取上一条 Agent task 的运行终态，同时以当前 task 的最新 storyboard、该 storyboard 的最新时间线状态和磁盘中实际存在的 preview 文件作为产物事实。任务状态用于说明处理中、待澄清、失败或部分完成，不能把较早的 task result 覆盖到更新的真实产物上；查询不进入通用 loop、不创建 Agent task，也不受后台视觉任务影响。
+
+### 会话路由与持久化
 
 Conversation Router 的公开入口是 `submit_conversation_turn`。它先验证会话作用域，再让精确只读状态直接返回；其他自然语言请求通过一次首轮路由决策选择 `respond`、`clarify` 或 `run`。顶层 route 不增加分支；`goal=question` 额外声明 `informationScope=general|project`。只有 `general` 可即时 `respond`，依赖当前项目素材、任务、产物、数量、状态或故障原因的 `project` 问题必须 `run` 并由模型选择首个观察工具。前两者不创建 `agent_tasks`，`run` 才创建异步任务；若首轮选择了执行工具，该工具通过 `run_agent_loop_with_initial_skill` 作为第 1 步执行，避免再次调用模型选择同一个工具。存在待澄清时，`respond`/`run` 必须在同一模型响应中声明 `keep` 或 `resolve`；新 `clarify` 会 supersede 旧问题。执行型任务创建与 `resolve`、Agent run 的 `needs_clarification` 终态与新问题写入均使用 SQLite 事务。旧 `execute_agent_edit` 保留给兼容调用。
 
@@ -175,6 +206,8 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 ### 当前 Agent runtime 覆盖说明
 
 当前实现覆盖上文保留的历史 6 步描述：模型拥有 10 步顶层编排预算，storyboard 另有 3 次内存修订预算。模型可调用 `request_asset_analysis` 对项目内已导入、未分析或分析失败的素材排队；文件、SQLite 和 FFprobe/FFmpeg/Tesseract 一直由 Rust 受控执行。模型可以生成解释性回复，但产物完成事实只能来自工具返回的后端验证摘要，不能被模型总结覆盖；固定降级仅用于 Provider 不可用等无模型回复场景。
+
+### 文本轨
 
 文本轨的第一项受限编辑工具为 `replace_text_tracks`：模型可提交当前作用域时间线的完整文本轨，Rust 会校验时间、样式/布局范围、受限动画与唯一 ID，并按已验证矩阵分配剪映兼容性。已启用文本轨会编译为 ASS 并通过本地 FFmpeg/libass 叠加在 preview；`jianying_default` 字体的静态、淡入/淡出、向上滑入、向下滑入和弹入 cue 可写入 Jianying draft。文本适配器把嵌套文本 JSON 写为 Unicode 转义而非裸 UTF-8，已在当前剪映 11.2 实机验证中文正确显示；其余文本请求仍会明确拒绝，绝不静默丢弃。
 
