@@ -15,7 +15,7 @@ React 19 + TypeScript + Vite
 |- src/hooks/             Provider、素材、成果交付与 Agent 终态对账 controller
 |- src/components/        互斥工作区和单一职责展示组件
 |- src/lib/local-store.ts Tauri 命令 TypeScript 桥接
-|- src/lib/agent-tools.ts Agent 工具的目标契约
+|- src/lib/agent-tools.ts Agent 内部技能名的 IDE 镜像
 `- src-tauri/             Rust 命令、SQLite、媒体工具与 OAuth 边界
   |- src/agent.rs         自然语言编辑控制器
   |- src/taskrouter.rs    项目内任务归属解析与任务状态快照
@@ -25,6 +25,8 @@ React 19 + TypeScript + Vite
   |- src/process.rs       无窗口外部命令
   `- src/oauth.rs         实验性 OpenCode 兼容 OAuth/PKCE
 ```
+
+面向源码学习的分层调用图、模块职责、集成、测试和风险清单位于 `docs/codebase/`。该目录只描述可从当前源码和终端验证的现实；本文继续承担长期产品架构和安全边界。Rust crate 的 `lib.rs` 为每个模块提供 IDE hover 导航注释，前端领域 controller 的导出 hook 也标注了状态所有权和副作用边界。
 
 `App.tsx` 在 Tauri 环境中通过 `local-store.ts` 加载项目、剪辑任务、会话和消息。剪辑任务是项目内的创作目标；会话、storyboard、timeline 和 preview 均被限制在该任务内，素材保持项目级复用。自然语言消息先经项目内 Task Resolver 选择已有任务、创建新任务或澄清，目标任务确定后才写入其 conversation；首次消息或导入仍会在需要时创建项目、任务和会话。
 
@@ -114,6 +116,8 @@ Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段�
 运行时覆盖说明：显式 preview 或 Jianying draft 请求通常走受控直通工具；若请求含同一项目、剪辑任务内已验证的时间线但缺少 storyboard 上下文，后端不擅自选定渲染动作，而是把该受控事实交给模型技能循环决定直接渲染、先观察时间线或澄清。无论模型选择什么，文件、SQLite 与 FFmpeg 仍只能由通过作用域与范围校验的 Rust 工具执行。
 
 Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
+
+当前物理模块边界仍未等于理想职责边界：`agentloop.rs` 同时包含 conversation route、请求工具策略、目标完成门、状态快照、prompt、循环与技能派发；`assets.rs` 同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。两者已被架构预算冻结，但冻结不等于完成拆分。后续按 `docs/codebase/ARCHITECTURE.md` 的子模块路线逐步搬迁：先纯策略/纯投影，再只读查询，再 worker，最后移动事务和技能派发；保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
 
 仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 

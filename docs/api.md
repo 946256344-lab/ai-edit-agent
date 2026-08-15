@@ -2,7 +2,7 @@
 
 ## 状态
 
-桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 是面向未来通用 Agent 工具层的 TypeScript 目标契约；当前 Tauri 命令直接返回领域结果。
+桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 仅镜像当前内部 Agent 技能名称，前端通过 `src/lib/local-store.ts` 调用公开 Tauri 命令。
 
 2026-08-14 的恢复基线没有新增、删除或修改 Tauri 命令及工具输入/输出；相关 Rust 改动仅为 `rustfmt` 标准格式化。
 
@@ -103,24 +103,11 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 生成 storyboard 必须提交非空的用户 brief。模型输入仅有紧凑的持久化证据：素材 ID、媒体类型、已验证时长、场景片段、OCR 与视觉标签。生成镜头必须含素材 ID 和源范围；视频范围必须在已验证时长内，图片的源范围必须为零。校验失败不会保存版本。
 
-## Agent 目标工具契约
+## Agent 内部技能契约
 
-```ts
-type ModelProvider = 'openai-oauth' | 'custom-api' | 'local'
-type ToolStatus = 'queued' | 'running' | 'completed' | 'partially_completed' | 'failed' | 'cancelled' | 'needs_clarification' | 'needs_review'
+`src/lib/agent-tools.ts` 是供 IDE 导航的 TypeScript 工具名称镜像，现与 `agentloop.rs` 的 9 个观察技能、12 个编辑/交付技能以及 fixture 定义的 `ask_user`/`finish` 两个 canonical control actions 对齐。它不声明前端可直接调用这些内部技能，也不参与运行时授权；执行事实仍是 Rust 的 `OBSERVATION_TOOLS`/`EDIT_TOOLS` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json`。兼容解析接受 `no_action`、`done` 和空工具名作为 `finish` 别名；当前生产 prompt 仍会向模型公布 `no_action`，所以这是待收敛的兼容入口，不能误报为“仅解析旧数据”。已经废止的 `analyze_assets`、`replace_timeline_clip` 不得重新作为当前工具名使用。
 
-type ToolInvocation<TInput, TResult> = {
-  id: string
-  name: AgentToolName
-  status: ToolStatus
-  input: TInput
-  result?: TResult
-  error?: string
-  createdAt: string
-}
-```
-
-此 envelope 是通用 Agent 审计层的目标形态。通过作用域校验后，`execute_agent_edit` 会先创建持久化调用，再记录模型选择的允许工具、经脱敏的成功结果或安全失败结果；终态 `completed` 与 `failed` 可包含 `result`，`failed` 的结果仅含工具名、状态和失败代码，`error` 不得含凭据或不必要的本机路径。命令先同步插入 `queued` 调用并立即返回任务 ID，完整流水线在后台线程执行，终态经 `agent-edit-completed` 事件（携带 `AgentEditResult`）回传前端。工具或循环失败时不把技术校验错误直接交给 UI：技能循环内失败只回读安全失败代码供模型继续决策，不再请求独立后续回合，也不会自动重放失败工具；Provider 或模型不可用、或循环最终无法达成目标时，后端保存相同结构的安全失败结果并返回固定诚实降级回复。Agent 单步与 storyboard 模型请求保留 120 秒上限，Agent 循环还以 90 秒模型决策总预算收紧每步实际超时；不再存在独立意图分类请求。启动时仍为 `queued` 或 `running` 的通用调用会变为 `needs_review`，用户可重新发起请求，但系统不会自动重放未知副作用。
+通用 Agent 运行状态由 `AgentTask`、`AgentRunStep`、`OperationLog` 和 `AgentEditResult` 分别表达，不存在一个供前端直接执行任意内部技能的通用 `ToolInvocation` 接口。通过作用域校验后，`execute_agent_edit` 会先创建持久化调用，再记录模型选择的允许工具、经脱敏的成功结果或安全失败结果；终态 `completed` 与 `failed` 可包含 `result`，`failed` 的结果仅含工具名、状态和失败代码，`error` 不得含凭据或不必要的本机路径。命令先同步插入 `queued` 调用并立即返回任务 ID，完整流水线在后台线程执行，终态经 `agent-edit-completed` 事件（携带 `AgentEditResult`）回传前端。工具或循环失败时不把技术校验错误直接交给 UI：技能循环内失败只回读安全失败代码供模型继续决策，不再请求独立后续回合，也不会自动重放失败工具；Provider 或模型不可用、或循环最终无法达成目标时，后端保存相同结构的安全失败结果并返回固定诚实降级回复。Agent 单步与 storyboard 模型请求保留 120 秒上限，Agent 循环还以 90 秒模型决策总预算收紧每步实际超时；不再存在独立意图分类请求。启动时仍为 `queued` 或 `running` 的通用调用会变为 `needs_review`，用户可重新发起请求，但系统不会自动重放未知副作用。
 
 `submit_conversation_turn` 的公开判别式返回值为：
 
@@ -142,12 +129,14 @@ Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理�
 
 | 工具 | 当前契约 | 实现状态 |
 | --- | --- | --- |
+| `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
 | `request_asset_analysis` | `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
+| `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
 | `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `sourceStartMs/sourceEndMs`、安全视觉标签、固定命中原因和游标；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
+| `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
-| `search_media_segments` | 名称保留，输入/结果未定义 | TODO |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
@@ -155,7 +144,8 @@ Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理�
 | `change_clip_duration` | `{ timelineVersionId?, adjustments: [{ shotIndex, newDurationMs?, newSourceStartMs? }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
 | `reorder_clips` | `{ timelineVersionId?, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
 | `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
-| `request_clarification` | `{ question }` | 已实现，不产生任何产物，仅返回澄清问题。 |
+| `ask_user` | `{ question }` | canonical control action：不产生产物，仅返回澄清问题。 |
+| `finish` | `{ answer? }` | fixture canonical terminal action：只有当前目标完成门允许时才能结束。`no_action`、`done` 和空工具名是兼容别名；当前 production prompt 仍会公布 `no_action`。 |
 
 “分析素材”“重新分析视频/图片/媒体文件”等请求由首次主模型决策声明为无产物门的观察目标，避免被误设为 storyboard；模型在同一响应中自主选择 `list_assets`、`request_asset_analysis`、澄清或其他合法工具，不存在独立分类器替代工具决策。
 
@@ -181,7 +171,7 @@ Agent 请求统一经 `agentloop.rs` 的封闭、有界目标驱动循环处理�
 
 `change_clip_duration` 对视频保存实际使用的源窗口：`sourceEndMs = sourceStartMs + timelineDurationMs`；图片仍使用零源范围。新起点不得早于变更前已验证窗口的 `sourceStartMs`，新结束点不得晚于其 `sourceEndMs` 或素材技术时长，因此缩短或移动镜头不会越出已验证范围。
 
-`create_timeline_draft` 的成功结果是按 storyboard 镜头顺序映射的内部时间线版本。版本化 `TimelineContent` 已预留 `textTracks`，旧版本读取为 `[]`；模型可经 `replace_text_tracks` 提交完整文本轨，后端校验 cue 时间、颜色、布局/样式范围、受限动画及唯一 ID，并按后端的已验证矩阵写入兼容性，绝不接受模型自证兼容。多轨音频、字幕、变换和自动化仍为 `TODO`。时间线变更目前只可经 `execute_agent_edit` 调用，决策严格限制在关闭工具集内：`replace_clips` 可一次替换多个既有 `shot_index`（每个保持对应时间线时长，视频源范围须已验证且严格等于该时长，图片源范围为零）；`change_clip_duration` 在不超出已验证源范围的前提下重定时长与起止点；`reorder_clips` 的 `order` 必须是全部既有 `shot_index` 的完整排列。每次变更都会创建新 `TimelineVersion` 并记录前后变化；`request_clarification` 仅返回澄清问题，不创建任何产物。
+`create_timeline_draft` 的成功结果是按 storyboard 镜头顺序映射的内部时间线版本。版本化 `TimelineContent` 已预留 `textTracks`，旧版本读取为 `[]`；模型可经 `replace_text_tracks` 提交完整文本轨，后端校验 cue 时间、颜色、布局/样式范围、受限动画及唯一 ID，并按后端的已验证矩阵写入兼容性，绝不接受模型自证兼容。多轨音频、字幕、变换和自动化仍为 `TODO`。时间线变更目前只可经 `execute_agent_edit` 调用，决策严格限制在关闭工具集内：`replace_clips` 可一次替换多个既有 `shot_index`（每个保持对应时间线时长，视频源范围须已验证且严格等于该时长，图片源范围为零）；`change_clip_duration` 在不超出已验证源范围的前提下重定时长与起止点；`reorder_clips` 的 `order` 必须是全部既有 `shot_index` 的完整排列。每次变更都会创建新 `TimelineVersion` 并记录前后变化；`ask_user` 仅返回澄清问题，不创建任何产物。
 
 `render_preview` 会把已启用的 `textTracks` 编译为 ASS，再通过 FFmpeg/libass 叠加；已验证的最小 Jianying 文本矩阵包含 Unicode 文案。适配器对每条文本素材的嵌套 `content` JSON 使用 Unicode 转义，已在当前剪映 11.2 实机验收中文正确显示。适配器也可写入描边、背景、阴影及五个剪映内置字体资源，但这些字段在实机视觉验收前仍不是可交付能力。
 

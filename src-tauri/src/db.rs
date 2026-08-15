@@ -1,3 +1,10 @@
+//! SQLite location, connection policy, and schema migration boundary.
+//!
+//! Domain SQL remains in its owning module. Commands that need SQLite open the
+//! same local database through this module so WAL, busy timeout, foreign keys,
+//! and migrations are applied consistently. Cross-table domain transactions
+//! must stay intact when large modules are later split.
+
 use rusqlite::{params, Connection};
 use std::{
     fs,

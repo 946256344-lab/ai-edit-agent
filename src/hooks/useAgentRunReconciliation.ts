@@ -37,6 +37,11 @@ function isTerminalTask(task: StoredAgentTask) {
   return !isActiveTask(task)
 }
 
+/**
+ * Reconciles an asynchronous Agent run with persisted task/message state.
+ * Tauri events are only low-latency notifications; polling and the scoped
+ * completion callback recover the authoritative SQLite result.
+ */
 export function useAgentRunReconciliation(options: AgentRunReconciliationOptions) {
   const { setComposerNotice, setIsSending } = options
   const [listenerReady, setListenerReady] = useState(!options.desktopRuntime)

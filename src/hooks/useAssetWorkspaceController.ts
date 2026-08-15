@@ -76,6 +76,11 @@ function toAsset(asset: StoredAsset): AssetView {
   }
 }
 
+/**
+ * Owns the project-scoped asset projection and explicit import/recovery
+ * actions. It reads safe Tauri projections rather than walking source paths;
+ * folder expansion remains local to AssetDirectoryTree.
+ */
 export function useAssetWorkspaceController(options: AssetWorkspaceControllerOptions) {
   const [assets, setAssets] = useState<AssetView[]>([])
   const [page, setPage] = useState(EMPTY_PAGE)

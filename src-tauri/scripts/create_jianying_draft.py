@@ -1,3 +1,10 @@
+"""One-way Jianying adapter invoked by the Rust delivery boundary.
+
+The adapter consumes a versioned local JSON handoff, creates a unique draft,
+and registers it only when Jianying is closed. It is not an application entry
+point and must never overwrite or synchronize an existing Jianying project.
+"""
+
 import json
 import msvcrt
 import os

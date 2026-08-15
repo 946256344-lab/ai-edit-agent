@@ -1,55 +1,40 @@
-export type ModelProvider = 'openai-oauth' | 'custom-api' | 'local'
-
-export type ToolStatus = 'queued' | 'running' | 'completed' | 'partially_completed' | 'failed' | 'cancelled' | 'needs_clarification' | 'needs_review'
-
-export type AgentToolName =
-  | 'analyze_assets'
-  | 'search_media_segments'
+/**
+ * IDE-facing mirror of the bounded Agent skill space. Execution authority is
+ * the Rust OBSERVATION_TOOLS/EDIT_TOOLS whitelist; the versioned fixture under
+ * src-tauri/tests/fixtures must change with that whitelist. These names are
+ * internal model skills, not commands that React may invoke directly.
+ */
+export type AgentObservationToolName =
+  | 'get_edit_status'
+  | 'get_asset_health_summary'
+  | 'list_assets'
   | 'search_assets'
+  | 'search_asset_segments'
+  | 'search_music'
+  | 'get_storyboard'
+  | 'get_timeline'
   | 'get_text_capabilities'
+
+export type AgentSideEffectToolName =
+  | 'download_music'
+  | 'use_online_music'
+  | 'request_asset_analysis'
   | 'generate_storyboard'
   | 'create_timeline_draft'
   | 'replace_clips'
   | 'change_clip_duration'
   | 'reorder_clips'
   | 'replace_text_tracks'
+  | 'replace_music_tracks'
   | 'render_preview'
   | 'create_jianying_draft'
-  | 'request_clarification'
-  | 'no_action'
-  | 'replace_timeline_clip'
 
-export type ToolInvocation<TInput, TResult> = {
-  id: string
-  name: AgentToolName
-  status: ToolStatus
-  input: TInput
-  result?: TResult
-  error?: string
-  createdAt: string
-}
+/** Canonical control actions defined by the versioned contract fixture. */
+export type AgentControlToolName = 'ask_user' | 'finish'
 
-export type TimelineDraftInput = {
-  projectId: string
-  storyboardVersionId: string
-}
+/** Accepted aliases; the current production prompt still advertises `no_action`. */
+export type AgentControlToolAlias = 'no_action' | 'done'
 
-export type JianyingDraftInput = {
-  timelineVersionId: string
-}
+export type AgentToolName = AgentObservationToolName | AgentSideEffectToolName | AgentControlToolName
 
-export type JianyingDraftResult = {
-  draftDirectory: string
-  draftContentPath: string
-}
-
-/**
- * The desktop backend implements this interface through named, locally
- * validated Tauri commands.
- */
-export interface VideoAgentTools {
-  analyzeAssets(projectId: string, assetIds: string[]): Promise<ToolInvocation<{ projectId: string; assetIds: string[] }, unknown>>
-  createTimelineDraft(input: TimelineDraftInput): Promise<ToolInvocation<TimelineDraftInput, { timelineVersionId: string }>>
-  renderPreview(timelineVersionId: string): Promise<ToolInvocation<{ timelineVersionId: string }, { previewPath: string }>>
-  createJianyingDraft(input: JianyingDraftInput): Promise<ToolInvocation<JianyingDraftInput, JianyingDraftResult>>
-}
+export type AgentAcceptedToolName = AgentToolName | AgentControlToolAlias

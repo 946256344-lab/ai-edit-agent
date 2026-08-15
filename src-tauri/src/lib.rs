@@ -1,19 +1,45 @@
+//! Desktop backend and local trust boundary.
+//!
+//! Follow a user request from [`taskrouter`] (task ownership), through
+//! [`agent`] (conversation/run lifecycle), into [`agentloop`] (bounded skill
+//! selection). The Rust modules below together form the local trusted boundary:
+//! each owning module may access SQLite, source media, external processes, or
+//! deliverables only for its scoped responsibility. `run` registers the stable
+//! Tauri command surface consumed by `src/lib/local-store.ts`.
+
+/// Conversation routing, asynchronous Agent task lifecycle, and atomic finalization.
 mod agent;
+/// Bounded goal loop, request policy, state snapshots, prompts, and skill dispatch.
 mod agentloop;
+/// Asset import, analysis workers, safe library projections, health, and recovery.
 mod assets;
+/// Payload-free Agent steps, diagnostics, task status, and operation records.
 mod audit;
+/// Custom OpenAI-compatible credential commands and stored configuration.
 mod custom_api;
+/// SQLite location, connection policy, and append-only schema migrations.
 mod db;
+/// One-way Jianying draft creation and deferred registration.
 mod jianying;
+/// Serializable domain and Tauri boundary types; no persistence behavior belongs here.
 mod models;
+/// Jamendo credential, search, eligibility, and bounded download adapter.
 mod music_provider;
+/// Experimental loopback PKCE flow and Windows Credential Manager access.
 mod oauth;
+/// FFmpeg preview rendering, text/music composition, and quality inspection.
 mod preview;
+/// Hidden Windows child-process construction and bounded process execution.
 mod process;
+/// Project/task/conversation/message commands and startup recovery coordination.
 mod projects;
+/// Replaceable model transport, priority gate, timeout, fallback, and circuit breaker.
 mod provider;
+/// Evidence-backed storyboard proposal, validation, versioning, and lookup.
 mod storyboard;
+/// Project-level task resolution, snapshots, pending routes, and one-use receipts.
 mod taskrouter;
+/// Internal timeline creation, validated edits, text/music tracks, and version queries.
 mod timeline;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

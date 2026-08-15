@@ -72,6 +72,12 @@ export function getTimelineLabel(timelineState: TimelineState, timeline: Timelin
   return 'Jianying draft 已注册'
 }
 
+/**
+ * Owns the selected editing task's storyboard → timeline → preview → Jianying
+ * projection. Every write calls a named Tauri command that creates or delivers
+ * a new version; this controller never treats UI state as the artifact source
+ * of truth.
+ */
 export function useArtifactWorkspaceController(options: ArtifactWorkspaceControllerOptions) {
   const [storyboard, setStoryboard] = useState<StoryboardVersion | null>(null)
   const [storyboardBrief, setStoryboardBrief] = useState('')

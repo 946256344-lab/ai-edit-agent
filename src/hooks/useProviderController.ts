@@ -26,6 +26,11 @@ const DISCONNECTED_CUSTOM_API: CustomApiStatus = {
   coarseVisualModel: null,
 }
 
+/**
+ * Owns provider connection UI state. Credential values cross the Tauri bridge
+ * only during explicit save/clear actions; persistence and provider selection
+ * remain Rust responsibilities.
+ */
 export function useProviderController(desktopRuntime: boolean) {
   const [isOpen, setIsOpen] = useState(false)
   const [oauthStatus, setOAuthStatus] = useState<ExperimentalOAuthStatus>(DISCONNECTED_OAUTH)

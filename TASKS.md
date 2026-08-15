@@ -2,6 +2,8 @@
 
 ## 当前优先级
 
+- [x] 完成（2026-08-15，P0）：建立全仓库代码地图与 IDE 导航注释。以真实源码为依据梳理 React/Tauri 启动、conversation/task 路由、Agent loop、素材分析、storyboard、timeline、preview、Jianying、Provider、SQLite 和测试边界；`docs/codebase/` 固定为七份学习文档，前后端关键入口补充只解释职责、调用方向和副作用边界的导航型注释。同步清除 `agent-tools.ts` 的历史接口草图，明确 9 个观察技能、12 个编辑/交付技能、fixture canonical controls 与 production alias 的真实关系；未改变公开命令、持久化 schema、业务行为或用户数据。
+- [x] 本项完成门：七份代码库文档通过 exact-file/inquiry/evidence 检查；代码注释与实际调用链一致、不复述语法、不掩盖巨型模块债务。前端 lint/build、Rust fmt/check、128 个单元测试 + 2 个契约测试、14 个 Python adapter 测试、harness test/check 与 diff 检查通过；独立审查三轮发现并关闭 control alias、状态工具、可信边界、Task Resolver 澄清/receipt 时序、SQLite 与术语精度问题。后端巨型模块只形成有边界、有顺序的拆分路线，不在缺少完整 scripted Agent runner 时盲拆；Rust 仍有既存 `PartiallyDone` 未构造 warning，已记录为债务。
 - [x] 完成（2026-08-15，P0）：收敛前端编排边界并建立可执行的架构约束。`App.tsx` 从约 1110 行降至 515 行，只保留项目、剪辑任务、conversation、消息路由和工作区组合；Provider、素材、成果交付、Agent task 终态对账分别进入具名 controller。删除 296 行且混合 Agent/成果模式的 `ConversationWorkspace`，改为互斥工作区与独立侧栏、顶栏、Provider、分析提示组件；现有项目、会话、素材、storyboard、timeline、preview、Jianying 与 Agent 任务契约不变。
 - [x] 本项完成门：Provider 与 Agent task 对账内部状态不再由 `App.tsx` 持有；Agent/成果工作区各自只有 `model/actions` 两个领域入口。机器可读架构预算已接入 `harness:check`、`harness:staged` 与 pre-commit，以只降不升的行数/字符/最长单行、props/state/effect/async、禁止路径和跨层调用约束阻止反向膨胀；语法无法解析、rest props、删除/改名预算或不完整迁移均 fail-closed。前端 lint/build、harness test/check、diff 检查、真实 Tauri 项目恢复/互斥模式/素材目录开合/Provider 模态回归均通过；独立审查三轮发现的 props、async/压缩代码、预算删除与迁移绕过均已补回归并关闭。
 - [x] 完成（2026-08-15，P0）：重建最小、Agent-first 的素材工作区。保留后端目录投影、素材分页、分析证据、源文件健康检查与显式重链路，不删除素材、分析结果或任何后端能力；前端删除搜索/组合筛选、收藏/评分/标签/集合、批量操作和任务中心，只保留导入、可开合目录树、当前目录直属素材、证据 Inspector 与异常恢复。`AssetManagementPanel` 从约 500 行、50 个扁平 props 收敛为 116 行和 `model/actions` 两个领域入口，`App.tsx` 素材 state 从约 20 个减至 8 个必要状态。

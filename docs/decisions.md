@@ -2,6 +2,13 @@
 
 维护记录（2026-08-14）：绿色构建恢复没有引入或替代架构决策。Rust 改动仅为标准格式化，前端只移除失效的未引用实现并修正已有类型与 Hook 依赖。
 
+## ADR-061：以可验证代码地图和 IDE 导航注释指导后端渐进拆分
+
+- 状态：已实现代码地图与注释；后端物理拆分待按路线逐项执行
+- 决策：`docs/codebase/` 固定包含技术栈、结构、架构、约定、集成、测试和关注点七份源码学习文档，每项非平凡结论必须引用当前文件或终端证据。Rust `lib.rs` 作为 crate 级 IDE 导航入口，为每个模块标注职责；前端 controller 导出点标注状态所有权和副作用边界。`src/lib/agent-tools.ts` 只作为 IDE 目标类型镜像并与当前 Rust 技能白名单对齐，不取得执行授权。后端热点不一次性重写：`agentloop.rs` 按 policy/router/state/prompt/executor，`assets.rs` 按 import/technical/visual/library/health/metadata 渐进提取，公开命令由 `mod.rs` 保持稳定。
+- 原因：仅知道“文件很大”不足以安全拆分。两个热点分别耦合 Agent 完成门与媒体 worker/路径事实，盲拆会破坏一次性 route receipt、原子终态、负向副作用门、分析恢复或目录脱敏。面向 IDE 的真实调用图能先建立共同语言，再用现有测试逐块搬迁。
+- 后果：本阶段不改变 Tauri 命令、SQLite schema、Agent 工具执行集合、媒体处理或用户数据。代码注释只解释所有权、依赖方向和恢复边界，不复述语法。后续新功能不得继续写入被冻结热点；拆分每一步必须同步 fixture、文档并执行 Rust/前端/harness/真实受影响路径验证。
+
 ## ADR-060：前端按领域 controller 收敛，并以架构预算阻止反向膨胀
 
 - 状态：已实现，真实 Tauri 回归待本变更关闭
