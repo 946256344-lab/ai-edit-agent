@@ -60,7 +60,7 @@
     },
     {
       "path": "src-tauri/src/timeline.rs",
-      "maxLines": 1848,
+      "maxLines": 1875,
       "maxCharacters": 74216,
       "maxLineLength": 643
     },

@@ -3,10 +3,7 @@
 
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
-use crate::models::{
-    StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
-    TechnicalMetadata,
-};
+use crate::models::{StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata};
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -435,93 +432,6 @@ fn choose_storyboard_video_range(
     (start, end)
 }
 
-fn fallback_storyboard(brief: &str, sources: &[StoryboardSource]) -> Option<StoryboardContent> {
-    let usable_sources = sources.iter().take(8).collect::<Vec<_>>();
-    if usable_sources.is_empty() {
-        return None;
-    }
-    let beat_prefix = brief
-        .split_whitespace()
-        .take(6)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut beats = Vec::with_capacity(usable_sources.len());
-    let mut shots = Vec::with_capacity(usable_sources.len());
-    let mut total_duration = 0_i64;
-    for (index, source) in usable_sources.iter().enumerate() {
-        let beat_id = format!("beat-{}", index + 1);
-        let shot_duration = match source.kind.as_str() {
-            "video" => source.duration_ms.unwrap_or(5_000).clamp(3_000, 12_000),
-            _ => 3_000,
-        };
-        let (source_start_ms, source_end_ms) = if source.kind == "video" {
-            choose_storyboard_video_range(source, shot_duration, 0, shot_duration)
-        } else {
-            (0, 0)
-        };
-        beats.push(StoryboardBeat {
-            id: beat_id.clone(),
-            purpose: if index == 0 {
-                format!("Introduce the request: {brief}")
-            } else {
-                format!("Support the next step with available media {index}")
-            },
-            required_visual: if index == 0 {
-                format!("A visual introduction for {beat_prefix}")
-            } else {
-                format!("A supporting visual for available media {index}")
-            },
-        });
-        shots.push(StoryboardShot {
-            order_index: index as i64 + 1,
-            duration_ms: shot_duration,
-            purpose: if index == 0 {
-                "Open with the user's requested topic.".to_owned()
-            } else {
-                "Continue the narrative with supporting footage.".to_owned()
-            },
-            on_screen_text: String::new(),
-            asset_id: source.asset_id.clone(),
-            source_start_ms,
-            source_end_ms,
-            reason: if source.kind == "video" {
-                "This source is the best available safe segment for the topic.".to_owned()
-            } else {
-                "This still image supports the requested topic as a stable visual.".to_owned()
-            },
-            beat_id,
-            match_level: if source.kind == "video" {
-                "contextual".to_owned()
-            } else {
-                "direct".to_owned()
-            },
-        });
-        total_duration += shot_duration;
-    }
-    let target_duration_ms = total_duration.max(minimum_storyboard_duration(brief));
-    Some(StoryboardContent {
-        brief: brief.to_owned(),
-        title: if brief.is_empty() {
-            "Auto storyboard".to_owned()
-        } else {
-            brief.chars().take(24).collect()
-        },
-        summary: format!(
-            "Fallback storyboard built from {} available media sources.",
-            usable_sources.len()
-        ),
-        target_duration_ms,
-        script_mode: if total_duration < minimum_storyboard_duration(brief) {
-            "key_message".to_owned()
-        } else {
-            "full_script".to_owned()
-        },
-        beats,
-        uncovered_beat_ids: Vec::new(),
-        shots,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{minimum_storyboard_duration, validate_storyboard};
@@ -682,7 +592,7 @@ fn generate_storyboard_internal(
         };
     }
     let access = ModelAccess::resolve().map_err(|error| {
-        log::warn!("AI storyboard generation could not access the configured provider.");
+        log::warn!("AI storyboard generation could not access the configured provider: {error}.");
         error
     })?;
     let mut previous = None;
@@ -696,32 +606,33 @@ fn generate_storyboard_internal(
             previous.as_ref(),
             feedback.as_deref(),
         ) {
-            Ok(candidate) => match validate_storyboard(&candidate, &sources, brief) {
-                Ok(()) => {
-                    content = Some(candidate);
-                    break;
+            Ok(candidate) => {
+                // 先规范化（夹紧数值约束、修正 target_duration_ms），
+                // 再校验结构性约束；纯数值偏差不再占用模型重试配额。
+                let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
+                match validate_storyboard(&candidate, &sources, brief) {
+                    Ok(()) => {
+                        content = Some(candidate);
+                        break;
+                    }
+                    Err(error) => {
+                        log::warn!("AI storyboard validation failed: {error}");
+                        feedback = Some(error);
+                        previous = Some(candidate);
+                    }
                 }
-                Err(error) => {
-                    log::warn!("AI storyboard validation failed.");
-                    feedback = Some(error);
-                    previous = Some(candidate);
-                }
-            },
+            }
             Err(error) => {
-                log::warn!("AI storyboard request failed.");
+                log::warn!("AI storyboard request failed: {error}");
                 feedback = Some(error);
                 previous = None;
             }
         }
     }
-    let content = content
-        .map(|candidate| normalize_storyboard_candidate(candidate, &sources, brief))
-        .or_else(|| fallback_storyboard(brief, &sources))
-        .ok_or_else(|| {
-            feedback.unwrap_or_else(|| {
-                "Storyboard generation did not produce a valid result.".to_owned()
-            })
-        })?;
+    let content = content.ok_or_else(|| {
+        feedback
+            .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned())
+    })?;
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",
         params![project_id], |row| row.get::<_, i64>(0),
@@ -767,7 +678,10 @@ pub fn get_latest_storyboard(
         params![project_id, editing_task_id],
         |row| {
             let content: StoryboardContent = serde_json::from_str(&row.get::<_, String>(2)?)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(|e| {
+                    log::warn!("Storyboard content could not be deserialized: {e}");
+                    rusqlite::Error::InvalidQuery
+                })?;
             Ok(StoryboardVersion {
                 id: row.get(0)?,
                 project_id: project_id.clone(),

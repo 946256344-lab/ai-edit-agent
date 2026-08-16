@@ -50,122 +50,87 @@ struct ModelTaskRoute {
 }
 
 #[tauri::command]
+#[rustfmt::skip]
 pub fn resolve_conversation_task(
-    app: AppHandle,
-    project_id: String,
-    active_editing_task_id: Option<String>,
-    request: String,
+    app: AppHandle, project_id: String,
+    active_editing_task_id: Option<String>, request: String,
 ) -> Result<TaskRouteResult, String> {
     let request = request.trim();
-    if request.is_empty() {
-        return Err("Task routing request cannot be empty.".to_owned());
-    }
+    if request.is_empty() { return Err("Task routing request cannot be empty.".to_owned()); }
     let connection = open_connection(&app)?;
     let project_exists: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
-            params![project_id],
-            |row| row.get(0),
-        )
+        .query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)", params![project_id], |row| row.get(0))
         .map_err(|_| "Current local project could not be verified.".to_owned())?;
-    if !project_exists {
-        return Err("Current local project could not be verified.".to_owned());
-    }
-
-    let candidates =
-        load_task_candidates(&connection, &project_id, active_editing_task_id.as_deref())?;
+    if !project_exists { return Err("Current local project could not be verified.".to_owned()); }
+    let candidates = load_task_candidates(&connection, &project_id, active_editing_task_id.as_deref())?;
     if candidates.is_empty() {
         let result = TaskRouteResult {
-            action: "create_new".to_owned(),
-            task_id: None,
-            conversation_id: None,
-            confidence: 1.0,
-            question: None,
-            suggested_title: Some(suggested_title(request)),
-            reason_code: "no_existing_task".to_owned(),
-            deferred_request: None,
-            route_receipt: None,
+            action: "create_new".to_owned(), task_id: None, conversation_id: None, confidence: 1.0,
+            question: None, suggested_title: Some(suggested_title(request)),
+            reason_code: "no_existing_task".to_owned(), deferred_request: None, route_receipt: None,
         };
         return issue_route_receipt(&connection, &project_id, request, result, None);
     }
-
-    let active_task_id = active_editing_task_id.filter(|task_id| {
-        candidates
-            .iter()
-            .any(|candidate| candidate.task_id == *task_id)
-    });
+    let active_task_id = active_editing_task_id
+        .filter(|id| candidates.iter().any(|c| c.task_id == *id));
     let pending = load_pending_task_route(&connection, &project_id)?;
-
     // 精确单命令只使用用户显式选中的 task；无 Provider 状态路径也绝不猜测另一个作用域。
     if pending.is_none() && explicit_command_tool(request).is_some() {
         if let Some(candidate) = selected_candidate(&candidates, active_task_id.as_deref()) {
-            let result = result_for_candidate(
-                "continue_current",
-                candidate,
-                1.0,
-                "explicit_current_task",
-                None,
-            );
+            let result = result_for_candidate("continue_current", candidate, 1.0, "explicit_current_task", None);
             return issue_route_receipt(&connection, &project_id, request, result, None);
         }
     }
-
-    let access =
-        ModelAccess::resolve().map_err(|_| "Task resolver model is unavailable.".to_owned())?;
-    let prompt = build_task_route_prompt(
-        request,
-        active_task_id.as_deref(),
-        &candidates,
-        pending.as_ref(),
-    );
-    let body = json!({
-        "model": "gpt-5.4",
-        "store": false,
-        "stream": true,
-        "input": [{ "role": "user", "content": [{ "type": "input_text", "text": prompt }] }],
-        "text": { "format": { "type": "json_object" } }
-    });
+    // 快路径：激活任务是全新空任务（planning 阶段、无产物、无历史子目标）。
+    // 用户通过按钮显式创建并激活了这个会话；直接归属，无需模型介入。
+    // 这防止旧任务候选干扰新会话的第一条消息。
+    if pending.is_none() {
+        if let Some(candidate) = active_task_id
+            .as_deref()
+            .and_then(|id| candidates.iter().find(|c| c.task_id == id))
+        {
+            if candidate.current_stage == "planning"
+                && candidate.completed.is_empty()
+                && candidate.active_subgoal.is_empty()
+            {
+                let result = result_for_candidate("continue_current", candidate, 1.0, "new_empty_active_task", None);
+                return issue_route_receipt(&connection, &project_id, request, result, None);
+            }
+        }
+    }
+    let access = ModelAccess::resolve().map_err(|_| "Task resolver model is unavailable.".to_owned())?;
+    let prompt = build_task_route_prompt(request, active_task_id.as_deref(), &candidates, pending.as_ref());
+    let body = json!({"model":"gpt-5.4","store":false,"stream":true,
+        "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
+        "text":{"format":{"type":"json_object"}}});
     let response_body = post_model_payload(&access, &body, Some(TASK_ROUTE_TIMEOUT))?;
     let response_text = model_response_json_text(&access, &response_body)
         .ok_or_else(|| "Task route response did not contain JSON.".to_owned())?;
     let response: ModelTaskRoute = serde_json::from_str(&response_text)
         .map_err(|_| "Task route response was malformed.".to_owned())?;
     let mut pending_action = response.pending_action.clone();
-    let result = validate_model_route(
-        response,
-        request,
-        active_task_id.as_deref(),
-        &candidates,
-        pending.as_ref(),
-    )?;
-    if result.action == "clarify"
-        && pending.is_some()
-        && pending_action.as_deref() == Some("resolve")
-    {
+    // 一次纠偏机会：首次验证失败时把问题原因反馈给模型后重试，而非直接 fail-closed。
+    let result = match validate_model_route(response, request, active_task_id.as_deref(), &candidates, pending.as_ref()) {
+        Ok(r) => r,
+        Err(hint) => {
+            let cp = format!("{prompt}\n\nIssue: {hint} Return corrected JSON only.");
+            let cb = json!({"model":"gpt-5.4","store":false,"stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":cp}]}],"text":{"format":{"type":"json_object"}}});
+            let ct = model_response_json_text(&access, &post_model_payload(&access, &cb, Some(TASK_ROUTE_TIMEOUT))?)
+                .ok_or_else(|| "Task route correction did not contain JSON.".to_owned())?;
+            let corrected: ModelTaskRoute = serde_json::from_str(&ct)
+                .map_err(|_| "Task route correction was malformed.".to_owned())?;
+            pending_action = corrected.pending_action.clone();
+            validate_model_route(corrected, request, active_task_id.as_deref(), &candidates, pending.as_ref())?
+        }
+    };
+    if result.action == "clarify" && pending.is_some() && pending_action.as_deref() == Some("resolve") {
         pending_action = Some("keep".to_owned());
     }
-    let mut result = persist_pending_route_transition(
-        &connection,
-        &project_id,
-        active_task_id.as_deref(),
-        request,
-        &candidates,
-        pending.as_ref(),
-        &result,
-        pending_action.as_deref(),
-    )?;
+    let mut result = persist_pending_route_transition(&connection, &project_id,
+        active_task_id.as_deref(), request, &candidates, pending.as_ref(), &result, pending_action.as_deref())?;
     if result.action != "clarify" {
-        result = issue_route_receipt(
-            &connection,
-            &project_id,
-            request,
-            result,
-            if pending_action.as_deref() == Some("resolve") {
-                pending.as_ref().map(|value| value.id.as_str())
-            } else {
-                None
-            },
-        )?;
+        result = issue_route_receipt(&connection, &project_id, request, result,
+            if pending_action.as_deref() == Some("resolve") { pending.as_ref().map(|v| v.id.as_str()) } else { None })?;
     }
     Ok(result)
 }

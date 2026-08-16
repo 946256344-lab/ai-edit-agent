@@ -91,3 +91,4 @@ npm run harness:test
 
 
 维护记录（2026-08-15）：architecture-budgets.json 新增 src-tauri/src/preview_tests.rs 预算条目（489 行），preview.rs 预算从 1015 收紧至 608 行。
+维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback；受影响文件（agent.rs、agentloop.rs、assets.rs）均通过架构预算检查，harness:check 无新触发规则。

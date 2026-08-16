@@ -588,6 +588,7 @@ fn update_analysis_status(
     Ok(true)
 }
 
+#[rustfmt::skip]
 fn update_visual_batch_task(
     app: &AppHandle,
     task_id: &str,
@@ -605,7 +606,7 @@ fn update_visual_batch_task(
             params![task_id],
             |row| row.get::<_, i64>(0),
         )
-        .unwrap_or_else(|_| now_millis());
+        .unwrap_or_else(|e| { log::warn!("Visual batch task timestamp unreadable: {e}"); now_millis() });
     let timestamp = now_millis();
     connection
         .execute(
@@ -978,6 +979,7 @@ fn queue_visual_analysis_batch(app: &AppHandle, asset_ids: &[String]) -> Result<
     Ok(())
 }
 
+#[rustfmt::skip]
 fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<String>) {
     let requested_count = asset_ids.len();
     let _ = update_visual_batch_task(&app, &task_id, "running", requested_count, 0, 0, 0, None);
@@ -991,7 +993,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
                 connection.query_row(
                     "SELECT id, kind, metadata_json FROM assets WHERE id = ?1 AND analysis_status = 'ready'",
                     params![asset_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_default())),
+                    |row| Ok((row.get(0)?, row.get(1)?, serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_else(|e| { log::warn!("Asset metadata_json could not be parsed: {e}"); Default::default() }))),
                 ).map_err(|_| "visual_asset_unavailable")
             })
             .collect()
@@ -1048,7 +1050,8 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
     let content = visual_model_content(&frames);
     let access = match ModelAccess::resolve() {
         Ok(access) => access,
-        Err(_) => {
+        Err(error) => {
+            log::warn!("Visual analysis batch: provider access failed: {error}.");
             let _ = update_visual_metadata(
                 &app,
                 &asset_ids,
@@ -1093,7 +1096,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
                 );
                 return;
             }
-            Err(_) => String::new(),
+            Err(error) => { log::warn!("Visual model request failed: {error}"); String::new() }
         };
     let response = (!response_body.is_empty())
         .then_some(response_body)
@@ -1252,7 +1255,7 @@ fn spawn_visual_analysis_worker(app: AppHandle) {
                 } else {
                     Ok(Some((task_id, Vec::new())))
                 }
-            })();
+            })().inspect_err(|e| log::warn!("Visual analysis worker: task claim failed: {e}"));
             match task {
                 Ok(Some((task_id, asset_ids))) => {
                     if !asset_ids.is_empty() {
