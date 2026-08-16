@@ -32,6 +32,12 @@
 - Agent 工具白名单、`src/lib/agent-tools.ts` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json` 必须保持一致。
 - 注释优先说明作用域、事务顺序、幂等性、恢复和隐私理由。
 
+## 测试放置与预算
+
+- 单元测试必须放在被测函数所在模块的 `#[cfg(test)] mod tests` 或同名 `_tests.rs` 文件；不得为绕过行数预算把测试跨模块放置。
+- 架构预算（`.harness/architecture-budgets.json`）不得用 `#[rustfmt::skip]`、单行合并或格式压缩绕过；超限说明职责需要拆分，应迁移职责而非压缩格式。
+- 预算合理放宽（如迁移错误放置的测试回正确模块）需在 commit message 写明理由，ratchet 才会接受。已有 `preview.rs` → `preview_tests.rs` 提取模式可作为参考。
+
 ## 修改完成
 
 运行：

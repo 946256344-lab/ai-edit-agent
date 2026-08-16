@@ -606,17 +606,22 @@ fn generate_storyboard_internal(
             previous.as_ref(),
             feedback.as_deref(),
         ) {
-            Ok(candidate) => match validate_storyboard(&candidate, &sources, brief) {
-                Ok(()) => {
-                    content = Some(candidate);
-                    break;
+            Ok(candidate) => {
+                // 先规范化（夹紧数值约束、修正 target_duration_ms），
+                // 再校验结构性约束；纯数值偏差不再占用模型重试配额。
+                let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
+                match validate_storyboard(&candidate, &sources, brief) {
+                    Ok(()) => {
+                        content = Some(candidate);
+                        break;
+                    }
+                    Err(error) => {
+                        log::warn!("AI storyboard validation failed: {error}");
+                        feedback = Some(error);
+                        previous = Some(candidate);
+                    }
                 }
-                Err(error) => {
-                    log::warn!("AI storyboard validation failed: {error}");
-                    feedback = Some(error);
-                    previous = Some(candidate);
-                }
-            },
+            }
             Err(error) => {
                 log::warn!("AI storyboard request failed: {error}");
                 feedback = Some(error);
@@ -624,13 +629,10 @@ fn generate_storyboard_internal(
             }
         }
     }
-    let content = content
-        .map(|candidate| normalize_storyboard_candidate(candidate, &sources, brief))
-        .ok_or_else(|| {
-            feedback.unwrap_or_else(|| {
-                "Storyboard generation did not produce a valid result.".to_owned()
-            })
-        })?;
+    let content = content.ok_or_else(|| {
+        feedback
+            .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned())
+    })?;
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",
         params![project_id], |row| row.get::<_, i64>(0),

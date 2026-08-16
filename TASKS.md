@@ -6,6 +6,14 @@
 （暂无活动任务）
 <!-- ACTIVE_TASKS_END -->
 
+- [x] 完成（2026-08-16，refactor）：明确作用域架构并修复测试错误放置。在 `docs/architecture.md` 补充 ASCII 图和文字说明，明确会话只是对话容器、产物归属剪辑任务；将多版本回归测试从 `agentloop.rs` 迁回 `timeline.rs`（+27 行），删除 `agentloop.rs` 的 `#[rustfmt::skip]` 格式压缩并展开测试为标准格式（保持 3599 行）；在 `src-tauri/src/AGENTS.md` 新增"测试放置与预算"规则，明确单元测试必须放在被测模块、架构预算不得用格式压缩绕过。`timeline.rs` 预算 1848→1875 系迁回错误放置测试，非功能增长。公开命令、SQLite schema、工具白名单不变。
+- [x] 本项完成门：130 个 Rust 库测试 + 2 个契约测试、Rust fmt/check、`harness:check`（commit 后 ratchet 以新基线通过）与 diff 检查通过。变更记录见 `docs/changes/2026-08-16-clarify-scope-architecture-and-decouple-tests.md`。
+
+- [x] 完成（2026-08-16，bugfix）：修复 `timeline.rs::select_timeline_candidate` 在多版本时间线场景下返回 `None` 导致"生成预览"始终失败的问题。旧逻辑 `(timelines.len() == 1).then(...)` 仅单条候选时返回结果；改为 `timelines.first().cloned()` 取列表首条（`version_number DESC` 排序下即最新版）。精确 ID 匹配路径不变。公开命令、SQLite schema、工具白名单不变。变更记录见 `docs/changes/2026-08-16-fix-render-preview-multiple-timelines.md`。
+
+- [x] 完成（2026-08-16，bugfix）：修复 `storyboard.rs::generate_storyboard_internal` 重试循环中校验无法收敛的问题。`normalize_storyboard_candidate` 从校验通过后移至校验前执行，自动夹紧 `duration_ms` 到源时间段宽度并修正 `target_duration_ms`；三次重试配额只用于结构性校验失败（非法 beat ID、资产不可用等），不再被纯数值偏差消耗。修复后新剪辑会话第一条 `generate_storyboard` 请求不再以 `invalid_source_time_range` 失败。公开命令、SQLite schema、工具白名单不变。
+- [x] 本项完成门：129 个 Rust 库测试、Rust fmt/check、harness test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-16-storyboard-normalize-before-validate.md`。
+
 ## 最近完成与历史执行记录
 
 - [x] 完成（2026-08-16，refactor）：移除后端 Rust 所有静默 fallback，补全被丢弃的错误日志。`agent.rs::persisted_task_status` 拆分 DB 不可用与任务失败两个 Err 路径并各自输出真实原因；`agentloop.rs` 的 `get_storyboard` handler 与 `build_timeline_snapshot` 序列化失败时记录真实错误而非静默返回 `Value::Null`；`assets.rs` 的时间戳读取失败（A9）、metadata_json 解析失败（A10）、Provider 访问失败（B15）、视觉模型请求失败（visual_req）均改为输出真实 `{error}` 变量；`spawn_visual_analysis_worker` IIFE 的 `Err` 路径改用 `.inspect_err()` 记录（B19）。所有降级仍封闭失败，不伪造成功结果。公开命令、SQLite schema、工具白名单、用户数据均未改变。

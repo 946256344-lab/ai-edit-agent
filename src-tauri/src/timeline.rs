@@ -1068,7 +1068,7 @@ pub(crate) fn select_timeline_candidate(
             .find(|timeline| timeline.id == timeline_id)
             .cloned();
     }
-    (timelines.len() == 1).then(|| timelines[0].clone())
+    timelines.first().cloned()
 }
 
 #[tauri::command]
@@ -1844,5 +1844,32 @@ mod tests {
             &[4, 1, 2],
         );
         assert!(unknown.is_err(), "unknown shot indexes must be rejected");
+    }
+
+    #[test]
+    fn select_timeline_candidate_picks_latest_when_multiple_versions_exist() {
+        let v2 = TimelineVersion {
+            id: "v2".to_owned(),
+            project_id: "p1".to_owned(),
+            storyboard_version_id: "sb1".to_owned(),
+            version_number: 2,
+            clips: vec![],
+            text_tracks: vec![],
+            music_tracks: vec![],
+            quality_report: None,
+            created_at: 2000,
+        };
+        let v1 = TimelineVersion {
+            id: "v1".to_owned(),
+            version_number: 1,
+            created_at: 1000,
+            ..v2.clone()
+        };
+
+        // 候选按 version_number DESC 排列，首条是最新版
+        assert_eq!(
+            select_timeline_candidate(&[v2.clone(), v1], None, None).map(|t| t.id),
+            Some("v2".to_owned())
+        );
     }
 }

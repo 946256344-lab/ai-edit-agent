@@ -81,6 +81,23 @@ pub fn resolve_conversation_task(
             return issue_route_receipt(&connection, &project_id, request, result, None);
         }
     }
+    // 快路径：激活任务是全新空任务（planning 阶段、无产物、无历史子目标）。
+    // 用户通过按钮显式创建并激活了这个会话；直接归属，无需模型介入。
+    // 这防止旧任务候选干扰新会话的第一条消息。
+    if pending.is_none() {
+        if let Some(candidate) = active_task_id
+            .as_deref()
+            .and_then(|id| candidates.iter().find(|c| c.task_id == id))
+        {
+            if candidate.current_stage == "planning"
+                && candidate.completed.is_empty()
+                && candidate.active_subgoal.is_empty()
+            {
+                let result = result_for_candidate("continue_current", candidate, 1.0, "new_empty_active_task", None);
+                return issue_route_receipt(&connection, &project_id, request, result, None);
+            }
+        }
+    }
     let access = ModelAccess::resolve().map_err(|_| "Task resolver model is unavailable.".to_owned())?;
     let prompt = build_task_route_prompt(request, active_task_id.as_deref(), &candidates, pending.as_ref());
     let body = json!({"model":"gpt-5.4","store":false,"stream":true,

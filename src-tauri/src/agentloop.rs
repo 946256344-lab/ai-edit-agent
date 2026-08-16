@@ -3527,27 +3527,27 @@ mod tests {
 
     #[test]
     fn delivery_tools_require_a_scoped_timeline_instead_of_creating_one() {
-        let timeline = TimelineVersion {
-            id: "timeline-current".to_owned(),
-            project_id: "project-1".to_owned(),
-            storyboard_version_id: "storyboard-1".to_owned(),
+        let tl = TimelineVersion {
+            id: "tc".to_owned(),
+            project_id: "p1".to_owned(),
+            storyboard_version_id: "s1".to_owned(),
             version_number: 1,
-            clips: Vec::new(),
-            text_tracks: Vec::new(),
-            music_tracks: Vec::new(),
+            clips: vec![],
+            text_tracks: vec![],
+            music_tracks: vec![],
             quality_report: None,
             created_at: 1,
         };
-
-        assert!(
-            select_timeline_candidate(&[timeline.clone()], Some("timeline-foreign"), None)
-                .is_none()
-        );
+        // 外来 ID 不匹配当前作用域
+        assert!(select_timeline_candidate(&[tl.clone()], Some("tf"), None).is_none());
+        // 单条候选无 ID 时直接返回
         assert_eq!(
-            select_timeline_candidate(&[timeline.clone()], None, None).map(|value| value.id),
-            Some(timeline.id)
+            select_timeline_candidate(&[tl.clone()], None, None).map(|v| v.id),
+            Some(tl.id.clone())
         );
+        // 空候选返回 None
         assert!(select_timeline_candidate(&[], None, None).is_none());
+        // 多版本选取行为由 timeline.rs 的专项测试覆盖
     }
 
     #[test]
