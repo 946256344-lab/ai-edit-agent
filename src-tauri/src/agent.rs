@@ -618,7 +618,8 @@ fn run_agent_edit(
             }
             emit(&status, result);
         }
-        Err(_error) => {
+        Err(error) => {
+            log::warn!("Agent task pipeline failed: {error}");
             let connection = open_connection(&app).ok();
             let result = failed_agent_edit_result(
                 agent_task_id.to_owned(),
@@ -650,7 +651,7 @@ fn run_agent_edit(
                     );
                     let _ = transaction.commit();
                 } else {
-                    log::warn!("Failed Agent completion could not be persisted.");
+                    log::warn!("Failed Agent completion could not be persisted: DB transaction unavailable.");
                 }
                 let _ = crate::taskrouter::refresh_task_state_snapshot(
                     connection,
@@ -768,16 +769,13 @@ fn persist_agent_completion_message(
     Ok(())
 }
 
+#[rustfmt::skip]
 fn persisted_task_status(app: &AppHandle, agent_task_id: &str) -> String {
     match open_connection(app) {
         Ok(connection) => connection
-            .query_row(
-                "SELECT status FROM agent_tasks WHERE id = ?1",
-                params![agent_task_id],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap_or_else(|_| "failed".to_owned()),
-        Err(_) => "failed".to_owned(),
+            .query_row("SELECT status FROM agent_tasks WHERE id = ?1", params![agent_task_id], |row| row.get::<_, String>(0))
+            .unwrap_or_else(|e| { log::warn!("Agent task status DB read failed: {e}"); "failed".to_owned() }),
+        Err(e) => { log::warn!("Agent task status: DB unavailable: {e}"); "failed".to_owned() }
     }
 }
 
@@ -875,7 +873,7 @@ fn run_agent_edit_pipeline(
             let access = match ModelAccess::resolve() {
                 Ok(access) => access,
                 Err(error) => {
-                    log::warn!("AI edit could not access the configured provider.");
+                    log::warn!("AI edit could not access the configured provider: {error}.");
                     let tool_result = json!({
                         "tool": "agent_loop",
                         "status": "failed",

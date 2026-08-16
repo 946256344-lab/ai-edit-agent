@@ -139,7 +139,7 @@ pub(crate) fn decide_conversation_route(
          Available first tools: {tools}. Return JSON only.",
         latest_run = latest_run.unwrap_or(Value::Null),
         artifacts = artifacts,
-        pending_clarification = serde_json::to_value(&pending_clarification).unwrap_or(Value::Null),
+        pending_clarification = serde_json::to_value(&pending_clarification).map_err(|e| e.to_string())?,
         pinned_goal = pinned_goal.map(|goal| goal.code()).unwrap_or("pending"),
         denied_tools = tool_policy.prompt_label(),
         tools = OBSERVATION_TOOLS
@@ -176,7 +176,7 @@ pub(crate) fn decide_conversation_route(
         Err(hint) => {
             let timeout = remaining_model_timeout(route_deadline, Instant::now())
                 .ok_or_else(|| "Route correction budget exhausted.".to_owned())?;
-            let prev = serde_json::to_string(&raw).unwrap_or_else(|_| "{}".to_owned());
+            let prev = serde_json::to_string(&raw).map_err(|e| format!("Correction ctx: {e}"))?;
             let cp = format!("{prompt}\n\nYour previous response: {prev}\n\nIssue: {hint} Return corrected JSON only.");
             let cb = json!({"model":"gpt-5.4","store":false,"stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":cp}]}],"text":{"format":{"type":"json_object"}}});
             let rb = post_model_payload(access, &cb, Some(timeout))?;
@@ -580,10 +580,6 @@ pub(crate) fn run_agent_loop_with_initial_skill(
             }
             Ok(AgentLoopControl::Continue) => {}
             Err(error) => {
-                // A step only surfaces Err when the provider/model call itself
-                // failed (for example it timed out). There is no point asking
-                // the model again, so degrade to an honest, goal-appropriate
-                // reply instead of bubbling a raw error to the client.
                 log::warn!("AI agent-loop step aborted by a model error: {error}");
                 terminated = true;
                 failed = state.goal == LoopGoal::Question
@@ -592,7 +588,7 @@ pub(crate) fn run_agent_loop_with_initial_skill(
                     state.last_outcome = Some(finalize_result_helper(
                         agent_task_id,
                         state.last_outcome.take(),
-                        &model_unavailable_message(state.goal),
+                        &model_unavailable_message(state.goal, &error),
                     ));
                 }
                 break;
@@ -894,7 +890,7 @@ fn run_step(
     let agent_task_id = state.agent_task_id;
     let snapshot = build_agent_state_snapshot(state, MAX_STEPS.saturating_sub(step_number - 1))?;
     let prerequisite_hints = deterministic_prerequisite_hints(&snapshot);
-    let prompt = build_step_prompt(state, transcript, &snapshot, &prerequisite_hints);
+    let prompt = build_step_prompt(state, transcript, &snapshot, &prerequisite_hints)?;
     let request_body = json!({
         "model": "gpt-5.4",
         "store": false,
@@ -2102,11 +2098,10 @@ fn build_step_prompt(
     transcript: &[Value],
     snapshot: &AgentStateSnapshot,
     prerequisite_hints: &[String],
-) -> String {
-    let snapshot_json = serde_json::to_string(snapshot).unwrap_or_else(|_| "{}".to_owned());
-    let prerequisite_json =
-        serde_json::to_string(prerequisite_hints).unwrap_or_else(|_| "[]".to_owned());
-    let transcript_json = serde_json::to_string(transcript).unwrap_or_else(|_| "[]".to_owned());
+) -> Result<String, String> {
+    let snapshot_json = serde_json::to_string(snapshot).map_err(|e| e.to_string())?;
+    let prerequisite_json = serde_json::to_string(prerequisite_hints).map_err(|e| e.to_string())?;
+    let transcript_json = serde_json::to_string(transcript).map_err(|e| e.to_string())?;
     let history_text = render_history(&state.history);
     let goal_label = if state.goal_locked {
         state.goal.label()
@@ -2125,7 +2120,7 @@ fn build_step_prompt(
         state.successful_observation,
     );
     let denied_tools = state.tool_policy.prompt_label();
-    format!(
+    Ok(format!(
         "You are Assembly Agent, the local video-editing loop for a project. The requested deliverable \
          for THIS request is: {goal}. You must only call finish after you have REALLY produced that \
          deliverable; finishing without producing it will be rejected and the loop will continue. \
@@ -2188,7 +2183,7 @@ fn build_step_prompt(
         clarification_hint = clarification_hint,
         project_fact_instruction = project_fact_instruction,
         denied_tools = denied_tools,
-    )
+    ))
 }
 
 /// 在真实且已校验的领域函数上执行一个技能。返回值只作为下一步观察；只有这里落地的
@@ -2380,7 +2375,9 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             "storyboard": state
                 .storyboard
                 .as_ref()
-                .map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|e| {
+                    log::warn!("Storyboard could not be serialized for model context: {e}"); Value::Null
+                }))
                 .unwrap_or(Value::Null)
         })),
         "get_timeline" => {
@@ -2864,9 +2861,13 @@ fn select_timeline_for_tool(state: &LoopState, args: &Value) -> Result<TimelineV
     })
 }
 
+#[rustfmt::skip]
 fn build_timeline_snapshot(state: &LoopState, requested: Option<&str>) -> Value {
     select_timeline_candidate(&state.timelines, requested, None)
-        .map(|timeline| serde_json::to_value(timeline).unwrap_or(Value::Null))
+        .map(|timeline| serde_json::to_value(timeline).unwrap_or_else(|e| {
+            log::warn!("Timeline could not be serialized for model context: {e}");
+            Value::Null
+        }))
         .unwrap_or(Value::Null)
 }
 

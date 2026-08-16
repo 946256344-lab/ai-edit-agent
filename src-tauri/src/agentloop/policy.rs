@@ -614,15 +614,16 @@ impl LoopGoal {
     }
 }
 
-/// Provider 失败时只返回固定、诚实、不会泄露技术错误的用户文案。
-pub(super) fn model_unavailable_message(goal: LoopGoal) -> String {
-    match goal {
-        LoopGoal::Question => "模型当前没有返回，因此本轮没有给出回答，也没有改动任何 storyboard、时间线或 preview；请检查模型连接后重试。".to_owned(),
-        LoopGoal::Storyboard => "模型当前没有响应，本轮没有生成 storyboard，也没有修改现有内容；请检查模型连接后重试。".to_owned(),
-        LoopGoal::Timeline => "模型当前没有响应，本轮没有修改内部时间线；请检查模型连接后重试。".to_owned(),
-        LoopGoal::Preview => "模型当前没有响应，本轮没有生成 preview，也没有修改现有内容；请检查模型连接后重试。".to_owned(),
-        LoopGoal::JianyingDraft => "模型当前没有响应，本轮没有创建剪映草稿；请检查模型连接后重试。".to_owned(),
-    }
+/// Provider 失败时把真实原因拼入用户可见文案。
+pub(super) fn model_unavailable_message(goal: LoopGoal, error: &str) -> String {
+    let action = match goal {
+        LoopGoal::Question => "本轮没有给出回答，也没有改动任何 storyboard、时间线或 preview",
+        LoopGoal::Storyboard => "本轮没有生成 storyboard，也没有修改现有内容",
+        LoopGoal::Timeline => "本轮没有修改内部时间线",
+        LoopGoal::Preview => "本轮没有生成 preview，也没有修改现有内容",
+        LoopGoal::JianyingDraft => "本轮没有创建剪映草稿",
+    };
+    format!("模型没有响应（{error}），{action}；请检查模型连接后重试。")
 }
 
 pub(super) fn run_deadline_message(goal: LoopGoal) -> String {
@@ -652,9 +653,7 @@ pub(super) fn run_deadline_message(goal: LoopGoal) -> String {
 /// 循环结束但没有目标产物时，禁止复述模型可能捏造的“已完成”。
 pub(super) fn honest_no_change(goal: LoopGoal) -> String {
     match goal {
-        LoopGoal::Question => {
-            "本轮没有形成可用回答，也没有修改任何 storyboard、时间线或 preview。请补充说明后重试。".to_owned()
-        }
+        LoopGoal::Question => "本轮没有形成可用回答，也没有修改任何 storyboard、时间线或 preview。请补充说明后重试。".to_owned(),
         LoopGoal::Storyboard => "本轮没有生成新的 storyboard，也没有修改现有内容；如需继续，请补充创作目标后重试。".to_owned(),
         LoopGoal::Timeline => "本轮没有修改内部时间线，也没有把已完成的改动当成成功执行；如需继续，请说明你希望保留的具体片段后重试。".to_owned(),
         LoopGoal::Preview => "本轮没有生成新的 preview，也没有修改现有 storyboard、时间线或 preview；请补充说明后重试。".to_owned(),

@@ -82,3 +82,4 @@ npm run harness:check
 真实桌面前端回归可在以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 Tauri dev 后运行 `npm run tauri:verify`。脚本只切换工作区、开合目录和打开/关闭 Provider 弹窗，不发送 Agent 请求，不导入、生成或交付产物。
 
 维护记录（2026-08-15）：agentloop 与 taskrouter 路由验证新增 validate-then-correct 重试；fast_goal 降级为提示；Agent run 超时从 90 s 提升至 300 s。
+维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback，错误路径改为输出真实原因；见 ADR-065 与 docs/changes/2026-08-16-remove-silent-fallbacks.md。

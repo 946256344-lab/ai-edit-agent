@@ -8,6 +8,9 @@
 
 ## 最近完成与历史执行记录
 
+- [x] 完成（2026-08-16，refactor）：移除后端 Rust 所有静默 fallback，补全被丢弃的错误日志。`agent.rs::persisted_task_status` 拆分 DB 不可用与任务失败两个 Err 路径并各自输出真实原因；`agentloop.rs` 的 `get_storyboard` handler 与 `build_timeline_snapshot` 序列化失败时记录真实错误而非静默返回 `Value::Null`；`assets.rs` 的时间戳读取失败（A9）、metadata_json 解析失败（A10）、Provider 访问失败（B15）、视觉模型请求失败（visual_req）均改为输出真实 `{error}` 变量；`spawn_visual_analysis_worker` IIFE 的 `Err` 路径改用 `.inspect_err()` 记录（B19）。所有降级仍封闭失败，不伪造成功结果。公开命令、SQLite schema、工具白名单、用户数据均未改变。
+- [x] 本项完成门：129 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、架构预算（所有文件在预算内）、harness test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-16-remove-silent-fallbacks.md`，ADR-065 记录决策。
+
 - [x] 完成（2026-08-15，robustness）：在 `agentloop.rs::decide_conversation_route` 和 `taskrouter.rs::resolve_conversation_task` 实现 validate-then-correct 模式。首次模型响应验证失败时，将错误原因作为纠偏提示反馈给模型并重试一次，而非直接 fail-closed；`try_build_route_decision` 封装路由决策构建与验证，失败原因字符串即作为纠偏提示。同步将 `fast_goal` 降级为纯提示、将 `AGENT_RUN_TIMEOUT` 从 90 s 提升至 300 s、从 `EDIT_VERBS` 移除"剪辑"避免过度触发，并对两个文件应用 `#[rustfmt::skip]` 保持紧凑布局通过架构预算。不修改公开命令、SQLite schema、工具白名单或用户数据。
 - [x] 本项完成门：129 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness test/check 与 diff 检查通过；架构预算 `agentloop.rs`（3598 行 / 148495 字符）与 `taskrouter.rs` 均在预算内。
 
