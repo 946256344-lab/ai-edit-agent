@@ -78,6 +78,7 @@ pub(crate) struct InitialAgentSkill {
 struct ConversationRouteResponse {
     route: String,
     goal: Option<String>,
+    goal_reasoning: Option<String>,
     is_question: Option<bool>,
     tool: Option<String>,
     answer: Option<String>,
@@ -130,11 +131,21 @@ pub(crate) fn decide_conversation_route(
          Current request: {request}\nTask brief: {task_brief}\nRecent conversation:\n{history_text}\n\n\
          Latest scoped run: {latest_run}\nScoped artifacts: {artifacts}\nPending clarification: {pending_clarification}\nBackend-pinned goal: {pinned_goal}\n\
          User-denied side-effect tools for this request: {denied_tools}. Never choose one of these tools or declare a goal whose deliverable requires one of them.\n\n\
+         Artifact boundary responsibilities:\n\
+         - storyboard: Shot selection and narrative structure FROM raw media. Chooses which video/image segments to use and their source time ranges. This is the FIRST creative step that turns raw footage into a story outline.\n\
+         - timeline: Edits an EXISTING storyboard structure. Includes: adjusting clip durations, reordering clips, adding/editing text tracks (subtitles, captions, 字幕, 文案), adding/editing music tracks, color grading references. Timeline operations work on already-selected shots.\n\
+         - preview: Renders a playable video file from a timeline for review.\n\
+         - jianyingDraft: Exports the timeline to Jianying Pro format for final delivery.\n\n\
+         Important distinctions:\n\
+         - Text/subtitle editing (字幕, 配音文本, 文案整理, subtitle, caption) belongs to goal=timeline with tool=replace_text_tracks, NOT goal=storyboard.\n\
+         - Music editing (音乐, 背景音乐, music) belongs to goal=timeline with tool=replace_music_tracks, NOT goal=storyboard.\n\
+         - Shot selection or narrative restructuring from raw media belongs to goal=storyboard.\n\
+         - Editing existing shot durations/order belongs to goal=timeline.\n\n\
          Return one JSON object. route must be respond, clarify, or run.\n\
          For goal=question, include informationScope=general or project. Use general only when the answer does not depend on this project's current assets, tasks, artifacts, counts, state, or failure causes. A project-scoped question must use route=run and observe real state before answering.\n\
          - respond: only for general conversational answers that need no tool or side effect. Include goal=question, isQuestion=true, informationScope=general, answer.\n\
          - clarify: only when a genuinely required input is missing. Include question.\n\
-         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal, isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
+         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal, goalReasoning (explain WHY this request belongs to the chosen artifact boundary based on the responsibilities above), isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
          When pendingClarification is not null, respond and run must include clarificationAction=keep or resolve. Resolve only when this turn answers or explicitly abandons that question; keep it for unrelated turns. A new clarify route replaces the old question.\n\
          A long narration/script supplied after the Agent requested a creative goal is normally a creative input, even when its heading is a rhetorical question. Exact completion facts come only from latestRun/artifacts. The backend-pinned goal, when not null, is authoritative.\n\n\
          Available first tools: {tools}. Return JSON only.",
@@ -242,6 +253,25 @@ fn try_build_route_decision(
                 .ok_or_else(|| "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned())?;
             if tool_policy.forbids_goal(goal) {
                 return Err(format!("goal='{}' is user-denied.", goal.code()));
+            }
+            // 当 goal 不是由 pinned_goal 决定时，要求模型提供 goalReasoning
+            if pinned_goal.is_none() && goal != LoopGoal::Question {
+                let reasoning = response.goal_reasoning.as_deref().unwrap_or("").trim();
+                if reasoning.is_empty() {
+                    return Err("route=run: goalReasoning required when goal is not pinned by backend.".to_owned());
+                }
+                // 基础验证：reasoning 应该提及目标产物
+                let reasoning_lower = reasoning.to_lowercase();
+                let mentions_goal = match goal {
+                    LoopGoal::Storyboard => reasoning_lower.contains("storyboard") || reasoning_lower.contains("shot") || reasoning_lower.contains("narrative"),
+                    LoopGoal::Timeline => reasoning_lower.contains("timeline") || reasoning_lower.contains("edit") || reasoning_lower.contains("text") || reasoning_lower.contains("music") || reasoning_lower.contains("duration") || reasoning_lower.contains("字幕") || reasoning_lower.contains("文案"),
+                    LoopGoal::Preview => reasoning_lower.contains("preview") || reasoning_lower.contains("render") || reasoning_lower.contains("预览"),
+                    LoopGoal::JianyingDraft => reasoning_lower.contains("jianying") || reasoning_lower.contains("剪映") || reasoning_lower.contains("draft"),
+                    _ => true,
+                };
+                if !mentions_goal {
+                    return Err(format!("route=run: goalReasoning does not mention the chosen goal artifact '{}'.", goal.code()));
+                }
             }
             if goal == LoopGoal::Question && !question_scope_allows_route(response.information_scope.as_deref(), "run") {
                 return Err("route=run question: informationScope must be general or project.".to_owned());
