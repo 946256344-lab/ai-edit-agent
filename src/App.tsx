@@ -476,13 +476,22 @@ function App() {
               sendMessage,
               confirmStoryboard: async () => {
                 if (!activeProjectId || !activeEditingSession || !artifactWorkspace.storyboard) return
+                const projectId = activeProjectId
+                const sessionId = activeEditingSessionId
+                const conversationId = activeEditingSession.conversationId
+                if (!sessionId || !conversationId) return
                 setIsSending(true)
                 try {
-                  await artifactWorkspace.actions.confirmStoryboard()
+                  // confirmStoryboard 返回后台任务 ID，后端线程仍在执行 timeline + preview。
+                  // 对齐 sendMessage 异步路径：设为 working 状态 → 注册 pendingEdit → 由
+                  // reconciliation 完成时调 setIsSending(false)，而非 finally 立刻重置。
+                  const taskId = await artifactWorkspace.actions.confirmStoryboard()
+                  await setConversationStatus(conversationId, 'working')
+                  await refreshEditingSessions(projectId)
+                  agentReconciliation.registerPendingEdit({ taskId, projectId, sessionId, conversationId })
                 } catch (error) {
                   console.error('Storyboard confirmation failed:', error)
                   setComposerNotice('确认失败，请重试或在对话中说明')
-                } finally {
                   setIsSending(false)
                 }
               },

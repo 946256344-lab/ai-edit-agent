@@ -326,29 +326,28 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     }
   }
 
-  async function confirmStoryboard() {
-    if (!options.projectId || !options.sessionId || !options.session || !storyboard) return
+  // 返回后台任务 ID，供 App 层注册 pendingEdit 并驱动 reconciliation 轮询。
+  async function confirmStoryboard(): Promise<string> {
+    if (!options.projectId || !options.sessionId || !options.session || !storyboard) {
+      throw new Error('Storyboard confirmation preconditions not met.')
+    }
     const conversationId = options.session.conversationId
-    if (!conversationId) return
+    if (!conversationId) throw new Error('No active conversation.')
     const projectId = options.projectId
     const sessionId = options.sessionId
     const storyboardId = storyboard.id
-    try {
-      await confirmStoryboardAndPreview(projectId, sessionId, conversationId, storyboardId)
-      const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
-        loadSession(projectId, sessionId),
-        listMessages(conversationId),
-        listAgentTasks(projectId, sessionId, conversationId),
-      ])
-      if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
-        options.setMessages(nextMessages.map(toMessage))
-        options.setAgentTasks(nextAgentTasks)
-        applySessionSnapshot(artifactSnapshot)
-      }
-    } catch (error) {
-      console.error('Storyboard confirmation failed:', error)
-      throw error
+    const taskId = await confirmStoryboardAndPreview(projectId, sessionId, conversationId, storyboardId)
+    const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
+      loadSession(projectId, sessionId),
+      listMessages(conversationId),
+      listAgentTasks(projectId, sessionId, conversationId),
+    ])
+    if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
+      options.setMessages(nextMessages.map(toMessage))
+      options.setAgentTasks(nextAgentTasks)
+      applySessionSnapshot(artifactSnapshot)
     }
+    return taskId
   }
 
   return {
@@ -386,7 +385,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       createTimeline: () => void createTimeline(),
       renderPreview: () => void createPreview(),
       createJianyingDraft: () => void deliverJianyingDraft(),
-      confirmStoryboard: () => void confirmStoryboard(),
+      confirmStoryboard: () => confirmStoryboard(),
     },
   }
 }
