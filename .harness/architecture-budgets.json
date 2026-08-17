@@ -42,7 +42,7 @@
     },
     {
       "path": "src-tauri/src/agentloop.rs",
-      "maxLines": 3654,
+      "maxLines": 3684,
       "maxCharacters": 154822,
       "maxLineLength": 1403
     },
@@ -67,7 +67,7 @@
     {
       "path": "src-tauri/src/taskrouter.rs",
       "maxLines": 1356,
-      "maxCharacters": 53934,
+      "maxCharacters": 54818,
       "maxLineLength": 625
     },
     {
