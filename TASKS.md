@@ -6,6 +6,13 @@
 （暂无活动任务）
 <!-- ACTIVE_TASKS_END -->
 
+- [x] 完成（2026-08-16，bugfix + 产品流程）：修复用户报告的三个系统性问题。
+  1. **Provider 诚实失败（问题 3）**：删除 `provider.rs::ModelAccess::resolve()` 的静默降级逻辑，改为"自定义 API 配了就只用自定义，OAuth 配了就只用 OAuth，都没配就明确拒绝"。错误消息包含 Base URL、模型名、HTTP 状态码或具体网络错误，`agentloop.rs` 的 `model_unavailable_message` 透传原始错误。
+  2. **render_preview 前置条件错误信息（问题 2）**：当 `render_preview` 因缺少 timeline 失败时，`safe_tool_failure_context` 返回明确的 `missing_timeline` 诊断，告知用户需要先创建时间线。
+  3. **storyboard 确认后自动生成 timeline + preview（新需求）**：产品流程改为 `storyboard 生成 → needs_confirmation 等待用户确认 → 自动调用 create_timeline_draft + render_preview`。后端新增 `confirm_storyboard_and_preview` Tauri 命令，前端显示确认横幅，用户点击后链式执行两步；用户无需手动说"生成时间线"或"生成预览"。
+  4. **创作透明度（问题 4）**：需要深度讨论后决定实现方式，暂记录为待决问题。
+- [x] 本项完成门：130 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、`harness:check` 与 diff 检查通过。变更记录见 `docs/changes/2026-08-16-fix-provider-honesty-and-preview-precondition.md`（问题 2/3）和 `docs/changes/2026-08-16-storyboard-review-then-auto-preview.md`（新需求）。
+
 - [x] 完成（2026-08-16，refactor）：明确作用域架构并修复测试错误放置。在 `docs/architecture.md` 补充 ASCII 图和文字说明，明确会话只是对话容器、产物归属剪辑任务；将多版本回归测试从 `agentloop.rs` 迁回 `timeline.rs`（+27 行），删除 `agentloop.rs` 的 `#[rustfmt::skip]` 格式压缩并展开测试为标准格式（保持 3599 行）；在 `src-tauri/src/AGENTS.md` 新增"测试放置与预算"规则，明确单元测试必须放在被测模块、架构预算不得用格式压缩绕过。`timeline.rs` 预算 1848→1875 系迁回错误放置测试，非功能增长。公开命令、SQLite schema、工具白名单不变。
 - [x] 本项完成门：130 个 Rust 库测试 + 2 个契约测试、Rust fmt/check、`harness:check`（commit 后 ratchet 以新基线通过）与 diff 检查通过。变更记录见 `docs/changes/2026-08-16-clarify-scope-architecture-and-decouple-tests.md`。
 
@@ -148,6 +155,7 @@
 
 ## 待决问题
 
+- [ ] 创作透明度（问题 4）：模型自主添加的文案、音乐、时长调整必须在生成时明确声明，状态查询时区分用户要求的内容和模型添加的内容。这是双刃剑，需要深度讨论后再决定实现方式。
 - [ ] 哪种官方 OpenAI OAuth 机制、scope 和模型端点可用于此桌面应用？
 - [ ] 收集媒体后的本地项目目录结构和长期 SQLite 迁移策略应如何定义？
 - [ ] 哪些视觉分析模型应本地运行，哪些可发送到托管 Provider？

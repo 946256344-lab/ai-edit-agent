@@ -121,7 +121,7 @@ fn safe_tool_failure(tool_name: &str, error: &str) -> serde_json::Value {
     json!({ "tool": tool_name, "status": "failed", "code": code })
 }
 
-fn failed_agent_edit_result(agent_task_id: String, message: &str) -> AgentEditResult {
+pub(crate) fn failed_agent_edit_result(agent_task_id: String, message: &str) -> AgentEditResult {
     AgentEditResult {
         agent_task_id,
         message: message.to_owned(),
@@ -132,7 +132,7 @@ fn failed_agent_edit_result(agent_task_id: String, message: &str) -> AgentEditRe
     }
 }
 
-fn resolve_pending_clarification(
+pub(crate) fn resolve_pending_clarification(
     connection: &Connection,
     project_id: &str,
     editing_task_id: &str,
@@ -664,7 +664,7 @@ fn run_agent_edit(
     }
 }
 
-fn persist_agent_completion_message(
+pub(crate) fn persist_agent_completion_message(
     connection: &Connection,
     agent_task_id: &str,
     project_id: &str,
@@ -770,7 +770,7 @@ fn persist_agent_completion_message(
 }
 
 #[rustfmt::skip]
-fn persisted_task_status(app: &AppHandle, agent_task_id: &str) -> String {
+pub(crate) fn persisted_task_status(app: &AppHandle, agent_task_id: &str) -> String {
     match open_connection(app) {
         Ok(connection) => connection
             .query_row("SELECT status FROM agent_tasks WHERE id = ?1", params![agent_task_id], |row| row.get::<_, String>(0))

@@ -30,9 +30,10 @@ use tauri::{AppHandle, Manager};
 mod policy;
 
 use policy::{
-    corrective_message, fast_goal, honest_no_change, model_unavailable_message,
-    parse_declared_goal, pinned_goal_allows_response, request_requires_project_observation,
-    run_deadline_message, LoopGoal, RequestToolPolicy, EDIT_TOOLS, OBSERVATION_TOOLS,
+    corrective_message, fast_goal, honest_no_change, honest_no_change_with_diagnostic,
+    model_unavailable_message, parse_declared_goal, pinned_goal_allows_response,
+    request_requires_project_observation, run_deadline_message, LoopGoal, RequestToolPolicy,
+    EDIT_TOOLS, OBSERVATION_TOOLS,
 };
 
 /// Maximum number of skill steps the loop will run before stopping. The loop is
@@ -537,10 +538,15 @@ pub(crate) fn run_agent_loop_with_initial_skill(
                 failed = state.goal == LoopGoal::Question
                     || !state.goal.satisfied_by(&state.last_outcome);
                 if failed {
+                    let message = if let Some(code) = state.last_failed_tool_error_code {
+                        honest_no_change_with_diagnostic(state.goal, code)
+                    } else {
+                        honest_no_change(state.goal)
+                    };
                     state.last_outcome = Some(finalize_result_helper(
                         agent_task_id,
                         state.last_outcome.take(),
-                        &honest_no_change(state.goal),
+                        &message,
                     ));
                 }
                 break;
@@ -601,10 +607,15 @@ pub(crate) fn run_agent_loop_with_initial_skill(
         failed = true;
     }
     if failed && !terminated && state.last_outcome.is_none() {
+        let message = if let Some(code) = state.last_failed_tool_error_code {
+            honest_no_change_with_diagnostic(state.goal, code)
+        } else {
+            honest_no_change(state.goal)
+        };
         state.last_outcome = Some(finalize_result_helper(
             agent_task_id,
             state.last_outcome.take(),
-            &honest_no_change(state.goal),
+            &message,
         ));
     }
     let status = if needs_clarification {
@@ -1315,6 +1326,30 @@ fn run_step(
             if OBSERVATION_TOOLS.contains(&tool.as_str()) {
                 state.successful_observation = true;
             }
+            // 检测 storyboard 确认需求
+            let needs_confirmation =
+                context.get("status").and_then(Value::as_str) == Some("needs_confirmation");
+            if needs_confirmation && tool == "generate_storyboard" {
+                let artifact = persisted_artifact_for_tool(state, &tool);
+                finish_agent_run_step(
+                    state.connection,
+                    state.project_id,
+                    state.editing_task_id,
+                    state.agent_task_id,
+                    &persisted_step_id,
+                    "completed",
+                    artifact.as_ref().map(|(kind, _)| *kind),
+                    artifact.as_ref().map(|(_, id)| id.as_str()),
+                    None,
+                )?;
+                state.executed_steps.push(ExecutedStepSummary {
+                    step_number,
+                    produced_artifact: produced_artifact_for_tool(&tool).map(str::to_owned),
+                    tool: tool.clone(),
+                    status: "succeeded".to_owned(),
+                });
+                return Ok(AgentLoopControl::NeedsClarification);
+            }
             let artifact = persisted_artifact_for_tool(state, &tool);
             finish_agent_run_step(
                 state.connection,
@@ -2016,6 +2051,21 @@ fn diagnostic_count(error: &str, key: &str) -> Option<usize> {
 
 fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     let code = safe_step_error_code(error);
+
+    // 前置条件缺失：render_preview/create_jianying_draft 需要先有 timeline
+    if error.starts_with("no_timeline:") {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "prerequisite_validation",
+            "code": "missing_timeline",
+            "facts": ["当前剪辑任务还没有时间线。"],
+            "retryable": true,
+            "recovery": "请先调用 create_timeline_draft 创建内部时间线，然后再生成预览或剪映草稿。",
+            "responseInstruction": "Tell the user they need to create a timeline first (create_timeline_draft), then they can generate preview or Jianying draft. Do not claim the preview or draft was created."
+        });
+    }
+
     if error.starts_with("storyboard_source_inventory_unavailable:") {
         let visual_ready = diagnostic_count(error, "visual_ready_candidates").unwrap_or(0);
         let accessible = diagnostic_count(error, "accessible_source_files").unwrap_or(0);
@@ -2438,7 +2488,7 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
                 message: format!(
-                    "已按你的目标生成 storyboard（版本 {version}）。{summary}",
+                    "已按你的目标生成 storyboard（版本 {version}）。{summary}\n\n请确认该 storyboard，确认后系统将自动创建时间线并生成预览。",
                     version = version_number
                 ),
                 storyboard: Some(generated),
@@ -2448,7 +2498,7 @@ fn apply_skill(state: &mut LoopState, tool: &str, args: &Value) -> Result<Value,
             });
             Ok(json!({
                 "tool": "generate_storyboard",
-                "status": "ok",
+                "status": "needs_confirmation",
                 "storyboardVersionId": storyboard_version_id,
                 "versionNumber": version_number
             }))
@@ -2857,7 +2907,12 @@ pub(crate) fn read_scoped_edit_status(
 fn select_timeline_for_tool(state: &LoopState, args: &Value) -> Result<TimelineVersion, String> {
     let timeline_id = args.get("timelineVersionId").and_then(Value::as_str);
     select_timeline_candidate(&state.timelines, timeline_id, None).ok_or_else(|| {
-        "Agent must select a timeline that belongs to the current storyboard.".to_owned()
+        // 没有任何 timeline 时给出明确前置条件提示，帮助用户理解下一步是什么。
+        if state.timelines.is_empty() {
+            "no_timeline: 当前剪辑任务还没有时间线，请先调用 create_timeline_draft 创建时间线，再生成预览或草稿。".to_owned()
+        } else {
+            "Agent must select a timeline that belongs to the current storyboard.".to_owned()
+        }
     })
 }
 
