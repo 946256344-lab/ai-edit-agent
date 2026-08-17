@@ -62,6 +62,7 @@
 | `clear_custom_api` | 无 | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
 | `get_jamendo_status` | 无 | `JamendoStatus` | 只检查 Windows Credential Manager 中是否存在可读取的 Jamendo client ID，返回 `connected` 或 `disconnected`。 |
 | `save_jamendo_client_id` | `{ clientId }` | `JamendoStatus` | 将非空 Jamendo client ID 写入 Windows Credential Manager；失败时只返回 `failed`，不回传凭据。 |
+| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | 用户确认 storyboard 后链式执行：解决 pending clarification（若存在）、创建确认消息、自动创建内部时间线并渲染 preview。校验 storyboard 归属后在后台异步执行完整流水线；成功时通过 `agent-edit-completed` 事件返回时间线与 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 

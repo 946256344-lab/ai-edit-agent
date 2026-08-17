@@ -6,6 +6,9 @@
 （暂无活动任务）
 <!-- ACTIVE_TASKS_END -->
 
+- [x] 完成（2026-08-17，refactor）：将 `confirm_storyboard_and_preview` 从 `agent.rs` 提取为独立 `confirmation.rs` 模块，并将前端确认逻辑从 `App.tsx` 迁入 `useArtifactWorkspaceController`。`agent.rs` 从 1505 行降至 1246 行；`confirmation.rs` 独立承载 storyboard 确认链路（resolve pending clarification → create agent task → timeline + preview）；前端 `artifactWorkspace.actions.confirmStoryboard()` 成为唯一确认入口，`App.tsx` 只做异常处理和加载状态管理。三个 helper 函数（`failed_agent_edit_result`、`persist_agent_completion_message`、`persisted_task_status`）改为 `pub(crate)` 供 `confirmation.rs` 复用；公开 Tauri 命令、SQLite schema、工具白名单不变。
+- [x] 本项完成门：130 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、diff 检查通过。`agent.rs` 预算调整至 1247 行，`policy.rs` 预算调整至 688 行。
+
 - [x] 完成（2026-08-16，bugfix + 产品流程）：修复用户报告的三个系统性问题。
   1. **Provider 诚实失败（问题 3）**：删除 `provider.rs::ModelAccess::resolve()` 的静默降级逻辑，改为"自定义 API 配了就只用自定义，OAuth 配了就只用 OAuth，都没配就明确拒绝"。错误消息包含 Base URL、模型名、HTTP 状态码或具体网络错误，`agentloop.rs` 的 `model_unavailable_message` 透传原始错误。
   2. **render_preview 前置条件错误信息（问题 2）**：当 `render_preview` 因缺少 timeline 失败时，`safe_tool_failure_context` 返回明确的 `missing_timeline` 诊断，告知用户需要先创建时间线。
