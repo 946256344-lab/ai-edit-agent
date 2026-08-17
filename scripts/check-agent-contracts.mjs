@@ -244,6 +244,7 @@ export function evaluateAgentContracts(contents, config) {
   // 工具授权事实必须留在纯策略模块；父循环仍负责解析 canonical control 及兼容别名。
   const rustPolicy = contents.get('src-tauri/src/agentloop/policy.rs') ?? ''
   const rustLoop = contents.get('src-tauri/src/agentloop.rs') ?? ''
+  const rustRuntime = contents.get('src-tauri/src/agentloop/runtime.rs') ?? ''
   const typeScriptTools = contents.get('src/lib/agent-tools.ts') ?? ''
   let fixture
   try {
@@ -265,7 +266,7 @@ export function evaluateAgentContracts(contents, config) {
       errors.push(`${label}在 Rust、TypeScript 与版本化 fixture 之间发生漂移。`)
     }
   }
-  const runtimeControls = runtimeControlNames(`${rustPolicy}\n${rustLoop}`)
+  const runtimeControls = runtimeControlNames(`${rustPolicy}\n${rustLoop}\n${rustRuntime}`)
   const contractControls = fixtureControls.flatMap((tool) => [tool.name, ...(tool.aliases ?? [])]).filter((name) => name !== 'empty tool')
   if (!sameValues(runtimeControls, contractControls)) {
     errors.push('Rust 接受的控制动作与 TypeScript/版本化 fixture 发生漂移。')

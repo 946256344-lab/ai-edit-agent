@@ -3,8 +3,12 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-（暂无活动任务）
+- [x] 完成（2026-08-17，refactor）：将 `agentloop.rs`（3684 行）拆分为四个子模块。`agentloop/schema.rs`（纯类型与常量）、`agentloop/prompt.rs`（提示构建与历史加载）、`agentloop/skills.rs`（技能执行器与状态辅助）、`agentloop/runtime.rs`（路由决策与主循环）；父文件收缩为薄 re-export 层加测试。`check-agent-contracts.mjs` 同步扩展扫描 `runtime.rs`。公开命令名称、SQLite schema、工具白名单、Provider 接口均不变。
+- [x] 本项完成门：103 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-17-extract-agentloop-submodules.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-17，refactor）：从 `assets.rs` 提取 `assets/library.rs` 子模块。将素材库查询、目录投影、collection/tag/metadata 管理、旧版路径兼容等 545+ 行从 `assets.rs`（4114 → 3569 行）提取为独立 `assets/library.rs` 子模块（813 行）。Tauri 命令注册路径从 `assets::*` 更新为 `assets::library::*`；公开命令名称、参数、返回值、SQLite schema、工具白名单均不变。修复提取过程中引入的四处函数实现差异（`legacy_asset_directories`、`asset_directory_nodes`、`asset_safe_directory`、`asset_public_folder_metadata`）。
+- [x] 本项完成门：130 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-17-extract-assets-library-submodule.md`。
 
 - [x] 完成（2026-08-16，bugfix + 产品流程）：修复用户报告的三个系统性问题。
   1. **Provider 诚实失败（问题 3）**：删除 `provider.rs::ModelAccess::resolve()` 的静默降级逻辑，改为"自定义 API 配了就只用自定义，OAuth 配了就只用 OAuth，都没配就明确拒绝"。错误消息包含 Base URL、模型名、HTTP 状态码或具体网络错误，`agentloop.rs` 的 `model_unavailable_message` 透传原始错误。

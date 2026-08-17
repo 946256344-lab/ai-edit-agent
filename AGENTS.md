@@ -56,3 +56,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 支持分层 `AGENTS.md` 的 Agent 会自动获得就近规则；不支持时，必须手动读取本文件、`TASKS.md` 当前窗口及目标目录的 `AGENTS.md`。机器检查只能证明可验证边界没有漂移，不能证明模型理解了全部产品语义。
 
 <!-- 维护记录（2026-08-16）：后端 Rust 静默 fallback 已全部移除；错误路径必须输出真实原因，见 ADR-065。 -->
+<!-- 维护记录（2026-08-17）：agentloop.rs 拆分完成；路由/执行/提示/类型分入 agentloop/{runtime,skills,prompt,schema}.rs 四个子模块；check-agent-contracts.mjs 扩展扫描 runtime.rs 以定位 canonical 控制动作匹配。 -->

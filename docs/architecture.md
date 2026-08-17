@@ -178,7 +178,7 @@ Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段�
 
 Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
 
-`agentloop` 的第一条物理边界已经落地：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析、真实产物完成门和固定降级文案，不能访问数据库、文件、Tauri、Provider 或外部进程；父 `agentloop.rs` 仍包含 conversation route、状态快照、prompt、循环与技能派发。`assets.rs` 仍同时包含导入、技术/视觉分析、目录投影、检索、健康、重链路、收集和用户元数据。热点均受只降不升预算保护，下一步按 `docs/codebase/CONCERNS.md` §6 的顺序渐进拆分。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
+`agentloop` 的第一条物理边界已经落地：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析、真实产物完成门和固定降级文案，不能访问数据库、文件、Tauri、Provider 或外部进程；父 `agentloop.rs` 仍包含 conversation route、状态快照、prompt、循环与技能派发。`assets.rs` 的素材库查询职责（分页、目录投影、collection/tag/metadata 管理、旧版路径兼容）已提取为 `assets/library.rs` 子模块（2026-08-17），`assets.rs` 继续拥有导入、技术/视觉分析、健康、重链路、收集和用户元数据的分析启动路径。热点均受只降不升预算保护，下一步按 `docs/codebase/CONCERNS.md` §6 的顺序渐进拆分。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
 
 仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 
