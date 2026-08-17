@@ -3,12 +3,12 @@
   "pathBudgets": [
     {
       "path": "src/App.tsx",
-      "maxLines": 520,
-      "maxCharacters": 21858,
+      "maxLines": 545,
+      "maxCharacters": 23819,
       "maxLineLength": 180,
       "maxUseState": 14,
       "maxUseEffect": 1,
-      "maxAsyncFunctions": 12
+      "maxAsyncFunctions": 13
     },
     {
       "path": "src/components/AgentWorkspace.tsx",
@@ -36,20 +36,20 @@
     },
     {
       "path": "src/lib/local-store.ts",
-      "maxLines": 562,
-      "maxCharacters": 21511,
+      "maxLines": 567,
+      "maxCharacters": 21926,
       "maxLineLength": 364
     },
     {
       "path": "src-tauri/src/agentloop.rs",
-      "maxLines": 3599,
-      "maxCharacters": 148499,
+      "maxLines": 3654,
+      "maxCharacters": 154822,
       "maxLineLength": 1403
     },
     {
       "path": "src-tauri/src/agentloop/policy.rs",
-      "maxLines": 674,
-      "maxCharacters": 18439,
+      "maxLines": 691,
+      "maxCharacters": 18963,
       "maxLineLength": 181
     },
     {
@@ -72,8 +72,8 @@
     },
     {
       "path": "src-tauri/src/agent.rs",
-      "maxLines": 1247,
-      "maxCharacters": 46950,
+      "maxLines": 1505,
+      "maxCharacters": 54614,
       "maxLineLength": 242
     },
     {

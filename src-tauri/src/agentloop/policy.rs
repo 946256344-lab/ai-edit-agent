@@ -35,7 +35,7 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "create_jianying_draft",
 ];
 
-/// 一次请求必须真实达到的目标。循环不能只凭模型声称“完成”就越过产物门。
+/// 一次请求必须真实达到的目标。循环不能只凭模型声称"完成"就越过产物门。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoopGoal {
     Question,
@@ -107,7 +107,7 @@ pub(super) struct RequestToolPolicy {
 impl RequestToolPolicy {
     pub(super) fn from_request(request: &str) -> Self {
         let mut denied_tools = Vec::new();
-        // 按分句判断只读，避免“不是只读，请调整”被一个孤立词误判为只读请求。
+        // 按分句判断只读，避免"不是只读，请调整"被一个孤立词误判为只读请求。
         let read_only = request
             .split(|character| {
                 matches!(
@@ -368,7 +368,7 @@ fn ordered_action_before_target(text: &str, actions: &[&str], targets: &[&str]) 
     })
 }
 
-/// 同时支持“不要 preview”和“不要生成 preview”两种顺序，避免负向边界漏判。
+/// 同时支持"不要 preview"和"不要生成 preview"两种顺序，避免负向边界漏判。
 fn explicitly_denies_target(request: &str, targets: &[&str], actions: &[&str]) -> bool {
     let compact = request
         .to_lowercase()
@@ -614,7 +614,7 @@ impl LoopGoal {
     }
 }
 
-/// Provider 失败时把真实原因拼入用户可见文案。
+/// Provider 失败时直接透传真实原因，不掩盖具体错误。
 pub(super) fn model_unavailable_message(goal: LoopGoal, error: &str) -> String {
     let action = match goal {
         LoopGoal::Question => "本轮没有给出回答，也没有改动任何 storyboard、时间线或 preview",
@@ -623,7 +623,7 @@ pub(super) fn model_unavailable_message(goal: LoopGoal, error: &str) -> String {
         LoopGoal::Preview => "本轮没有生成 preview，也没有修改现有内容",
         LoopGoal::JianyingDraft => "本轮没有创建剪映草稿",
     };
-    format!("模型没有响应（{error}），{action}；请检查模型连接后重试。")
+    format!("{error}。{action}。")
 }
 
 pub(super) fn run_deadline_message(goal: LoopGoal) -> String {
@@ -650,7 +650,7 @@ pub(super) fn run_deadline_message(goal: LoopGoal) -> String {
     }
 }
 
-/// 循环结束但没有目标产物时，禁止复述模型可能捏造的“已完成”。
+/// 循环结束但没有目标产物时，禁止复述模型可能捏造的"已完成"。
 pub(super) fn honest_no_change(goal: LoopGoal) -> String {
     match goal {
         LoopGoal::Question => "本轮没有形成可用回答，也没有修改任何 storyboard、时间线或 preview。请补充说明后重试。".to_owned(),
@@ -658,6 +658,24 @@ pub(super) fn honest_no_change(goal: LoopGoal) -> String {
         LoopGoal::Timeline => "本轮没有修改内部时间线，也没有把已完成的改动当成成功执行；如需继续，请说明你希望保留的具体片段后重试。".to_owned(),
         LoopGoal::Preview => "本轮没有生成新的 preview，也没有修改现有 storyboard、时间线或 preview；请补充说明后重试。".to_owned(),
         LoopGoal::JianyingDraft => "本轮没有创建新的剪映草稿，也没有修改现有内容；请补充说明后重试。".to_owned(),
+    }
+}
+
+/// 循环结束但没有目标产物时的失败消息，带具体错误代码的诊断提示。
+pub(super) fn honest_no_change_with_diagnostic(goal: LoopGoal, error_code: &str) -> String {
+    let base = honest_no_change(goal);
+    let diagnostic_hint = match error_code {
+        "invalid_source_time_range" => "失败原因：素材时间范围重叠或超出源媒体长度。",
+        "missing_timeline" => "失败原因：缺少时间线前置条件。",
+        "unavailable_media" => "失败原因：所需素材不可访问或视觉证据不完整。",
+        "missing_or_invalid_prerequisite" => "失败原因：缺少 storyboard 或 timeline 等前置产物。",
+        "skill_execution_failed" => "失败原因：工具执行被拒绝或底层操作失败。",
+        _ => "",
+    };
+    if diagnostic_hint.is_empty() {
+        base
+    } else {
+        format!("{}。{}", diagnostic_hint, base)
     }
 }
 

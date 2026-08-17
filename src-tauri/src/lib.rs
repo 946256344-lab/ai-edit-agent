@@ -110,6 +110,7 @@ pub fn run() {
             jianying::get_jianying_registration_status,
             agent::submit_conversation_turn,
             agent::execute_agent_edit,
+            agent::confirm_storyboard_and_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

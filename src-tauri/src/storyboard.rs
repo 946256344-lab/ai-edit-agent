@@ -56,7 +56,7 @@ pub(crate) fn storyboard_sources(
                     visual_evidence: metadata.visual_evidence,
                 },
                 visual_ready,
-                visual_ready && source_available,
+                source_available,
             ))
         })
         .map_err(|error| error.to_string())?;
@@ -70,7 +70,7 @@ pub(crate) fn storyboard_sources(
     Ok((
         candidates
             .into_iter()
-            .filter_map(|(source, _, available)| available.then_some(source))
+            .filter_map(|(source, _, source_available)| source_available.then_some(source))
             .collect(),
         visual_ready_count,
     ))

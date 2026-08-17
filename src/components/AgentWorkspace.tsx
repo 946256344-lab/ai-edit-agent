@@ -24,6 +24,7 @@ export type AgentWorkspaceActions = {
   setInput: (value: string) => void
   openArtifacts: () => void
   sendMessage: (event: FormEvent<HTMLFormElement>) => void
+  confirmStoryboard: () => void
 }
 
 type AgentWorkspaceProps = {
@@ -70,6 +71,30 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
 
         {model.tasks[0] && (
           <AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} />
+        )}
+
+        {model.storyboard && model.tasks[0]?.status === 'needs_clarification' && !model.isSending && (
+          <div className="storyboard-confirm-banner">
+            <p>
+              已生成 <strong>{model.storyboard.title}</strong> storyboard，确认后将自动创建时间线并生成预览。
+            </p>
+            <div className="storyboard-confirm-actions">
+              <button
+                type="button"
+                className="storyboard-confirm-button primary"
+                onClick={actions.confirmStoryboard}
+              >
+                确认并生成时间线和预览
+              </button>
+              <button
+                type="button"
+                className="storyboard-confirm-button secondary"
+                onClick={actions.openArtifacts}
+              >
+                先查看 storyboard 详情
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

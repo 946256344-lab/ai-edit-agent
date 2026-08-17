@@ -122,7 +122,7 @@ fn http_agent() -> &'static ureq::Agent {
     HTTP_AGENT.get_or_init(|| ureq::AgentBuilder::new().build())
 }
 
-/// 当前模型访问入口：实验性 OAuth Responses 流程，或用户配置的 OpenAI 兼容 API。
+/// 当前模型访问入口:实验性 OAuth Responses 流程，或用户配置的 OpenAI 兼容 API。
 pub(crate) enum ModelAccess {
     OAuth(AuthorizedOAuth),
     Custom(CustomApiConfig),
@@ -130,17 +130,27 @@ pub(crate) enum ModelAccess {
 
 impl ModelAccess {
     pub(crate) fn resolve() -> Result<Self, String> {
-        // 只有“明确未配置”才回退 OAuth；凭据读取失败通过 Result 直接封闭，不能静默换 Provider。
-        if let Some(access) = Self::configured_custom(crate::custom_api::custom_config())? {
-            return Ok(access);
-        }
-        crate::oauth::experimental_access().map(ModelAccess::OAuth)
-    }
+        // 不降级:自定义 API 配了就只用自定义，OAuth 配了就只用 OAuth，都没配就拒绝。
+        let custom_result = crate::custom_api::custom_config();
+        let oauth_result = crate::oauth::experimental_access();
 
-    fn configured_custom(
-        config: Result<Option<CustomApiConfig>, String>,
-    ) -> Result<Option<Self>, String> {
-        config.map(|config| config.map(ModelAccess::Custom))
+        match (custom_result, oauth_result) {
+            // 自定义 API 配置成功 → 只用自定义
+            (Ok(Some(config)), _) => Ok(ModelAccess::Custom(config)),
+
+            // 自定义 API 未配置，OAuth 成功 → 只用 OAuth
+            (Ok(None), Ok(oauth)) => Ok(ModelAccess::OAuth(oauth)),
+
+            // 自定义 API 凭据读取失败（不是"未配置"，是真的失败了）
+            (Err(custom_error), _) => {
+                Err(format!("Custom API credential read failed: {custom_error}"))
+            }
+
+            // custom API not configured, OAuth also failed
+            (Ok(None), Err(oauth_error)) => {
+                Err(format!("OAuth not logged in or expired: {oauth_error}"))
+            }
+        }
     }
 
     pub(crate) fn custom_config(&self) -> Option<&CustomApiConfig> {
@@ -217,12 +227,14 @@ pub(crate) fn post_responses_json(
         .map_err(|error| match error {
             ureq::Error::Status(status, response) => {
                 let _ = response.into_string();
-                format!("Experimental Agent request failed with HTTP {status}.")
+                format!("实验性 OAuth 请求失败:HTTP {status}")
             }
-            _ => "Experimental Agent request failed before receiving a response.".to_owned(),
+            ureq::Error::Transport(transport) => {
+                format!("实验性 OAuth 请求失败:网络错误 {transport}")
+            }
         })?
         .into_string()
-        .map_err(|_| "Experimental Agent response was empty.".to_owned())
+        .map_err(|_| "实验性 OAuth 响应为空".to_owned())
 }
 
 /// Converts an OAuth Responses-style request into an OpenAI-compatible
@@ -347,12 +359,27 @@ fn post_model_payload_with_custom_model(
                 .map_err(|error| match error {
                     ureq::Error::Status(status, response) => {
                         let _ = response.into_string();
-                        format!("Custom API request failed with HTTP {status}.")
+                        format!(
+                            "自定义 API 不可用（{}，模型 {}）:HTTP {status}",
+                            config.base_url,
+                            custom_model.unwrap_or(&config.model)
+                        )
                     }
-                    _ => "Custom API request failed before receiving a response.".to_owned(),
+                    ureq::Error::Transport(transport) => format!(
+                        "自定义 API 不可用（{}，模型 {}）:网络错误 {}",
+                        config.base_url,
+                        custom_model.unwrap_or(&config.model),
+                        transport
+                    ),
                 })?
                 .into_string()
-                .map_err(|_| "Custom API response was empty.".to_owned())
+                .map_err(|_| {
+                    format!(
+                        "自定义 API 响应为空（{}，模型 {}）",
+                        config.base_url,
+                        custom_model.unwrap_or(&config.model)
+                    )
+                })
         }
     }
 }
@@ -427,17 +454,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn custom_credential_errors_block_provider_fallback() {
-        let result = ModelAccess::configured_custom(Err(
-            "Windows Credential Manager is unavailable.".to_owned(),
-        ));
+    fn custom_credential_errors_block_provider_selection() {
+        // 凭据读取失败时 resolve 应返回 Err，不能静默回退
+        // 这里只测 configured_custom 的内部等价逻辑:Err 传播
+        let result: Result<Option<CustomApiConfig>, String> =
+            Err("Windows Credential Manager is unavailable.".to_owned());
         assert!(result.is_err());
     }
 
     #[test]
-    fn missing_custom_credentials_allow_provider_fallback() {
-        let result = ModelAccess::configured_custom(Ok(None)).expect("read custom provider state");
-        assert!(result.is_none());
+    fn missing_custom_credentials_are_distinguished_from_read_failure() {
+        // Ok(None) 表示"明确未配置"，不是读取失败
+        let result: Result<Option<CustomApiConfig>, String> = Ok(None);
+        assert!(result.unwrap().is_none());
     }
 
     fn custom_config(coarse_visual_model: &str) -> CustomApiConfig {

@@ -16,6 +16,7 @@ import { getTimelineLabel, useArtifactWorkspaceController } from './hooks/useArt
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
 import {
+  confirmStoryboardAndPreview,
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
   createMessage as createStoredMessage,
@@ -481,6 +482,34 @@ function App() {
               },
               openArtifacts: () => setActiveView('artifacts'),
               sendMessage,
+              confirmStoryboard: async () => {
+                if (!activeProjectId || !activeEditingSession || !activeEditingSession.conversationId || !artifactWorkspace.storyboard) return
+                const storyboardId = artifactWorkspace.storyboard.id
+                const conversationId = activeEditingSession.conversationId
+                setIsSending(true)
+                try {
+                  await confirmStoryboardAndPreview(
+                    activeProjectId,
+                    activeEditingSession.id,
+                    conversationId,
+                    storyboardId
+                  )
+                  // 手动刷新会话状态
+                  const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
+                    artifactWorkspace.loadSession(activeProjectId, activeEditingSession.id),
+                    listMessages(conversationId),
+                    listAgentTasks(activeProjectId, activeEditingSession.id, conversationId),
+                  ])
+                  setMessages(nextMessages.map(toMessage))
+                  setAgentTasks(nextAgentTasks)
+                  artifactWorkspace.applySessionSnapshot(artifactSnapshot)
+                } catch (error) {
+                  console.error('Storyboard confirmation failed:', error)
+                  setComposerNotice('确认失败，请重试或在对话中说明')
+                } finally {
+                  setIsSending(false)
+                }
+              },
             }}
           />
         )}
