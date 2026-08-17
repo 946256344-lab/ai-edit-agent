@@ -4,7 +4,7 @@
 
 桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 仅镜像当前内部 Agent 技能名称，前端通过 `src/lib/local-store.ts` 调用公开 Tauri 命令。
 
-素材库查询命令（`list_assets`、`list_asset_page`、`update_asset_user_metadata_batch`、`add_asset_tag_batch`、`remove_asset_tag_batch`、`create_asset_collection`、`list_asset_collections`、`add_assets_to_collection`、`get_asset_evidence`）已于 2026-08-17 从 `assets.rs` 迁移至 `assets/library.rs` 子模块，命令名称、参数和返回值完全不变。
+素材库查询命令（`list_assets`、`list_asset_page`、`update_asset_user_metadata_batch`、`add_asset_tag_batch`、`remove_asset_tag_batch`、`create_asset_collection`、`list_asset_collections`、`add_assets_to_collection`、`get_asset_evidence`）已于 2026-08-17 从 `assets.rs` 迁移至 `assets/library.rs` 子模块，命令名称、参数和返回值完全不变。同批提取 `assets/analysis.rs`（技术与视觉分析）、`assets/health.rs`（源文件健康）、`assets/visual.rs`（视觉批次）三个子模块；`assets.rs` 收缩为薄协调层。
 
 2026-08-14 的恢复基线没有新增、删除或修改 Tauri 命令及工具输入/输出；相关 Rust 改动仅为 `rustfmt` 标准格式化。
 
