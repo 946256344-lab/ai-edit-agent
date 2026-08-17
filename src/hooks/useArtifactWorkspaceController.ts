@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import {
+  confirmStoryboardAndPreview,
   createJianyingDraft,
   createTimelineDraft,
   generateStoryboard,
@@ -10,10 +11,12 @@ import {
   getLatestStoryboard,
   getLatestTimeline,
   listAgentTasks,
+  listMessages,
   listOperationLogs,
   listTimelineVersions,
   renderPreview,
 } from '../lib/local-store'
+import { toMessage } from '../lib/message'
 import type {
   AgentEditEvent,
   JianyingRegistrationStatus,
@@ -44,6 +47,7 @@ type ArtifactWorkspaceControllerOptions = {
   activeProjectRef: RefObject<string | null>
   activeSessionRef: RefObject<string | null>
   setAgentTasks: Dispatch<SetStateAction<StoredAgentTask[]>>
+  setMessages: Dispatch<SetStateAction<any[]>>
   appendAgentMessage: (conversationId: string, sessionId: string, content: string) => Promise<void>
   setSessionBrief: (sessionId: string, brief: string) => void
   selectView: Dispatch<SetStateAction<WorkspaceView>>
@@ -322,6 +326,31 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     }
   }
 
+  async function confirmStoryboard() {
+    if (!options.projectId || !options.sessionId || !options.session || !storyboard) return
+    const conversationId = options.session.conversationId
+    if (!conversationId) return
+    const projectId = options.projectId
+    const sessionId = options.sessionId
+    const storyboardId = storyboard.id
+    try {
+      await confirmStoryboardAndPreview(projectId, sessionId, conversationId, storyboardId)
+      const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
+        loadSession(projectId, sessionId),
+        listMessages(conversationId),
+        listAgentTasks(projectId, sessionId, conversationId),
+      ])
+      if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
+        options.setMessages(nextMessages.map(toMessage))
+        options.setAgentTasks(nextAgentTasks)
+        applySessionSnapshot(artifactSnapshot)
+      }
+    } catch (error) {
+      console.error('Storyboard confirmation failed:', error)
+      throw error
+    }
+  }
+
   return {
     storyboard,
     timeline,
@@ -357,6 +386,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       createTimeline: () => void createTimeline(),
       renderPreview: () => void createPreview(),
       createJianyingDraft: () => void deliverJianyingDraft(),
+      confirmStoryboard: () => void confirmStoryboard(),
     },
   }
 }

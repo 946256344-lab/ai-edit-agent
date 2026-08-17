@@ -664,19 +664,15 @@ pub(super) fn honest_no_change(goal: LoopGoal) -> String {
 /// 循环结束但没有目标产物时的失败消息，带具体错误代码的诊断提示。
 pub(super) fn honest_no_change_with_diagnostic(goal: LoopGoal, error_code: &str) -> String {
     let base = honest_no_change(goal);
-    let diagnostic_hint = match error_code {
+    let hint = match error_code {
         "invalid_source_time_range" => "失败原因：素材时间范围重叠或超出源媒体长度。",
         "missing_timeline" => "失败原因：缺少时间线前置条件。",
         "unavailable_media" => "失败原因：所需素材不可访问或视觉证据不完整。",
         "missing_or_invalid_prerequisite" => "失败原因：缺少 storyboard 或 timeline 等前置产物。",
         "skill_execution_failed" => "失败原因：工具执行被拒绝或底层操作失败。",
-        _ => "",
+        _ => return base,
     };
-    if diagnostic_hint.is_empty() {
-        base
-    } else {
-        format!("{}。{}", diagnostic_hint, base)
-    }
+    format!("{}。{}", hint, base)
 }
 
 /// 模型过早结束时回送纠偏信息，循环仍受父模块的最大步数限制。

@@ -12,6 +12,8 @@ mod agentloop;
 mod assets;
 /// 不含 payload 的 Agent 步骤、诊断、任务状态与操作记录。
 mod audit;
+/// Storyboard 确认后的自动化流程：timeline + preview 依次执行。
+mod confirmation;
 /// 自定义 OpenAI 兼容凭据命令与配置。
 mod custom_api;
 /// SQLite 位置、连接策略与只追加 schema 迁移。
@@ -110,7 +112,7 @@ pub fn run() {
             jianying::get_jianying_registration_status,
             agent::submit_conversation_turn,
             agent::execute_agent_edit,
-            agent::confirm_storyboard_and_preview,
+            confirmation::confirm_storyboard_and_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

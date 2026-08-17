@@ -16,7 +16,6 @@ import { getTimelineLabel, useArtifactWorkspaceController } from './hooks/useArt
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
 import {
-  confirmStoryboardAndPreview,
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
   createMessage as createStoredMessage,
@@ -32,6 +31,7 @@ import {
   submitConversationTurn,
 } from './lib/local-store'
 import type { AgentEditEvent, ConversationTurnResult, StoredAgentTask, StoredEditingSession, StoredMessage, StoredProject, TaskRouteResult } from './lib/local-store'
+import { toMessage } from './lib/message'
 
 function toEditingSession(session: StoredEditingSession): EditingSessionView {
   return {
@@ -42,15 +42,6 @@ function toEditingSession(session: StoredEditingSession): EditingSessionView {
     brief: session.brief,
     updated: new Date(session.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     state: session.status === 'working' ? 'working' : session.status === 'review' ? 'review' : 'ready',
-  }
-}
-
-function toMessage(message: StoredMessage): ConversationMessage {
-  return {
-    id: message.id,
-    role: message.role === 'user' ? 'user' : 'agent',
-    content: message.content,
-    time: new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
   }
 }
 
@@ -83,6 +74,7 @@ function App() {
     activeProjectRef,
     activeSessionRef: activeEditingSessionRef,
     setAgentTasks,
+    setMessages,
     appendAgentMessage: (conversationId, sessionId, content) => (
       appendStoredMessage(conversationId, sessionId, 'agent', content)
     ),
@@ -483,26 +475,10 @@ function App() {
               openArtifacts: () => setActiveView('artifacts'),
               sendMessage,
               confirmStoryboard: async () => {
-                if (!activeProjectId || !activeEditingSession || !activeEditingSession.conversationId || !artifactWorkspace.storyboard) return
-                const storyboardId = artifactWorkspace.storyboard.id
-                const conversationId = activeEditingSession.conversationId
+                if (!activeProjectId || !activeEditingSession || !artifactWorkspace.storyboard) return
                 setIsSending(true)
                 try {
-                  await confirmStoryboardAndPreview(
-                    activeProjectId,
-                    activeEditingSession.id,
-                    conversationId,
-                    storyboardId
-                  )
-                  // 手动刷新会话状态
-                  const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
-                    artifactWorkspace.loadSession(activeProjectId, activeEditingSession.id),
-                    listMessages(conversationId),
-                    listAgentTasks(activeProjectId, activeEditingSession.id, conversationId),
-                  ])
-                  setMessages(nextMessages.map(toMessage))
-                  setAgentTasks(nextAgentTasks)
-                  artifactWorkspace.applySessionSnapshot(artifactSnapshot)
+                  await artifactWorkspace.actions.confirmStoryboard()
                 } catch (error) {
                   console.error('Storyboard confirmation failed:', error)
                   setComposerNotice('确认失败，请重试或在对话中说明')

@@ -48,7 +48,7 @@
     },
     {
       "path": "src-tauri/src/agentloop/policy.rs",
-      "maxLines": 691,
+      "maxLines": 688,
       "maxCharacters": 18963,
       "maxLineLength": 181
     },
@@ -72,7 +72,7 @@
     },
     {
       "path": "src-tauri/src/agent.rs",
-      "maxLines": 1505,
+      "maxLines": 1247,
       "maxCharacters": 54614,
       "maxLineLength": 242
     },
@@ -100,7 +100,7 @@
     {
       "directory": "src/hooks",
       "extensions": [".ts", ".tsx"],
-      "maxLines": 380,
+      "maxLines": 394,
       "maxCharacters": 16000,
       "maxLineLength": 180
     }
