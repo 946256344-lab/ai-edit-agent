@@ -830,13 +830,37 @@ fn generate_storyboard_internal(
         wait_for_visual_batch(&app, priority_batch.as_deref())?;
     }
     let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id)?;
+    let video_count = sources.iter().filter(|s| s.kind == "video").count();
+    let image_count = sources.iter().filter(|s| s.kind == "image").count();
+    let audio_count = sources.iter().filter(|s| s.kind == "audio").count();
+    let other_count = sources.iter().filter(|s| s.kind == "other").count();
+
     log::info!(
-        "Loaded storyboard sources: total_count={}, visual_ready_count={}, video_count={}, image_count={}",
+        "Loaded storyboard sources: total_count={}, visual_ready_count={}, video_count={}, image_count={}, audio_count={}, other_count={}",
         sources.len(),
         visual_ready_count,
-        sources.iter().filter(|s| s.kind == "video").count(),
-        sources.iter().filter(|s| s.kind == "image").count()
+        video_count,
+        image_count,
+        audio_count,
+        other_count
     );
+
+    // 记录前 10 个素材的详细信息用于诊断
+    if !sources.is_empty() {
+        let sample: Vec<String> = sources
+            .iter()
+            .take(10)
+            .map(|s| {
+                format!(
+                    "{}({}:{}ms)",
+                    s.asset_id,
+                    s.kind,
+                    s.duration_ms.unwrap_or(0)
+                )
+            })
+            .collect();
+        log::info!("Sample of loaded sources (first 10): {}", sample.join(", "));
+    }
     if sources.is_empty() {
         log::warn!(
             "No accessible source files found. visual_ready_count={}",

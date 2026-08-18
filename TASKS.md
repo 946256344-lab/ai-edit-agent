@@ -3,7 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [x] 完成（2026-08-18，feature）：为 storyboard 生成流程添加详细日志。在 `storyboard.rs` 的关键决策点添加 info/error 级别日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片计数）、候选排序与 TOP-5 清单、多模态内容构建、模型请求/响应、重试循环进度、候选接收（shots/beats/时长）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结。覆盖 `generate_storyboard_internal`（6 处）、`request_storyboard`（4 处）和 `normalize_storyboard_candidate`（4 处），共 14 处日志点，支持后续调试验证失败原因和候选素材选择过程。
+- [x] 完成（2026-08-18，feature）：为 storyboard 生成流程添加详细日志并增强素材池诊断。在 `storyboard.rs` 的关键决策点添加 info/error 级别日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他计数）、素材样本（前 10 个的 ID/类型/时长）、候选排序与 TOP-5 清单、多模态内容构建、模型请求/响应、重试循环进度、候选接收（shots/beats/时长）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结。覆盖 `generate_storyboard_internal`（7 处）、`request_storyboard`（4 处）和 `normalize_storyboard_candidate`（4 处），共 15 处日志点，支持后续调试验证失败原因和候选素材选择过程。新增素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断"451 个图片 vs 4 个视频"等异常情况。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-storyboard-generation-logging.md`。
 <!-- ACTIVE_TASKS_END -->
 

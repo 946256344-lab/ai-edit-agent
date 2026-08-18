@@ -12,9 +12,10 @@ feature（诊断与调试支持）
 
 ### storyboard 生成日志（src-tauri/src/storyboard.rs）
 
-**`generate_storyboard_internal` 函数（行 727-828）**
+**`generate_storyboard_internal` 函数（行 727-860）**
 - 新增入口日志（行 727）：记录 `project_id`、`editing_task_id`、brief 长度、是否调度视觉分析
-- 新增素材库存日志（行 747）：记录总素材数、视觉就绪数、视频/图片分类计数
+- 新增素材库存日志（行 747）：记录总素材数、视觉就绪数、视频/图片/音频/其他分类计数
+- 新增素材样本日志（行 860）：记录前 10 个素材的 ID、类型和时长，用于快速诊断素材池组成
 - 新增每轮重试日志（行 772）：记录当前尝试次数 `revision + 1 / MAX_STORYBOARD_REVISIONS`
 - 新增候选接收日志（行 796）：记录模型返回的 shots 数、beats 数、目标时长、未覆盖 beats 数
 - 新增验证成功日志（行 808）：简短确认验证通过
@@ -43,7 +44,8 @@ feature（诊断与调试支持）
 
 ```
 [INFO] Starting AI storyboard generation. project_id=abc-123, editing_task_id=def-456, brief_length=248, schedule_visual_analysis=true
-[INFO] Loaded storyboard sources: total_count=15, visual_ready_count=12, video_count=13, image_count=2
+[INFO] Loaded storyboard sources: total_count=15, visual_ready_count=12, video_count=13, image_count=2, audio_count=0, other_count=0
+[INFO] Sample of loaded sources (first 10): asset-1(video:45000ms), asset-2(video:30000ms), asset-3(video:60000ms), asset-4(image:0ms), asset-5(video:25000ms), asset-6(video:38000ms), asset-7(video:42000ms), asset-8(image:0ms), asset-9(video:55000ms), asset-10(video:28000ms)
 [INFO] Ranked 15 candidates for storyboard. target_duration_ms=30000, prior_selections=0
 [INFO] Storyboard candidates (top 5 of 15 total): asset-1(video:45000ms), asset-2(video:30000ms), asset-3(video:60000ms), asset-4(image:0ms), asset-5(video:25000ms)
 [INFO] Building multimodal content blocks for 5 candidates with keyframe grids
@@ -91,13 +93,16 @@ feature（诊断与调试支持）
 - ✅ Rust 库测试：113 passed
 - ✅ Rust fmt/check：通过
 - ✅ harness:test：通过
-- ⏳ harness:check：需要同步 docs/architecture.md 后通过
+- ✅ harness:check：通过
+- ✅ docs/architecture.md：已更新素材分析流程说明
+- ✅ docs/api.md：已更新维护记录
 
 ## 日志覆盖范围
 
 已覆盖：
 - ✅ 生成入口参数（project_id、editing_task_id、brief 长度）
-- ✅ 素材库存统计（总数、视觉就绪数、视频/图片计数）
+- ✅ 素材库存统计（总数、视觉就绪数、视频/图片/音频/其他分类计数）
+- ✅ 素材样本展示（前 10 个素材的 ID/类型/时长）
 - ✅ 候选排序过程（输入参数、输出 TOP-5 清单）
 - ✅ 多模态内容构建（候选数、blocks 数）
 - ✅ 模型请求/响应（模型名、content_parts 数、JSON 长度）
