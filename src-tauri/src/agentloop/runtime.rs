@@ -159,6 +159,17 @@ pub(crate) fn decide_conversation_route(
         serde_json::from_str(&text).map_err(|_| "Route response was malformed.".to_owned())?;
     let mut response: ConversationRouteResponse = serde_json::from_value(raw.clone())
         .map_err(|_| "Route response schema invalid.".to_owned())?;
+
+    // 日志记录路由决策的原始值
+    log::info!(
+        "Route decision received: route={}, goal={:?}, isQuestion={:?}, tool={:?}, pinnedGoal={:?}",
+        response.route,
+        response.goal,
+        response.is_question,
+        response.tool,
+        pinned_goal.map(|g| g.code())
+    );
+
     // 纠偏重试：验证失败时把错误原因反馈给模型。
     match try_build_route_decision(
         &response,
@@ -181,6 +192,15 @@ pub(crate) fn decide_conversation_route(
                 .map_err(|_| "Route correction was malformed.".to_owned())?;
             response = serde_json::from_value(raw.clone())
                 .map_err(|_| "Route correction schema invalid.".to_owned())?;
+
+            // 日志记录纠偏后的值
+            log::info!(
+                "Route correction received: route={}, goal={:?}, isQuestion={:?}, tool={:?}",
+                response.route,
+                response.goal,
+                response.is_question,
+                response.tool
+            );
         }
     }
     try_build_route_decision(
@@ -233,7 +253,15 @@ fn try_build_route_decision(
             let declared = parse_declared_goal(response.goal.as_deref(), response.is_question);
             // pinned_goal 优先；declared 仅作后备，避免 pinned 存在时因模型漏填 goal 而失败
             let goal = pinned_goal.or(declared)
-                .ok_or_else(|| "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned())?;
+                .ok_or_else(|| {
+                    log::warn!(
+                        "Route validation failed: goal parsing failed. raw_goal={:?}, isQuestion={:?}, pinned={:?}",
+                        response.goal,
+                        response.is_question,
+                        pinned_goal.map(|g| g.code())
+                    );
+                    "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned()
+                })?;
             if tool_policy.forbids_goal(goal) {
                 return Err(format!("goal='{}' is user-denied.", goal.code()));
             }
