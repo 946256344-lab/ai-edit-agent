@@ -3,12 +3,8 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-08-18，feature）：多模态视觉选镜系统——关键帧网格图。
-  1. **第一阶段（视觉分析存储层）**：`TechnicalMetadata` 新增 `keyframe_grid_path: Option<String>` 字段存储关键帧网格图路径；`models.rs` 的 `StoryboardSource` 同步新增该字段；向后兼容（旧记录读为 `None`）。
-  2. **第二阶段（关键帧提取子模块）**：新建 `storyboard/keyframes.rs` 独立子模块。定义 `extract_keyframe_grid(asset_path, scene_segments, output_path) -> Result<PathBuf, String>` 接口，从场景段均匀采样 4-8 帧，拼成 2x2 或 2x4 网格图，保存到 `.cache/<asset_id>_grid.jpg`。当前阶段定义接口和结构，实现体保留 TODO 标记（后续集成 FFmpeg 截图逻辑）。
-  3. **第三阶段（多模态 prompt 构建）**：`storyboard.rs::request_storyboard` 改造为多模态输入。为 top-5 候选的每个素材，如果 `keyframe_grid_path` 存在，读取图像并 base64 编码，构建 `{"type": "image"}` 内容块；prompt 指示模型直接从关键帧画面判断语义匹配度，而非依赖文本化的 `visual_evidence`。
-  4. **第四阶段（验证层集成）**：`storyboard/validation.rs::verify_storyboard_selections` 同步使用关键帧网格图，让独立验证模型也能看到画面，对抗审查选镜合理性。
-- [ ] 本项完成门：110+ 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 通过。新增字段向后兼容。公开 Tauri 命令、SQLite schema、Agent 工具白名单不变。第二、三、四阶段架构先定义接口，实现体分独立任务完成。变更记录见 `docs/changes/2026-08-18-multimodal-keyframe-grid-selection.md`。
+- [x] 完成（2026-08-18，feature）：实现关键帧网格拼接与固定 4 帧采样策略。替换场景检测（前 30 秒，最多 6 帧）为固定时间采样（整个视频，精确 4 帧：第 1 秒、1/3、2/3、最后 1 秒）。实现 `storyboard/multimodal.rs` 的 `generate_keyframe_grid`（2×2 网格拼接，640×360 JPEG）和 `build_multimodal_content`（base64 编码为 image block + 元数据 text block）。素材导入后自动调用网格生成，路径记录到 `TechnicalMetadata.keyframe_grid_path`。向后兼容：旧素材读取为 `None`，网格生成失败只记录警告不阻塞导入。新增 `image = 0.25` 依赖（仅 jpeg feature）。
+- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-keyframe-grid-generation-implementation.md`，架构决策见 `docs/decisions.md` ADR-065。
 <!-- ACTIVE_TASKS_END -->
 
 - [x] 完成（2026-08-18，feature）：深度解耦地实现完整选镜优化系统（四阶段）。暴露质量分数、多样性硬门；提取独立评分模块（语义50分、质量25分、时长15分）；定义语义匹配层架构（embedding接口）；定义对抗验证框架架构。新增字段向后兼容，公开契约不变。变更记录见 `docs/changes/2026-08-18-storyboard-selection-scoring-system.md`。
