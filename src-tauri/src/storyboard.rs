@@ -3,6 +3,7 @@
 
 mod keyframes;
 pub(crate) mod multimodal;
+pub(crate) mod phases;
 mod scoring;
 mod semantic;
 mod validation;
@@ -878,32 +879,42 @@ fn generate_storyboard_internal(
         log::warn!("AI storyboard generation could not access the configured provider: {error}.");
         error
     })?;
-    let mut previous = None;
+
+    // Phase 1: 生成叙事结构
+    let narrative = phases::phase1_generate_narrative(&access, brief)?;
+    log::info!(
+        "Phase 1 complete: narrative with {} beats, target_duration={}ms",
+        narrative.beats.len(),
+        narrative.target_duration_ms
+    );
+
+    // Phase 2: 逐 beat 粗选镜
+    let rough = phases::phase2_rough_shot_selection(&access, brief, &narrative, &sources)?;
+    log::info!(
+        "Phase 2 complete: rough storyboard with {} shots, {} uncovered beats",
+        rough.shots.len(),
+        rough.uncovered_beat_ids.len()
+    );
+
+    // Phase 3: 精剪与验证重试循环
     let mut feedback = None;
     let mut content = None;
     for revision in 0..MAX_STORYBOARD_REVISIONS {
         log::info!(
-            "Storyboard generation attempt {}/{}",
+            "Phase 3 attempt {}/{}: fine editing with validation",
             revision + 1,
             MAX_STORYBOARD_REVISIONS
         );
-        match request_storyboard(
-            &access,
-            brief,
-            &sources,
-            previous.as_ref(),
-            feedback.as_deref(),
-        ) {
+        match phases::phase3_fine_edit(&access, brief, &rough, &sources, feedback.as_deref()) {
             Ok(candidate) => {
                 log::info!(
-                    "Received storyboard candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}",
+                    "Phase 3 produced candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}",
                     candidate.shots.len(),
                     candidate.beats.len(),
                     candidate.target_duration_ms,
                     candidate.uncovered_beat_ids.len()
                 );
-                // 先规范化（夹紧数值约束、修正 target_duration_ms），
-                // 再校验结构性约束；纯数值偏差不再占用模型重试配额。
+                // 规范化数值约束
                 let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
                 match validate_storyboard(&candidate, &sources, brief) {
                     Ok(()) => {
@@ -912,22 +923,20 @@ fn generate_storyboard_internal(
                         break;
                     }
                     Err(error) => {
-                        log::warn!("AI storyboard validation failed: {error}");
+                        log::warn!("Phase 3 validation failed: {error}");
                         feedback = Some(error);
-                        previous = Some(candidate);
                     }
                 }
             }
             Err(error) => {
-                log::warn!("AI storyboard request failed: {error}");
+                log::warn!("Phase 3 request failed: {error}");
                 feedback = Some(error);
-                previous = None;
             }
         }
     }
     let content = content.ok_or_else(|| {
         log::error!(
-            "Storyboard generation failed after {} attempts. final_feedback={:?}",
+            "Storyboard generation failed after {} Phase 3 attempts. final_feedback={:?}",
             MAX_STORYBOARD_REVISIONS,
             feedback
         );

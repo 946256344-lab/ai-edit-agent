@@ -3,9 +3,12 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-18，refactor）：重构 storyboard 生成为三阶段架构。原有实现对整个素材池（426 个视频）做一次全局排序，取 TOP-5 候选，导致整条时间线只能从同一组 5 个素材中反复选择。新架构分为三个阶段：**Phase 1（叙事结构生成）** - 模型根据 brief 拆分为 3-12 个 beats，每个 beat 包含 id/purpose/requiredVisual，不涉及素材选择；**Phase 2（逐 beat 粗选镜）** - 对每个 beat 单独对素材池排序（使用 `scoring::rank_segment_candidates`），提供该 beat 专属的 TOP-5 候选素材（带关键帧网格），模型为该 beat 选择 1 个素材 + 时间范围；**Phase 3（精剪与节奏优化）** - 模型调整精确时间范围（对齐场景边界、避免重叠）、节奏控制、镜头组合和过渡优化，输出最终可执行的 `StoryboardContent`。重试循环只在 Phase 3，验证失败时带反馈重新精剪，最多 3 次。新增 `src-tauri/src/storyboard/phases.rs` 子模块（231 行）定义三阶段函数和中间数据结构（`NarrativeStructure`、`RoughStoryboard`）；主流程 `storyboard.rs:generate_storyboard_internal` 重构为三阶段顺序调用（Phase 1/2 不重试，Phase 3 重试）。架构优势：素材多样性提升（每个 beat 独立 TOP-5，不再受全局 5 个素材限制）、语义匹配精度提升（排序针对每个 beat 的 `requiredVisual` 计算）、重试效率提升（Phase 3 验证失败时只重新精剪，Phase 1/2 结果保持稳定）。Tauri 命令签名不变，SQLite schema 不变，最终持久化的 `StoryboardVersion` 结构不变。
+- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-three-phase-storyboard-refactor.md`。
+<!-- ACTIVE_TASKS_END -->
+
 - [x] 完成（2026-08-18，bugfix）：修复素材重链接时 `kind` 字段未更新导致的数据不一致问题。根本原因：`confirm_asset_relink` 在更新 `source_reference` 时未同步更新 `kind` 字段，导致用户将图片替换为同名视频后，数据库仍记录旧的 `kind = 'image'`；分析结果回写路径 `update_analysis_status` 也存在同样问题。修复：在 `confirm_asset_relink` 的两个 UPDATE 分支（`preserve_analysis = true/false`）都重新计算 `kind = asset_kind(&source)` 并更新到数据库；在 `update_analysis_status` 的两个分支（有/无 `metadata_json`）也同步更新 `kind` 字段。修复后用户 relink 到不同类型文件或分析回写时，`kind` 会自动同步，避免"数据库显示 451 个图片但文件系统实际是 426 个视频"的不一致。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-fix-asset-kind-sync-on-relink.md`。
-<!-- ACTIVE_TASKS_END -->
 
 - [x] 完成（2026-08-18，feature）：为 storyboard 生成流程添加详细日志并增强素材池诊断。在 `storyboard.rs` 的关键决策点添加 info/error 级别日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他计数）、素材样本（前 10 个的 ID/类型/时长）、候选排序与 TOP-5 清单、多模态内容构建、模型请求/响应、重试循环进度、候选接收（shots/beats/时长）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结。覆盖 `generate_storyboard_internal`（7 处）、`request_storyboard`（4 处）和 `normalize_storyboard_candidate`（4 处），共 15 处日志点，支持后续调试验证失败原因和候选素材选择过程。新增素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断"451 个图片 vs 4 个视频"等异常情况。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-storyboard-generation-logging.md`。
