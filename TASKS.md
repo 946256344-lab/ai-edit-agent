@@ -3,6 +3,8 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-18，bugfix）：在路由决策 prompt 中明确列举 goal 枚举值。修复模型漏填 `goal` 字段或返回不合法值（如 `"storyboard_generation"` 而非 `"storyboard"`）导致的路由验证失败。Prompt 从模糊描述（"Include goal"）改为明确列举 5 个合法值（question, storyboard, timeline, preview, jianying）+ 对应推荐工具，降低模型猜测错误的概率。不改变 `ConversationRouteResponse` schema、公开命令或工具白名单。
+- [x] 本项完成门：113 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-clarify-route-goal-enum-in-prompt.md`。
 - [x] 完成（2026-08-18，feature）：添加路由决策诊断日志。在 `agentloop/runtime.rs` 的路由决策流程新增三处 info/warn 级别日志：首次路由决策时记录模型返回的原始 route/goal/isQuestion/tool 值和 backend 识别的 pinnedGoal；纠偏重试后记录修正值；验证失败时记录导致失败的原始字段值。用于诊断 storyboard 生成失败时的路由验证问题（模型漏填 goal、返回不合法值、还是 fast_goal 关键词识别遗漏）。不改变执行逻辑或公开命令。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-route-decision-logging.md`。
 <!-- ACTIVE_TASKS_END -->

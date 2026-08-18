@@ -125,10 +125,16 @@ pub(crate) fn decide_conversation_route(
          - Shot selection or narrative restructuring from raw media belongs to goal=storyboard.\n\
          - Editing existing shot durations/order belongs to goal=timeline.\n\n\
          Return one JSON object. route must be respond, clarify, or run.\n\
-         For goal=question, include informationScope=general or project. Use general only when the answer does not depend on this project's current assets, tasks, artifacts, counts, state, or failure causes. A project-scoped question must use route=run and observe real state before answering.\n\
+         Valid goal values (required for route=run): question, storyboard, timeline, preview, jianying. Choose based on the artifact boundary above.\n\
+         - goal=question: answering a question by observing project state (use informationScope=general or project)\n\
+         - goal=storyboard: creating initial shot selection from raw media (first tool: generate_storyboard)\n\
+         - goal=timeline: editing existing storyboard/timeline structure (tools: create_timeline_draft, replace_text_tracks, replace_music_tracks)\n\
+         - goal=preview: rendering video preview (first tool: render_preview)\n\
+         - goal=jianying: exporting to Jianying format (first tool: create_jianying_draft)\n\n\
+         Route decision rules:\n\
          - respond: only for general conversational answers that need no tool or side effect. Include goal=question, isQuestion=true, informationScope=general, answer.\n\
          - clarify: only when a genuinely required input is missing. Include question.\n\
-         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal, goalReasoning (explain WHY this request belongs to the chosen artifact boundary based on the responsibilities above), isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
+         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal (one of the 5 valid values above), goalReasoning (explain WHY this request belongs to the chosen artifact boundary), isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
          When pendingClarification is not null, respond and run must include clarificationAction=keep or resolve. Resolve only when this turn answers or explicitly abandons that question; keep it for unrelated turns. A new clarify route replaces the old question.\n\
          A long narration/script supplied after the Agent requested a creative goal is normally a creative input, even when its heading is a rhetorical question. Exact completion facts come only from latestRun/artifacts. The backend-pinned goal, when not null, is authoritative.\n\n\
          Available first tools: {tools}. Return JSON only.",
