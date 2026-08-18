@@ -6,7 +6,7 @@
 
 - Tauri 2 桌面应用，使用 SQLite 持久化本地项目、剪辑任务、会话、消息、素材、storyboard 和时间线版本。
 - 原生文件和文件夹导入；保存源媒体引用，不复制或修改原文件。
-- 基于 FFprobe、FFmpeg 和 Tesseract 的本地技术分析、缩略图、关键帧、场景候选和英文 OCR 证据。
+- 基于 FFprobe、FFmpeg 和 Tesseract 的本地技术分析、缩略图、关键帧拼接网格、OCR 证据。关键帧提取使用固定时间采样（第 1 秒、1/3、2/3、最后 1 秒），覆盖整个视频，拼接为 2×2 网格图供多模态选镜使用。
 - 实验性 Provider 最小帧视觉分析、证据校验后的 storyboard 生成，以及受限的自然语言编辑工具选择。
 - 源时间绑定的内部时间线、540 x 960 本地 FFmpeg preview 和质量检查。
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。

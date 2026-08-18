@@ -1,6 +1,12 @@
 //! 只使用已就绪真实媒体证据生成版本化 storyboard，并校验证据源时间范围。
 //! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
 
+mod keyframes;
+pub(crate) mod multimodal;
+mod scoring;
+mod semantic;
+mod validation;
+
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
 use crate::models::{StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata};
@@ -46,14 +52,32 @@ pub(crate) fn storyboard_sources(
             let visual_ready =
                 metadata.visual_analysis_status == "ready" && !metadata.visual_evidence.is_empty();
             let source_available = Path::new(&row.get::<_, String>(3)?).is_file();
+
+            // 从元数据中提取视觉质量分数（如果可用）
+            // 当前视觉证据尚未包含数值质量分数，使用 None
+            let visual_quality_score = None;
+
+            // 从元数据中提取关键帧网格图路径
+            let keyframe_grid_path = metadata.keyframe_grid_path.clone();
+
             Ok((
                 StoryboardSource {
                     asset_id: row.get(0)?,
                     kind: row.get(1)?,
                     duration_ms: metadata.duration_ms,
-                    scene_segments: metadata.scene_segments,
+                    scene_segments: metadata
+                        .scene_segments
+                        .into_iter()
+                        .map(|mut seg| {
+                            // 场景段时长从端点推算
+                            seg.scene_duration_ms = Some(seg.end_ms - seg.start_ms);
+                            seg
+                        })
+                        .collect(),
                     ocr_evidence: metadata.ocr_evidence,
                     visual_evidence: metadata.visual_evidence,
+                    visual_quality_score,
+                    keyframe_grid_path,
                 },
                 visual_ready,
                 source_available,
@@ -83,28 +107,101 @@ pub(crate) fn request_storyboard(
     previous: Option<&StoryboardContent>,
     feedback: Option<&str>,
 ) -> Result<StoryboardContent, String> {
-    let evidence = serde_json::to_string(sources)
-        .map_err(|_| "Could not prepare media evidence.".to_owned())?;
-    let previous_json = previous
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|_| "Could not prepare storyboard revision context.".to_owned())?
+    // 使用评分模块对候选素材排序，只向模型提供 top-5 高质量候选
+    use crate::models::StoryboardBeat;
+
+    let target_duration_ms = previous.map(|p| p.target_duration_ms).unwrap_or(30_000); // 默认 30 秒作为初始估算
+
+    let prior_selections: Vec<String> = previous
+        .map(|p| p.shots.iter().map(|shot| shot.asset_id.clone()).collect())
         .unwrap_or_default();
-    let revision_context = feedback.map_or(String::new(), |feedback| {
-        format!("\nPrevious attempt failed local validation: {feedback}\nPrevious storyboard JSON (revise it when useful): {previous_json}\n")
-    });
-    let prompt = format!(
-        "Create an editable, evidence-bound storyboard for this brief: {brief}\n\
-        Work in two stages inside the returned JSON: first split the brief into the narrative beats it needs (up to 30 for safety); then choose the strongest real media for each covered beat.\n\
-        Return title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots. targetDurationMs is your creative duration proposal (3-120 seconds). scriptMode must be full_script or key_message. Each beat must contain id, purpose, and requiredVisual.\n\
-        Each shot must contain orderIndex, durationMs, purpose, onScreenText, assetId, sourceStartMs, sourceEndMs, reason, beatId, and matchLevel.\n\
-        matchLevel must be direct or contextual. Use direct only when the supplied evidence visibly and specifically supports the beat. Use contextual only for honest scene-setting footage, and say exactly what is contextual in reason.\n\
-        Prefer the clearest, most specific, and least repetitive evidence. Do not default to the first source, the longest source, or a generic clip if a more relevant one exists. Avoid padding a beat with weak footage when a better shot is available.\n\
-        Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
-        Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
-        Use ONLY the supplied media evidence JSON below. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.\n\
-        Evidence: {evidence}{revision_context}"
+
+    let usage_counts = std::collections::HashMap::new(); // TODO: 从 DB 读取项目内素材使用次数
+
+    // 对每个 beat 独立排序候选（当前阶段为全局排序，后续可按 beat 细分）
+    let dummy_beat = StoryboardBeat {
+        id: "global".to_owned(),
+        purpose: "全局候选排序".to_owned(),
+        required_visual: "高质量素材".to_owned(),
+    };
+
+    let ranked = scoring::rank_segment_candidates(
+        sources.to_vec(),
+        &dummy_beat,
+        target_duration_ms,
+        &prior_selections,
+        &usage_counts,
     );
+
+    // 只取评分最高的前 5 个候选提供给模型
+    let top_candidates: Vec<StoryboardSource> = ranked
+        .into_iter()
+        .take(5)
+        .map(|scored| scored.source)
+        .collect();
+
+    // 构建多模态输入：为每个候选准备视觉证据
+    let mut content_parts: Vec<serde_json::Value> = Vec::new();
+
+    // 检查是否有候选包含关键帧网格图
+    let has_keyframe_grids = top_candidates
+        .iter()
+        .any(|c| c.keyframe_grid_path.is_some());
+
+    let previous_json = previous
+        .and_then(|p| serde_json::to_string(p).ok())
+        .unwrap_or_default();
+
+    let prompt_text = if has_keyframe_grids {
+        // 多模态模式：提示模型直接从关键帧画面判断语义匹配度
+        format!(
+            "Create an editable, evidence-bound storyboard for this brief: {brief}\n\
+            Work in two stages inside the returned JSON: first split the brief into the narrative beats it needs (up to 30 for safety); then choose the strongest real media for each covered beat.\n\
+            Return title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots. targetDurationMs is your creative duration proposal (3-120 seconds). scriptMode must be full_script or key_message. Each beat must contain id, purpose, and requiredVisual.\n\
+            Each shot must contain orderIndex, durationMs, purpose, onScreenText, assetId, sourceStartMs, sourceEndMs, reason, beatId, and matchLevel.\n\
+            matchLevel must be direct or contextual. Use direct only when the supplied evidence visibly and specifically supports the beat. Use contextual only for honest scene-setting footage, and say exactly what is contextual in reason.\n\
+            Prefer the clearest, most specific, and least repetitive evidence. Do not default to the first source, the longest source, or a generic clip if a more relevant one exists. Avoid padding a beat with weak footage when a better shot is available.\n\
+            Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
+            Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
+            The candidates below have been pre-ranked by quality, duration match, and relevance. Each candidate includes a keyframe grid showing 4-8 representative frames from the video. Judge semantic match by directly inspecting these frames, not by relying solely on text descriptions.\n\
+            For each candidate, you will see: (1) a keyframe grid image, (2) metadata (assetId, duration, sceneSegments). Use ONLY the supplied candidates. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.{}"
+        , if let Some(fb) = feedback {
+            format!("\n\nPrevious attempt failed local validation: {fb}\nPrevious storyboard JSON (revise it when useful): {}", previous_json)
+        } else {
+            String::new()
+        })
+    } else {
+        // 回退到纯文本模式
+        let evidence = serde_json::to_string(&top_candidates)
+            .map_err(|_| "Could not prepare media evidence.".to_owned())?;
+        let revision_context = feedback.map_or(String::new(), |feedback| {
+            format!("\nPrevious attempt failed local validation: {feedback}\nPrevious storyboard JSON (revise it when useful): {previous_json}\n")
+        });
+        format!(
+            "Create an editable, evidence-bound storyboard for this brief: {brief}\n\
+            Work in two stages inside the returned JSON: first split the brief into the narrative beats it needs (up to 30 for safety); then choose the strongest real media for each covered beat.\n\
+            Return title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots. targetDurationMs is your creative duration proposal (3-120 seconds). scriptMode must be full_script or key_message. Each beat must contain id, purpose, and requiredVisual.\n\
+            Each shot must contain orderIndex, durationMs, purpose, onScreenText, assetId, sourceStartMs, sourceEndMs, reason, beatId, and matchLevel.\n\
+            matchLevel must be direct or contextual. Use direct only when the supplied evidence visibly and specifically supports the beat. Use contextual only for honest scene-setting footage, and say exactly what is contextual in reason.\n\
+            Prefer the clearest, most specific, and least repetitive evidence. Do not default to the first source, the longest source, or a generic clip if a more relevant one exists. Avoid padding a beat with weak footage when a better shot is available.\n\
+            Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
+            Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
+            Use ONLY the supplied media evidence JSON below. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.\n\
+            The evidence below has been pre-ranked by quality, duration match, and relevance — prioritize the top candidates.\n\
+            Evidence: {evidence}{revision_context}"
+        )
+    };
+
+    content_parts.push(serde_json::json!({
+        "type": "input_text",
+        "text": prompt_text
+    }));
+
+    // 添加关键帧网格图（如果可用）
+    if has_keyframe_grids {
+        let multimodal_blocks = multimodal::build_multimodal_content(&top_candidates)?;
+        content_parts.extend(multimodal_blocks);
+    }
     let model_name = access
         .custom_config()
         .map(|config| {
@@ -119,7 +216,7 @@ pub(crate) fn request_storyboard(
         "model": model_name,
         "store": false,
         "stream": true,
-        "input": [{ "role": "user", "content": [{ "type": "input_text", "text": prompt }] }],
+        "input": [{ "role": "user", "content": content_parts }],
         "text": { "format": { "type": "json_object" } }
     });
     let body = post_model_payload(access, &request, Some(STORYBOARD_TIMEOUT))?;
@@ -280,6 +377,12 @@ pub(crate) fn validate_storyboard(
             content.shots.iter().map(|shot| shot.order_index).collect(),
         )
     })?;
+    validate_shot_diversity(&content.shots).map_err(|error| {
+        storyboard_repair_message(
+            error,
+            content.shots.iter().map(|shot| shot.order_index).collect(),
+        )
+    })?;
     Ok(())
 }
 
@@ -307,6 +410,47 @@ fn validate_non_overlapping_video_sources(
             }
         }
     }
+    Ok(())
+}
+
+/// 校验镜头多样性：禁止连续使用同一素材，且同一素材占比不得超过 40%。
+fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<(), String> {
+    if shots.len() < 2 {
+        return Ok(());
+    }
+
+    // 检查连续镜头是否使用同一素材
+    for window in shots.windows(2) {
+        if window[0].asset_id == window[1].asset_id {
+            return Err(format!(
+                "Consecutive shots (index {} and {}) cannot use the same asset. Choose different footage to maintain visual variety. Try alternating between available assets or selecting non-adjacent time ranges from this asset.",
+                window[0].order_index,
+                window[1].order_index
+            ));
+        }
+    }
+
+    // 检查单一素材占比
+    let mut asset_usage = std::collections::HashMap::new();
+    for shot in shots {
+        *asset_usage.entry(&shot.asset_id).or_insert(0) += 1;
+    }
+
+    let max_allowed = (shots.len() * 2 / 5).max(1); // 40% 向上取整
+    for (asset_id, count) in asset_usage {
+        if count > max_allowed {
+            let percentage = count * 100 / shots.len();
+            return Err(format!(
+                "Asset '{}' appears in {} of {} shots ({}%), exceeding the 40% diversity limit. Recommended: use this asset for at most {} shots and distribute remaining shots across other available footage. Consider replacing repetitive shots with contextually similar scenes from different assets.",
+                asset_id,
+                count,
+                shots.len(),
+                percentage,
+                max_allowed
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -445,6 +589,8 @@ mod tests {
             scene_segments: Vec::new(),
             ocr_evidence: Vec::new(),
             visual_evidence: Vec::new(),
+            visual_quality_score: None,
+            keyframe_grid_path: None,
         }
     }
 

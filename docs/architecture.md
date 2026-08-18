@@ -264,3 +264,5 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 维护记录（2026-08-15）：render_timeline_clip 的 FFmpeg -t 参数改为 min(source_range, timeline_slot)，防止源素材短于时间线槽位时生成黑帧；测试模块提取为独立 preview_tests.rs，preview.rs 预算从 1015 降至 608 行。
 维护记录（2026-08-15）：agentloop.rs::decide_conversation_route 和 taskrouter.rs::resolve_conversation_task 新增 validate-then-correct 重试逻辑；路由验证失败时把错误原因反馈给模型后重试一次，不改变公开命令或运行时边界。
 维护记录（2026-08-16）：移除 agent.rs、agentloop.rs、assets.rs 中所有静默 fallback（遇错返回硬编码合成值），补全被丢弃的真实错误日志；降级路径仍封闭失败，不伪造成功结果，公开命令与运行时边界不变。
+维护记录（2026-08-18）：实现四阶段 storyboard 选镜优化系统。models.rs 新增 visual_quality_score 和 scene_duration_ms 字段（Option 类型向后兼容）；新增 storyboard/scoring.rs 独立评分模块（质量/时长/语义/多样性/新鲜度综合评分），request_storyboard 只向模型提供 top-5 候选；新增多样性硬门（连续禁止、同素材≤40%）；新增 storyboard/semantic.rs 和 validation.rs 架构层（接口定义，实现体 TODO）。公开命令与 schema 不变。
+维护记录（2026-08-18）：新增 storyboard/multimodal.rs 多模态选镜架构层。定义关键帧网格配置（4-8 帧拼成 2x2/2x4 网格）、generate_keyframe_grid（FFmpeg I 帧提取 + image crate 拼图）和 build_multimodal_content（base64 编码图像块）接口。request_storyboard 检测 keyframe_grid_path 并构建多模态输入，让模型直接从关键帧画面判断语义匹配度。当前阶段接口定义完成，FFmpeg 和 base64 实现体 TODO。公开命令与 schema 不变。

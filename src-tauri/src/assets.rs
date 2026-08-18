@@ -697,6 +697,8 @@ pub(crate) fn search_asset_segments_for_agent(
             vec![SceneSegment {
                 start_ms: 0,
                 end_ms: 0,
+                scene_duration_ms: None,
+                visual_quality_score: None,
             }]
         } else {
             metadata.scene_segments.clone()

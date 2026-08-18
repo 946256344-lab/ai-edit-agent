@@ -108,6 +108,8 @@ OAuth 命令兼容当前 OpenCode 实现，但不是官方 OpenAI 第三方集�
 
 Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
 
+`storyboard.rs::request_storyboard` 使用独立的 `storyboard/scoring.rs` 评分模块对所有候选素材进行综合评分（语义相关性 0-50 分、画面质量 0-25 分、时长匹配 0-15 分、多样性惩罚 -10 分、新鲜度 0-10 分），按评分降序排序后只向模型提供前 5 个高质量候选，提高选镜精度。`validate_storyboard` 新增多样性硬门：连续镜头禁止使用同一素材，单一素材占比不得超过 40%。`models.rs` 的 `StoryboardSource` 和 `SceneSegment` 新增 `visual_quality_score` 和 `scene_duration_ms` 字段（Option 类型向后兼容）。`storyboard/multimodal.rs` 定义多模态选镜架构：检测候选的 `keyframe_grid_path` 字段，构建包含关键帧网格图（4-8 帧拼成 2x2/2x4 网格）的多模态内容块，让模型直接从画面判断语义匹配度（当前阶段接口已定义，FFmpeg 关键帧提取和 base64 编码实现体 TODO）。`storyboard/semantic.rs` 和 `storyboard/validation.rs` 定义了语义匹配层与对抗验证框架的接口和类型，实现体保留 TODO 供后续集成 CLIP 编码器和独立验证模型。
+
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
 生成 storyboard 必须提交非空的用户 brief。模型输入仅有紧凑的持久化证据：素材 ID、媒体类型、已验证时长、场景片段、OCR 与视觉标签。生成镜头必须含素材 ID 和源范围；视频范围必须在已验证时长内，图片的源范围必须为零。校验失败不会保存版本。
