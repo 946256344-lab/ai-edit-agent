@@ -198,6 +198,7 @@ pub(crate) fn phase3_fine_edit(
         5. Ensure visual transitions between consecutive shots are smooth\n\n\
         Return the complete final JSON with: title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots.\n\
         Each shot must contain: orderIndex, durationMs, purpose, onScreenText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
+        matchLevel must be 'direct' (evidence visibly supports the beat) or 'contextual' (honest scene-setting).\n\
         Do NOT add new assets — only refine timing and structure of the existing rough shots.\n\
         This is the FINAL pass before execution.",
         serde_json::to_string(&rough).unwrap_or_default()
