@@ -46,7 +46,9 @@ pub(crate) fn phase1_generate_narrative(
         "Analyze this brief and create a narrative structure: {brief}\n\
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (full_script or key_message), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement).\n\
-        Create 3-12 beats that cover the brief's narrative arc. Do not select any media yet — this stage is pure story structure.\n\
+        Determine the appropriate number of beats based on the content's natural rhythm, pacing requirements, and narrative complexity. \
+        A simple message might need just 3-4 beats, while a story-driven piece could use 8-12 or more. \
+        Let the content guide the structure—do not artificially limit or pad the beat count. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration. scriptMode determines whether every word must be narrated (full_script) or only key points (key_message)."
     );
 

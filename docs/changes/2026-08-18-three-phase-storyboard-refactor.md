@@ -33,7 +33,8 @@ pub(crate) fn phase1_generate_narrative(
 ```
 - 输入：brief
 - 输出：`NarrativeStructure`（title, summary, targetDurationMs, scriptMode, beats）
-- 模型只负责拆分叙事为 3-12 个 beats，每个 beat 包含：
+- 模型根据内容的自然节奏、节奏要求和叙事复杂度确定合适的 beats 数量。简单消息可能只需 3-4 个 beats，故事驱动的内容可能使用 8-12 个或更多。让内容引导结构，不人为限制或填充 beat 数量。
+- 每个 beat 包含：
   - `id`：唯一标识
   - `purpose`：该 beat 的叙事作用
   - `requiredVisual`：该 beat 需要的视觉证据要求
