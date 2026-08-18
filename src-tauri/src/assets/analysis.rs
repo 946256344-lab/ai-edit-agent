@@ -434,16 +434,20 @@ fn update_analysis_status(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+
+    // 从 source_reference 重新计算 kind，防止文件类型变化时产生不一致
+    let new_kind = asset_kind(Path::new(source_reference));
+
     let updated = if let Some(metadata_json) = metadata_json {
         transaction.execute(
-            "UPDATE assets SET analysis_status = ?1, metadata_json = ?2, updated_at = ?3 WHERE id = ?4 AND source_reference = ?5 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?6 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?4)",
-            params![status, metadata_json, timestamp, asset_id, source_reference, task_id],
+            "UPDATE assets SET analysis_status = ?1, metadata_json = ?2, kind = ?3, updated_at = ?4 WHERE id = ?5 AND source_reference = ?6 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?7 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?5)",
+            params![status, metadata_json, new_kind, timestamp, asset_id, source_reference, task_id],
         ).map_err(|error| error.to_string())?
     } else {
         transaction
             .execute(
-                "UPDATE assets SET analysis_status = ?1, updated_at = ?2 WHERE id = ?3 AND source_reference = ?4 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?5 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?3)",
-                params![status, timestamp, asset_id, source_reference, task_id],
+                "UPDATE assets SET analysis_status = ?1, kind = ?2, updated_at = ?3 WHERE id = ?4 AND source_reference = ?5 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?6 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?4)",
+                params![status, new_kind, timestamp, asset_id, source_reference, task_id],
             )
             .map_err(|error| error.to_string())?
     };

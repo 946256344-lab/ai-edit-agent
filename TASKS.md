@@ -3,9 +3,12 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-18，bugfix）：修复素材重链接时 `kind` 字段未更新导致的数据不一致问题。根本原因：`confirm_asset_relink` 在更新 `source_reference` 时未同步更新 `kind` 字段，导致用户将图片替换为同名视频后，数据库仍记录旧的 `kind = 'image'`；分析结果回写路径 `update_analysis_status` 也存在同样问题。修复：在 `confirm_asset_relink` 的两个 UPDATE 分支（`preserve_analysis = true/false`）都重新计算 `kind = asset_kind(&source)` 并更新到数据库；在 `update_analysis_status` 的两个分支（有/无 `metadata_json`）也同步更新 `kind` 字段。修复后用户 relink 到不同类型文件或分析回写时，`kind` 会自动同步，避免"数据库显示 451 个图片但文件系统实际是 426 个视频"的不一致。
+- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-fix-asset-kind-sync-on-relink.md`。
+<!-- ACTIVE_TASKS_END -->
+
 - [x] 完成（2026-08-18，feature）：为 storyboard 生成流程添加详细日志并增强素材池诊断。在 `storyboard.rs` 的关键决策点添加 info/error 级别日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他计数）、素材样本（前 10 个的 ID/类型/时长）、候选排序与 TOP-5 清单、多模态内容构建、模型请求/响应、重试循环进度、候选接收（shots/beats/时长）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结。覆盖 `generate_storyboard_internal`（7 处）、`request_storyboard`（4 处）和 `normalize_storyboard_candidate`（4 处），共 15 处日志点，支持后续调试验证失败原因和候选素材选择过程。新增素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断"451 个图片 vs 4 个视频"等异常情况。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-storyboard-generation-logging.md`。
-<!-- ACTIVE_TASKS_END -->
 
 - [x] 完成（2026-08-18，feature）：实现关键帧网格拼接与固定 4 帧采样策略。替换场景检测（前 30 秒，最多 6 帧）为固定时间采样（整个视频，精确 4 帧：第 1 秒、1/3、2/3、最后 1 秒）。实现 `storyboard/multimodal.rs` 的 `generate_keyframe_grid`（2×2 网格拼接，640×360 JPEG）和 `build_multimodal_content`（base64 编码为 image block + 元数据 text block）。素材导入后自动调用网格生成，路径记录到 `TechnicalMetadata.keyframe_grid_path`。向后兼容：旧素材读取为 `None`，网格生成失败只记录警告不阻塞导入。新增 `image = 0.25` 依赖（仅 jpeg feature）。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-keyframe-grid-generation-implementation.md`，架构决策见 `docs/decisions.md` ADR-065。

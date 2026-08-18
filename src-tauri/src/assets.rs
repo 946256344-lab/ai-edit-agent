@@ -324,10 +324,11 @@ pub fn confirm_asset_relink(
         if !selected.contains(&asset_id) {
             continue;
         }
+        let new_kind = asset_kind(&source);
         if preserve_analysis {
             transaction.execute(
-                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, updated_at = ?3 WHERE id = ?4 AND project_id = ?5",
-                params![source.to_string_lossy(), source_directory.as_str(), timestamp, asset_id, project_id],
+                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, updated_at = ?4 WHERE id = ?5 AND project_id = ?6",
+                params![source.to_string_lossy(), source_directory.as_str(), new_kind, timestamp, asset_id, project_id],
             ).map_err(|error| error.to_string())?;
         } else {
             transaction.execute(
@@ -335,8 +336,8 @@ pub fn confirm_asset_relink(
                 params![timestamp, project_id, format!("%\"assetId\":\"{asset_id}\"%")],
             ).map_err(|error| error.to_string())?;
             transaction.execute(
-                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, analysis_status = 'queued', metadata_json = '{}', updated_at = ?3 WHERE id = ?4 AND project_id = ?5",
-                params![source.to_string_lossy(), source_directory.as_str(), timestamp, asset_id, project_id],
+                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, analysis_status = 'queued', metadata_json = '{}', updated_at = ?4 WHERE id = ?5 AND project_id = ?6",
+                params![source.to_string_lossy(), source_directory.as_str(), new_kind, timestamp, asset_id, project_id],
             ).map_err(|error| error.to_string())?;
             let task_id = Uuid::new_v4().to_string();
             transaction.execute(
