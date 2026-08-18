@@ -133,12 +133,36 @@ pub(crate) fn request_storyboard(
         &usage_counts,
     );
 
+    log::info!(
+        "Ranked {} candidates for storyboard. target_duration_ms={}, prior_selections={}",
+        sources.len(),
+        target_duration_ms,
+        prior_selections.len()
+    );
+
     // 只取评分最高的前 5 个候选提供给模型
     let top_candidates: Vec<StoryboardSource> = ranked
         .into_iter()
         .take(5)
         .map(|scored| scored.source)
         .collect();
+
+    // 记录提供给模型的候选素材清单
+    log::info!(
+        "Storyboard candidates (top {} of {} total): {}",
+        top_candidates.len(),
+        sources.len(),
+        top_candidates
+            .iter()
+            .map(|c| format!(
+                "{}({}:{}ms)",
+                c.asset_id,
+                c.kind,
+                c.duration_ms.unwrap_or(0)
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     // 构建多模态输入：为每个候选准备视觉证据
     let mut content_parts: Vec<serde_json::Value> = Vec::new();
@@ -199,7 +223,15 @@ pub(crate) fn request_storyboard(
 
     // 添加关键帧网格图（如果可用）
     if has_keyframe_grids {
+        log::info!(
+            "Building multimodal content blocks for {} candidates with keyframe grids",
+            top_candidates.len()
+        );
         let multimodal_blocks = multimodal::build_multimodal_content(&top_candidates)?;
+        log::info!(
+            "Added {} multimodal content blocks (image + metadata pairs)",
+            multimodal_blocks.len()
+        );
         content_parts.extend(multimodal_blocks);
     }
     let model_name = access
@@ -212,6 +244,12 @@ pub(crate) fn request_storyboard(
             }
         })
         .unwrap_or("gpt-5.4");
+    log::info!(
+        "Sending storyboard request to model: model={}, content_parts={}, timeout={}s",
+        model_name,
+        content_parts.len(),
+        STORYBOARD_TIMEOUT.as_secs()
+    );
     let request = serde_json::json!({
         "model": model_name,
         "store": false,
@@ -222,6 +260,7 @@ pub(crate) fn request_storyboard(
     let body = post_model_payload(access, &request, Some(STORYBOARD_TIMEOUT))?;
     let text = model_response_json_text(access, &body)
         .ok_or_else(|| "Experimental storyboard response did not contain JSON.".to_owned())?;
+    log::info!("Received model response: json_length={} bytes", text.len());
     serde_json::from_str(&text)
         .map_err(|_| "Experimental storyboard JSON did not match the required schema.".to_owned())
 }
@@ -403,6 +442,16 @@ fn validate_non_overlapping_video_sources(
                 && shot.source_start_ms < other.source_end_ms
                 && other.source_start_ms < shot.source_end_ms
             {
+                log::warn!(
+                    "Overlapping video source range detected: asset_id={}, shot_{}=[{}-{}]ms, shot_{}=[{}-{}]ms",
+                    shot.asset_id,
+                    shot.order_index,
+                    shot.source_start_ms,
+                    shot.source_end_ms,
+                    other.order_index,
+                    other.source_start_ms,
+                    other.source_end_ms
+                );
                 return Err(
                     "Storyboard cannot reuse overlapping video source ranges across beats."
                         .to_owned(),
@@ -422,6 +471,13 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
     // 检查连续镜头是否使用同一素材
     for window in shots.windows(2) {
         if window[0].asset_id == window[1].asset_id {
+            log::warn!(
+                "Consecutive shots use same asset: shot_{}={}, shot_{}={}",
+                window[0].order_index,
+                window[0].asset_id,
+                window[1].order_index,
+                window[1].asset_id
+            );
             return Err(format!(
                 "Consecutive shots (index {} and {}) cannot use the same asset. Choose different footage to maintain visual variety. Try alternating between available assets or selecting non-adjacent time ranges from this asset.",
                 window[0].order_index,
@@ -440,6 +496,14 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
     for (asset_id, count) in asset_usage {
         if count > max_allowed {
             let percentage = count * 100 / shots.len();
+            log::warn!(
+                "Asset usage exceeds diversity limit: asset_id={}, usage={}/{} shots ({}%), limit=40% ({} shots)",
+                asset_id,
+                count,
+                shots.len(),
+                percentage,
+                max_allowed
+            );
             return Err(format!(
                 "Asset '{}' appears in {} of {} shots ({}%), exceeding the 40% diversity limit. Recommended: use this asset for at most {} shots and distribute remaining shots across other available footage. Consider replacing repetitive shots with contextually similar scenes from different assets.",
                 asset_id,
@@ -471,13 +535,21 @@ fn normalize_storyboard_candidate(
     sources: &[StoryboardSource],
     brief: &str,
 ) -> StoryboardContent {
+    log::info!(
+        "Normalizing storyboard candidate: shots={}, initial_target_duration_ms={}",
+        content.shots.len(),
+        content.target_duration_ms
+    );
     let mut total_duration = 0_i64;
+    let mut corrections = 0;
     for shot in &mut content.shots {
         if let Some(source) = sources
             .iter()
             .find(|source| source.asset_id == shot.asset_id)
         {
             if source.kind == "video" {
+                let original_start = shot.source_start_ms;
+                let original_end = shot.source_end_ms;
                 let duration = source.duration_ms.unwrap_or(0).max(1);
                 let desired_duration = shot.duration_ms.clamp(1, duration);
                 let (mut start, mut end) = choose_storyboard_video_range(
@@ -490,6 +562,18 @@ fn normalize_storyboard_candidate(
                     let fallback_start = (duration.saturating_sub(desired_duration)) / 2;
                     start = fallback_start.clamp(0, duration.saturating_sub(1));
                     end = (start + desired_duration).min(duration).max(start + 1);
+                }
+                if start != original_start || end != original_end {
+                    corrections += 1;
+                    log::info!(
+                        "Corrected video range for shot_{}: asset_id={}, [{}-{}]ms -> [{}-{}]ms",
+                        shot.order_index,
+                        shot.asset_id,
+                        original_start,
+                        original_end,
+                        start,
+                        end
+                    );
                 }
                 shot.source_start_ms = start;
                 shot.source_end_ms = end;
@@ -507,7 +591,18 @@ fn normalize_storyboard_candidate(
     }
     if content.script_mode == "full_script" && total_duration < minimum_storyboard_duration(brief) {
         content.script_mode = "key_message".to_owned();
+        log::info!(
+            "Downgraded script mode: full_script -> key_message (total_duration={}ms < minimum={}ms)",
+            total_duration,
+            minimum_storyboard_duration(brief)
+        );
     }
+    log::info!(
+        "Normalization complete: corrections={}, final_duration={}ms, script_mode={}",
+        corrections,
+        total_duration,
+        content.script_mode
+    );
     content
 }
 
@@ -707,7 +802,13 @@ fn generate_storyboard_internal(
     brief: String,
     schedule_visual_analysis: bool,
 ) -> Result<StoryboardVersion, String> {
-    log::info!("Starting AI storyboard generation.");
+    log::info!(
+        "Starting AI storyboard generation. project_id={}, editing_task_id={}, brief_length={}, schedule_visual_analysis={}",
+        project_id,
+        editing_task_id,
+        brief.len(),
+        schedule_visual_analysis
+    );
     let brief = brief.trim();
     if brief.is_empty() {
         return Err("Storyboard brief cannot be empty.".to_owned());
@@ -724,11 +825,23 @@ fn generate_storyboard_internal(
         return Err("Editing task does not belong to this project.".to_owned());
     }
     if schedule_visual_analysis {
+        log::info!("Prioritizing visual analysis batch for storyboard generation.");
         let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
         wait_for_visual_batch(&app, priority_batch.as_deref())?;
     }
     let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id)?;
+    log::info!(
+        "Loaded storyboard sources: total_count={}, visual_ready_count={}, video_count={}, image_count={}",
+        sources.len(),
+        visual_ready_count,
+        sources.iter().filter(|s| s.kind == "video").count(),
+        sources.iter().filter(|s| s.kind == "image").count()
+    );
     if sources.is_empty() {
+        log::warn!(
+            "No accessible source files found. visual_ready_count={}",
+            visual_ready_count
+        );
         return if visual_ready_count == 0 {
             Err("storyboard_visual_evidence_unavailable: visual_ready_candidates=0".to_owned())
         } else {
@@ -744,7 +857,12 @@ fn generate_storyboard_internal(
     let mut previous = None;
     let mut feedback = None;
     let mut content = None;
-    for _ in 0..MAX_STORYBOARD_REVISIONS {
+    for revision in 0..MAX_STORYBOARD_REVISIONS {
+        log::info!(
+            "Storyboard generation attempt {}/{}",
+            revision + 1,
+            MAX_STORYBOARD_REVISIONS
+        );
         match request_storyboard(
             &access,
             brief,
@@ -753,11 +871,19 @@ fn generate_storyboard_internal(
             feedback.as_deref(),
         ) {
             Ok(candidate) => {
+                log::info!(
+                    "Received storyboard candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}",
+                    candidate.shots.len(),
+                    candidate.beats.len(),
+                    candidate.target_duration_ms,
+                    candidate.uncovered_beat_ids.len()
+                );
                 // 先规范化（夹紧数值约束、修正 target_duration_ms），
                 // 再校验结构性约束；纯数值偏差不再占用模型重试配额。
                 let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
                 match validate_storyboard(&candidate, &sources, brief) {
                     Ok(()) => {
+                        log::info!("Storyboard validation passed.");
                         content = Some(candidate);
                         break;
                     }
@@ -776,9 +902,15 @@ fn generate_storyboard_internal(
         }
     }
     let content = content.ok_or_else(|| {
+        log::error!(
+            "Storyboard generation failed after {} attempts. final_feedback={:?}",
+            MAX_STORYBOARD_REVISIONS,
+            feedback
+        );
         feedback
             .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned())
     })?;
+    log::info!("Storyboard content finalized. Persisting to database.");
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",
         params![project_id], |row| row.get::<_, i64>(0),

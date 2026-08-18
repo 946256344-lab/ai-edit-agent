@@ -3,10 +3,12 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [x] 完成（2026-08-18，feature）：实现关键帧网格拼接与固定 4 帧采样策略。替换场景检测（前 30 秒，最多 6 帧）为固定时间采样（整个视频，精确 4 帧：第 1 秒、1/3、2/3、最后 1 秒）。实现 `storyboard/multimodal.rs` 的 `generate_keyframe_grid`（2×2 网格拼接，640×360 JPEG）和 `build_multimodal_content`（base64 编码为 image block + 元数据 text block）。素材导入后自动调用网格生成，路径记录到 `TechnicalMetadata.keyframe_grid_path`。向后兼容：旧素材读取为 `None`，网格生成失败只记录警告不阻塞导入。新增 `image = 0.25` 依赖（仅 jpeg feature）。
-- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-keyframe-grid-generation-implementation.md`，架构决策见 `docs/decisions.md` ADR-065。
+- [x] 完成（2026-08-18，feature）：为 storyboard 生成流程添加详细日志。在 `storyboard.rs` 的关键决策点添加 info/error 级别日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片计数）、候选排序与 TOP-5 清单、多模态内容构建、模型请求/响应、重试循环进度、候选接收（shots/beats/时长）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结。覆盖 `generate_storyboard_internal`（6 处）、`request_storyboard`（4 处）和 `normalize_storyboard_candidate`（4 处），共 14 处日志点，支持后续调试验证失败原因和候选素材选择过程。
+- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-storyboard-generation-logging.md`。
 <!-- ACTIVE_TASKS_END -->
 
+- [x] 完成（2026-08-18，feature）：实现关键帧网格拼接与固定 4 帧采样策略。替换场景检测（前 30 秒，最多 6 帧）为固定时间采样（整个视频，精确 4 帧：第 1 秒、1/3、2/3、最后 1 秒）。实现 `storyboard/multimodal.rs` 的 `generate_keyframe_grid`（2×2 网格拼接，640×360 JPEG）和 `build_multimodal_content`（base64 编码为 image block + 元数据 text block）。素材导入后自动调用网格生成，路径记录到 `TechnicalMetadata.keyframe_grid_path`。向后兼容：旧素材读取为 `None`，网格生成失败只记录警告不阻塞导入。新增 `image = 0.25` 依赖（仅 jpeg feature）。
+- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-keyframe-grid-generation-implementation.md`，架构决策见 `docs/decisions.md` ADR-065。
 - [x] 完成（2026-08-18，feature）：深度解耦地实现完整选镜优化系统（四阶段）。暴露质量分数、多样性硬门；提取独立评分模块（语义50分、质量25分、时长15分）；定义语义匹配层架构（embedding接口）；定义对抗验证框架架构。新增字段向后兼容，公开契约不变。变更记录见 `docs/changes/2026-08-18-storyboard-selection-scoring-system.md`。
 
 - [x] 完成（2026-08-17，refactor）：将 `agentloop.rs`（3684 行）拆分为四个子模块。`agentloop/schema.rs`（纯类型与常量）、`agentloop/prompt.rs`（提示构建与历史加载）、`agentloop/skills.rs`（技能执行器与状态辅助）、`agentloop/runtime.rs`（路由决策与主循环）；父文件收缩为薄 re-export 层加测试。`check-agent-contracts.mjs` 同步扩展扫描 `runtime.rs`。公开命令名称、SQLite schema、工具白名单、Provider 接口均不变。

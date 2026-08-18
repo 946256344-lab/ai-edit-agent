@@ -240,9 +240,9 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows Credential Manager；`search_music` 仅返回 API 明示可下载且为 CC0/CC-BY 的曲目，CC-BY 的曲名、作者和许可 URL 会随 music cue 保存。`download_music` 才按需将单曲写入当前 local project 并交给既有本地分析队列；`use_online_music` 在一个具名、受限且可审计的调用内下载一首、等待分析完成并新建含循环背景音乐的时间线版本。每个下载副本使用唯一文件名，绝不覆盖既有本地副本。不会抓取网页、批量缓存曲库或把未验证的远程 URL 写入时间线/Jianying draft。
 
-场景检测当前覆盖前述历史滤镜描述：首次扫描在前 30 秒内先限制为 4 fps，再以 fast bilinear 缩放到 320 像素宽，最后执行 `scene` 比较与 `showinfo`；`pts_time` 仍作为源时间。
+场景检测当前覆盖前述历史滤镜描述：固定时间采样（第 1 秒、1/3、2/3、最后 1 秒）替代旧的前 30 秒场景检测，精确提取 4 帧关键帧并拼接为 2×2 网格（640×360 JPEG）供多模态选镜使用。关键帧提取路径记录到 `TechnicalMetadata.keyframe_grid_path`，素材导入时自动生成，网格生成失败只记录警告不阻塞导入。
 
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
+生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。storyboard 生成会记录详细日志：入口参数、素材库存（总数、视频/图片计数、视觉就绪数）、每轮重试进度、候选接收情况、归一化修正次数、验证结果及最终失败反馈，所有日志使用 Rust `log` crate 的 info/warn/error 级别。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
 
 ## 技术约束
 
