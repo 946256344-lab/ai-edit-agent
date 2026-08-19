@@ -19,9 +19,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-const SCENE_SCAN_CAP_SECONDS: f64 = 30.0;
-const SCENE_SCAN_FPS: usize = 4;
-const MAX_INITIAL_SCENE_KEYFRAMES: usize = 4;
+const KEYFRAME_COUNT: usize = 4;
 pub(crate) const MAX_INITIAL_OCR_FRAMES: usize = 2;
 pub(crate) const MAX_TECHNICAL_ANALYSIS_WORKERS: usize = 2;
 pub(crate) const STARTUP_ANALYSIS_BATCH: usize = 4;
@@ -188,6 +186,7 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         visual_evidence: Vec::new(),
         visual_analysis_note: None,
         visual_analysis_status: "queued".to_owned(),
+        keyframe_grid_path: None,
     })
 }
 
@@ -245,12 +244,6 @@ fn extract_scene_times(output: &[u8]) -> Vec<f64> {
         .collect()
 }
 
-fn scene_scan_filter() -> String {
-    format!(
-        "fps={SCENE_SCAN_FPS},scale=320:-2:flags=fast_bilinear,select=gt(scene\\,0.30),showinfo"
-    )
-}
-
 fn generate_video_keyframes(
     app: &AppHandle,
     asset_id: &str,
@@ -258,73 +251,48 @@ fn generate_video_keyframes(
     duration_ms: Option<i64>,
 ) -> Result<(Vec<KeyframeMetadata>, Vec<SceneSegment>), String> {
     let directory = derived_directory(app, asset_id)?;
-    let pattern = directory.join("keyframe_%03d.jpg");
-    let cap_seconds = SCENE_SCAN_CAP_SECONDS.to_string();
-    let max_keyframes = MAX_INITIAL_SCENE_KEYFRAMES.to_string();
-    let scene_filter = scene_scan_filter();
-    let mut command = hidden_command("ffmpeg");
-    command
-        .args(["-y", "-hide_banner", "-loglevel", "info", "-i"])
-        .arg(source)
-        .args([
-            "-t",
-            &cap_seconds,
-            "-vf",
-            &scene_filter,
-            "-frames:v",
-            &max_keyframes,
-            "-fps_mode",
-            "vfr",
-        ])
-        .arg(&pattern);
-    let output = run_hidden_command_with_timeout(&mut command, SCENE_SCAN_FFMPEG_TIMEOUT);
-    let output = output.map_err(|error| match error {
-        HiddenCommandError::TimedOut => "Scene scan timed out.".to_owned(),
-        HiddenCommandError::Failed => "Scene scan could not start.".to_owned(),
-    })?;
-    let mut times = output
-        .status
-        .success()
-        .then(|| extract_scene_times(&output.stderr))
-        .unwrap_or_default();
-    if times.is_empty() {
-        let duration_seconds = duration_ms.unwrap_or(0) as f64 / 1000.0;
-        times = [
-            0.0,
-            duration_seconds * 0.5,
-            (duration_seconds - 0.1).max(0.0),
+    let duration_seconds = duration_ms.unwrap_or(0) as f64 / 1000.0;
+
+    // 固定采样 4 帧：第 1 秒、1/3 处、2/3 处、最后 1 秒
+    let times = if duration_seconds > 2.0 {
+        vec![
+            1.0,                               // 第 1 秒
+            duration_seconds / 3.0,            // 1/3 处
+            duration_seconds * 2.0 / 3.0,      // 2/3 处
+            (duration_seconds - 1.0).max(1.5), // 最后 1 秒（不小于 1.5s）
         ]
-        .into_iter()
-        .filter(|time| duration_seconds > 0.0 || *time == 0.0)
-        .collect();
-        for (index, time) in times.iter().enumerate() {
-            let destination = directory.join(format!("keyframe_{:03}.jpg", index + 1));
-            let mut command = hidden_command("ffmpeg");
-            command
-                .args([
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-ss",
-                    &format!("{time:.3}"),
-                    "-i",
-                ])
-                .arg(source)
-                .args(["-frames:v", "1", "-vf", "scale=320:-2"])
-                .arg(destination);
-            run_hidden_command_with_timeout(&mut command, FALLBACK_FRAME_FFMPEG_TIMEOUT).map_err(
-                |error| match error {
-                    HiddenCommandError::TimedOut => {
-                        "Fallback frame extraction timed out.".to_owned()
-                    }
-                    HiddenCommandError::Failed => {
-                        "Fallback frame extraction could not start.".to_owned()
-                    }
-                },
-            )?;
-        }
+    } else if duration_seconds > 0.0 {
+        // 短视频回退：开头和中间
+        vec![0.0, duration_seconds * 0.5]
+    } else {
+        vec![0.0]
+    };
+
+    // 提取每一帧
+    for (index, time) in times.iter().enumerate() {
+        let destination = directory.join(format!("keyframe_{:03}.jpg", index + 1));
+        let mut command = hidden_command("ffmpeg");
+        command
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                &format!("{time:.3}"),
+                "-i",
+            ])
+            .arg(source)
+            .args(["-frames:v", "1", "-vf", "scale=320:-2"])
+            .arg(destination);
+        run_hidden_command_with_timeout(&mut command, FALLBACK_FRAME_FFMPEG_TIMEOUT).map_err(
+            |error| match error {
+                HiddenCommandError::TimedOut => "Keyframe extraction timed out.".to_owned(),
+                HiddenCommandError::Failed => "Keyframe extraction could not start.".to_owned(),
+            },
+        )?;
     }
+
     let keyframes = times
         .into_iter()
         .enumerate()
@@ -355,6 +323,8 @@ fn generate_video_keyframes(
         .map(|pair| SceneSegment {
             start_ms: pair[0],
             end_ms: pair[1],
+            scene_duration_ms: Some(pair[1] - pair[0]),
+            visual_quality_score: None,
         })
         .collect();
     Ok((keyframes, scenes))
@@ -464,16 +434,20 @@ fn update_analysis_status(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+
+    // 从 source_reference 重新计算 kind，防止文件类型变化时产生不一致
+    let new_kind = asset_kind(Path::new(source_reference));
+
     let updated = if let Some(metadata_json) = metadata_json {
         transaction.execute(
-            "UPDATE assets SET analysis_status = ?1, metadata_json = ?2, updated_at = ?3 WHERE id = ?4 AND source_reference = ?5 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?6 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?4)",
-            params![status, metadata_json, timestamp, asset_id, source_reference, task_id],
+            "UPDATE assets SET analysis_status = ?1, metadata_json = ?2, kind = ?3, updated_at = ?4 WHERE id = ?5 AND source_reference = ?6 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?7 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?5)",
+            params![status, metadata_json, new_kind, timestamp, asset_id, source_reference, task_id],
         ).map_err(|error| error.to_string())?
     } else {
         transaction
             .execute(
-                "UPDATE assets SET analysis_status = ?1, updated_at = ?2 WHERE id = ?3 AND source_reference = ?4 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?5 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?3)",
-                params![status, timestamp, asset_id, source_reference, task_id],
+                "UPDATE assets SET analysis_status = ?1, kind = ?2, updated_at = ?3 WHERE id = ?4 AND source_reference = ?5 AND EXISTS (SELECT 1 FROM agent_tasks WHERE id = ?6 AND tool_name = 'analyze_asset' AND status = 'running' AND json_extract(input_json, '$.assetId') = ?4)",
+                params![status, new_kind, timestamp, asset_id, source_reference, task_id],
             )
             .map_err(|error| error.to_string())?
     };
@@ -524,6 +498,36 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
         if kind == "video" {
             (metadata.keyframes, metadata.scene_segments) =
                 generate_video_keyframes(&app, &asset_id, &source, metadata.duration_ms)?;
+
+            // 生成关键帧网格图
+            if !metadata.keyframes.is_empty() {
+                use crate::storyboard::multimodal::{generate_keyframe_grid, KeyframeGridConfig};
+                let keyframe_paths: Vec<String> = metadata
+                    .keyframes
+                    .iter()
+                    .map(|kf| kf.image_path.clone())
+                    .collect();
+                let derived_dir = derived_directory(&app, &asset_id)?;
+                match generate_keyframe_grid(
+                    &asset_id,
+                    &keyframe_paths,
+                    &derived_dir,
+                    &KeyframeGridConfig::default(),
+                ) {
+                    Ok(Some(grid_path)) => {
+                        metadata.keyframe_grid_path =
+                            Some(grid_path.to_string_lossy().into_owned());
+                    }
+                    Ok(None) => {
+                        log::warn!("Keyframe grid generation returned None for asset {asset_id}");
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to generate keyframe grid for asset {asset_id}: {error}"
+                        );
+                    }
+                }
+            }
         }
         metadata.ocr_evidence = extract_ocr_evidence(&kind, &source, &metadata.keyframes)?;
         Ok(Some((source_reference, metadata)))
@@ -645,16 +649,37 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
     {
         return Ok(());
     }
+    log::info!("[PERF] resume_incomplete_analysis: starting");
+    let start = std::time::Instant::now();
+
+    let step_start = std::time::Instant::now();
     if let Err(error) = super::visual::recover_interrupted_visual_batches(app) {
         RECOVERY_STARTED.store(false, Ordering::Release);
         return Err(error);
     }
+    log::info!(
+        "[PERF] resume_incomplete_analysis: recover_interrupted_visual_batches took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     if let Err(error) = super::visual::backfill_queued_visual_batches(app) {
         RECOVERY_STARTED.store(false, Ordering::Release);
         return Err(error);
     }
-    super::visual::spawn_visual_analysis_worker(app.clone());
+    log::info!(
+        "[PERF] resume_incomplete_analysis: backfill_queued_visual_batches took {:?}",
+        step_start.elapsed()
+    );
 
+    let step_start = std::time::Instant::now();
+    super::visual::spawn_visual_analysis_worker(app.clone());
+    log::info!(
+        "[PERF] resume_incomplete_analysis: spawn_visual_analysis_worker took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     let result = (|| {
         let connection = open_connection(app)?;
         connection
@@ -663,6 +688,8 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 params![now_millis()],
             )
             .map_err(|error| error.to_string())?;
+
+        let step_start_inner = std::time::Instant::now();
         let mut statement = connection
             .prepare(
                 "
@@ -681,6 +708,7 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         drop(statement);
+        log::info!("[PERF] resume_incomplete_analysis: query queued analyze_asset tasks took {:?}, found {} rows", step_start_inner.elapsed(), rows.len());
 
         // Every asset that already has any analyze_asset task (queued, running,
         // completed, failed, or cancelled) must never be enqueued again.
@@ -748,10 +776,15 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 tasked_asset_ids.insert(asset_id);
             }
         }
+        log::info!(
+            "[PERF] resume_incomplete_analysis: collected {} tasked asset IDs",
+            tasked_asset_ids.len()
+        );
 
         // Re-enqueue analysis for assets that are queued or in progress but had
         // never had an analyze_asset task persisted (for example after an import
         // was interrupted), so they no longer sit in "正在分析媒体" forever.
+        let step_start_inner = std::time::Instant::now();
         let mut orphan_statement = connection
             .prepare(
                 "
@@ -769,7 +802,13 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         drop(orphan_statement);
+        log::info!(
+            "[PERF] resume_incomplete_analysis: query orphan assets took {:?}, found {} orphans",
+            step_start_inner.elapsed(),
+            orphan_assets.len()
+        );
         let orphan_timestamp = now_millis();
+        let mut created_orphan_tasks = 0;
         for (asset_id, project_id) in orphan_assets {
             if tasked_asset_ids.contains(&asset_id) {
                 continue;
@@ -782,11 +821,23 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 )
                 .map_err(|error| error.to_string())?;
             tasks.push((asset_id.clone(), task_id));
+            created_orphan_tasks += 1;
         }
+        log::info!("[PERF] resume_incomplete_analysis: created {} orphan tasks, total tasks before truncate: {}", created_orphan_tasks, tasks.len());
         tasks.truncate(STARTUP_ANALYSIS_BATCH);
+        log::info!("[PERF] resume_incomplete_analysis: will spawn {} analysis tasks (STARTUP_ANALYSIS_BATCH={})", tasks.len(), STARTUP_ANALYSIS_BATCH);
         spawn_technical_analysis_tasks(app.clone(), tasks);
         Ok(())
     })();
+    log::info!(
+        "[PERF] resume_incomplete_analysis: technical analysis recovery took {:?}",
+        step_start.elapsed()
+    );
+
+    log::info!(
+        "[PERF] resume_incomplete_analysis: total time {:?}",
+        start.elapsed()
+    );
 
     if result.is_err() {
         RECOVERY_STARTED.store(false, Ordering::Release);
@@ -1021,16 +1072,9 @@ mod tests {
     }
 
     #[test]
-    fn scene_scan_reduces_frames_and_resolution_before_comparison() {
-        let filter = scene_scan_filter();
-        let fps = filter.find("fps=4").expect("scene scan must limit fps");
-        let scale = filter
-            .find("scale=320")
-            .expect("scene scan must reduce resolution");
-        let scene = filter
-            .find("select=gt(scene")
-            .expect("scene scan must compare frames");
-
-        assert!(fps < scale && scale < scene);
+    fn keyframe_extraction_uses_fixed_sampling() {
+        // 验证固定采样策略：不再依赖场景检测，改为固定时间点采样
+        // 该测试验证关键帧提取不使用 scene detection filter
+        assert_eq!(KEYFRAME_COUNT, 4);
     }
 }

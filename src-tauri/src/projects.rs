@@ -14,24 +14,25 @@ const MISSING_AGENT_REPLY_MESSAGE: &str = "上一条 Agent 任务已结束，但
 fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
-            "SELECT task.id, task.project_id, task.editing_task_id, task.conversation_id
+            "WITH latest_tasks AS (
+               SELECT id, conversation_id,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY conversation_id
+                        ORDER BY created_at DESC, updated_at DESC, id DESC
+                      ) as row_num
+               FROM agent_tasks
+               WHERE editing_task_id IS NOT NULL
+                 AND conversation_id IS NOT NULL
+                 AND status IN ('completed', 'partially_completed', 'failed', 'needs_clarification', 'needs_review')
+             )
+             SELECT task.id, task.project_id, task.editing_task_id, task.conversation_id
              FROM agent_tasks AS task
              JOIN conversations AS conversation ON conversation.id = task.conversation_id
+             JOIN latest_tasks ON latest_tasks.id = task.id AND latest_tasks.row_num = 1
+             LEFT JOIN messages ON messages.id = 'agent-task-result-' || task.id
+               AND messages.conversation_id = task.conversation_id
              WHERE conversation.status = 'working'
-               AND task.editing_task_id IS NOT NULL
-               AND task.conversation_id IS NOT NULL
-               AND task.status IN ('completed', 'partially_completed', 'failed', 'needs_clarification', 'needs_review')
-               AND task.id = (
-                 SELECT latest.id FROM agent_tasks AS latest
-                 WHERE latest.conversation_id = task.conversation_id
-                 ORDER BY latest.created_at DESC, latest.updated_at DESC, latest.id DESC
-                 LIMIT 1
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM messages
-                 WHERE messages.id = 'agent-task-result-' || task.id
-                   AND messages.conversation_id = task.conversation_id
-               )",
+               AND messages.id IS NULL",
         )
         .map_err(|error| error.to_string())?;
     let missing = statement
@@ -109,29 +110,84 @@ fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<
 
 #[tauri::command]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
+    let start = std::time::Instant::now();
+    log::info!("[PERF] initialize_local_store: starting");
+
     let connection = open_connection(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: open_connection took {:?}",
+        start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE agent_tasks SET status = 'needs_review', error_message = COALESCE(error_message, 'The application stopped before this Agent operation completed.'), updated_at = ?1 WHERE status IN ('queued', 'running') AND editing_task_id IS NOT NULL",
         params![now_millis()],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE agent_tasks took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE agent_run_steps SET status = 'failed', error_code = COALESCE(error_code, 'interrupted_requires_review'), completed_at = ?1, updated_at = ?1 WHERE status IN ('queued', 'running') AND agent_task_id IN (SELECT id FROM agent_tasks WHERE status = 'needs_review')",
         params![now_millis()],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE agent_run_steps took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     recover_missing_agent_completion_messages(&connection)?;
+    log::info!(
+        "[PERF] initialize_local_store: recover_missing_agent_completion_messages took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE conversations SET status = 'review' WHERE status = 'working' AND id IN (SELECT conversation_id FROM agent_tasks WHERE status = 'needs_review' AND conversation_id IS NOT NULL)",
         [],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE conversations (review) took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection
         .execute(
             "UPDATE conversations SET status = 'ready' WHERE status = 'working' AND id NOT IN (SELECT conversation_id FROM agent_tasks WHERE status = 'needs_review' AND conversation_id IS NOT NULL)",
             [],
         )
         .map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE conversations (ready) took {:?}",
+        step_start.elapsed()
+    );
+
     drop(connection);
+
+    let step_start = std::time::Instant::now();
     resume_incomplete_analysis(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: resume_incomplete_analysis took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     resume_pending_jianying_registrations(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: resume_pending_jianying_registrations took {:?}",
+        step_start.elapsed()
+    );
+
+    log::info!(
+        "[PERF] initialize_local_store: total time {:?}",
+        start.elapsed()
+    );
     Ok(StoreStatus {
         database_ready: true,
         schema_version: crate::db::SCHEMA_VERSION,

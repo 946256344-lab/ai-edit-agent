@@ -679,7 +679,7 @@ fn default_storyboard_script_mode() -> String {
     "full_script".to_owned()
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardSource {
     pub(crate) asset_id: String,
@@ -688,6 +688,14 @@ pub struct StoryboardSource {
     pub(crate) scene_segments: Vec<SceneSegment>,
     pub(crate) ocr_evidence: Vec<OcrEvidence>,
     pub(crate) visual_evidence: Vec<VisualEvidence>,
+    /// 素材整体视觉质量分数 0.0-1.0，用于候选排序。
+    /// 旧记录读取为 None，视为中等质量 0.5。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) visual_quality_score: Option<f64>,
+    /// 关键帧网格图路径（4-8 帧拼图），用于多模态选镜。
+    /// 旧记录读取为 None，模型回退到文本证据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) keyframe_grid_path: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -711,6 +719,10 @@ pub struct TechnicalMetadata {
     pub(crate) visual_analysis_note: Option<String>,
     #[serde(default = "default_visual_analysis_status")]
     pub(crate) visual_analysis_status: String,
+    /// 关键帧网格图路径（4-8 帧拼图），用于多模态选镜。
+    /// 旧记录读取为 None，表示尚未生成网格图。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) keyframe_grid_path: Option<String>,
 }
 
 fn default_visual_analysis_status() -> String {
@@ -724,21 +736,29 @@ pub struct KeyframeMetadata {
     pub(crate) image_path: String,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneSegment {
     pub(crate) start_ms: i64,
     pub(crate) end_ms: i64,
+    /// 场景实际持续时长（毫秒），用于选镜时的时长匹配评分。
+    /// 旧记录读取为 None，可从 end_ms - start_ms 计算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scene_duration_ms: Option<i64>,
+    /// 画面质量分数 0.0-1.0，高分优先选择。
+    /// 旧记录读取为 None，视为中等质量 0.5。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) visual_quality_score: Option<f64>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrEvidence {
     pub(crate) time_ms: Option<i64>,
     pub(crate) text: String,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisualEvidence {
     pub(crate) time_ms: Option<i64>,

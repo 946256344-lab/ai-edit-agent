@@ -125,10 +125,16 @@ pub(crate) fn decide_conversation_route(
          - Shot selection or narrative restructuring from raw media belongs to goal=storyboard.\n\
          - Editing existing shot durations/order belongs to goal=timeline.\n\n\
          Return one JSON object. route must be respond, clarify, or run.\n\
-         For goal=question, include informationScope=general or project. Use general only when the answer does not depend on this project's current assets, tasks, artifacts, counts, state, or failure causes. A project-scoped question must use route=run and observe real state before answering.\n\
+         Valid goal values (required for route=run): question, storyboard, timeline, preview, jianying. Choose based on the artifact boundary above.\n\
+         - goal=question: answering a question by observing project state (use informationScope=general or project)\n\
+         - goal=storyboard: creating initial shot selection from raw media (first tool: generate_storyboard)\n\
+         - goal=timeline: editing existing storyboard/timeline structure (tools: create_timeline_draft, replace_text_tracks, replace_music_tracks)\n\
+         - goal=preview: rendering video preview (first tool: render_preview)\n\
+         - goal=jianying: exporting to Jianying format (first tool: create_jianying_draft)\n\n\
+         Route decision rules:\n\
          - respond: only for general conversational answers that need no tool or side effect. Include goal=question, isQuestion=true, informationScope=general, answer.\n\
          - clarify: only when a genuinely required input is missing. Include question.\n\
-         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal, goalReasoning (explain WHY this request belongs to the chosen artifact boundary based on the responsibilities above), isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
+         - run: for observation requiring project details, media analysis, storyboard/timeline edits, preview, or Jianying delivery. Include goal (one of the 5 valid values above), goalReasoning (explain WHY this request belongs to the chosen artifact boundary), isQuestion=false unless this is an observation question, and choose the FIRST tool now. Tool arguments stay at the JSON top level.\n\
          When pendingClarification is not null, respond and run must include clarificationAction=keep or resolve. Resolve only when this turn answers or explicitly abandons that question; keep it for unrelated turns. A new clarify route replaces the old question.\n\
          A long narration/script supplied after the Agent requested a creative goal is normally a creative input, even when its heading is a rhetorical question. Exact completion facts come only from latestRun/artifacts. The backend-pinned goal, when not null, is authoritative.\n\n\
          Available first tools: {tools}. Return JSON only.",
@@ -159,6 +165,17 @@ pub(crate) fn decide_conversation_route(
         serde_json::from_str(&text).map_err(|_| "Route response was malformed.".to_owned())?;
     let mut response: ConversationRouteResponse = serde_json::from_value(raw.clone())
         .map_err(|_| "Route response schema invalid.".to_owned())?;
+
+    // 日志记录路由决策的原始值
+    log::info!(
+        "Route decision received: route={}, goal={:?}, isQuestion={:?}, tool={:?}, pinnedGoal={:?}",
+        response.route,
+        response.goal,
+        response.is_question,
+        response.tool,
+        pinned_goal.map(|g| g.code())
+    );
+
     // 纠偏重试：验证失败时把错误原因反馈给模型。
     match try_build_route_decision(
         &response,
@@ -181,6 +198,15 @@ pub(crate) fn decide_conversation_route(
                 .map_err(|_| "Route correction was malformed.".to_owned())?;
             response = serde_json::from_value(raw.clone())
                 .map_err(|_| "Route correction schema invalid.".to_owned())?;
+
+            // 日志记录纠偏后的值
+            log::info!(
+                "Route correction received: route={}, goal={:?}, isQuestion={:?}, tool={:?}",
+                response.route,
+                response.goal,
+                response.is_question,
+                response.tool
+            );
         }
     }
     try_build_route_decision(
@@ -233,7 +259,15 @@ fn try_build_route_decision(
             let declared = parse_declared_goal(response.goal.as_deref(), response.is_question);
             // pinned_goal 优先；declared 仅作后备，避免 pinned 存在时因模型漏填 goal 而失败
             let goal = pinned_goal.or(declared)
-                .ok_or_else(|| "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned())?;
+                .ok_or_else(|| {
+                    log::warn!(
+                        "Route validation failed: goal parsing failed. raw_goal={:?}, isQuestion={:?}, pinned={:?}",
+                        response.goal,
+                        response.is_question,
+                        pinned_goal.map(|g| g.code())
+                    );
+                    "route=run: goal must be question/storyboard/timeline/preview/jianying.".to_owned()
+                })?;
             if tool_policy.forbids_goal(goal) {
                 return Err(format!("goal='{}' is user-denied.", goal.code()));
             }
