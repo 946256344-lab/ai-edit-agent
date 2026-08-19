@@ -1,5 +1,12 @@
 # 技术决策记录
 
+## ADR-074：Native 主链授权、观察完成门与确认收据
+
+- 状态：已实现（2026-08-19）
+- 决策：NativeToolLoop 默认只暴露观察工具；主链写工具必须由 `RequestToolPolicy` 根据本轮明确的创建、分析或修改意图逐项授权。loop 使用结构化 `NativeRunReceipt` 记录是否要求项目观察、是否成功观察、工具失败和确认状态；项目事实请求没有成功只读观察时不能以事实回答完成，工具失败允许模型基于安全错误自然解释但终态保持失败或部分完成。`needs_confirmation` 只创建 storyboard 待确认状态；确认命令必须匹配项目、任务、会话、待确认 storyboard、来源 task 和有效期，并在同一 SQLite 事务内消费 pending、写入确认消息和排队唯一任务，通过一次性状态防止重放或半消费。
+- 原因：模型文本不是副作用或项目事实证据；把所有写工具放入普通请求会扩大权限，把“调用过工具”当作观察会允许失败或写操作满足事实门，确认不绑定持久化 pending 会允许跨作用域或重复执行。
+- 后果：Legacy Runtime、Router、LoopGoal 默认路径和既有 `apply_skill`、SQLite 事务、版本与审计保持不变；Native 主链仅迁移六项工具。安全 fixture 覆盖中文/英文授权、伪造调用、成功/失败观察、虚假完成、确认过期和作用域重放。
+
 ## ADR-065：故事板选镜采用固定时间采样替代场景检测
 
 - 状态：已实现（2026-08-18）
@@ -516,3 +523,10 @@
 - 决策：NativeToolLoop 只在用户明确提出预览生成动作且 RequestToolPolicy 未识别“只查看/只检查/不要生成预览”时注册 `render_preview`。模型 schema 不包含作用域、路径或 FFmpeg 参数；Rust 在 `apply_skill` 前再次校验权限、参数和当前项目时间线，成功返回脱敏产物收据，失败返回安全错误。工具结果必须进入下一轮模型请求；只有带 `status=ok` 且 `artifact.type=preview` 的结果才通过预览完成门。
 - 原因：preview 是本地产物副作用，不能像观察工具一样默认暴露，也不能只依赖模型服从提示；同时最终回复需要根据真实收据自然生成，而不是由 Legacy 的 `last_outcome` 固定文案覆盖。
 - 后果：最终任务结果保留 `apply_skill` 验证过的 preview 引用与步骤产物审计，但正常完成时显示消息替换为模型对真实工具结果的总结。preview 已生成而后续模型总结失败时，真实产物仍以 `partially_completed` 保存，并显示诚实恢复文案；无时间线或越权调用不会产生成功收据，模型不得声称成功。Router、LoopGoal、其他编辑工具和 Legacy 默认路径不变。
+
+## ADR-073：NativeToolLoop 迁移主链 Function Tools
+
+- 状态：已采用（2026-08-19）
+- 决策：在集中式 `agentloop/tools.rs` 注册 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 六个主链工具。非只读请求才将它们加入本轮 tools；只读请求继续只提供观察工具。每个工具使用 strict 闭合 schema，模型不传 project、conversation、路径或其他作用域字段；Rust 从 `LoopState` 补齐作用域并在 Native 参数边界与既有 `apply_skill` 前后复核。
+- 原因：Provider 原生调用能力已在前序任务验证，需要逐步迁移真实主链，同时保留 Legacy Runtime、现有素材证据、源时间范围、版本、事务、审计和权限校验。把未迁移的文本、音乐下载/编辑和 Jianying 工具带入 Native 会扩大本轮副作用边界。
+- 后果：`queued`（素材分析）与 `needs_confirmation`（storyboard）作为既有安全成功状态进入 `function_call_output`，模型可继续完成“分析素材 → storyboard → timeline”复合流程；工具失败仍通过安全错误交给模型。六个工具之外的写工具保持 Legacy 路径，Router、LoopGoal、确认门和 SQLite schema 不变。

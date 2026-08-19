@@ -1,0 +1,13 @@
+{
+  "id": "resp_main_chain_analysis_call",
+  "output": [
+    {
+      "id": "fc_main_chain_analysis",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_request_asset_analysis",
+      "name": "request_asset_analysis",
+      "arguments": "{\"assetIds\":[\"asset-1\"]}"
+    }
+  ]
+}

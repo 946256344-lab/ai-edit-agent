@@ -1,0 +1,11 @@
+{
+  "id": "resp_main_chain_final_reply",
+  "output": [
+    {
+      "id": "msg_main_chain_final_reply",
+      "type": "message",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "素材已分析，Storyboard 已生成，并已创建时间线。"}]
+    }
+  ]
+}

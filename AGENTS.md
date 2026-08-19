@@ -61,3 +61,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 <!-- 维护记录（2026-08-19）：显式 NATIVE_TOOL_LOOP=true 才启用只读原生 Agent Loop；仅调用三项观察工具并将安全 function_call_output 回传模型，Legacy Runtime 默认路径不变。 -->
 <!-- 维护记录（2026-08-19）：NativeToolLoop 从 SQLite 读取真实 user/assistant 会话项；上下文裁剪保持 function_call 与 function_call_output 成对，Native 回复以 assistant 角色保存。 -->
 <!-- 维护记录（2026-08-19）：NativeToolLoop 仅对明确且未被请求策略禁止的预览生成意图提供 render_preview；Rust 执行前复核权限、参数和时间线作用域，真实产物收据再交模型总结。 -->
+<!-- 维护记录（2026-08-19）：Native 主链写工具默认不暴露；仅本地请求策略明确授权的分析、Storyboard 或时间线能力进入请求，项目事实终态必须有成功只读观察，确认操作绑定作用域、来源任务和有效期。 -->

@@ -97,3 +97,4 @@ npm run harness:test
 维护记录（2026-08-19）：NativeToolLoop 原生 loop 同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具、受策略过滤的 `render_preview` 和安全错误边界保持可审查。
 维护记录（2026-08-19）：移除架构预算中的代码文件/目录 `maxLines` 指标；字符总量、最长单行、hooks、props、禁止路径和跨层边界仍由架构检查与 ratchet 保护。
 维护记录（2026-08-19）：NativeToolLoop 会话消息变更同步校验 SQLite assistant 角色、原生工具项上下文预算与 Legacy 默认回退；新增迁移 fixture 覆盖旧 messages 约束升级。
+维护记录（2026-08-19）：7B Native 主链审查新增本地逐工具授权、成功只读观察完成门、RunReceipt 真实性和确认作用域/有效期/重放测试；授权解析拆到 native_policy.rs 以保持策略模块架构预算。

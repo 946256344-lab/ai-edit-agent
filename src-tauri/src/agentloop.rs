@@ -6,6 +6,7 @@
 //! `agentloop/{tools,native}.rs`。本文件只负责模块声明、公开接口重导出和测试。
 
 mod native;
+mod native_policy;
 mod policy;
 mod prompt;
 mod runtime;

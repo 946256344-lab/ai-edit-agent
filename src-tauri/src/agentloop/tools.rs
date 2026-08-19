@@ -19,6 +19,12 @@ const GET_TIMELINE: &str = "get_timeline";
 const GET_TEXT_CAPABILITIES: &str = "get_text_capabilities";
 #[allow(dead_code)]
 const RENDER_PREVIEW: &str = "render_preview";
+const REQUEST_ASSET_ANALYSIS: &str = "request_asset_analysis";
+const GENERATE_STORYBOARD: &str = "generate_storyboard";
+const CREATE_TIMELINE_DRAFT: &str = "create_timeline_draft";
+const REPLACE_CLIPS: &str = "replace_clips";
+const CHANGE_CLIP_DURATION: &str = "change_clip_duration";
+const REORDER_CLIPS: &str = "reorder_clips";
 
 /// 只读原生工具保持独立入口，供 NativeToolLoop 的默认观察集合复用。
 #[allow(dead_code)]
@@ -27,6 +33,13 @@ pub(crate) fn native_observation_function_tools() -> Vec<Value> {
 }
 
 pub(crate) fn native_function_tools(include_render_preview: bool) -> Vec<Value> {
+    native_function_tools_for_request(include_render_preview, false)
+}
+
+pub(crate) fn native_function_tools_for_request(
+    include_render_preview: bool,
+    include_main_chain: bool,
+) -> Vec<Value> {
     let mut tools = vec![
         function_tool(
             GET_EDIT_STATUS,
@@ -152,7 +165,121 @@ pub(crate) fn native_function_tools(include_render_preview: bool) -> Vec<Value> 
             vec!["timelineVersionId"],
         ));
     }
+    if include_main_chain {
+        tools.extend(main_chain_function_tools());
+    }
     tools
+}
+
+fn main_chain_function_tools() -> Vec<Value> {
+    vec![
+        function_tool(
+            REQUEST_ASSET_ANALYSIS,
+            "Request bounded analysis for selected imported assets in the current project.",
+            json!({
+                "assetIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                    }
+                }
+            }),
+            vec!["assetIds"],
+        ),
+        function_tool(
+            GENERATE_STORYBOARD,
+            "Generate an evidence-bound storyboard from analyzed media and the current editing brief.",
+            json!({
+                "brief": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 4_000,
+                    "description": "Optional storyboard brief; null uses the current task brief."
+                }
+            }),
+            vec!["brief"],
+        ),
+        function_tool(
+            CREATE_TIMELINE_DRAFT,
+            "Create a new scoped timeline version from the current storyboard.",
+            json!({}),
+            Vec::new(),
+        ),
+        function_tool(
+            REPLACE_CLIPS,
+            "Create a new timeline version by replacing clips with verified source ranges.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "shots": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "shotIndex": {"type": "integer", "minimum": 0},
+                            "assetId": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "sourceStartMs": {"type": "integer", "minimum": 0},
+                            "sourceEndMs": {"type": "integer", "minimum": 0}
+                        },
+                        "required": ["shotIndex", "assetId", "sourceStartMs", "sourceEndMs"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            vec!["timelineVersionId", "shots"],
+        ),
+        function_tool(
+            CHANGE_CLIP_DURATION,
+            "Create a new timeline version with verified clip duration or source-start adjustments.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "adjustments": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "shotIndex": {"type": "integer", "minimum": 0},
+                            "newDurationMs": {"type": ["integer", "null"], "minimum": 1},
+                            "newSourceStartMs": {"type": ["integer", "null"], "minimum": 0}
+                        },
+                        "required": ["shotIndex", "newDurationMs", "newSourceStartMs"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            vec!["timelineVersionId", "adjustments"],
+        ),
+        function_tool(
+            REORDER_CLIPS,
+            "Create a new timeline version using a complete order of the existing clips.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "order": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {"type": "integer", "minimum": 0}
+                }
+            }),
+            vec!["timelineVersionId", "order"],
+        ),
+    ]
 }
 
 fn nullable_bounded_string(description: &str, max_length: usize) -> Value {
@@ -349,6 +476,85 @@ mod tests {
         assert_eq!(
             native_function_tools(true).len(),
             OBSERVATION_TOOLS.len() + 1
+        );
+    }
+
+    #[test]
+    fn main_chain_catalog_has_exact_native_migration_batch() {
+        let tools = native_function_tools_for_request(false, true);
+        let names = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect::<HashSet<_>>();
+        assert_eq!(names.len(), tools.len());
+        for name in [
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ] {
+            assert!(names.contains(name), "missing {name}");
+        }
+        for forbidden in [
+            "replace_text_tracks",
+            "replace_music_tracks",
+            "download_music",
+            "use_online_music",
+            "create_jianying_draft",
+        ] {
+            assert!(!names.contains(forbidden), "unexpected {forbidden}");
+        }
+    }
+
+    #[test]
+    fn main_chain_schemas_are_strict_closed_and_nullable_where_optional() {
+        let tools = native_function_tools_for_request(false, true);
+        for name in [
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("main chain tool");
+            assert_eq!(tool["strict"], true);
+            assert_eq!(tool["parameters"]["additionalProperties"], false);
+            let properties = tool["parameters"]["properties"]
+                .as_object()
+                .expect("properties");
+            let required = tool["parameters"]["required"].as_array().expect("required");
+            assert_eq!(properties.len(), required.len());
+            assert!(required
+                .iter()
+                .all(|key| properties.contains_key(key.as_str().unwrap())));
+            assert!(!tool.to_string().contains("projectId"));
+            assert!(!tool.to_string().contains("sourcePath"));
+        }
+
+        let by_name = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(
+            by_name("generate_storyboard")["parameters"]["properties"]["brief"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            by_name("replace_clips")["parameters"]["properties"]["timelineVersionId"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            by_name("change_clip_duration")["parameters"]["properties"]["adjustments"]["items"]
+                ["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            by_name("change_clip_duration")["parameters"]["properties"]["adjustments"]["items"]
+                ["properties"]["newDurationMs"]["type"],
+            json!(["integer", "null"])
         );
     }
 

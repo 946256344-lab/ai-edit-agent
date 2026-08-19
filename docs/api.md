@@ -100,7 +100,7 @@ OAuth 命令兼容当前 OpenCode 实现，但不是官方 OpenAI 第三方集�
 
 实验性 Responses 请求设置 `store: false` 与 `stream: true`。Provider 以协议无关的 `ModelTurn`/`ModelOutputItem`/`FunctionCall` 保留完整 `response.output`，包括 message、function call 及未知 output item；Chat Completions 的普通响应和 SSE 增量也转换为同一结构。旧的 `model_response_json_text` 接口仍保留给 Legacy Runtime，当前不由统一结构替换。后端累计 SSE 文本后再解析结构化工具或分析 JSON。回调成功、失败或超时后，后端发出 `experimental-openai-oauth-status` 事件；前端同时轮询状态作为恢复路径。
 
-显式设置进程环境变量 `NATIVE_TOOL_LOOP=true` 才会启用只读原生 Agent Loop；缺省仍是 Legacy Runtime。原生路径按 SQLite 时间顺序读取真实 user/assistant 消息，以对应原生 role/content item 发送，不拼接“用户/助手/工具”标签 Prompt；设置 `store: false`、`parallel_tool_calls: false`，并将完整 Responses output（或 Chat 适配后的 assistant/function call 项）与 `function_call_output` 追加到下一轮。上下文预算只丢弃旧消息，最新 function_call 与对应 function_call_output 始终作为完整配对保留，即使结果很大也不拆散；最终自然语言回复以 assistant 消息保存，旧 Legacy 回复仍为 agent。普通 message 直接作为自然语言回复；项目事实通过 9 个只读观察工具取得，搜索参数由严格 schema 和 Rust 边界共同限制；成功结果只保留安全 `tool/status` 包络和脱敏事实，工具失败只回传安全结构化错误，模型仍可解释或调整。原生路径受现有 10 步、300 秒总预算、每步 120 秒和任务取消检查约束，不经过 `decide_conversation_route`，不迁移编辑或副作用工具。
+显式设置进程环境变量 `NATIVE_TOOL_LOOP=true` 才会启用 Native Agent Loop；缺省仍是 Legacy Runtime。原生路径按 SQLite 时间顺序读取真实 user/assistant 消息，以对应原生 role/content item 发送，不拼接“用户/助手/工具”标签 Prompt；设置 `store: false`、`parallel_tool_calls: false`，并将完整 Responses output（或 Chat 适配后的 assistant/function call 项）与 `function_call_output` 追加到下一轮。上下文预算只丢弃旧消息，最新 function_call 与对应 function_call_output 始终作为完整配对保留，即使结果很大也不拆散；最终自然语言回复以 assistant 消息保存，旧 Legacy 回复仍为 agent。普通 message 直接作为自然语言回复；请求不是只读时，原生目录额外提供 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 六个主链工具，仍由 RequestToolPolicy 过滤；项目事实通过 9 个只读观察工具取得，搜索参数和主链参数由严格 schema 与 Rust 边界共同限制。成功结果只保留安全 `tool/status` 包络和脱敏事实，工具失败只回传安全结构化错误，模型仍可解释或调整。原生路径受现有 10 步、300 秒总预算、每步 120 秒和任务取消检查约束，不经过 `decide_conversation_route`；未迁移的文本、音乐下载/编辑和 Jianying 工具不进入 Native 目录。
 
 内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：首次视频分析最多扫描前 30 秒、生成 4 张关键帧，并只对前两张关键帧进行 OCR；完成后素材成为技术 `ready`。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 以最多 6 条技术就绪素材为一批，发送每条素材一张低分辨率中间代表帧及素材 ID/源时间标签；模型响应只能回填同一批次内的 ID 和精确时间。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或响应无效不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 只使用 `ready` 且实际具有视觉证据的素材，并已按 brief 对 queued 视觉批次设置本地优先级。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
 
@@ -120,7 +120,7 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 ## Agent 内部技能契约
 
-`src/lib/agent-tools.ts` 是供 IDE 导航的 TypeScript 工具名称镜像，现与 `agentloop/policy.rs` 的 9 个观察技能、12 个编辑/交付技能以及 fixture 定义的 `ask_user`/`finish` 两个 canonical control actions 对齐。它不声明前端可直接调用这些内部技能，也不参与运行时授权；执行事实仍是 Rust policy 的 `OBSERVATION_TOOLS`/`EDIT_TOOLS` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json`。原生 Function Tool 定义集中在 `src-tauri/src/agentloop/tools.rs`，9 个观察工具使用 strict 闭合 JSON Schema；严格 schema 将所有属性列入 `required`，语义上的可选值使用 nullable，搜索参数包含长度、枚举、时长和分页边界；真实执行仍经现有 `skills::apply_skill`，写操作工具不注册到 NativeToolLoop。兼容解析接受 `no_action`、`done` 和空工具名作为 `finish` 别名；当前生产 prompt 仍会向模型公布 `no_action`，所以这是待收敛的兼容入口，不能误报为“仅解析旧数据”。已经废止的 `analyze_assets`、`replace_timeline_clip` 不得重新作为当前工具名使用。
+`src/lib/agent-tools.ts` 是供 IDE 导航的 TypeScript 工具名称镜像，现与 `agentloop/policy.rs` 的 9 个观察技能、12 个编辑/交付技能以及 fixture 定义的 `ask_user`/`finish` 两个 canonical control actions 对齐。它不声明前端可直接调用这些内部技能，也不参与运行时授权；执行事实仍是 Rust policy 的 `OBSERVATION_TOOLS`/`EDIT_TOOLS` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json`。原生 Function Tool 定义集中在 `src-tauri/src/agentloop/tools.rs`，9 个观察工具和六个主链工具使用 strict 闭合 JSON Schema；严格 schema 将所有属性列入 `required`，语义上的可选值使用 nullable，搜索和镜头编辑参数包含长度、枚举、时间范围和数量边界；真实执行仍经现有 `skills::apply_skill`，模型不提供项目/会话/路径作用域参数，Rust 从当前 LoopState 补齐并复核。兼容解析接受 `no_action`、`done` 和空工具名作为 `finish` 别名；当前生产 prompt 仍会向模型公布 `no_action`，所以这是待收敛的兼容入口，不能误报为“仅解析旧数据”。已经废止的 `analyze_assets`、`replace_timeline_clip` 不得重新作为当前工具名使用。
 
 通用 Agent 运行状态由 `AgentTask`、`AgentRunStep`、`OperationLog` 和 `AgentEditResult` 分别表达，不存在一个供前端直接执行任意内部技能的通用 `ToolInvocation` 接口。通过作用域校验后，`execute_agent_edit` 会先创建持久化调用，再记录模型选择的允许工具、经脱敏的成功结果或安全失败结果；终态 `completed` 与 `failed` 可包含 `result`，`failed` 的结果仅含工具名、状态和失败代码，`error` 不得含凭据或不必要的本机路径。命令先同步插入 `queued` 调用并立即返回任务 ID，完整流水线在后台线程执行，终态经 `agent-edit-completed` 事件（携带 `AgentEditResult`）回传前端。工具或循环失败时不把技术校验错误直接交给 UI：技能循环内失败只回读安全失败代码供模型继续决策，不再请求独立后续回合，也不会自动重放失败工具；Provider 或模型不可用、或循环最终无法达成目标时，后端保存相同结构的安全失败结果并返回固定诚实降级回复。Agent 单步与 storyboard 模型请求保留 120 秒上限，Agent 循环还以 90 秒模型决策总预算收紧每步实际超时；不再存在独立意图分类请求。启动时仍为 `queued` 或 `running` 的通用调用会变为 `needs_review`，用户可重新发起请求，但系统不会自动重放未知副作用。
 
@@ -147,19 +147,20 @@ Agent 请求统一经父 `agentloop.rs` 的封闭、有界目标驱动循环处�
 | 工具 | 当前契约 | 实现状态 |
 | --- | --- | --- |
 | `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
-| `request_asset_analysis` | `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
+| `request_asset_analysis` | Native `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
 | `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `sourceStartMs/sourceEndMs`、安全视觉标签、固定命中原因和游标；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
-| `create_timeline_draft` | `{ projectId, storyboardVersionId }` | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
+| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。 |
+| `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
-| `replace_clips` | `{ timelineVersionId?, replacements: [{ shotIndex, assetId, sourceStartMs, sourceEndMs }] }` | 已实现，批量替换既有镜头并保持对应时间线时长。 |
-| `change_clip_duration` | `{ timelineVersionId?, adjustments: [{ shotIndex, newDurationMs?, newSourceStartMs? }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
-| `reorder_clips` | `{ timelineVersionId?, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
+| `replace_clips` | Native `{ timelineVersionId: string|null, shots: [{ shotIndex, assetId, sourceStartMs, sourceEndMs }] }` | 已实现，批量替换既有镜头并保持对应时间线时长；素材证据与源范围仍由 Rust 复核。 |
+| `change_clip_duration` | Native `{ timelineVersionId: string|null, adjustments: [{ shotIndex, newDurationMs: number|null, newSourceStartMs: number|null }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
+| `reorder_clips` | Native `{ timelineVersionId: string|null, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
 | `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
 | `ask_user` | `{ question }` | canonical control action：不产生产物，仅返回澄清问题。 |
 | `finish` | `{ answer? }` | fixture canonical terminal action：只有当前目标完成门允许时才能结束。`no_action`、`done` 和空工具名是兼容别名；当前 production prompt 仍会公布 `no_action`。 |

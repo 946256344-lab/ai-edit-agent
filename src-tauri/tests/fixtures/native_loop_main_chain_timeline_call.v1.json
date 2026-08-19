@@ -1,0 +1,13 @@
+{
+  "id": "resp_main_chain_timeline_call",
+  "output": [
+    {
+      "id": "fc_main_chain_timeline",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_create_timeline_draft",
+      "name": "create_timeline_draft",
+      "arguments": "{}"
+    }
+  ]
+}

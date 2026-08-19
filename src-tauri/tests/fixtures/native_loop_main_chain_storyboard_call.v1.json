@@ -1,0 +1,13 @@
+{
+  "id": "resp_main_chain_storyboard_call",
+  "output": [
+    {
+      "id": "fc_main_chain_storyboard",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_generate_storyboard",
+      "name": "generate_storyboard",
+      "arguments": "{\"brief\":null}"
+    }
+  ]
+}

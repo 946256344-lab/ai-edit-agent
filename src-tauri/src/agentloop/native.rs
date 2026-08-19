@@ -18,7 +18,9 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-use super::policy::{request_requires_project_observation, LoopGoal, RequestToolPolicy};
+use super::policy::{
+    request_requires_project_observation, LoopGoal, RequestToolPolicy, OBSERVATION_TOOLS,
+};
 use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
     MAX_STEPS,
@@ -26,7 +28,7 @@ use super::schema::{
 use super::skills::{
     apply_skill, persisted_artifact_for_tool, safe_step_error_code, safe_tool_failure_context,
 };
-use super::tools::native_function_tools;
+use super::tools::native_function_tools_for_request;
 
 const NATIVE_TOOL_LOOP_ENV: &str = "NATIVE_TOOL_LOOP";
 const NATIVE_TOOL_NAMES: &[&str] = &[
@@ -40,6 +42,12 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "get_timeline",
     "get_text_capabilities",
     "render_preview",
+    "request_asset_analysis",
+    "generate_storyboard",
+    "create_timeline_draft",
+    "replace_clips",
+    "change_clip_duration",
+    "reorder_clips",
 ];
 
 /// NativeToolLoop 是显式 opt-in；缺省值保持 Legacy Runtime。
@@ -138,7 +146,7 @@ pub(crate) fn run_native_tool_loop(
         "role": "system",
         "content": [{
             "type": "input_text",
-            "text": "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. The only artifact-producing function you may use is the scoped local preview function when it is provided. Treat function outputs as the only project and artifact facts. Claim a preview was created only when its function output contains a successful artifact receipt. If a function returns a structured failure, explain it safely or adjust with another allowed function."
+            "text": "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function."
         }]
     })];
     input.extend(history);
@@ -178,12 +186,17 @@ pub(crate) fn run_native_tool_loop(
     };
     let cancelled = || native_task_cancelled(connection, agent_task_id);
     let mut preview_succeeded = false;
+    let mut receipt = NativeRunReceipt {
+        requires_project_observation: request_requires_project_observation(request),
+        ..NativeRunReceipt::default()
+    };
     let loop_result = drive_native_loop(
         &mut input,
         is_custom,
         request_requires_project_observation(request),
         &tool_policy,
         &mut preview_succeeded,
+        &mut receipt,
         request,
         run_deadline,
         &mut respond,
@@ -219,11 +232,16 @@ pub(crate) fn run_native_tool_loop(
         state.last_outcome.take(),
         render_preview_authorized,
         preview_succeeded,
+        &receipt,
     )?;
     Ok(AgentLoopResult {
         result,
         status,
-        goal: LoopGoal::Question,
+        goal: if receipt.needs_confirmation {
+            LoopGoal::Storyboard
+        } else {
+            LoopGoal::Question
+        },
     })
 }
 
@@ -233,10 +251,20 @@ fn finish_native_result(
     last_outcome: Option<AgentEditResult>,
     preview_requested: bool,
     preview_succeeded: bool,
+    receipt: &NativeRunReceipt,
 ) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
     match loop_result {
         Ok(message) => {
-            let status = if preview_requested && !preview_succeeded {
+            let status = if receipt.failed_tool_call && receipt.successful_tool_call {
+                AgentLoopTerminalStatus::PartiallyCompleted
+            } else if receipt.failed_tool_call {
+                AgentLoopTerminalStatus::Failed
+            } else if last_outcome
+                .as_ref()
+                .is_some_and(|outcome| outcome.storyboard.is_some() && outcome.timeline.is_none())
+            {
+                AgentLoopTerminalStatus::NeedsClarification
+            } else if preview_requested && !preview_succeeded {
                 AgentLoopTerminalStatus::Failed
             } else {
                 AgentLoopTerminalStatus::Completed
@@ -246,15 +274,42 @@ fn finish_native_result(
                 status,
             ))
         }
-        Err(error) => {
+        Err(_error) => {
             match last_outcome {
                 Some(mut outcome) if outcome.preview.is_some() => {
                     outcome.message = "本地预览已生成并验证，但模型未能完成结果说明；预览已保留，可稍后继续检查。".to_owned();
                     Ok((outcome, AgentLoopTerminalStatus::PartiallyCompleted))
                 }
-                _ => Err(error),
+                _ => Ok((
+                    native_model_reply_unavailable_result(agent_task_id, receipt),
+                    AgentLoopTerminalStatus::Failed,
+                )),
             }
         }
+    }
+}
+
+/// Provider 在工具返回后的总结请求失败时，保留真实失败终态并给 UI 一个诚实、
+/// 不含传输细节的恢复消息。不能把此类 Native 回合抛回 Legacy 的固定“受限操作”
+/// 文案，因为它可能已完成只读观察，而未发生任何本地写入。
+fn native_model_reply_unavailable_result(
+    agent_task_id: &str,
+    receipt: &NativeRunReceipt,
+) -> AgentEditResult {
+    let message = if receipt.successful_observation_this_turn {
+        "项目数据已读取，但模型未能生成最终回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。"
+    } else if receipt.tool_called {
+        "模型未能根据本轮工具结果生成最终回复。请检查模型连接后重试；本轮没有确认新的本地写入。"
+    } else {
+        "模型未能生成回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。"
+    };
+    AgentEditResult {
+        agent_task_id: agent_task_id.to_owned(),
+        message: message.to_owned(),
+        storyboard: None,
+        timeline: None,
+        preview: None,
+        jianying_draft: None,
     }
 }
 
@@ -280,12 +335,23 @@ fn native_result_from_message(
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct NativeRunReceipt {
+    requires_project_observation: bool,
+    successful_observation_this_turn: bool,
+    tool_called: bool,
+    successful_tool_call: bool,
+    failed_tool_call: bool,
+    needs_confirmation: bool,
+}
+
 fn drive_native_loop(
     input: &mut Vec<Value>,
     is_custom: bool,
     requires_observation: bool,
     tool_policy: &RequestToolPolicy,
     preview_succeeded: &mut bool,
+    receipt: &mut NativeRunReceipt,
     request: &str,
     run_deadline: Instant,
     respond: &mut NativeRespond<'_>,
@@ -293,8 +359,9 @@ fn drive_native_loop(
     mut cancelled: impl FnMut() -> bool,
     mut observed: impl FnMut(&str, usize),
 ) -> Result<String, String> {
-    let mut tool_called = false;
+    receipt.requires_project_observation = requires_observation;
     let mut preview_tool_called = false;
+    let mut storyboard_confirmation_pending = false;
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
@@ -309,7 +376,15 @@ fn drive_native_loop(
             "stream": false,
             "parallel_tool_calls": false,
             "tool_choice": "auto",
-            "tools": native_function_tools(native_render_preview_allowed(request, tool_policy)),
+            "tools": filtered_native_tools(
+                native_function_tools_for_request(
+                    !storyboard_confirmation_pending
+                        && native_render_preview_allowed(request, tool_policy),
+                    tool_policy.has_native_write_authorization() && !storyboard_confirmation_pending,
+                ),
+                tool_policy,
+                !storyboard_confirmation_pending && native_render_preview_allowed(request, tool_policy),
+            ),
             "input": input,
         });
         let body = respond(&payload, timeout)?;
@@ -336,7 +411,10 @@ fn drive_native_loop(
                 continue;
             }
             if let Some(message) = model_message_text(&turn) {
-                if requires_observation && !tool_called {
+                if requires_observation
+                    && !receipt.successful_observation_this_turn
+                    && !receipt.failed_tool_call
+                {
                     input.push(json!({
                         "role": "system",
                         "content": [{
@@ -346,11 +424,21 @@ fn drive_native_loop(
                     }));
                     continue;
                 }
+                if tool_policy.has_native_write_authorization() && !receipt.successful_tool_call {
+                    input.push(json!({
+                        "role": "system",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "This request explicitly asks for a local project change. Use the matching provided function tool and wait for its structured result before claiming completion."
+                        }]
+                    }));
+                    continue;
+                }
                 return Ok(message);
             }
             return Err("native_tool_loop_response_missing_message".to_owned());
         }
-        tool_called = true;
+        receipt.tool_called = true;
         preview_tool_called |= calls.iter().any(|call| call.name == "render_preview");
 
         for item in &turn.output {
@@ -362,7 +450,29 @@ fn drive_native_loop(
             if cancelled() {
                 return Err("native_tool_loop_cancelled".to_owned());
             }
-            let result = execute(&call, step_number)?;
+            let result = if storyboard_confirmation_pending
+                && !OBSERVATION_TOOLS.contains(&call.name.as_str())
+            {
+                storyboard_confirmation_required(&call.name)
+            } else {
+                execute(&call, step_number)?
+            };
+            let result_status = result["status"].as_str();
+            if result_status == Some("needs_confirmation") {
+                storyboard_confirmation_pending = true;
+                receipt.needs_confirmation = true;
+            }
+            if OBSERVATION_TOOLS.contains(&call.name.as_str()) && result_status == Some("ok") {
+                receipt.successful_observation_this_turn = true;
+            }
+            if matches!(
+                result_status,
+                Some("ok") | Some("queued") | Some("needs_confirmation")
+            ) {
+                receipt.successful_tool_call = true;
+            } else {
+                receipt.failed_tool_call = true;
+            }
             if call.name == "render_preview"
                 && result["status"] == "ok"
                 && result["artifact"]["type"] == "preview"
@@ -409,6 +519,23 @@ fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy)
             | "render preview"
             | "make preview"
     )
+}
+
+fn filtered_native_tools(
+    tools: Vec<Value>,
+    policy: &RequestToolPolicy,
+    render_preview_included: bool,
+) -> Vec<Value> {
+    tools
+        .into_iter()
+        .filter(|tool| {
+            let Some(name) = tool["name"].as_str() else {
+                return false;
+            };
+            policy.native_tool_exposed(name)
+                || (name == "render_preview" && render_preview_included)
+        })
+        .collect()
 }
 
 fn remaining_timeout(deadline: Instant) -> Option<Duration> {
@@ -587,7 +714,7 @@ fn execute_native_tool(
             "stage": "permission",
             "code": "user_restricted_tool",
             "retryable": false,
-            "responseInstruction": "Explain that the user asked for inspection only, so preview generation is disabled for this request."
+            "responseInstruction": "Explain that this operation was not authorized for the current request. Use the allowed observation functions or ask the user to explicitly request the operation; do not claim it ran."
         }));
     }
     let args = match parse_native_arguments(&call.name, &call.arguments) {
@@ -639,7 +766,9 @@ fn execute_native_tool(
                     return Ok(error);
                 }
             };
-            state.successful_observation = true;
+            if OBSERVATION_TOOLS.contains(&call.name.as_str()) && value["status"] == "ok" {
+                state.successful_observation = true;
+            }
             let artifact = persisted_artifact_for_tool(state, &call.name);
             finish_agent_run_step(
                 state.connection,
@@ -678,7 +807,13 @@ fn native_tool_call_allowed(
     policy: &RequestToolPolicy,
     render_preview_authorized: bool,
 ) -> bool {
-    !policy.forbids(tool) && (tool != "render_preview" || render_preview_authorized)
+    if policy.forbids(tool) {
+        return false;
+    }
+    if tool == "render_preview" {
+        return render_preview_authorized;
+    }
+    policy.native_tool_exposed(tool)
 }
 
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
@@ -708,6 +843,95 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object
                 .get("timelineVersionId")
                 .is_some_and(|value| !(value.is_null() || value.is_string()))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "request_asset_analysis" => {
+            if object.len() != 1 || !object.contains_key("assetIds") {
+                return Err(invalid_arguments());
+            }
+            let Some(asset_ids) = object["assetIds"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if asset_ids.is_empty()
+                || asset_ids.len() > 100
+                || !asset_ids
+                    .iter()
+                    .all(|asset_id| bounded_required_string(asset_id, 200))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "generate_storyboard" => {
+            if object.len() != 1 || !object.contains_key("brief") {
+                return Err(invalid_arguments());
+            }
+            if !nullable_bounded_string_argument(&object["brief"], 4_000) {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "create_timeline_draft" => {
+            if object.is_empty() {
+                Ok(value)
+            } else {
+                Err(invalid_arguments())
+            }
+        }
+        "replace_clips" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("shots")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(shots) = object["shots"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if shots.is_empty() || shots.len() > 100 || !shots.iter().all(valid_clip_replacement) {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "change_clip_duration" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("adjustments")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(adjustments) = object["adjustments"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if adjustments.is_empty()
+                || adjustments.len() > 100
+                || !adjustments.iter().all(valid_clip_adjustment)
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "reorder_clips" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("order")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(order) = object["order"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if order.is_empty()
+                || order.len() > 100
+                || !order
+                    .iter()
+                    .all(|index| index.as_i64().is_some_and(|index| index >= 0))
             {
                 return Err(invalid_arguments());
             }
@@ -806,6 +1030,60 @@ fn nullable_bounded_string_argument(value: &Value, max_length: usize) -> bool {
     value.is_null() || bounded_required_string(value, max_length)
 }
 
+fn nullable_timeline_id(value: &Value) -> bool {
+    value.is_null() || bounded_required_string(value, 200)
+}
+
+fn valid_clip_replacement(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["shotIndex", "assetId", "sourceStartMs", "sourceEndMs"];
+    if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return false;
+    }
+    let Some(shot_index) = object["shotIndex"].as_i64() else {
+        return false;
+    };
+    let Some(source_start_ms) = object["sourceStartMs"].as_i64() else {
+        return false;
+    };
+    let Some(source_end_ms) = object["sourceEndMs"].as_i64() else {
+        return false;
+    };
+    shot_index >= 0
+        && bounded_required_string(&object["assetId"], 200)
+        && source_start_ms >= 0
+        && source_end_ms >= source_start_ms
+}
+
+fn valid_clip_adjustment(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["shotIndex", "newDurationMs", "newSourceStartMs"];
+    if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return false;
+    }
+    let Some(shot_index) = object["shotIndex"].as_i64() else {
+        return false;
+    };
+    let duration_present = !object["newDurationMs"].is_null();
+    let source_start_present = !object["newSourceStartMs"].is_null();
+    let valid_duration = !duration_present
+        || object["newDurationMs"]
+            .as_i64()
+            .is_some_and(|duration| duration > 0);
+    let valid_source_start = !source_start_present
+        || object["newSourceStartMs"]
+            .as_i64()
+            .is_some_and(|start| start >= 0);
+    shot_index >= 0
+        && (duration_present || source_start_present)
+        && valid_duration
+        && valid_source_start
+}
+
 fn non_negative_integer_or_null(value: &Value) -> bool {
     value.is_null() || value.as_i64().is_some_and(|number| number >= 0)
 }
@@ -824,7 +1102,13 @@ fn bounded_integer(value: &Value, minimum: i64, maximum: i64) -> bool {
 }
 
 fn prepare_native_tool_result(tool: &str, mut result: Value) -> Result<Value, Value> {
-    if result["tool"] != tool || result["status"] != "ok" {
+    let status_allowed = match (tool, result["status"].as_str()) {
+        (_, Some("ok")) => true,
+        ("request_asset_analysis", Some("queued")) => true,
+        ("generate_storyboard", Some("needs_confirmation")) => true,
+        _ => false,
+    };
+    if result["tool"] != tool || !status_allowed {
         return Err(unsafe_tool_result());
     }
     redact_native_scope_fields(&mut result);
@@ -873,7 +1157,20 @@ fn invalid_arguments() -> Value {
         "stage": "argument_validation",
         "code": "invalid_arguments",
         "retryable": true,
-        "responseInstruction": "Explain that the read-only observation request had invalid arguments, then retry with the documented schema or answer without a tool."
+        "responseInstruction": "Explain that the function tool request had invalid arguments, then retry with the documented schema or answer without a tool."
+    })
+}
+
+fn storyboard_confirmation_required(tool: &str) -> Value {
+    json!({
+        "status": "failed",
+        "operation": tool,
+        "stage": "confirmation",
+        "code": "storyboard_confirmation_required",
+        "retryable": true,
+        "facts": ["A new storyboard is ready for user review and has not been confirmed."],
+        "recovery": "Wait for the user to confirm the storyboard in a later turn before creating or editing a timeline.",
+        "responseInstruction": "Summarize that the storyboard is ready for review. Do not claim a timeline or preview was created."
     })
 }
 
@@ -911,6 +1208,16 @@ mod tests {
         include_str!("../../tests/fixtures/native_loop_render_preview_reply.v1.json");
     const RENDER_FAILURE_REPLY: &str =
         include_str!("../../tests/fixtures/native_loop_render_preview_failure_reply.v1.json");
+    const MAIN_CHAIN_ANALYSIS_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_main_chain_analysis_call.v1.json");
+    const MAIN_CHAIN_STORYBOARD_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_main_chain_storyboard_call.v1.json");
+    const MAIN_CHAIN_TIMELINE_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_main_chain_timeline_call.v1.json");
+    const MAIN_CHAIN_CONFIRMATION_REPLY: &str =
+        include_str!("../../tests/fixtures/native_loop_main_chain_confirmation_reply.v1.json");
+    const MAIN_CHAIN_FINAL_REPLY: &str =
+        include_str!("../../tests/fixtures/native_loop_main_chain_final_reply.v1.json");
 
     fn fixture_driver(
         fixtures: Vec<&'static str>,
@@ -938,6 +1245,7 @@ mod tests {
             false,
             &RequestToolPolicy::default(),
             &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
             "fixture request",
             Instant::now() + Duration::from_secs(5),
             &mut respond,
@@ -969,6 +1277,105 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_chat_does_not_expose_native_write_tools() {
+        let (_message, requests, _calls) = fixture_driver_with_policy(
+            "你好",
+            vec![HELLO],
+            json!({}),
+            RequestToolPolicy::from_request("你好"),
+        );
+        let names = requests[0]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert!(names.contains("list_assets"));
+        for name in [
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ] {
+            assert!(!names.contains(name), "ordinary chat exposed {name}");
+        }
+    }
+
+    #[test]
+    fn advice_and_inspection_requests_only_expose_observation_tools() {
+        for request in [
+            "这些素材适合怎么剪？",
+            "Please inspect these assets and do not modify anything.",
+        ] {
+            let (_message, requests, _calls) = fixture_driver_with_policy(
+                request,
+                vec![HELLO],
+                json!({}),
+                RequestToolPolicy::from_request(request),
+            );
+            let names = requests[0]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(names
+                .iter()
+                .all(|name| { super::super::policy::OBSERVATION_TOOLS.contains(name) }));
+        }
+    }
+
+    #[test]
+    fn explicit_analysis_storyboard_request_only_exposes_required_capabilities() {
+        for request in [
+            "分析这些素材并生成 storyboard",
+            "Analyze these assets and generate a storyboard",
+        ] {
+            let (_message, requests, _calls) = fixture_driver_with_policy(
+                request,
+                vec![MAIN_CHAIN_ANALYSIS_CALL, HELLO],
+                json!({
+                    "tool": "request_asset_analysis",
+                    "status": "queued",
+                    "queuedCount": 1
+                }),
+                RequestToolPolicy::from_request(request),
+            );
+            let names = requests[0]["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect::<std::collections::HashSet<_>>();
+            assert!(names.contains("request_asset_analysis"));
+            assert!(names.contains("generate_storyboard"));
+            for name in [
+                "create_timeline_draft",
+                "replace_clips",
+                "change_clip_duration",
+                "reorder_clips",
+            ] {
+                assert!(!names.contains(name), "request exposed unrelated {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn forged_native_write_call_is_rejected_without_explicit_authorization() {
+        for request in ["你好", "Please inspect the assets only."] {
+            let policy = RequestToolPolicy::from_request(request);
+            assert!(!native_tool_call_allowed(
+                "generate_storyboard",
+                &policy,
+                false
+            ));
+            assert!(!native_tool_call_allowed("replace_clips", &policy, false));
+        }
+    }
+
+    #[test]
     fn project_fact_question_executes_read_tool_then_replies() {
         let (message, requests, calls) = fixture_driver(
             vec![LIST_CALL, LIST_REPLY],
@@ -990,6 +1397,303 @@ mod tests {
         assert!(requests[1]["input"].as_array().unwrap().iter().any(|item| {
             item["type"] == "function_call_output" && item["call_id"] == "call_list_assets"
         }));
+    }
+
+    #[test]
+    fn successful_list_assets_observation_opens_project_fact_gate() {
+        let mut responses = vec![LIST_CALL, LIST_REPLY].into_iter();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(responses.next().expect("observation fixture").to_owned())
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(json!({
+                "tool": "list_assets",
+                "status": "ok",
+                "assets": [{"id": "asset-1"}]
+            }))
+        };
+        let mut preview_succeeded = false;
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut preview_succeeded,
+            &mut receipt,
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("successful observation should allow final reply");
+        assert_eq!(message, "项目中有 1 个素材。");
+        assert!(receipt.requires_project_observation);
+        assert!(receipt.successful_observation_this_turn);
+        assert!(receipt.successful_tool_call);
+    }
+
+    #[test]
+    fn failed_observation_does_not_satisfy_project_fact_gate() {
+        let mut response_count = 0;
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            response_count += 1;
+            if response_count == 1 {
+                Ok::<_, String>(FAILURE_CALL.to_owned())
+            } else {
+                Ok::<_, String>(FAILURE_REPLY.to_owned())
+            }
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(json!({
+                "tool": "list_assets",
+                "status": "failed",
+                "code": "asset_store_unavailable",
+                "retryable": true,
+                "responseInstruction": "请稍后重试。"
+            }))
+        };
+        let mut preview_succeeded = false;
+        let mut receipt = NativeRunReceipt::default();
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut preview_succeeded,
+            &mut receipt,
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        );
+        assert_eq!(
+            result,
+            Ok("当前无法读取素材状态，我可以稍后再试。".to_owned())
+        );
+        assert!(!receipt.successful_observation_this_turn);
+        assert!(receipt.failed_tool_call);
+    }
+
+    #[test]
+    fn generate_storyboard_does_not_satisfy_project_fact_gate() {
+        let mut response_count = 0;
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目的 storyboard 是什么？"}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            response_count += 1;
+            if response_count == 1 {
+                Ok::<_, String>(MAIN_CHAIN_STORYBOARD_CALL.to_owned())
+            } else {
+                Ok::<_, String>(MAIN_CHAIN_CONFIRMATION_REPLY.to_owned())
+            }
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(json!({
+                "tool": "generate_storyboard",
+                "status": "needs_confirmation",
+                "storyboardVersionId": "storyboard-1"
+            }))
+        };
+        let mut preview_succeeded = false;
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目的 storyboard 是什么？"),
+            &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
+            "当前项目的 storyboard 是什么？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        );
+        assert_eq!(result, Err("native_tool_loop_max_steps".to_owned()));
+    }
+
+    #[test]
+    fn model_claim_without_tool_cannot_complete_storyboard_request() {
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "生成 storyboard"}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(
+                json!({
+                    "id": "response-claim",
+                    "output": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Storyboard 已生成。"}]
+                    }]
+                })
+                .to_string(),
+            )
+        };
+        let mut execute =
+            |_call: &FunctionCall, _step: usize| panic!("the model claim must not execute a tool");
+        let mut preview_succeeded = false;
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("生成 storyboard"),
+            &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
+            "生成 storyboard",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        );
+        assert_eq!(result, Err("native_tool_loop_max_steps".to_owned()));
+    }
+
+    #[test]
+    fn composite_main_chain_fixture_runs_analysis_storyboard_then_timeline() {
+        let mut pre_confirmation_responses = vec![
+            MAIN_CHAIN_ANALYSIS_CALL,
+            MAIN_CHAIN_STORYBOARD_CALL,
+            MAIN_CHAIN_CONFIRMATION_REPLY,
+        ]
+        .into_iter();
+        let mut requests = Vec::new();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "分析素材并生成 storyboard，最后创建时间线"}]
+        })];
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(
+                pre_confirmation_responses
+                    .next()
+                    .expect("composite fixture response")
+                    .to_owned(),
+            )
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.borrow_mut().push(call.name.clone());
+            let result = match call.name.as_str() {
+                "request_asset_analysis" => {
+                    json!({"tool":"request_asset_analysis","status":"queued","queuedCount":1})
+                }
+                "generate_storyboard" => json!({
+                    "tool":"generate_storyboard",
+                    "status":"needs_confirmation",
+                    "storyboardVersionId":"storyboard-1"
+                }),
+                "create_timeline_draft" => json!({
+                    "tool":"create_timeline_draft",
+                    "status":"ok",
+                    "timelineVersionId":"timeline-1"
+                }),
+                _ => unreachable!("unexpected composite tool"),
+            };
+            prepare_native_tool_result(&call.name, result)
+                .map_err(|_| "unsafe composite fixture result".to_owned())
+        };
+        let mut preview_succeeded = false;
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("分析素材并生成 storyboard，最后创建时间线"),
+            &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
+            "分析素材并生成 storyboard，最后创建时间线",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("composite native loop");
+        assert_eq!(
+            message,
+            "素材分析已请求，Storyboard 已生成，请确认后再创建时间线。"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["request_asset_analysis", "generate_storyboard"]
+        );
+        assert_eq!(requests.len(), 3);
+        let confirmation_input = requests[2]["input"].as_array().expect("confirmation input");
+        for call_id in ["call_request_asset_analysis", "call_generate_storyboard"] {
+            assert!(confirmation_input
+                .iter()
+                .any(|item| item["type"] == "function_call_output" && item["call_id"] == call_id));
+        }
+        assert!(requests[2]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .all(|tool| super::super::policy::OBSERVATION_TOOLS
+                .contains(&tool["name"].as_str().unwrap())));
+
+        let mut post_confirmation_responses =
+            vec![MAIN_CHAIN_TIMELINE_CALL, MAIN_CHAIN_FINAL_REPLY].into_iter();
+        let mut confirmed_input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "我确认这个 storyboard，请创建时间线"}]
+        })];
+        let mut respond_after_confirmation = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(
+                post_confirmation_responses
+                    .next()
+                    .expect("post-confirmation fixture response")
+                    .to_owned(),
+            )
+        };
+        let confirmed_message = drive_native_loop(
+            &mut confirmed_input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("我确认这个 storyboard，请创建时间线"),
+            &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
+            "我确认这个 storyboard，请创建时间线",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond_after_confirmation,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("post-confirmation native loop");
+        assert_eq!(
+            confirmed_message,
+            "素材已分析，Storyboard 已生成，并已创建时间线。"
+        );
+        assert_eq!(
+            calls.borrow().last().map(String::as_str),
+            Some("create_timeline_draft")
+        );
+        let final_input = requests.last().unwrap()["input"]
+            .as_array()
+            .expect("final input");
+        for call_id in ["call_create_timeline_draft"] {
+            assert!(final_input
+                .iter()
+                .any(|item| item["type"] == "function_call_output" && item["call_id"] == call_id));
+        }
     }
 
     #[test]
@@ -1099,6 +1803,24 @@ mod tests {
     }
 
     #[test]
+    fn read_only_request_omits_main_chain_tools() {
+        let policy = RequestToolPolicy::from_request("只读查看素材状态");
+        let (_message, requests, _calls) =
+            fixture_driver_with_policy("只读查看素材状态", vec![HELLO], json!({}), policy);
+        let names = requests[0]["tools"].as_array().expect("tools");
+        for name in [
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ] {
+            assert!(!names.iter().any(|tool| tool["name"] == name), "{name}");
+        }
+    }
+
+    #[test]
     fn missing_timeline_returns_safe_failure_and_model_explains_it() {
         let policy = RequestToolPolicy::from_request("生成预览");
         let (message, requests, calls) = fixture_driver_with_policy(
@@ -1137,6 +1859,119 @@ mod tests {
         assert!(parse_native_arguments("render_preview", "{}").is_err());
         assert!(parse_native_arguments("render_preview", "{\"projectId\":\"project-1\"}").is_err());
         assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":42}").is_err());
+    }
+
+    #[test]
+    fn main_chain_arguments_are_scope_free_and_strictly_bounded() {
+        assert!(
+            parse_native_arguments("request_asset_analysis", r#"{"assetIds":["asset-1"]}"#).is_ok()
+        );
+        assert!(parse_native_arguments("request_asset_analysis", r#"{"assetIds":[]}"#).is_err());
+        assert!(parse_native_arguments(
+            "request_asset_analysis",
+            r#"{"assetIds":["asset-1"],"projectId":"project-1"}"#
+        )
+        .is_err());
+        assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());
+        assert!(parse_native_arguments("generate_storyboard", r#"{"brief":""}"#).is_err());
+        assert!(parse_native_arguments("create_timeline_draft", "{}").is_ok());
+        assert!(parse_native_arguments("create_timeline_draft", r#"{"projectId":"p"}"#).is_err());
+
+        let replacement = json!({
+            "timelineVersionId": null,
+            "shots": [{
+                "shotIndex": 0,
+                "assetId": "asset-1",
+                "sourceStartMs": 0,
+                "sourceEndMs": 1_000
+            }]
+        });
+        assert!(parse_native_arguments("replace_clips", &replacement.to_string()).is_ok());
+        let mut invalid_replacement = replacement.clone();
+        invalid_replacement["shots"][0]["sourceStartMs"] = json!(-1);
+        assert!(parse_native_arguments("replace_clips", &invalid_replacement.to_string()).is_err());
+
+        let adjustment = json!({
+            "timelineVersionId": null,
+            "adjustments": [{
+                "shotIndex": 0,
+                "newDurationMs": 1_000,
+                "newSourceStartMs": null
+            }]
+        });
+        assert!(parse_native_arguments("change_clip_duration", &adjustment.to_string()).is_ok());
+        assert!(parse_native_arguments(
+            "change_clip_duration",
+            r#"{"timelineVersionId":null,"adjustments":[{"shotIndex":0,"newDurationMs":null,"newSourceStartMs":null}]}"#
+        )
+        .is_err());
+
+        let order = json!({"timelineVersionId": null, "order": [1, 0]});
+        assert!(parse_native_arguments("reorder_clips", &order.to_string()).is_ok());
+        assert!(parse_native_arguments(
+            "reorder_clips",
+            r#"{"timelineVersionId":null,"order":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_main_chain_tool_selection_excludes_unmigrated_writes() {
+        let tools = native_function_tools_for_request(false, true);
+        let names = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect::<std::collections::HashSet<_>>();
+        for name in [
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ] {
+            assert!(names.contains(name));
+        }
+        for name in [
+            "replace_text_tracks",
+            "replace_music_tracks",
+            "download_music",
+            "use_online_music",
+            "create_jianying_draft",
+        ] {
+            assert!(!names.contains(name));
+        }
+        let read_only_tools = native_function_tools_for_request(false, false);
+        assert!(read_only_tools.iter().all(|tool| ![
+            "request_asset_analysis",
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+            "change_clip_duration",
+            "reorder_clips",
+        ]
+        .contains(&tool["name"].as_str().unwrap())));
+    }
+
+    #[test]
+    fn prepare_native_result_accepts_existing_main_chain_success_states() {
+        let queued = prepare_native_tool_result(
+            "request_asset_analysis",
+            json!({"tool":"request_asset_analysis","status":"queued","queuedCount":1}),
+        )
+        .expect("queued analysis result");
+        assert_eq!(queued["status"], "queued");
+        let storyboard = prepare_native_tool_result(
+            "generate_storyboard",
+            json!({"tool":"generate_storyboard","status":"needs_confirmation","storyboardVersionId":"sb-1"}),
+        )
+        .expect("storyboard result");
+        assert_eq!(storyboard["status"], "needs_confirmation");
+        assert!(prepare_native_tool_result(
+            "request_asset_analysis",
+            json!({"tool":"request_asset_analysis","status":"failed"}),
+        )
+        .is_err());
     }
 
     #[test]
@@ -1268,6 +2103,7 @@ mod tests {
                 false,
                 &RequestToolPolicy::default(),
                 &mut preview_succeeded,
+                &mut NativeRunReceipt::default(),
                 "fixture request",
                 Instant::now() + Duration::from_secs(5),
                 &mut respond,
@@ -1335,6 +2171,51 @@ mod tests {
     }
 
     #[test]
+    fn model_claim_after_tool_failure_cannot_be_completed() {
+        let receipt = NativeRunReceipt {
+            failed_tool_call: true,
+            tool_called: true,
+            ..NativeRunReceipt::default()
+        };
+        let (_result, status) = finish_native_result(
+            "task-1",
+            Ok("Storyboard 已生成。".to_owned()),
+            None,
+            false,
+            false,
+            &receipt,
+        )
+        .expect("safe failed terminal result");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+    }
+
+    #[test]
+    fn model_reply_failure_after_observation_keeps_native_safe_failure_message() {
+        let receipt = NativeRunReceipt {
+            requires_project_observation: true,
+            successful_observation_this_turn: true,
+            tool_called: true,
+            successful_tool_call: true,
+            ..NativeRunReceipt::default()
+        };
+        let (result, status) = finish_native_result(
+            "task-1",
+            Err("custom provider transport detail must not reach the UI".to_owned()),
+            None,
+            false,
+            false,
+            &receipt,
+        )
+        .expect("native failure is persisted without falling back to Legacy text");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert!(result.message.contains("项目数据已读取"));
+        assert!(!result.message.contains("transport"));
+        assert!(result.storyboard.is_none());
+        assert!(result.timeline.is_none());
+        assert!(result.preview.is_none());
+    }
+
+    #[test]
     fn preview_tool_requires_positive_intent_and_request_policy_permission() {
         assert!(native_render_preview_allowed(
             "生成预览",
@@ -1386,6 +2267,7 @@ mod tests {
             Some(outcome),
             true,
             false,
+            &NativeRunReceipt::default(),
         )
         .expect("partial preview result");
         assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
@@ -1421,6 +2303,7 @@ mod tests {
             false,
             &policy,
             &mut preview_succeeded,
+            &mut NativeRunReceipt::default(),
             request,
             Instant::now() + Duration::from_secs(5),
             &mut respond,

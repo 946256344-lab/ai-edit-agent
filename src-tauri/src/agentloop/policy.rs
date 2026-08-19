@@ -6,6 +6,9 @@
 
 use crate::models::AgentEditResult;
 
+use super::native_policy::explicitly_requested_native_tools;
+pub(super) use super::native_policy::request_requires_project_observation;
+
 /// 不创建/修改本地产物的观察技能；`search_music` 是受控外部查询，其余只读本地状态。
 pub(super) const OBSERVATION_TOOLS: &[&str] = &[
     "get_edit_status",
@@ -46,7 +49,7 @@ pub(crate) enum LoopGoal {
 }
 
 /// 明确表达时间线修改意图的动词；普通领域名词不能单独触发编辑。
-const EDIT_VERBS: &[&str] = &[
+pub(super) const EDIT_VERBS: &[&str] = &[
     "替换",
     "换成",
     "换掉",
@@ -81,7 +84,7 @@ const EDIT_VERBS: &[&str] = &[
 ];
 
 /// 明确请求创建产物的动词；它们只锁定目标，不直接选择具体执行技能。
-const CREATE_VERBS: &[&str] = &[
+pub(super) const CREATE_VERBS: &[&str] = &[
     "生成",
     "创建",
     "渲染",
@@ -102,6 +105,7 @@ const CREATE_VERBS: &[&str] = &[
 pub(super) struct RequestToolPolicy {
     denied_tools: Vec<&'static str>,
     pub(super) read_only: bool,
+    authorized_native_tools: Vec<&'static str>,
 }
 
 impl RequestToolPolicy {
@@ -212,9 +216,11 @@ impl RequestToolPolicy {
         }
         denied_tools.sort_unstable();
         denied_tools.dedup();
+        let authorized_native_tools = explicitly_requested_native_tools(request);
         Self {
             denied_tools,
             read_only,
+            authorized_native_tools,
         }
     }
 
@@ -230,6 +236,20 @@ impl RequestToolPolicy {
             LoopGoal::Preview => self.forbids("render_preview"),
             LoopGoal::JianyingDraft => self.forbids("create_jianying_draft"),
         }
+    }
+
+    /// Native 主链写工具必须由用户明确请求；没有授权时默认只暴露观察目录。
+    pub(super) fn native_tool_exposed(&self, tool: &str) -> bool {
+        !self.forbids(tool)
+            && (OBSERVATION_TOOLS.contains(&tool) || self.native_write_authorized(tool))
+    }
+
+    pub(super) fn native_write_authorized(&self, tool: &str) -> bool {
+        self.authorized_native_tools.contains(&tool)
+    }
+
+    pub(super) fn has_native_write_authorization(&self) -> bool {
+        !self.authorized_native_tools.is_empty()
     }
 
     pub(super) fn prompt_label(&self) -> String {
@@ -501,60 +521,6 @@ pub(super) fn fast_goal(request: &str) -> Option<LoopGoal> {
         return Some(LoopGoal::Timeline);
     }
     None
-}
-
-/// Router 解析失败时的保守兜底：当前项目事实必须至少执行一次真实观察。
-pub(super) fn request_requires_project_observation(request: &str) -> bool {
-    let policy = RequestToolPolicy::from_request(request);
-    if policy.read_only {
-        return true;
-    }
-    let text = request.trim().to_lowercase();
-    let project_subject = [
-        "当前项目",
-        "本项目",
-        "这个项目",
-        "剪辑任务",
-        "时间线",
-        "timeline",
-        "storyboard",
-        "分镜",
-        "preview",
-        "预览",
-        "素材",
-        "asset",
-        "片段",
-        "clip",
-        "镜头",
-        "shot",
-        "版本",
-        "version",
-    ]
-    .iter()
-    .any(|term| text.contains(term));
-    let current_fact = [
-        "当前",
-        "现在",
-        "现有",
-        "已有",
-        "最新",
-        "多少",
-        "几个",
-        "状态",
-        "是否已经",
-        "有没有",
-        "v几",
-        "current",
-        "existing",
-        "latest",
-        "how many",
-        "count",
-        "status",
-        "which version",
-    ]
-    .iter()
-    .any(|term| text.contains(term));
-    project_subject && current_fact
 }
 
 pub(super) fn parse_declared_goal(

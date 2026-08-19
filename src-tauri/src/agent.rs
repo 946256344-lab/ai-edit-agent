@@ -147,12 +147,15 @@ pub(crate) fn resolve_pending_clarification(
     clarification_id: &str,
 ) -> Result<(), String> {
     let now = now_millis();
-    connection
+    let updated = connection
         .execute(
             "UPDATE pending_clarifications SET status = 'resolved', updated_at = ?5, resolved_at = ?5 WHERE project_id = ?1 AND editing_task_id = ?2 AND conversation_id = ?3 AND id = ?4 AND status = 'pending'",
             params![project_id, editing_task_id, conversation_id, clarification_id, now],
         )
         .map_err(|_| "Pending clarification could not be resolved.".to_owned())?;
+    if updated != 1 {
+        return Err("Pending clarification is not active in this scope.".to_owned());
+    }
     Ok(())
 }
 
@@ -1335,5 +1338,53 @@ mod tests {
             .expect("count superseded clarifications");
         assert_eq!(pending_count, 1);
         assert_eq!(superseded_count, 1);
+    }
+
+    #[test]
+    fn clarification_resolution_rejects_wrong_scope_and_replay() {
+        let connection = Connection::open_in_memory().expect("open clarification database");
+        connection
+            .execute_batch(
+                "CREATE TABLE pending_clarifications (
+                  id TEXT PRIMARY KEY, project_id TEXT, editing_task_id TEXT, conversation_id TEXT,
+                  source_kind TEXT, source_agent_task_id TEXT, goal TEXT, question TEXT,
+                  status TEXT, created_at INTEGER, updated_at INTEGER, resolved_at INTEGER
+                );",
+            )
+            .expect("create clarification schema");
+        let now = now_millis();
+        connection
+            .execute(
+                "INSERT INTO pending_clarifications
+                 (id, project_id, editing_task_id, conversation_id, source_kind, goal, question, status, created_at, updated_at)
+                 VALUES ('clarification-1', 'project-1', 'task-1', 'conversation-1', 'agent_run', 'storyboard', '请确认', 'pending', ?1, ?1)",
+                params![now],
+            )
+            .expect("seed pending clarification");
+
+        assert!(resolve_pending_clarification(
+            &connection,
+            "project-1",
+            "task-1",
+            "wrong-conversation",
+            "clarification-1",
+        )
+        .is_err());
+        resolve_pending_clarification(
+            &connection,
+            "project-1",
+            "task-1",
+            "conversation-1",
+            "clarification-1",
+        )
+        .expect("matching clarification scope");
+        assert!(resolve_pending_clarification(
+            &connection,
+            "project-1",
+            "task-1",
+            "conversation-1",
+            "clarification-1",
+        )
+        .is_err());
     }
 }
