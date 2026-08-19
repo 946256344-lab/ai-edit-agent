@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除一轮请求的固定 LoopGoal/finish/done/no_action 终止假设；NativeToolLoop 以原生 function_call 持续执行、以自然语言结束，并由真实 RunReceipt 处理超时、步骤上限和复合“观察 → storyboard → timeline → text → preview”任务。范围测试、契约测试和完整完成门见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
 - [x] 完成（2026-08-19，remove-conversation-router）：删除 NativeToolLoop 前置对话 Router 与其首工具选择协议；保留 Task Resolver 的作用域 receipt、请求工具策略、确认门、观察完成门、超时、步骤上限及审计，使普通聊天、澄清、项目问答和工具执行统一进入 NativeToolLoop。Native 代表性测试、契约检查和既有桌面验收前提均通过；变更记录见 `docs/changes/2026-08-19-remove-conversation-router.md`。
 - [x] 完成（2026-08-19，native-observation-tools）：将剩余只读/观察工具迁移到原生 Function Tool 目录；仅包含 `get_edit_status`、`search_assets`、`search_asset_segments`、`search_music`、`get_storyboard`、`get_text_capabilities`，不迁移任何写操作。9 个 Native 工具均有 strict schema、完整 required 和安全结果包络；149 个 Rust 测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-tools.md`。
 - [x] 完成（2026-08-19，native-context-budget）：修复大型只读工具结果触发固定失败文案的问题；输入预算裁剪保留最新 `function_call`/`function_call_output` 完整配对，避免模型因看不到观察结果重复调用直至达到最大步骤数。Native loop 回归测试与完整 Rust 测试通过。
@@ -10,7 +11,6 @@
 - [x] 完成（2026-08-19）：取消代码行数预算。
 - [x] 完成（2026-08-19，native-memory）：NativeToolLoop 从 SQLite 按时间读取真实 user/assistant 消息，以原生 function_call/function_call_output 维持观察上下文；保留 Legacy 默认路径。133 个 Rust 库测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-session-messages.md`。
 - [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。
-- [x] 完成（2026-08-19，provider-tools）：为 get_asset_health_summary、list_assets、get_timeline 建立集中式原生 Function Tools 定义与 strict JSON Schema 合约测试；不接入用户请求、不迁移编辑或副作用工具。121 个 Rust 库测试 + 2 个契约测试、前端 lint/build、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-function-tools.md`。
 <!-- ACTIVE_TASKS_END -->
 
 - [x] 完成（2026-08-19，native-delivery-tools）：将 `get_text_capabilities`、`replace_text_tracks`、`search_music`、`download_music`、`use_online_music`、`replace_music_tracks`、`render_preview`、`create_jianying_draft` 迁移到 Native Function Tool 目录与受限执行入口；strict 嵌套 Schema、参数边界、工具选择及执行前授权测试通过，保留许可证、下载、文字能力矩阵、剪映兼容性、确认边界和领域算法，不迁移其他工具或改变领域实现。变更记录见 `docs/changes/2026-08-19-native-delivery-tools.md`。

@@ -544,3 +544,10 @@
 - 决策：`submit_conversation_turn` 在消费 Task Resolver 的一次性作用域 receipt 后，所有普通聊天、澄清、项目事实和工具执行都创建同一种 Agent task，并直接进入 NativeToolLoop。删除 `decide_conversation_route`、ConversationRoute*、InitialAgentSkill、旧 JSON decision/首工具选择协议和 `NATIVE_TOOL_LOOP` 开关；NativeToolLoop 成为生产对话唯一模型入口。
 - 原因：前置 Router 让同一请求先经过模型分类再经过模型执行，重复决策且把首个工具选择与业务目标耦合；原生函数工具循环已经具备请求级权限、观察完成门、确认门、超时、取消和审计边界。
 - 后果：Task Resolver 仍只负责项目/任务/会话归属和 receipt，不选择工具或回复 route；RequestToolPolicy、`apply_skill`、SQLite 事务、版本/素材证据、真实产物校验和确认状态保持不变。Native 统一保存 assistant 回复，旧 JSON 提取接口仅供 storyboard/视觉等非对话请求使用。历史 ADR 与 changes 中关于 Router/开关的描述保留为当时事实，不代表当前生产路径。
+
+## ADR-076：NativeToolLoop 以原生输出结束，不锁定单一目标
+
+- 状态：已采用（2026-08-19）
+- 决策：删除 Native 对话路径中残留的固定目标终止假设。循环每步解析完整 `ModelTurn`：存在 function_call 时执行所有调用、追加 function_call_output 并继续；不存在调用但存在自然语言时结束本轮。不注册或解析 `finish`、`done`、`no_action` 控制动作，也不要求模型声明一次后不可改变的 LoopGoal。RequestToolPolicy 可为一条明确复合请求同时授权多个具名能力，但不选择顺序或首工具。
+- 原因：固定单一目标会把“检查素材，做 30 秒剪辑，加字幕并生成预览”压成一个 deliverable，并在模型已给出自然语言时用目标纠偏强制继续；它也让步骤上限只保留某一种产物。原生函数调用本身已经提供足够的循环信号，安全与完成事实应由后端收据而不是模型控制动作承担。
+- 后果：RunReceipt 只记录实际执行的工具状态：按名称去重的成功 `status=ok` 写工具、仍在排队的操作和未恢复失败；同一工具修正后成功会清除其旧失败，但不会抹掉其他工具的失败。自然语言只结束模型循环，不能创建 completed 状态或 artifact；needs_confirmation、持久化产物和已验证中间结果仍由 Rust 裁决。达到总超时或步骤上限时，任意真实中间产物均保留为 partially_completed，没有成功工具则 failed。storyboard 返回 needs_confirmation 后仍停止后续非观察写工具，确认边界没有放宽。契约检查器禁止固定目标标识和 finish/done/no_action 字符串重新进入 Native 生产路径；历史 ADR 中的旧架构描述保留为当时事实。

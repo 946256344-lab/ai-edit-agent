@@ -157,11 +157,6 @@ fn regression_fixture_covers_the_required_agent_risk_categories() {
     let mut covered_categories = BTreeSet::new();
     let mut allowed_steps = source_tool_names("OBSERVATION_TOOLS");
     allowed_steps.extend(source_tool_names("EDIT_TOOLS"));
-    allowed_steps.extend(
-        ["ask_user", "finish", "no_action", "done"]
-            .into_iter()
-            .map(str::to_owned),
-    );
 
     for case in cases {
         let id = required_string(case, "id", "regression case");
@@ -210,7 +205,7 @@ fn regression_fixture_covers_the_required_agent_risk_categories() {
         "missing_assets",
         "malformed_json",
         "cross_scope",
-        "premature_finish",
+        "unverified_completion_claim",
         "source_range_overflow",
         "clarification_required",
     ]

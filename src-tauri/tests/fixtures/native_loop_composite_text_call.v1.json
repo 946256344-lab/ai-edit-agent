@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_text",
+  "output": [{"type":"function_call","call_id":"call_composite_text","name":"replace_text_tracks","arguments":"{\"timelineVersionId\":null,\"textTracks\":[]}"}]
+}

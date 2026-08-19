@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_final",
+  "output": [{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已检查素材并完成 30 秒剪辑、字幕和预览。"}]}]
+}

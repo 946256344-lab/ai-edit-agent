@@ -69,7 +69,6 @@ pub(crate) fn run_native_tool_loop(
     let run_deadline = run_started_at + AGENT_RUN_TIMEOUT;
     let history = super::prompt::load_native_message_history(connection, conversation_id, request);
     let tool_policy = RequestToolPolicy::from_request(request);
-    let render_preview_authorized = native_render_preview_allowed(request, &tool_policy);
     let mut input = vec![json!({
         "role": "system",
         "content": [{
@@ -102,10 +101,14 @@ pub(crate) fn run_native_tool_loop(
     let mut respond =
         |payload: &Value, timeout: Duration| post_model_payload(access, payload, Some(timeout));
     let mut execute = |call: &FunctionCall, step_number: usize| {
-        execute_native_tool(&mut state, call, step_number, render_preview_authorized)
+        execute_native_tool(
+            &mut state,
+            call,
+            step_number,
+            native_render_preview_allowed(request, &tool_policy),
+        )
     };
     let cancelled = || native_task_cancelled(connection, agent_task_id);
-    let mut preview_succeeded = false;
     let mut receipt = NativeRunReceipt {
         requires_project_observation: request_requires_project_observation(request),
         ..NativeRunReceipt::default()
@@ -115,7 +118,6 @@ pub(crate) fn run_native_tool_loop(
         is_custom,
         request_requires_project_observation(request),
         &tool_policy,
-        &mut preview_succeeded,
         &mut receipt,
         request,
         run_deadline,
@@ -150,8 +152,6 @@ pub(crate) fn run_native_tool_loop(
         agent_task_id,
         loop_result,
         state.last_outcome.take(),
-        render_preview_authorized,
-        preview_succeeded,
         &receipt,
     )?;
     Ok(AgentLoopResult {
@@ -165,23 +165,24 @@ fn finish_native_result(
     agent_task_id: &str,
     loop_result: Result<String, String>,
     last_outcome: Option<AgentEditResult>,
-    preview_requested: bool,
-    preview_succeeded: bool,
     receipt: &NativeRunReceipt,
 ) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
     match loop_result {
         Ok(message) => {
-            let status = if receipt.failed_tool_call && receipt.successful_tool_call {
-                AgentLoopTerminalStatus::PartiallyCompleted
-            } else if receipt.failed_tool_call {
-                AgentLoopTerminalStatus::Failed
-            } else if last_outcome
-                .as_ref()
-                .is_some_and(|outcome| outcome.storyboard.is_some() && outcome.timeline.is_none())
-            {
+            let status = if receipt.needs_confirmation {
                 AgentLoopTerminalStatus::NeedsClarification
-            } else if preview_requested && !preview_succeeded {
+            } else if !receipt.failed_tools.is_empty() && receipt.successful_tool_call {
+                AgentLoopTerminalStatus::PartiallyCompleted
+            } else if !receipt.failed_tools.is_empty() {
                 AgentLoopTerminalStatus::Failed
+            } else if !receipt.pending_tools.is_empty() {
+                AgentLoopTerminalStatus::PartiallyCompleted
+            } else if !receipt.unverified_requested_write_tools.is_empty()
+                && receipt.successful_write_tools.is_empty()
+            {
+                AgentLoopTerminalStatus::Failed
+            } else if !receipt.unverified_requested_write_tools.is_empty() {
+                AgentLoopTerminalStatus::PartiallyCompleted
             } else {
                 AgentLoopTerminalStatus::Completed
             };
@@ -190,19 +191,67 @@ fn finish_native_result(
                 status,
             ))
         }
-        Err(_error) => {
-            match last_outcome {
-                Some(mut outcome) if outcome.preview.is_some() => {
-                    outcome.message = "本地预览已生成并验证，但模型未能完成结果说明；预览已保留，可稍后继续检查。".to_owned();
-                    Ok((outcome, AgentLoopTerminalStatus::PartiallyCompleted))
-                }
-                _ => Ok((
-                    native_model_reply_unavailable_result(agent_task_id, receipt),
-                    AgentLoopTerminalStatus::Failed,
-                )),
-            }
-        }
+        Err(error) => Ok(interrupted_native_result(
+            agent_task_id,
+            &error,
+            last_outcome,
+            receipt,
+        )),
     }
+}
+
+fn interrupted_native_result(
+    agent_task_id: &str,
+    error: &str,
+    last_outcome: Option<AgentEditResult>,
+    receipt: &NativeRunReceipt,
+) -> (AgentEditResult, AgentLoopTerminalStatus) {
+    let bounded_reason = match error {
+        "native_tool_loop_deadline_exceeded" => Some("本轮达到总超时"),
+        "native_tool_loop_max_steps" => Some("本轮达到步骤上限"),
+        _ => None,
+    };
+    let Some(reason) = bounded_reason else {
+        if let Some(mut outcome) = last_outcome {
+            outcome.message = if outcome.preview.is_some() {
+                "预览已由工具生成并验证，但模型未能完成结果说明；预览已保留。".to_owned()
+            } else {
+                native_model_reply_unavailable_result(agent_task_id, receipt).message
+            };
+            let status = if receipt.needs_confirmation {
+                AgentLoopTerminalStatus::NeedsClarification
+            } else {
+                AgentLoopTerminalStatus::PartiallyCompleted
+            };
+            return (outcome, status);
+        }
+        return (
+            native_model_reply_unavailable_result(agent_task_id, receipt),
+            AgentLoopTerminalStatus::Failed,
+        );
+    };
+    let message = if receipt.successful_tool_call {
+        format!("{reason}；已由工具确认的部分结果已保留，未完成步骤没有标记为成功。")
+    } else {
+        format!("{reason}，没有工具确认任何完成结果。")
+    };
+    let mut result = last_outcome.unwrap_or_else(|| AgentEditResult {
+        agent_task_id: agent_task_id.to_owned(),
+        message: String::new(),
+        storyboard: None,
+        timeline: None,
+        preview: None,
+        jianying_draft: None,
+    });
+    result.message = message;
+    let status = if receipt.needs_confirmation {
+        AgentLoopTerminalStatus::NeedsClarification
+    } else if receipt.successful_tool_call {
+        AgentLoopTerminalStatus::PartiallyCompleted
+    } else {
+        AgentLoopTerminalStatus::Failed
+    };
+    (result, status)
 }
 
 /// Provider 在工具返回后的总结请求失败时，保留真实失败终态并给 UI 一个诚实、
@@ -248,17 +297,58 @@ fn native_result_from_message(
     }
 }
 
+fn merge_native_outcomes(
+    previous: Option<AgentEditResult>,
+    mut current: AgentEditResult,
+    tool: &str,
+) -> AgentEditResult {
+    let Some(previous) = previous else {
+        return current;
+    };
+    if tool == "generate_storyboard" {
+        return current;
+    }
+    if current.storyboard.is_none() {
+        current.storyboard = previous.storyboard;
+    }
+    if current.timeline.is_none() {
+        current.timeline = previous.timeline;
+    }
+    if current.preview.is_none() {
+        let invalidates_preview = matches!(
+            tool,
+            "create_timeline_draft"
+                | "replace_clips"
+                | "change_clip_duration"
+                | "reorder_clips"
+                | "replace_text_tracks"
+                | "replace_music_tracks"
+                | "use_online_music"
+        );
+        if !invalidates_preview {
+            current.preview = previous.preview;
+        }
+    }
+    if current.jianying_draft.is_none() {
+        current.jianying_draft = previous.jianying_draft;
+    }
+    current
+}
+
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct NativeRunReceipt {
     requires_project_observation: bool,
     successful_observation_this_turn: bool,
     tool_called: bool,
     successful_tool_call: bool,
-    failed_tool_call: bool,
     needs_confirmation: bool,
+    successful_write_tools: std::collections::BTreeSet<String>,
+    unverified_requested_write_tools: std::collections::BTreeSet<String>,
+    failed_tools: std::collections::BTreeSet<String>,
+    pending_tools: std::collections::BTreeSet<String>,
 }
 
 fn drive_native_loop(
@@ -266,7 +356,6 @@ fn drive_native_loop(
     is_custom: bool,
     requires_observation: bool,
     tool_policy: &RequestToolPolicy,
-    preview_succeeded: &mut bool,
     receipt: &mut NativeRunReceipt,
     request: &str,
     run_deadline: Instant,
@@ -276,7 +365,11 @@ fn drive_native_loop(
     mut observed: impl FnMut(&str, usize),
 ) -> Result<String, String> {
     receipt.requires_project_observation = requires_observation;
-    let mut preview_tool_called = false;
+    receipt.unverified_requested_write_tools.extend(
+        tool_policy
+            .authorized_native_write_tools()
+            .map(str::to_owned),
+    );
     let mut storyboard_confirmation_pending = false;
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
@@ -316,20 +409,10 @@ fn drive_native_loop(
         .ok_or_else(|| "native_tool_loop_response_unparseable".to_owned())?;
         let calls = turn.function_calls().cloned().collect::<Vec<_>>();
         if calls.is_empty() {
-            if native_render_preview_allowed(request, tool_policy) && !preview_tool_called {
-                input.push(json!({
-                    "role": "system",
-                    "content": [{
-                        "type": "input_text",
-                        "text": "This request explicitly asks for a preview. Call render_preview and wait for its structured result before answering; never claim a preview exists from text alone."
-                    }]
-                }));
-                continue;
-            }
             if let Some(message) = model_message_text(&turn) {
                 if requires_observation
                     && !receipt.successful_observation_this_turn
-                    && !receipt.failed_tool_call
+                    && receipt.failed_tools.is_empty()
                 {
                     input.push(json!({
                         "role": "system",
@@ -340,22 +423,11 @@ fn drive_native_loop(
                     }));
                     continue;
                 }
-                if tool_policy.has_native_write_authorization() && !receipt.successful_tool_call {
-                    input.push(json!({
-                        "role": "system",
-                        "content": [{
-                            "type": "input_text",
-                            "text": "This request explicitly asks for a local project change. Use the matching provided function tool and wait for its structured result before claiming completion."
-                        }]
-                    }));
-                    continue;
-                }
                 return Ok(message);
             }
             return Err("native_tool_loop_response_missing_message".to_owned());
         }
         receipt.tool_called = true;
-        preview_tool_called |= calls.iter().any(|call| call.name == "render_preview");
 
         for item in &turn.output {
             if let Some(value) = output_item_for_input(item, is_custom) {
@@ -386,14 +458,21 @@ fn drive_native_loop(
                 Some("ok") | Some("queued") | Some("needs_confirmation")
             ) {
                 receipt.successful_tool_call = true;
+                receipt.failed_tools.remove(&call.name);
+                if result_status == Some("queued") {
+                    receipt.pending_tools.insert(call.name.clone());
+                } else {
+                    receipt.pending_tools.remove(&call.name);
+                }
+                if result_status == Some("ok")
+                    && !OBSERVATION_TOOLS.contains(&call.name.as_str())
+                    && tool_policy.native_write_authorized(&call.name)
+                {
+                    receipt.successful_write_tools.insert(call.name.clone());
+                    receipt.unverified_requested_write_tools.remove(&call.name);
+                }
             } else {
-                receipt.failed_tool_call = true;
-            }
-            if call.name == "render_preview"
-                && result["status"] == "ok"
-                && result["artifact"]["type"] == "preview"
-            {
-                *preview_succeeded = true;
+                receipt.failed_tools.insert(call.name.clone());
             }
             input.push(json!({
                 "type": "function_call_output",
@@ -409,32 +488,7 @@ fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy)
     if tool_policy.forbids("render_preview") || request.contains(['?', '？']) {
         return false;
     }
-    let mut normalized = request
-        .trim()
-        .trim_matches(|character: char| matches!(character, '。' | '！' | '.' | '!' | '，' | ','))
-        .trim()
-        .to_lowercase();
-    normalized = normalized.replace("一个", "").replace("一段", "");
-    for prefix in ["请帮我", "麻烦帮我", "请", "帮我", "麻烦"] {
-        if let Some(stripped) = normalized.strip_prefix(prefix) {
-            normalized = stripped.trim().to_owned();
-            break;
-        }
-    }
-    matches!(
-        normalized.as_str(),
-        "生成预览"
-            | "创建预览"
-            | "渲染预览"
-            | "制作预览"
-            | "生成预览视频"
-            | "渲染预览视频"
-            | "生成低清预览"
-            | "generate preview"
-            | "create preview"
-            | "render preview"
-            | "make preview"
-    )
+    tool_policy.native_write_authorized("render_preview")
 }
 
 fn filtered_native_tools(
@@ -651,7 +705,13 @@ fn execute_native_tool(
         }
     };
     let started_at = Instant::now();
+    let previous_outcome = state.last_outcome.take();
     let result = apply_skill(state, &call.name, &args);
+    let current_outcome = state.last_outcome.take();
+    state.last_outcome = match (previous_outcome, current_outcome) {
+        (previous, Some(current)) => Some(merge_native_outcomes(previous, current, &call.name)),
+        (previous, None) => previous,
+    };
     let _ = record_agent_timing_diagnostic(
         state.connection,
         state.project_id,
@@ -1464,6 +1524,18 @@ mod tests {
         include_str!("../../tests/fixtures/native_loop_main_chain_confirmation_reply.v1.json");
     const MAIN_CHAIN_FINAL_REPLY: &str =
         include_str!("../../tests/fixtures/native_loop_main_chain_final_reply.v1.json");
+    const COMPOSITE_OBSERVE_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_observe_call.v1.json");
+    const COMPOSITE_STORYBOARD_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_storyboard_call.v1.json");
+    const COMPOSITE_TIMELINE_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_timeline_call.v1.json");
+    const COMPOSITE_TEXT_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_text_call.v1.json");
+    const COMPOSITE_PREVIEW_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_preview_call.v1.json");
+    const COMPOSITE_FINAL_REPLY: &str =
+        include_str!("../../tests/fixtures/native_loop_composite_final_reply.v1.json");
 
     fn fixture_driver(
         fixtures: Vec<&'static str>,
@@ -1472,7 +1544,6 @@ mod tests {
         let mut responses = fixtures.into_iter();
         let mut requests = Vec::new();
         let mut calls = Vec::new();
-        let mut preview_succeeded = false;
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": "fixture request"}]
@@ -1490,7 +1561,6 @@ mod tests {
             false,
             false,
             &RequestToolPolicy::default(),
-            &mut preview_succeeded,
             &mut NativeRunReceipt::default(),
             "fixture request",
             Instant::now() + Duration::from_secs(5),
@@ -1611,6 +1681,13 @@ mod tests {
             ));
             assert!(!native_tool_call_allowed("replace_clips", &policy, false));
         }
+        for (request, tool) in [
+            ("不要做 30 秒剪辑", "create_timeline_draft"),
+            ("Do not add subtitles", "replace_text_tracks"),
+        ] {
+            let policy = RequestToolPolicy::from_request(request);
+            assert!(!native_tool_call_allowed(tool, &policy, false));
+        }
     }
 
     #[test]
@@ -1654,14 +1731,12 @@ mod tests {
                 "assets": [{"id": "asset-1"}]
             }))
         };
-        let mut preview_succeeded = false;
         let mut receipt = NativeRunReceipt::default();
         let message = drive_native_loop(
             &mut input,
             false,
             true,
             &RequestToolPolicy::from_request("当前项目有多少素材？"),
-            &mut preview_succeeded,
             &mut receipt,
             "当前项目有多少素材？",
             Instant::now() + Duration::from_secs(5),
@@ -1701,14 +1776,12 @@ mod tests {
                 "responseInstruction": "请稍后重试。"
             }))
         };
-        let mut preview_succeeded = false;
         let mut receipt = NativeRunReceipt::default();
         let result = drive_native_loop(
             &mut input,
             false,
             true,
             &RequestToolPolicy::from_request("当前项目有多少素材？"),
-            &mut preview_succeeded,
             &mut receipt,
             "当前项目有多少素材？",
             Instant::now() + Duration::from_secs(5),
@@ -1722,7 +1795,7 @@ mod tests {
             Ok("当前无法读取素材状态，我可以稍后再试。".to_owned())
         );
         assert!(!receipt.successful_observation_this_turn);
-        assert!(receipt.failed_tool_call);
+        assert!(receipt.failed_tools.contains("list_assets"));
     }
 
     #[test]
@@ -1747,13 +1820,11 @@ mod tests {
                 "storyboardVersionId": "storyboard-1"
             }))
         };
-        let mut preview_succeeded = false;
         let result = drive_native_loop(
             &mut input,
             false,
             true,
             &RequestToolPolicy::from_request("当前项目的 storyboard 是什么？"),
-            &mut preview_succeeded,
             &mut NativeRunReceipt::default(),
             "当前项目的 storyboard 是什么？",
             Instant::now() + Duration::from_secs(5),
@@ -1766,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn model_claim_without_tool_cannot_complete_storyboard_request() {
+    fn model_claim_without_tool_ends_loop_but_receipt_cannot_complete_request() {
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": "生成 storyboard"}]
@@ -1786,14 +1857,13 @@ mod tests {
         };
         let mut execute =
             |_call: &FunctionCall, _step: usize| panic!("the model claim must not execute a tool");
-        let mut preview_succeeded = false;
+        let mut receipt = NativeRunReceipt::default();
         let result = drive_native_loop(
             &mut input,
             false,
             false,
             &RequestToolPolicy::from_request("生成 storyboard"),
-            &mut preview_succeeded,
-            &mut NativeRunReceipt::default(),
+            &mut receipt,
             "生成 storyboard",
             Instant::now() + Duration::from_secs(5),
             &mut respond,
@@ -1801,7 +1871,10 @@ mod tests {
             || false,
             |_body, _step| {},
         );
-        assert_eq!(result, Err("native_tool_loop_max_steps".to_owned()));
+        assert_eq!(result, Ok("Storyboard 已生成。".to_owned()));
+        let (_result, status) = finish_native_result("task-1", result, None, &receipt)
+            .expect("receipt must reject an unverified completion claim");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
     }
 
     #[test]
@@ -1848,13 +1921,11 @@ mod tests {
             prepare_native_tool_result(&call.name, result)
                 .map_err(|_| "unsafe composite fixture result".to_owned())
         };
-        let mut preview_succeeded = false;
         let message = drive_native_loop(
             &mut input,
             false,
             false,
             &RequestToolPolicy::from_request("分析素材并生成 storyboard，最后创建时间线"),
-            &mut preview_succeeded,
             &mut NativeRunReceipt::default(),
             "分析素材并生成 storyboard，最后创建时间线",
             Instant::now() + Duration::from_secs(5),
@@ -1906,7 +1977,6 @@ mod tests {
             false,
             false,
             &RequestToolPolicy::from_request("我确认这个 storyboard，请创建时间线"),
-            &mut preview_succeeded,
             &mut NativeRunReceipt::default(),
             "我确认这个 storyboard，请创建时间线",
             Instant::now() + Duration::from_secs(5),
@@ -1932,6 +2002,348 @@ mod tests {
                 .iter()
                 .any(|item| item["type"] == "function_call_output" && item["call_id"] == call_id));
         }
+    }
+
+    #[test]
+    fn composite_edit_fixture_crosses_confirmation_before_timeline_text_and_preview() {
+        let request = "检查素材，做 30 秒剪辑，加字幕并生成预览。";
+        let policy = RequestToolPolicy::from_request(request);
+        let mut responses = vec![
+            COMPOSITE_OBSERVE_CALL,
+            COMPOSITE_STORYBOARD_CALL,
+            MAIN_CHAIN_CONFIRMATION_REPLY,
+        ]
+        .into_iter();
+        let mut requests = Vec::new();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(responses.next().expect("composite response").to_owned())
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.borrow_mut().push(call.name.clone());
+            Ok::<_, String>(match call.name.as_str() {
+                "list_assets" => json!({"tool":"list_assets","status":"ok","assets":[]}),
+                "generate_storyboard" => {
+                    json!({"tool":"generate_storyboard","status":"needs_confirmation","storyboardVersionId":"storyboard-1"})
+                }
+                _ => unreachable!("unexpected composite call"),
+            })
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("composite loop");
+        assert_eq!(
+            message,
+            "素材分析已请求，Storyboard 已生成，请确认后再创建时间线。"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["list_assets", "generate_storyboard"]
+        );
+        assert_eq!(requests.len(), 3);
+        for payload in requests.iter().take(2) {
+            let names = payload["tools"]
+                .as_array()
+                .expect("composite tools")
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect::<std::collections::HashSet<_>>();
+            for required in [
+                "generate_storyboard",
+                "create_timeline_draft",
+                "replace_text_tracks",
+                "render_preview",
+            ] {
+                assert!(
+                    names.contains(required),
+                    "missing composite tool {required}"
+                );
+            }
+        }
+        assert!(receipt.needs_confirmation);
+        assert!(receipt.successful_observation_this_turn);
+
+        let confirmed_request = "我确认这个 storyboard；创建时间线，加字幕并生成预览。";
+        let confirmed_policy = RequestToolPolicy::from_request(confirmed_request);
+        let mut confirmed_responses = vec![
+            COMPOSITE_TIMELINE_CALL,
+            COMPOSITE_TEXT_CALL,
+            COMPOSITE_PREVIEW_CALL,
+            COMPOSITE_FINAL_REPLY,
+        ]
+        .into_iter();
+        let mut confirmed_input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": confirmed_request}]
+        })];
+        let mut respond_confirmed = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(
+                confirmed_responses
+                    .next()
+                    .expect("confirmed response")
+                    .to_owned(),
+            )
+        };
+        let mut execute_confirmed = |call: &FunctionCall, _step: usize| {
+            calls.borrow_mut().push(call.name.clone());
+            Ok::<_, String>(match call.name.as_str() {
+                "create_timeline_draft" => {
+                    json!({"tool":"create_timeline_draft","status":"ok","timelineVersionId":"timeline-1"})
+                }
+                "replace_text_tracks" => {
+                    json!({"tool":"replace_text_tracks","status":"ok","timelineVersionId":"timeline-2","qualityWarnings":[]})
+                }
+                "render_preview" => {
+                    json!({"tool":"render_preview","status":"ok","artifact":{"type":"preview","timelineVersionId":"timeline-2"}})
+                }
+                _ => unreachable!("unexpected confirmed composite call"),
+            })
+        };
+        let mut confirmed_receipt = NativeRunReceipt::default();
+        let confirmed_message = drive_native_loop(
+            &mut confirmed_input,
+            false,
+            false,
+            &confirmed_policy,
+            &mut confirmed_receipt,
+            confirmed_request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond_confirmed,
+            &mut execute_confirmed,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("confirmed composite loop");
+        assert_eq!(
+            confirmed_message,
+            "已检查素材并完成 30 秒剪辑、字幕和预览。"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            [
+                "list_assets",
+                "generate_storyboard",
+                "create_timeline_draft",
+                "replace_text_tracks",
+                "render_preview"
+            ]
+        );
+        assert!(confirmed_receipt
+            .successful_write_tools
+            .contains("render_preview"));
+    }
+
+    #[test]
+    fn natural_language_ends_the_turn_without_fixed_goal_correction() {
+        let request = "生成 storyboard";
+        let policy = RequestToolPolicy::from_request(request);
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| Ok::<_, String>(HELLO.to_owned());
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            unreachable!("natural language must end without a tool call")
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        );
+        assert_eq!(result, Ok("你好！有什么我可以帮你查看的吗？".to_owned()));
+        assert!(!receipt.successful_tool_call);
+    }
+
+    #[test]
+    fn composite_request_with_only_one_verified_write_is_partially_completed() {
+        let request = "生成 storyboard 并创建时间线";
+        let policy = RequestToolPolicy::from_request(request);
+        let mut responses = vec![MAIN_CHAIN_STORYBOARD_CALL, HELLO].into_iter();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(
+                responses
+                    .next()
+                    .expect("partial composite response")
+                    .to_owned(),
+            )
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(json!({
+                "tool": "generate_storyboard",
+                "status": "ok",
+                "storyboardVersionId": "storyboard-1"
+            }))
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("natural language ends the composite loop");
+        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+            .expect("receipt determines the truthful terminal status");
+        assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
+    }
+
+    #[test]
+    fn recovered_tool_failure_does_not_force_partial_completion() {
+        let request = "生成预览";
+        let policy = RequestToolPolicy::from_request(request);
+        let mut responses = vec![RENDER_CALL, RENDER_CALL, RENDER_REPLY].into_iter();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut attempts = 0;
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(responses.next().expect("recovery response").to_owned())
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            attempts += 1;
+            Ok::<_, String>(if attempts == 1 {
+                json!({"tool":"render_preview","status":"failed","code":"invalid_arguments"})
+            } else {
+                json!({"tool":"render_preview","status":"ok","artifact":{"type":"preview","timelineVersionId":"timeline-1"}})
+            })
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        );
+        let (_result, status) =
+            finish_native_result("task-1", message, None, &receipt).expect("recovered receipt");
+        assert_eq!(status, AgentLoopTerminalStatus::Completed);
+        assert_eq!(attempts, 2);
+        assert!(receipt.failed_tools.is_empty());
+    }
+
+    #[test]
+    fn merging_verified_outcomes_preserves_earlier_artifacts() {
+        let storyboard = StoryboardVersion {
+            id: "storyboard-1".to_owned(),
+            project_id: "project-1".to_owned(),
+            editing_task_id: "task-1".to_owned(),
+            version_number: 1,
+            brief: "brief".to_owned(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 30_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: Vec::new(),
+            created_at: 1,
+        };
+        let earlier = AgentEditResult {
+            agent_task_id: "task-1".to_owned(),
+            message: "storyboard".to_owned(),
+            storyboard: Some(storyboard),
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        };
+        let later = AgentEditResult {
+            agent_task_id: "task-1".to_owned(),
+            message: "observation".to_owned(),
+            storyboard: None,
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        };
+        let merged = merge_native_outcomes(Some(earlier), later, "get_edit_status");
+        assert!(merged.storyboard.is_some());
+        assert_eq!(merged.message, "observation");
+    }
+
+    #[test]
+    fn step_limit_preserves_real_partial_artifact_from_receipt() {
+        let storyboard = StoryboardVersion {
+            id: "storyboard-1".to_owned(),
+            project_id: "project-1".to_owned(),
+            editing_task_id: "task-1".to_owned(),
+            version_number: 1,
+            brief: "30 second edit".to_owned(),
+            title: "Draft".to_owned(),
+            summary: "Draft".to_owned(),
+            target_duration_ms: 30_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: Vec::new(),
+            created_at: 1,
+        };
+        let outcome = AgentEditResult {
+            agent_task_id: "agent-task-1".to_owned(),
+            message: "ignored".to_owned(),
+            storyboard: Some(storyboard),
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        };
+        let receipt = NativeRunReceipt {
+            tool_called: true,
+            successful_tool_call: true,
+            ..NativeRunReceipt::default()
+        };
+        let (result, status) = finish_native_result(
+            "agent-task-1",
+            Err("native_tool_loop_max_steps".to_owned()),
+            Some(outcome),
+            &receipt,
+        )
+        .expect("partial receipt result");
+        assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
+        assert!(result.storyboard.is_some());
+        assert!(result.message.contains("步骤上限"));
     }
 
     #[test]
@@ -2011,21 +2423,36 @@ mod tests {
     }
 
     #[test]
-    fn preview_request_cannot_finish_from_text_without_render_call() {
-        let policy = RequestToolPolicy::from_request("帮我生成一个预览");
-        let (message, requests, calls) = fixture_driver_with_policy(
-            "帮我生成一个预览",
-            vec![HELLO, RENDER_CALL, RENDER_REPLY],
-            json!({
-                "tool": "render_preview",
-                "status": "ok",
-                "artifact": {"type": "preview", "timelineVersionId": "timeline-1"}
-            }),
-            policy,
-        );
-        assert_eq!(message, "预览已生成，可以检查节奏和字幕。");
-        assert_eq!(calls, ["render_preview"]);
-        assert_eq!(requests.len(), 3);
+    fn preview_claim_without_tool_ends_loop_but_receipt_cannot_complete_request() {
+        let request = "帮我生成一个预览";
+        let policy = RequestToolPolicy::from_request(request);
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| Ok::<_, String>(HELLO.to_owned());
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            unreachable!("natural language must finish without forcing a tool call")
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("natural language ends the native loop");
+        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+            .expect("receipt evaluates preview completion");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert!(receipt.successful_write_tools.is_empty());
     }
 
     #[test]
@@ -2448,13 +2875,11 @@ mod tests {
                 selected.push(call.name.clone());
                 Ok::<_, String>(json!({"tool":call.name,"status":"ok","result":{}}))
             };
-            let mut preview_succeeded = false;
             let message = drive_native_loop(
                 &mut input,
                 false,
                 false,
                 &RequestToolPolicy::default(),
-                &mut preview_succeeded,
                 &mut NativeRunReceipt::default(),
                 "fixture request",
                 Instant::now() + Duration::from_secs(5),
@@ -2525,16 +2950,14 @@ mod tests {
     #[test]
     fn model_claim_after_tool_failure_cannot_be_completed() {
         let receipt = NativeRunReceipt {
-            failed_tool_call: true,
             tool_called: true,
+            failed_tools: ["generate_storyboard".to_owned()].into_iter().collect(),
             ..NativeRunReceipt::default()
         };
         let (_result, status) = finish_native_result(
             "task-1",
             Ok("Storyboard 已生成。".to_owned()),
             None,
-            false,
-            false,
             &receipt,
         )
         .expect("safe failed terminal result");
@@ -2554,8 +2977,6 @@ mod tests {
             "task-1",
             Err("custom provider transport detail must not reach the UI".to_owned()),
             None,
-            false,
-            false,
             &receipt,
         )
         .expect("native failure is persisted without falling back to Legacy text");
@@ -2617,14 +3038,12 @@ mod tests {
             "task-1",
             Err("native_tool_loop_response_unparseable".to_owned()),
             Some(outcome),
-            true,
-            false,
             &NativeRunReceipt::default(),
         )
         .expect("partial preview result");
         assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
         assert!(result.preview.is_some());
-        assert!(result.message.contains("预览已生成"));
+        assert!(result.message.contains("预览已由工具生成并验证"));
     }
 
     fn fixture_driver_with_policy(
@@ -2636,7 +3055,6 @@ mod tests {
         let mut responses = fixtures.into_iter();
         let mut requests = Vec::new();
         let mut calls = Vec::new();
-        let mut preview_succeeded = false;
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": request}]
@@ -2654,7 +3072,6 @@ mod tests {
             false,
             false,
             &policy,
-            &mut preview_succeeded,
             &mut NativeRunReceipt::default(),
             request,
             Instant::now() + Duration::from_secs(5),

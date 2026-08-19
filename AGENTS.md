@@ -63,3 +63,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 <!-- 维护记录（2026-08-19）：NativeToolLoop 仅对明确且未被请求策略禁止的预览生成意图提供 render_preview；Rust 执行前复核权限、参数和时间线作用域，真实产物收据再交模型总结。 -->
 <!-- 维护记录（2026-08-19）：Native 主链写工具默认不暴露；仅本地请求策略明确授权的分析、Storyboard 或时间线能力进入请求，项目事实终态必须有成功只读观察，确认操作绑定作用域、来源任务和有效期。 -->
 <!-- 维护记录（2026-08-19）：Native 工具目录扩展至文本、音乐下载/编辑和 Jianying draft；工具 schema/参数只适配 Provider，执行仍复用 apply_skill，许可证、文字矩阵、剪映兼容性和确认门由既有 Rust 领域边界裁决。 -->
+<!-- 维护记录（2026-08-19）：NativeToolLoop 不再声明或锁定单一 LoopGoal；function_call 驱动继续，自然语言驱动结束，RunReceipt 与持久化事实独立裁决完成、部分完成和失败。 -->

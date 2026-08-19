@@ -196,7 +196,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### Agent 循环与请求策略
 
-自然语言编辑控制器（`agent.rs`）在消费一次性 receipt 后统一进入 `run_native_tool_loop`。循环从 SQLite 按时间顺序加载真实 user/assistant 消息，Provider 返回的 message、function_call 和 function_call_output 作为原生 item 继续下一步；不再调用前置对话分类模型、要求 JSON decision 或预选首个工具。`RequestToolPolicy` 只做本地权限过滤，模型在允许的工具集合内自行决定观察、澄清或副作用顺序；项目事实仍必须先有成功只读观察，真实产物和确认门由 Rust 完成。模型最多 10 步，受 300 秒总预算、120 秒单步预算和取消检查约束。
+自然语言编辑控制器（`agent.rs`）在消费一次性 receipt 后统一进入 `run_native_tool_loop`。循环从 SQLite 按时间顺序加载真实 user/assistant 消息，Provider 返回的 message、function_call 和 function_call_output 作为原生 item 继续下一步；不再调用前置对话分类模型、要求 JSON decision、预选首个工具或声明固定 `LoopGoal`。有 function_call 时逐项执行并继续；没有 function_call 且有自然语言时结束本轮。`RequestToolPolicy` 只做本地权限过滤，模型在允许的工具集合内自行决定观察、澄清或副作用顺序；项目事实仍必须先有成功只读观察，真实产物和确认门由 Rust 完成。模型最多 10 步，受 300 秒总预算、120 秒单步预算和取消检查约束。
 
 每个普通自然语言请求还会生成只在本轮有效的 `RequestToolPolicy`。该策略不决定应该调用哪个工具，只把用户明确写出的负向副作用约束转换为禁用集合：例如“不生成 preview”“不创建 Jianying draft”“不分析素材”分别禁止对应写工具；排除素材分析还会禁止会下载媒体并触发本地分析的 `download_music`/`use_online_music`；“只读/readonly”禁止全部编辑与交付工具但保留观察工具。Agent `list_assets` 调用独立的无调度快照入口，`generate_storyboard` 只消费已就绪证据；越界工具由发送前过滤和执行前复核共同以 `user_restricted_tool` 封闭。策略只缩小权限，不替模型选择首个工具或构造业务目标。
 
@@ -214,7 +214,7 @@ Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 tas
 
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
-NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，最新调用与结果成对保留。默认注册 9 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验，最终消息以 assistant 角色保存；工具失败交给模型自然解释，但任务终态和产物存在性只由 Rust 与持久化事实决定。
+NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，最新调用与结果成对保留。默认注册 9 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
 
 Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
 

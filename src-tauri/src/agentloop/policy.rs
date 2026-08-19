@@ -201,6 +201,21 @@ impl RequestToolPolicy {
             denied_tools.push("download_music");
             denied_tools.push("use_online_music");
         }
+        if explicitly_denies_target(
+            request,
+            &["30秒剪辑", "30secondedit"],
+            &["", "做", "制作", "创建", "make", "create"],
+        ) {
+            denied_tools.push("generate_storyboard");
+            denied_tools.push("create_timeline_draft");
+        }
+        if explicitly_denies_target(
+            request,
+            &["字幕", "subtitle", "subtitles", "caption", "captions"],
+            &["", "加", "添加", "替换", "add", "replace", "edit"],
+        ) {
+            denied_tools.push("replace_text_tracks");
+        }
         denied_tools.sort_unstable();
         denied_tools.dedup();
         let authorized_native_tools = explicitly_requested_native_tools(request);
@@ -222,11 +237,18 @@ impl RequestToolPolicy {
     }
 
     pub(super) fn native_write_authorized(&self, tool: &str) -> bool {
-        self.authorized_native_tools.contains(&tool)
+        !self.forbids(tool) && self.authorized_native_tools.contains(&tool)
     }
 
     pub(super) fn has_native_write_authorization(&self) -> bool {
-        !self.authorized_native_tools.is_empty()
+        self.authorized_native_write_tools().next().is_some()
+    }
+
+    pub(super) fn authorized_native_write_tools(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.authorized_native_tools
+            .iter()
+            .copied()
+            .filter(|tool| !self.forbids(tool))
     }
 }
 
@@ -362,7 +384,7 @@ fn ordered_action_before_target(text: &str, actions: &[&str], targets: &[&str]) 
 }
 
 /// 同时支持"不要 preview"和"不要生成 preview"两种顺序，避免负向边界漏判。
-fn explicitly_denies_target(request: &str, targets: &[&str], actions: &[&str]) -> bool {
+pub(super) fn explicitly_denies_target(request: &str, targets: &[&str], actions: &[&str]) -> bool {
     let compact = request
         .to_lowercase()
         .chars()

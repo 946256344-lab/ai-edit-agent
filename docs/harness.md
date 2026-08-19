@@ -45,6 +45,7 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 - `src/lib/local-store.ts` 是唯一前端 `invoke` 所有者，所有被调用命令必须在 `lib.rs` 注册，所有已注册公开命令必须出现在 `docs/api.md`；
 - 外部进程、`keyring`/`Entry::new` 与 HTTP/网络传输只能出现在清单允许的 Rust 边界；
 - `agentloop/policy.rs` 的 Rust 观察/编辑工具白名单、TypeScript IDE 镜像和版本化 Agent fixture 的名称完全一致。
+- Native 对话生产路径不得恢复固定 `LoopGoal`、目标锁或 `finish`/`done`/`no_action` 伪控制动作；契约负向测试会阻止这些协议回流。
 
 桌面契约文档触发器同时匹配 `src-tauri/src/*.rs` 与 `src-tauri/src/**/*.rs`，因此后续提取的 Rust 子模块不能绕过架构/API/TASKS/变更记录同步。
 
@@ -100,3 +101,4 @@ npm run harness:test
 维护记录（2026-08-19）：7B Native 主链审查新增本地逐工具授权、成功只读观察完成门、RunReceipt 真实性和确认作用域/有效期/重放测试；授权解析拆到 native_policy.rs 以保持策略模块架构预算。
 维护记录（2026-08-19）：Native 文本、音乐与 Jianying 工具迁移需同步检查嵌套 strict schema、nullable 参数边界、显式授权和 apply_skill 复用；许可证、文字矩阵、确认与剪映兼容性不可被 Provider 参数绕过。
 维护记录（2026-08-19）：NativeToolLoop 已成为唯一对话模型入口；契约检查器负向扫描生产源码中的旧 Conversation Router、首工具和 route/goal 协议，Task Resolver 仅保留作用域 receipt。
+维护记录（2026-08-19）：NativeToolLoop 删除固定单目标终止假设；契约检查器禁止 LoopGoal/目标锁与 finish/done/no_action 回流，回归 fixture 以原生工具调用和 assistantReply 表达多步执行与自然语言结束。
