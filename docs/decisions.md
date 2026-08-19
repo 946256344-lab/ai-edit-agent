@@ -481,3 +481,10 @@
 - 决策：Provider 新增协议无关的 `ModelTurn`、`ModelOutputItem` 和 `FunctionCall` 类型。Responses 的完整 `response.output`、Responses SSE item 事件、Chat Completions 普通响应和 SSE 增量均可转换为同一结构；自定义 Chat 适配器透传 `tools`、`tool_choice`、`parallel_tool_calls`，并把 Responses 函数调用历史转换为 assistant `tool_calls` 与带 `tool_call_id` 的 tool 消息。
 - 原因：仅提取一段 JSON decision text 会丢失原生函数调用、并行调用和同一响应中的其他 output item；Provider 需要先具备完整协议能力，再由后续任务决定是否接入 Agent Runtime。
 - 后果：现有 `model_response_json_text` 与 Legacy Runtime 路径保持不变；统一结构目前只在 Provider 边界和固定 JSON fixture 测试中启用，不改变 Router、LoopGoal、SQLite schema、权限或副作用流程。fixture 不含凭据、本机路径或原始敏感响应。
+
+## ADR-068：首批原生 Function Tools 只读集中定义
+
+- 状态：已采用（2026-08-19）
+- 决策：在 `agentloop/tools.rs` 集中定义 `get_asset_health_summary`、`list_assets`、`get_timeline` 三个原生 Function Tool。定义采用 Responses 风格的 `type/function/name/description/parameters/strict` 结构，参数 schema 关闭额外属性；可选 `timelineVersionId` 使用 `string|null`。工具定义不携带 project、conversation 或路径作用域字段。
+- 原因：Provider 已能承载原生工具调用，但首批工具必须先拥有稳定、可审查的协议契约；把 schema 分散到请求路径会导致名称、参数和安全边界漂移。
+- 后果：本轮只提供定义和合约测试，不自动注册到用户请求；三个工具仍由既有 `skills::apply_skill` 执行，编辑类和副作用工具留待后续批次。

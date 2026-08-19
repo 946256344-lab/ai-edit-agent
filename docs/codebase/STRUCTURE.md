@@ -55,6 +55,7 @@ src/main.tsx
 | `agent.rs` | conversation route 入口、异步 run、原子终态提交 |
 | `agentloop.rs` | Conversation Router、prompt、状态快照、有界循环与技能派发 |
 | `agentloop/policy.rs` | 工具白名单、负向约束、目标解析、真实产物完成门与固定降级文案 |
+| `agentloop/tools.rs` | 首批只读原生 Function Tool 的集中 strict JSON Schema；暂不接入用户请求 |
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |
 | `storyboard.rs` | 证据候选、模型提案、校验和版本 |
 | `timeline.rs` | 时间线版本、镜头/文本/音乐编辑和查询 |

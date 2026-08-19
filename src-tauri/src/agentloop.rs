@@ -2,13 +2,15 @@
 //!
 //! 纯请求策略和真实产物完成门位于 `agentloop/policy.rs`；路由决策与有界循环位于
 //! `agentloop/runtime.rs`；状态快照与提示构建位于 `agentloop/prompt.rs`；技能执行
-//! 与参数校验位于 `agentloop/skills.rs`。本文件只负责模块声明、公开接口重导出和测试。
+//! 与参数校验位于 `agentloop/skills.rs`；首批原生 Function Tool 定义位于
+//! `agentloop/tools.rs`。本文件只负责模块声明、公开接口重导出和测试。
 
 mod policy;
 mod prompt;
 mod runtime;
 mod schema;
 mod skills;
+mod tools;
 
 // 重导出公开接口供外部模块使用
 pub(crate) use runtime::{
