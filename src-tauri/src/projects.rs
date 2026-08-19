@@ -14,24 +14,25 @@ const MISSING_AGENT_REPLY_MESSAGE: &str = "上一条 Agent 任务已结束，但
 fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
-            "SELECT task.id, task.project_id, task.editing_task_id, task.conversation_id
+            "WITH latest_tasks AS (
+               SELECT id, conversation_id,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY conversation_id
+                        ORDER BY created_at DESC, updated_at DESC, id DESC
+                      ) as row_num
+               FROM agent_tasks
+               WHERE editing_task_id IS NOT NULL
+                 AND conversation_id IS NOT NULL
+                 AND status IN ('completed', 'partially_completed', 'failed', 'needs_clarification', 'needs_review')
+             )
+             SELECT task.id, task.project_id, task.editing_task_id, task.conversation_id
              FROM agent_tasks AS task
              JOIN conversations AS conversation ON conversation.id = task.conversation_id
+             JOIN latest_tasks ON latest_tasks.id = task.id AND latest_tasks.row_num = 1
+             LEFT JOIN messages ON messages.id = 'agent-task-result-' || task.id
+               AND messages.conversation_id = task.conversation_id
              WHERE conversation.status = 'working'
-               AND task.editing_task_id IS NOT NULL
-               AND task.conversation_id IS NOT NULL
-               AND task.status IN ('completed', 'partially_completed', 'failed', 'needs_clarification', 'needs_review')
-               AND task.id = (
-                 SELECT latest.id FROM agent_tasks AS latest
-                 WHERE latest.conversation_id = task.conversation_id
-                 ORDER BY latest.created_at DESC, latest.updated_at DESC, latest.id DESC
-                 LIMIT 1
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM messages
-                 WHERE messages.id = 'agent-task-result-' || task.id
-                   AND messages.conversation_id = task.conversation_id
-               )",
+               AND messages.id IS NULL",
         )
         .map_err(|error| error.to_string())?;
     let missing = statement
