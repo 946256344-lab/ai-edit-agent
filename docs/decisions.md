@@ -474,3 +474,10 @@
 - 决策：将 agentloop.rs（3684 行）按职责分为 `agentloop/schema.rs`（纯类型与常量）、`agentloop/prompt.rs`（提示构建与历史加载）、`agentloop/skills.rs`（技能执行器与状态辅助）、`agentloop/runtime.rs`（路由决策与主循环）四个子模块；父文件缩减为薄 re-export 层加测试。`check-agent-contracts.mjs` 同步扩展扫描 `runtime.rs` 以定位 canonical 控制动作匹配表达式。
 - 原因：单文件超出架构预算且职责混杂；分层后各子模块边界清晰，测试可访问精确函数，预算棘轮可独立守护每层。
 - 后果：公开命令名称、SQLite schema、工具白名单、最大步数、Provider 接口和用户数据均未改变；契约检查器扫描范围扩大一个文件，不影响既有棘轮规则。
+
+## ADR-067：Provider 统一原生工具调用数据结构
+
+- 状态：已采用（2026-08-19）
+- 决策：Provider 新增协议无关的 `ModelTurn`、`ModelOutputItem` 和 `FunctionCall` 类型。Responses 的完整 `response.output`、Responses SSE item 事件、Chat Completions 普通响应和 SSE 增量均可转换为同一结构；自定义 Chat 适配器透传 `tools`、`tool_choice`、`parallel_tool_calls`，并把 Responses 函数调用历史转换为 assistant `tool_calls` 与带 `tool_call_id` 的 tool 消息。
+- 原因：仅提取一段 JSON decision text 会丢失原生函数调用、并行调用和同一响应中的其他 output item；Provider 需要先具备完整协议能力，再由后续任务决定是否接入 Agent Runtime。
+- 后果：现有 `model_response_json_text` 与 Legacy Runtime 路径保持不变；统一结构目前只在 Provider 边界和固定 JSON fixture 测试中启用，不改变 Router、LoopGoal、SQLite schema、权限或副作用流程。fixture 不含凭据、本机路径或原始敏感响应。

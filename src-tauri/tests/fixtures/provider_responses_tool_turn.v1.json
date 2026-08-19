@@ -1,0 +1,28 @@
+{
+  "id": "resp_fixture_1",
+  "object": "response",
+  "status": "completed",
+  "store": false,
+  "output": [
+    {
+      "id": "msg_fixture_1",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "I will inspect the ready assets."
+        }
+      ]
+    },
+    {
+      "id": "fc_fixture_1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_fixture_1",
+      "name": "list_assets",
+      "arguments": "{\"status\":\"ready\"}"
+    }
+  ]
+}

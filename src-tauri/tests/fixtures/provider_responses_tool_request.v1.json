@@ -1,0 +1,56 @@
+{
+  "model": "response-model",
+  "store": false,
+  "parallel_tool_calls": false,
+  "tool_choice": {
+    "type": "function",
+    "name": "list_assets"
+  },
+  "tools": [
+    {
+      "type": "function",
+      "name": "list_assets",
+      "description": "List scoped assets.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  ],
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Inspect assets."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_fixture_0",
+      "name": "get_storyboard",
+      "arguments": "{}"
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_fixture_1",
+      "name": "list_assets",
+      "arguments": "{\"status\":\"ready\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_fixture_0",
+      "output": {
+        "exists": false
+      }
+    }
+  ]
+}
