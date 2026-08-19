@@ -164,7 +164,7 @@ schema v12 将收藏、评分、备注、禁止使用、用户标签和素材集
 
 Agent 通过受限只读 `search_assets` 做目标化候选发现，而不是把整个素材库注入模型。查询可组合媒体类型、时长、最低评分、收藏、标签、集合和游标，单页最多 20 条；结果按收藏、评分和更新时间稳定排序并给出固定命中原因码。工具自动排除用户禁止使用的素材，不返回源路径、用户备注正文、OCR 正文、媒体内容或完整视觉证据。`list_assets` 继续只用于紧凑状态盘点和分析排队前观察。
 
-素材浏览不访问源文件系统。schema v14 的 `asset_source_health` 独立保存大小、修改时间基线、最近观察结果和脱敏原因码；只有用户显式启动可取消的 `scan_asset_health` 后台任务时才逐项读取文件元数据。新导入和确认重链路会建立新基线；列表只展示持久化的 `unchecked/online/missing/changed/unreadable` 状态。Agent 通过 `get_asset_health_summary` 读取项目级计数、扫描状态和安全原因码，不接收路径或原始系统错误。
+素材浏览不访问源文件系统。schema v15 的 `asset_source_health` 独立保存大小、修改时间基线、最近观察结果和脱敏原因码，`messages` 同时允许原生 `assistant` 角色；只有用户显式启动可取消的 `scan_asset_health` 后台任务时才逐项读取文件元数据。新导入和确认重链路会建立新基线；列表只展示持久化的 `unchecked/online/missing/changed/unreadable` 状态。Agent 通过 `get_asset_health_summary` 读取项目级计数、扫描状态和安全原因码，不接收路径或原始系统错误。
 
 Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段内绑定 OCR/视觉证据，返回可直接用于剪辑工具的明确源时间范围。结果单页最多 20 条，保留 OCR 正文和本地路径的隐私边界，并排除用户禁止使用及健康状态明确异常的源文件。
 
@@ -214,7 +214,7 @@ Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 tas
 
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
-NativeToolLoop 是显式 `NATIVE_TOOL_LOOP=true` 的只读实验路径。它绕过 Conversation Router 和 JSON decision schema，仅注册 `get_asset_health_summary`、`list_assets`、`get_timeline`，把真实 `user`、`assistant`、`function_call`、`function_call_output` 项组成后续请求；`store:false` 时不依赖 Provider 服务端状态。Legacy loop 仍是默认路径，编辑、副作用、确认门和产物真实性校验不由 NativeToolLoop 接管。
+NativeToolLoop 是显式 `NATIVE_TOOL_LOOP=true` 的只读实验路径。它绕过 Conversation Router 和 JSON decision schema，按 SQLite 时间顺序读取真实 user/assistant 会话消息，不再把历史拼成带说话人标签的 Prompt；仅注册 `get_asset_health_summary`、`list_assets`、`get_timeline`，把本轮真实 `user`、`assistant`、`function_call`、`function_call_output` 项组成后续请求。上下文预算只删除旧消息，function_call 与对应 function_call_output 成对保留；`store:false` 时不依赖 Provider 服务端状态。Native 最终回复以 assistant 角色保存，Legacy 仍使用 agent 角色和默认路径，编辑、副作用、确认门和产物真实性校验不由 NativeToolLoop 接管。
 
 Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
 

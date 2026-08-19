@@ -118,7 +118,7 @@ pub(crate) fn run_native_tool_loop(
 ) -> Result<AgentLoopResult, String> {
     let run_started_at = Instant::now();
     let run_deadline = run_started_at + AGENT_RUN_TIMEOUT;
-    let history = super::prompt::load_message_history(connection, conversation_id, request);
+    let history = super::prompt::load_native_message_history(connection, conversation_id, request);
     let mut input = vec![json!({
         "role": "system",
         "content": [{
@@ -126,22 +126,7 @@ pub(crate) fn run_native_tool_loop(
             "text": "You are a read-only local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided read-only functions before answering. Treat function outputs as the only project facts. If a function returns a structured failure, explain it safely or adjust with another allowed function; do not claim an edit or artifact was created."
         }]
     })];
-    input.extend(
-        history
-            .into_iter()
-            .filter_map(|(role, content)| {
-                let role = match role.as_str() {
-                    "user" => "user",
-                    "agent" | "assistant" => "assistant",
-                    _ => return None,
-                };
-                Some(json!({
-                    "role": role,
-                    "content": [{"type": "input_text", "text": content}]
-                }))
-            })
-            .collect::<Vec<_>>(),
-    );
+    input.extend(history);
     input.push(json!({
         "role": "user",
         "content": [{"type": "input_text", "text": request}]
@@ -181,6 +166,7 @@ pub(crate) fn run_native_tool_loop(
         &mut input,
         is_custom,
         request_requires_project_observation(request),
+        request,
         run_deadline,
         &mut respond,
         &mut execute,
@@ -229,6 +215,7 @@ fn drive_native_loop(
     input: &mut Vec<Value>,
     is_custom: bool,
     requires_observation: bool,
+    request: &str,
     run_deadline: Instant,
     respond: &mut NativeRespond<'_>,
     execute: &mut NativeExecute<'_>,
@@ -243,6 +230,7 @@ fn drive_native_loop(
         let Some(timeout) = remaining_timeout(run_deadline) else {
             return Err("native_tool_loop_deadline_exceeded".to_owned());
         };
+        trim_native_input(input, request);
         let payload = json!({
             "model": "gpt-5.4",
             "store": false,
@@ -350,6 +338,60 @@ fn output_item_for_input(item: &ModelOutputItem, is_custom: bool) -> Option<Valu
         ModelOutputItem::Other(raw) if !raw.is_null() => Some(raw.clone()),
         ModelOutputItem::Other(_) => None,
     }
+}
+
+const MAX_NATIVE_INPUT_CHARS: usize = 16_000;
+
+fn trim_native_input(input: &mut Vec<Value>, request: &str) {
+    trim_native_input_to_budget(input, request, MAX_NATIVE_INPUT_CHARS);
+}
+
+fn trim_native_input_to_budget(input: &mut Vec<Value>, request: &str, max_chars: usize) {
+    while input_char_count(input) > max_chars {
+        let current_index = input
+            .iter()
+            .rposition(|item| is_current_user_item(item, request));
+        let Some(remove_index) = (1..input.len()).find(|index| Some(*index) != current_index)
+        else {
+            break;
+        };
+        if input[remove_index]["type"] == "function_call" {
+            let call_id = input[remove_index]["call_id"].clone();
+            input.remove(remove_index);
+            if let Some(output_index) = input.iter().position(|item| {
+                item["type"] == "function_call_output" && item["call_id"] == call_id
+            }) {
+                input.remove(output_index);
+            }
+        } else if input[remove_index]["type"] == "function_call_output" {
+            let call_id = input[remove_index]["call_id"].clone();
+            input.remove(remove_index);
+            if let Some(call_index) = input
+                .iter()
+                .position(|item| item["type"] == "function_call" && item["call_id"] == call_id)
+            {
+                input.remove(call_index);
+            }
+        } else {
+            input.remove(remove_index);
+        }
+    }
+}
+
+fn is_current_user_item(item: &Value, request: &str) -> bool {
+    item["role"] == "user"
+        && item["content"]
+            .as_array()
+            .and_then(|content| content.first())
+            .and_then(|content| content["text"].as_str())
+            .is_some_and(|text| text == request)
+}
+
+fn input_char_count(input: &[Value]) -> usize {
+    input
+        .iter()
+        .map(|item| item.to_string().chars().count())
+        .sum()
 }
 
 fn execute_native_tool(
@@ -543,6 +585,7 @@ mod tests {
             &mut input,
             false,
             false,
+            "fixture request",
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
@@ -639,5 +682,30 @@ mod tests {
         );
         assert_eq!(calls, ["get_timeline"]);
         assert_eq!(message, "当前任务还没有时间线。");
+    }
+
+    #[test]
+    fn input_budget_drops_old_history_but_keeps_function_call_pair() {
+        let mut input = vec![
+            json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
+            json!({"role": "user", "content": [{"type": "input_text", "text": "很长的旧问题"}]}),
+            json!({"role": "assistant", "content": [{"type": "output_text", "text": "很长的旧回答"}]}),
+            json!({"role": "user", "content": [{"type": "input_text", "text": "当前问题"}]}),
+            json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
+            json!({"type": "function_call_output", "call_id": "call_1", "output": "{\"status\":\"ok\"}"}),
+        ];
+
+        trim_native_input_to_budget(&mut input, "当前问题", 400);
+
+        assert!(input.iter().any(|item| item["type"] == "function_call"));
+        assert!(input
+            .iter()
+            .any(|item| item["type"] == "function_call_output"));
+        assert!(input
+            .iter()
+            .any(|item| item["role"] == "user" && item["content"][0]["text"] == "当前问题"));
+        assert!(!input
+            .iter()
+            .any(|item| item.to_string().contains("很长的旧问题")));
     }
 }

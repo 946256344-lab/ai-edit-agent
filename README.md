@@ -12,6 +12,7 @@
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、注册和打开。
 - 非显式自然语言请求由模型在受控工具中逐步决策；模型可请求分析项目内已导入但未分析的素材，但不能直接执行文件、SQLite 或 FFmpeg 操作。storyboard 的镜头数和时长由模型提案，应用只保留本地处理安全上限。
+- 显式 `NATIVE_TOOL_LOOP=true` 时，只读实验路径按 SQLite 时间顺序发送真实 user/assistant 会话消息，并用原生观察工具项承接上下文；Legacy Runtime 仍是默认路径。
 
 这不是生产就绪的 Agent 编排系统。自定义模型适配器、生产安装包中的媒体运行时、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
 

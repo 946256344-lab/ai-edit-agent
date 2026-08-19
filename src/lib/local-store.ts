@@ -58,7 +58,7 @@ export type StoredEditingSession = {
 export type StoredMessage = {
   id: string
   conversationId: string
-  role: 'user' | 'agent' | 'tool' | 'system'
+  role: 'user' | 'assistant' | 'agent' | 'tool' | 'system'
   content: string
   createdAt: number
 }

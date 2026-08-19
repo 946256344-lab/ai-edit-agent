@@ -502,3 +502,10 @@
 - 决策：移除 `.harness/architecture-budgets.json` 中路径和目录预算的 `maxLines` 指标，并从架构检查器和 ratchet 中删除行数度量。保留字符总量、最长单行、hooks、props、禁止路径、禁止文本和跨层边界保护；删除旧 `maxLines` 不视为放宽其它预算。
 - 原因：代码行数受格式化、测试放置和合法实现风格影响较大，不能稳定代表职责边界；保留字符、单行和结构指标即可继续约束无界膨胀与跨层回流。
 - 后果：文件可以因真实职责或测试需要自然增加行数，不再触发行数预算失败；架构边界、代码密度和可审查性仍由其余机器检查与文档规则负责。历史变更记录中的旧行数仅作为当时事实，不是当前预算。
+
+## ADR-071：NativeToolLoop 使用原生会话消息
+
+- 状态：已采用（2026-08-19）
+- 决策：NativeToolLoop 从 SQLite 按时间顺序读取 user/assistant（兼容旧 agent）消息，直接构造成 Responses input item；本轮模型输出的完整 assistant/function_call item 与 function_call_output 只在内存中追加到下一轮。上下文预算只能删除旧消息，工具调用与对应结果必须成对保留；最终 Native 回复以 assistant 角色保存，Legacy 回复继续使用 agent。
+- 原因：把历史渲染成“用户：/助手：/工具：”文本会丢失协议 role，导致追问“其中视频有几个？”无法可靠承接上一轮，也会把工具事实混入非结构化 Prompt。原生 item 让模型通过真实会话和观察工具获得项目事实。
+- 后果：SQLite schema v15 允许 assistant 消息并保留旧 agent 数据；不新增模型 transcript 或原始工具响应持久化。system 只保留身份、只读安全边界和“项目事实必须观察”的约束，项目状态仍由三项观察工具提供。

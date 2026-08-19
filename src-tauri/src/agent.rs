@@ -193,6 +193,7 @@ fn finalize_agent_task(
     outcome: Result<AgentEditResult, String>,
     terminal_status: &str,
     clarification_goal: Option<&str>,
+    completion_role: &str,
 ) -> Result<AgentEditResult, String> {
     match outcome {
         Ok(result) => {
@@ -260,13 +261,14 @@ fn finalize_agent_task(
                     &summary,
                 )?;
             }
-            persist_agent_completion_message(
+            persist_agent_completion_message_with_role(
                 &transaction,
                 agent_task_id,
                 project_id,
                 editing_task_id,
                 conversation_id,
                 &result.message,
+                completion_role,
             )?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(result)
@@ -288,13 +290,14 @@ fn finalize_agent_task(
                 agent_task_id.to_owned(),
                 "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
             );
-            persist_agent_completion_message(
+            persist_agent_completion_message_with_role(
                 &transaction,
                 agent_task_id,
                 project_id,
                 editing_task_id,
                 conversation_id,
                 &result.message,
+                completion_role,
             )?;
             transaction.commit().map_err(|error| error.to_string())?;
             Ok(result)
@@ -685,9 +688,32 @@ pub(crate) fn persist_agent_completion_message(
     conversation_id: &str,
     message: &str,
 ) -> Result<(), String> {
+    persist_agent_completion_message_with_role(
+        connection,
+        agent_task_id,
+        project_id,
+        editing_task_id,
+        conversation_id,
+        message,
+        "agent",
+    )
+}
+
+fn persist_agent_completion_message_with_role(
+    connection: &Connection,
+    agent_task_id: &str,
+    project_id: &str,
+    editing_task_id: &str,
+    conversation_id: &str,
+    message: &str,
+    role: &str,
+) -> Result<(), String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("Agent completion message cannot be empty.".to_owned());
+    }
+    if !matches!(role, "agent" | "assistant") {
+        return Err("Agent completion message role is invalid.".to_owned());
     }
     // 由 task ID 派生稳定主键，使事件、轮询和重启恢复重复对账时仍只会插入一次回复。
     let message_id = format!("agent-task-result-{agent_task_id}");
@@ -695,14 +721,15 @@ pub(crate) fn persist_agent_completion_message(
     let inserted = connection
         .execute(
             "INSERT OR IGNORE INTO messages (id, conversation_id, role, content, created_at)
-             SELECT ?1, ?2, 'agent', ?3, ?4
+             SELECT ?1, ?2, ?3, ?4, ?5
              WHERE EXISTS (
                SELECT 1 FROM conversations
-               WHERE id = ?2 AND project_id = ?5 AND editing_task_id = ?6
+               WHERE id = ?2 AND project_id = ?6 AND editing_task_id = ?7
              )",
             params![
                 message_id,
                 conversation_id,
+                role,
                 message,
                 timestamp,
                 project_id,
@@ -715,9 +742,9 @@ pub(crate) fn persist_agent_completion_message(
             .query_row(
                 "SELECT EXISTS(
                    SELECT 1 FROM messages
-                   WHERE id = ?1 AND conversation_id = ?2 AND role = 'agent'
+                   WHERE id = ?1 AND conversation_id = ?2 AND role = ?3
                  )",
-                params![message_id, conversation_id],
+                params![message_id, conversation_id, role],
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
@@ -863,6 +890,7 @@ fn run_agent_edit_pipeline(
         storyboard.is_some(),
         timeline_version_id.is_some(),
     );
+    let native_completion = native_tool_loop_enabled() && initial_skill.is_none();
     let (outcome, terminal_status, clarification_goal) =
         if let Some(tool) = explicit_command_tool(&request).filter(|_| !needs_model_recovery) {
             (
@@ -936,6 +964,11 @@ fn run_agent_edit_pipeline(
         outcome,
         terminal_status,
         clarification_goal,
+        if native_completion {
+            "assistant"
+        } else {
+            "agent"
+        },
     )
 }
 
@@ -1029,6 +1062,7 @@ mod tests {
             Ok(result),
             "failed",
             None,
+            "agent",
         )
         .expect("persist failed loop result");
 
@@ -1165,6 +1199,7 @@ mod tests {
             Ok(result),
             "completed",
             None,
+            "agent",
         )
         .expect("finalize successful task");
 
@@ -1182,6 +1217,40 @@ mod tests {
         assert_eq!(task_status, "completed");
         assert_eq!(conversation_status, "ready");
         assert_eq!(message_count, 1);
+    }
+
+    #[test]
+    fn native_completion_message_is_saved_as_assistant() {
+        let connection = Connection::open_in_memory().expect("open native completion database");
+        crate::db::migrate(&connection).expect("migrate native completion database");
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p', 'Project', 1, 1);
+                 INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at) VALUES ('t', 'p', 'Task', '', 1, 1);
+                 INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at) VALUES ('c', 'p', 't', 'Conversation', 'working', 1, 1);
+                 INSERT INTO agent_tasks (id, project_id, editing_task_id, conversation_id, tool_name, status, input_json, created_at, updated_at) VALUES ('run', 'p', 't', 'c', 'agent_loop', 'completed', '{}', 2, 2);",
+            )
+            .expect("seed native completion scope");
+
+        persist_agent_completion_message_with_role(
+            &connection,
+            "run",
+            "p",
+            "t",
+            "c",
+            "项目中有 10 个素材。",
+            "assistant",
+        )
+        .expect("persist native assistant message");
+
+        let role: String = connection
+            .query_row(
+                "SELECT role FROM messages WHERE id = 'agent-task-result-run'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read native assistant role");
+        assert_eq!(role, "assistant");
     }
 
     #[test]

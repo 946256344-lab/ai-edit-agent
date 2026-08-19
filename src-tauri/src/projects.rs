@@ -557,7 +557,10 @@ pub fn create_message(
     if content.is_empty() {
         return Err("Message content cannot be empty.".to_owned());
     }
-    if !matches!(role.as_str(), "user" | "agent" | "tool" | "system") {
+    if !matches!(
+        role.as_str(),
+        "user" | "assistant" | "agent" | "tool" | "system"
+    ) {
         return Err("Message role is invalid.".to_owned());
     }
 
