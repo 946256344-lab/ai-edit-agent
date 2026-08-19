@@ -140,6 +140,8 @@ Agent 请求统一经父 `agentloop.rs` 的封闭、有界目标驱动循环处�
 
 普通自然语言请求会在路由和 Agent loop 中复用同一个请求级工具限制策略。明确“不生成 preview”“不创建 Jianying draft”“不分析素材”时，对应 `render_preview`、`create_jianying_draft`、`request_asset_analysis` 不进入本轮可用工具集合；因为 `download_music` 与 `use_online_music` 会下载媒体并触发本地分析，排除素材分析时两者也不可用。Agent 的 `list_assets` 始终只读持久化快照，`generate_storyboard` 始终只使用已就绪证据，因此不会从观察或 storyboard 生成旁路启动分析。“只读/readonly”请求不允许任何编辑或交付工具，也不接受模型提供的 `taskBrief` 持久化。负向限制不会直接选择替代工具，也不会把少量选项写死为业务流程；它只缩小模型的权限，并在路由目标、首次目标声明、初始技能与每个后续技能执行前校验。被否定的 deliverable 词不参与 `fast_goal` 目标锁定，模型也不得把依赖被禁工具的 deliverable 声明为本轮目标；越界工具以安全码 `user_restricted_tool` 封闭。路由模型返回无效目标或工具而回退到无首步 Agent loop 时，后端会从本轮只读/当前项目事实措辞保守恢复观察门，至少一个真实观察成功前不得 `finish` 回答项目事实。
 
+显式开启 `NATIVE_TOOL_LOOP` 时，`render_preview` 只会在当前请求包含明确的预览生成动作且 RequestToolPolicy 未禁止时进入原生 tools。它的 strict schema 仅接受 nullable `timelineVersionId`；project、conversation、本机路径和 FFmpeg 参数不属于模型契约。Rust 在执行前重新校验请求权限和参数，并从当前项目作用域选择时间线。成功的 `function_call_output` 只返回产物类型、时间线版本和质量检查计数；失败只返回安全错误码及恢复建议。无论成功或失败，loop 都再次调用模型，最终消息采用模型对真实结果的自然语言总结，同时任务终态仍持有后端验证的 preview 产物引用。
+
 每轮决策前，后端从当前作用域重建 `AgentStateSnapshot`，仅包含项目/剪辑任务/会话标识、素材可用与分析状态计数、当前真实产物状态、已执行步骤摘要、剩余步数、目标和未满足条件。完整 storyboard/时间线细节不再每轮直接注入；模型需要镜头细节时使用观察工具。确定性前置条件提示负责指出最短合法路径，但已有时间线时允许直接编辑、渲染 preview 或创建 Jianying draft，不强制重建 storyboard。每个循环技能和显式直通技能都写入 `agent_run_steps`：只保存工具名、步骤状态、安全产物类型/ID、安全错误码和时间戳。中断后运行仍进入 `needs_review`，未完成步骤封闭为 `failed/interrupted_requires_review`，绝不自动重放未知副作用。
 
 | 工具 | 当前契约 | 实现状态 |

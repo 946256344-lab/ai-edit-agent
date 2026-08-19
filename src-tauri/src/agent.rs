@@ -54,6 +54,14 @@ fn explicit_command_needs_model_recovery(
         && matches!(tool, Some("render_preview" | "create_jianying_draft"))
 }
 
+fn should_use_native_loop(
+    native_enabled: bool,
+    has_initial_skill: bool,
+    explicit_tool: Option<&str>,
+) -> bool {
+    native_enabled && !has_initial_skill && matches!(explicit_tool, None | Some("render_preview"))
+}
+
 fn load_agent_context(
     connection: &Connection,
     project_id: &str,
@@ -873,9 +881,8 @@ fn run_agent_edit_pipeline(
         timelines = vec![timeline];
     }
 
-    let tool_name = explicit_command_tool(&request)
-        .unwrap_or("agent_loop")
-        .to_owned();
+    let explicit_tool = explicit_command_tool(&request);
+    let tool_name = explicit_tool.unwrap_or("agent_loop").to_owned();
     update_agent_task(
         &connection,
         agent_task_id,
@@ -886,13 +893,17 @@ fn run_agent_edit_pipeline(
     )?;
 
     let needs_model_recovery = explicit_command_needs_model_recovery(
-        explicit_command_tool(&request),
+        explicit_tool,
         storyboard.is_some(),
         timeline_version_id.is_some(),
     );
-    let native_completion = native_tool_loop_enabled() && initial_skill.is_none();
+    let native_completion = should_use_native_loop(
+        native_tool_loop_enabled(),
+        initial_skill.is_some(),
+        explicit_tool,
+    );
     let (outcome, terminal_status, clarification_goal) =
-        if let Some(tool) = explicit_command_tool(&request).filter(|_| !needs_model_recovery) {
+        if let Some(tool) = explicit_tool.filter(|_| !needs_model_recovery && !native_completion) {
             (
                 run_explicit_command(
                     &app,
@@ -1024,6 +1035,23 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn native_switch_routes_only_migrated_preview_explicit_command_to_native_loop() {
+        assert!(should_use_native_loop(true, false, Some("render_preview")));
+        assert!(should_use_native_loop(true, false, None));
+        assert!(!should_use_native_loop(
+            true,
+            false,
+            Some("create_timeline_draft")
+        ));
+        assert!(!should_use_native_loop(
+            false,
+            false,
+            Some("render_preview")
+        ));
+        assert!(!should_use_native_loop(true, true, Some("render_preview")));
     }
 
     #[test]

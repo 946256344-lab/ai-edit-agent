@@ -23,11 +23,18 @@ use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
     MAX_STEPS,
 };
-use super::skills::{apply_skill, safe_step_error_code, safe_tool_failure_context};
-use super::tools::native_observation_function_tools;
+use super::skills::{
+    apply_skill, persisted_artifact_for_tool, safe_step_error_code, safe_tool_failure_context,
+};
+use super::tools::native_function_tools;
 
 const NATIVE_TOOL_LOOP_ENV: &str = "NATIVE_TOOL_LOOP";
-const NATIVE_TOOL_NAMES: &[&str] = &["get_asset_health_summary", "list_assets", "get_timeline"];
+const NATIVE_TOOL_NAMES: &[&str] = &[
+    "get_asset_health_summary",
+    "list_assets",
+    "get_timeline",
+    "render_preview",
+];
 
 /// NativeToolLoop 是显式 opt-in；缺省值保持 Legacy Runtime。
 pub(crate) fn native_tool_loop_enabled() -> bool {
@@ -119,11 +126,13 @@ pub(crate) fn run_native_tool_loop(
     let run_started_at = Instant::now();
     let run_deadline = run_started_at + AGENT_RUN_TIMEOUT;
     let history = super::prompt::load_native_message_history(connection, conversation_id, request);
+    let tool_policy = RequestToolPolicy::from_request(request);
+    let render_preview_authorized = native_render_preview_allowed(request, &tool_policy);
     let mut input = vec![json!({
         "role": "system",
         "content": [{
             "type": "input_text",
-            "text": "You are a read-only local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided read-only functions before answering. Treat function outputs as the only project facts. If a function returns a structured failure, explain it safely or adjust with another allowed function; do not claim an edit or artifact was created."
+            "text": "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. The only artifact-producing function you may use is the scoped local preview function when it is provided. Treat function outputs as the only project and artifact facts. Claim a preview was created only when its function output contains a successful artifact receipt. If a function returns a structured failure, explain it safely or adjust with another allowed function."
         }]
     })];
     input.extend(history);
@@ -142,7 +151,7 @@ pub(crate) fn run_native_tool_loop(
         task_brief: task_brief.to_owned(),
         goal: LoopGoal::Question,
         goal_locked: true,
-        tool_policy: RequestToolPolicy::from_request("只读"),
+        tool_policy: tool_policy.clone(),
         pending_clarification: None,
         run_started_at,
         run_deadline,
@@ -159,13 +168,16 @@ pub(crate) fn run_native_tool_loop(
     let mut respond =
         |payload: &Value, timeout: Duration| post_model_payload(access, payload, Some(timeout));
     let mut execute = |call: &FunctionCall, step_number: usize| {
-        execute_native_tool(&mut state, call, step_number)
+        execute_native_tool(&mut state, call, step_number, render_preview_authorized)
     };
     let cancelled = || native_task_cancelled(connection, agent_task_id);
-    let message = drive_native_loop(
+    let mut preview_succeeded = false;
+    let loop_result = drive_native_loop(
         &mut input,
         is_custom,
         request_requires_project_observation(request),
+        &tool_policy,
+        &mut preview_succeeded,
         request,
         run_deadline,
         &mut respond,
@@ -183,7 +195,8 @@ pub(crate) fn run_native_tool_loop(
                 &format!("native_response_bytes={}", body.len()),
             );
         },
-    )?;
+    );
+    drop(execute);
     let _ = record_agent_timing_diagnostic(
         connection,
         project_id,
@@ -194,18 +207,68 @@ pub(crate) fn run_native_tool_loop(
         AgentTimingMetric::RunTotal,
         run_started_at.elapsed(),
     );
+    let (result, status) = finish_native_result(
+        agent_task_id,
+        loop_result,
+        state.last_outcome.take(),
+        render_preview_authorized,
+        preview_succeeded,
+    )?;
     Ok(AgentLoopResult {
-        result: AgentEditResult {
-            agent_task_id: agent_task_id.to_owned(),
-            message,
-            storyboard: None,
-            timeline: None,
-            preview: None,
-            jianying_draft: None,
-        },
-        status: AgentLoopTerminalStatus::Completed,
+        result,
+        status,
         goal: LoopGoal::Question,
     })
+}
+
+fn finish_native_result(
+    agent_task_id: &str,
+    loop_result: Result<String, String>,
+    last_outcome: Option<AgentEditResult>,
+    preview_requested: bool,
+    preview_succeeded: bool,
+) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
+    match loop_result {
+        Ok(message) => {
+            let status = if preview_requested && !preview_succeeded {
+                AgentLoopTerminalStatus::Failed
+            } else {
+                AgentLoopTerminalStatus::Completed
+            };
+            Ok((
+                native_result_from_message(agent_task_id, message, last_outcome),
+                status,
+            ))
+        }
+        Err(error) => {
+            match last_outcome {
+                Some(mut outcome) if outcome.preview.is_some() => {
+                    outcome.message = "本地预览已生成并验证，但模型未能完成结果说明；预览已保留，可稍后继续检查。".to_owned();
+                    Ok((outcome, AgentLoopTerminalStatus::PartiallyCompleted))
+                }
+                _ => Err(error),
+            }
+        }
+    }
+}
+
+fn native_result_from_message(
+    agent_task_id: &str,
+    message: String,
+    last_outcome: Option<AgentEditResult>,
+) -> AgentEditResult {
+    if let Some(mut outcome) = last_outcome {
+        outcome.message = message;
+        return outcome;
+    }
+    AgentEditResult {
+        agent_task_id: agent_task_id.to_owned(),
+        message,
+        storyboard: None,
+        timeline: None,
+        preview: None,
+        jianying_draft: None,
+    }
 }
 
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
@@ -215,6 +278,8 @@ fn drive_native_loop(
     input: &mut Vec<Value>,
     is_custom: bool,
     requires_observation: bool,
+    tool_policy: &RequestToolPolicy,
+    preview_succeeded: &mut bool,
     request: &str,
     run_deadline: Instant,
     respond: &mut NativeRespond<'_>,
@@ -223,6 +288,7 @@ fn drive_native_loop(
     mut observed: impl FnMut(&str, usize),
 ) -> Result<String, String> {
     let mut tool_called = false;
+    let mut preview_tool_called = false;
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
@@ -237,7 +303,7 @@ fn drive_native_loop(
             "stream": false,
             "parallel_tool_calls": false,
             "tool_choice": "auto",
-            "tools": native_observation_function_tools(),
+            "tools": native_function_tools(native_render_preview_allowed(request, tool_policy)),
             "input": input,
         });
         let body = respond(&payload, timeout)?;
@@ -253,6 +319,16 @@ fn drive_native_loop(
         .ok_or_else(|| "native_tool_loop_response_unparseable".to_owned())?;
         let calls = turn.function_calls().cloned().collect::<Vec<_>>();
         if calls.is_empty() {
+            if native_render_preview_allowed(request, tool_policy) && !preview_tool_called {
+                input.push(json!({
+                    "role": "system",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "This request explicitly asks for a preview. Call render_preview and wait for its structured result before answering; never claim a preview exists from text alone."
+                    }]
+                }));
+                continue;
+            }
             if let Some(message) = model_message_text(&turn) {
                 if requires_observation && !tool_called {
                     input.push(json!({
@@ -269,6 +345,7 @@ fn drive_native_loop(
             return Err("native_tool_loop_response_missing_message".to_owned());
         }
         tool_called = true;
+        preview_tool_called |= calls.iter().any(|call| call.name == "render_preview");
 
         for item in &turn.output {
             if let Some(value) = output_item_for_input(item, is_custom) {
@@ -280,6 +357,12 @@ fn drive_native_loop(
                 return Err("native_tool_loop_cancelled".to_owned());
             }
             let result = execute(&call, step_number)?;
+            if call.name == "render_preview"
+                && result["status"] == "ok"
+                && result["artifact"]["type"] == "preview"
+            {
+                *preview_succeeded = true;
+            }
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": call.call_id,
@@ -288,6 +371,38 @@ fn drive_native_loop(
         }
     }
     Err("native_tool_loop_max_steps".to_owned())
+}
+
+fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy) -> bool {
+    if tool_policy.forbids("render_preview") || request.contains(['?', '？']) {
+        return false;
+    }
+    let mut normalized = request
+        .trim()
+        .trim_matches(|character: char| matches!(character, '。' | '！' | '.' | '!' | '，' | ','))
+        .trim()
+        .to_lowercase();
+    normalized = normalized.replace("一个", "").replace("一段", "");
+    for prefix in ["请帮我", "麻烦帮我", "请", "帮我", "麻烦"] {
+        if let Some(stripped) = normalized.strip_prefix(prefix) {
+            normalized = stripped.trim().to_owned();
+            break;
+        }
+    }
+    matches!(
+        normalized.as_str(),
+        "生成预览"
+            | "创建预览"
+            | "渲染预览"
+            | "制作预览"
+            | "生成预览视频"
+            | "渲染预览视频"
+            | "生成低清预览"
+            | "generate preview"
+            | "create preview"
+            | "render preview"
+            | "make preview"
+    )
 }
 
 fn remaining_timeout(deadline: Instant) -> Option<Duration> {
@@ -398,6 +513,7 @@ fn execute_native_tool(
     state: &mut LoopState,
     call: &FunctionCall,
     step_number: usize,
+    render_preview_authorized: bool,
 ) -> Result<Value, String> {
     let allowed = NATIVE_TOOL_NAMES.contains(&call.name.as_str());
     let persisted_name = if allowed {
@@ -431,7 +547,28 @@ fn execute_native_tool(
             "stage": "tool_allowlist",
             "code": "tool_not_allowed",
             "retryable": false,
-            "responseInstruction": "Explain that only the three read-only observation tools are available, then answer from available facts or ask the user to rephrase."
+            "responseInstruction": "Explain that only the allowed read-only observation or preview function tools are available, then answer from available facts or ask the user to rephrase."
+        }));
+    }
+    if !native_tool_call_allowed(&call.name, &state.tool_policy, render_preview_authorized) {
+        finish_agent_run_step(
+            state.connection,
+            state.project_id,
+            state.editing_task_id,
+            state.agent_task_id,
+            &step_id,
+            "failed",
+            None,
+            None,
+            Some("user_restricted_tool"),
+        )?;
+        return Ok(json!({
+            "status": "failed",
+            "operation": call.name,
+            "stage": "permission",
+            "code": "user_restricted_tool",
+            "retryable": false,
+            "responseInstruction": "Explain that the user asked for inspection only, so preview generation is disabled for this request."
         }));
     }
     let args = match parse_native_arguments(&call.name, &call.arguments) {
@@ -466,6 +603,7 @@ fn execute_native_tool(
     match result {
         Ok(value) => {
             state.successful_observation = true;
+            let artifact = persisted_artifact_for_tool(state, &call.name);
             finish_agent_run_step(
                 state.connection,
                 state.project_id,
@@ -473,8 +611,8 @@ fn execute_native_tool(
                 state.agent_task_id,
                 &step_id,
                 "completed",
-                None,
-                None,
+                artifact.as_ref().map(|(kind, _)| *kind),
+                artifact.as_ref().map(|(_, id)| id.as_str()),
                 None,
             )?;
             Ok(value)
@@ -498,6 +636,14 @@ fn execute_native_tool(
     }
 }
 
+fn native_tool_call_allowed(
+    tool: &str,
+    policy: &RequestToolPolicy,
+    render_preview_authorized: bool,
+) -> bool {
+    !policy.forbids(tool) && (tool != "render_preview" || render_preview_authorized)
+}
+
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
     let value = serde_json::from_str::<Value>(arguments).map_err(|_| invalid_arguments())?;
     let Some(object) = value.as_object() else {
@@ -509,6 +655,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         }
         "get_timeline" => {
             if object.keys().any(|key| key != "timelineVersionId") {
+                return Err(invalid_arguments());
+            }
+            if object
+                .get("timelineVersionId")
+                .is_some_and(|value| !(value.is_null() || value.is_string()))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "render_preview" => {
+            if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
             if object
@@ -550,6 +708,7 @@ fn native_task_cancelled(connection: &Connection, agent_task_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{PreviewQualityReport, PreviewResult};
     use crate::provider::{model_turn_from_responses, ModelOutputItem};
 
     const HELLO: &str = include_str!("../../tests/fixtures/native_loop_hello.v1.json");
@@ -561,6 +720,12 @@ mod tests {
         include_str!("../../tests/fixtures/native_loop_failure_call.v1.json");
     const FAILURE_REPLY: &str =
         include_str!("../../tests/fixtures/native_loop_failure_reply.v1.json");
+    const RENDER_CALL: &str =
+        include_str!("../../tests/fixtures/native_loop_render_preview_call.v1.json");
+    const RENDER_REPLY: &str =
+        include_str!("../../tests/fixtures/native_loop_render_preview_reply.v1.json");
+    const RENDER_FAILURE_REPLY: &str =
+        include_str!("../../tests/fixtures/native_loop_render_preview_failure_reply.v1.json");
 
     fn fixture_driver(
         fixtures: Vec<&'static str>,
@@ -569,6 +734,7 @@ mod tests {
         let mut responses = fixtures.into_iter();
         let mut requests = Vec::new();
         let mut calls = Vec::new();
+        let mut preview_succeeded = false;
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": "fixture request"}]
@@ -585,6 +751,8 @@ mod tests {
             &mut input,
             false,
             false,
+            &RequestToolPolicy::default(),
+            &mut preview_succeeded,
             "fixture request",
             Instant::now() + Duration::from_secs(5),
             &mut respond,
@@ -682,6 +850,225 @@ mod tests {
         );
         assert_eq!(calls, ["get_timeline"]);
         assert_eq!(message, "当前任务还没有时间线。");
+    }
+
+    #[test]
+    fn preview_request_exposes_render_tool_and_returns_model_summary_after_execution() {
+        let policy = RequestToolPolicy::from_request("生成预览");
+        let (message, requests, calls) = fixture_driver_with_policy(
+            "生成预览",
+            vec![RENDER_CALL, RENDER_REPLY],
+            json!({
+                "tool": "render_preview",
+                "status": "ok",
+                "artifact": {
+                    "type": "preview",
+                    "timelineVersionId": "timeline-1",
+                    "versionNumber": 2,
+                    "qualityCheckCount": 0
+                }
+            }),
+            policy,
+        );
+        assert_eq!(message, "预览已生成，可以检查节奏和字幕。");
+        assert_eq!(calls, ["render_preview"]);
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "render_preview"));
+        assert!(requests[1]["input"].as_array().unwrap().iter().any(|item| {
+            item["type"] == "function_call_output" && item["call_id"] == "call_render_preview"
+        }));
+    }
+
+    #[test]
+    fn preview_request_cannot_finish_from_text_without_render_call() {
+        let policy = RequestToolPolicy::from_request("帮我生成一个预览");
+        let (message, requests, calls) = fixture_driver_with_policy(
+            "帮我生成一个预览",
+            vec![HELLO, RENDER_CALL, RENDER_REPLY],
+            json!({
+                "tool": "render_preview",
+                "status": "ok",
+                "artifact": {"type": "preview", "timelineVersionId": "timeline-1"}
+            }),
+            policy,
+        );
+        assert_eq!(message, "预览已生成，可以检查节奏和字幕。");
+        assert_eq!(calls, ["render_preview"]);
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[test]
+    fn read_only_preview_request_omits_render_tool() {
+        let policy = RequestToolPolicy::from_request("只检查，不要生成");
+        let (_message, requests, _calls) =
+            fixture_driver_with_policy("只检查，不要生成", vec![HELLO], json!({}), policy);
+        assert!(!requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "render_preview"));
+    }
+
+    #[test]
+    fn missing_timeline_returns_safe_failure_and_model_explains_it() {
+        let policy = RequestToolPolicy::from_request("生成预览");
+        let (message, requests, calls) = fixture_driver_with_policy(
+            "生成预览",
+            vec![RENDER_CALL, RENDER_FAILURE_REPLY],
+            json!({
+                "status": "failed",
+                "operation": "render_preview",
+                "code": "missing_timeline",
+                "retryable": true,
+                "recovery": "请先创建内部时间线。"
+            }),
+            policy,
+        );
+        assert_eq!(message, "当前没有时间线，所以还不能生成预览。");
+        assert_eq!(calls, ["render_preview"]);
+        let output = requests[1]["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .expect("function output")["output"]
+            .as_str()
+            .expect("function output text");
+        assert!(output.contains("missing_timeline"));
+        assert!(!message.contains("已生成"));
+    }
+
+    #[test]
+    fn render_preview_arguments_are_scope_free_and_strictly_validated() {
+        assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":null}").is_ok());
+        assert!(
+            parse_native_arguments("render_preview", "{\"timelineVersionId\":\"timeline-1\"}")
+                .is_ok()
+        );
+        assert!(parse_native_arguments("render_preview", "{}").is_err());
+        assert!(parse_native_arguments("render_preview", "{\"projectId\":\"project-1\"}").is_err());
+        assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":42}").is_err());
+    }
+
+    #[test]
+    fn native_result_keeps_model_reply_instead_of_last_outcome_message() {
+        let outcome = AgentEditResult {
+            agent_task_id: "task-1".to_owned(),
+            message: "deterministic artifact message".to_owned(),
+            storyboard: None,
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        };
+        let result = native_result_from_message(
+            "task-1",
+            "model summarized the real receipt".to_owned(),
+            Some(outcome),
+        );
+        assert_eq!(result.message, "model summarized the real receipt");
+    }
+
+    #[test]
+    fn preview_tool_requires_positive_intent_and_request_policy_permission() {
+        assert!(native_render_preview_allowed(
+            "生成预览",
+            &RequestToolPolicy::from_request("生成预览")
+        ));
+        for request in [
+            "你好",
+            "只查看",
+            "只检查，不要生成",
+            "不要生成预览",
+            "怎么生成预览？",
+            "解释生成预览是什么意思",
+        ] {
+            assert!(!native_render_preview_allowed(
+                request,
+                &RequestToolPolicy::from_request(request)
+            ));
+        }
+    }
+
+    #[test]
+    fn preview_execution_rechecks_positive_authorization() {
+        let policy = RequestToolPolicy::from_request("你好");
+        assert!(!native_tool_call_allowed("render_preview", &policy, false));
+        assert!(native_tool_call_allowed(
+            "render_preview",
+            &RequestToolPolicy::from_request("生成预览"),
+            true
+        ));
+    }
+
+    #[test]
+    fn verified_preview_survives_model_summary_failure() {
+        let outcome = AgentEditResult {
+            agent_task_id: "task-1".to_owned(),
+            message: "unused".to_owned(),
+            storyboard: None,
+            timeline: None,
+            preview: Some(PreviewResult {
+                timeline_version_id: "timeline-1".to_owned(),
+                preview_path: "redacted".to_owned(),
+                quality_report: PreviewQualityReport { checks: Vec::new() },
+            }),
+            jianying_draft: None,
+        };
+        let (result, status) = finish_native_result(
+            "task-1",
+            Err("native_tool_loop_response_unparseable".to_owned()),
+            Some(outcome),
+            true,
+            false,
+        )
+        .expect("partial preview result");
+        assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
+        assert!(result.preview.is_some());
+        assert!(result.message.contains("预览已生成"));
+    }
+
+    fn fixture_driver_with_policy(
+        request: &str,
+        fixtures: Vec<&'static str>,
+        execute_result: Value,
+        policy: RequestToolPolicy,
+    ) -> (String, Vec<Value>, Vec<String>) {
+        let mut responses = fixtures.into_iter();
+        let mut requests = Vec::new();
+        let mut calls = Vec::new();
+        let mut preview_succeeded = false;
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(responses.next().expect("fixture response").to_owned())
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.push(call.name.clone());
+            Ok::<_, String>(execute_result.clone())
+        };
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut preview_succeeded,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("fixture loop");
+        drop(execute);
+        (message, requests, calls)
     }
 
     #[test]

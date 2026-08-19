@@ -320,13 +320,17 @@ pub(super) fn select_timeline_for_tool(
     args: &Value,
 ) -> Result<TimelineVersion, String> {
     let timeline_id = args.get("timelineVersionId").and_then(Value::as_str);
-    select_timeline_candidate(&state.timelines, timeline_id, None).ok_or_else(|| {
+    let timeline = select_timeline_candidate(&state.timelines, timeline_id, None).ok_or_else(|| {
         if state.timelines.is_empty() {
             "no_timeline: 当前剪辑任务还没有时间线，请先调用 create_timeline_draft 创建时间线，再生成预览或草稿。".to_owned()
         } else {
             "Agent must select a timeline that belongs to the current storyboard.".to_owned()
         }
-    })
+    })?;
+    if timeline.project_id != state.project_id {
+        return Err("timeline_scope_mismatch: 时间线不属于当前项目。".to_owned());
+    }
+    Ok(timeline)
 }
 
 #[rustfmt::skip]
@@ -860,6 +864,7 @@ pub(super) fn apply_skill(
             let version_number = timeline.version_number;
             let timeline_for_render = timeline.clone();
             let preview = render_preview(state.app.clone(), timeline_for_render.id.clone())?;
+            let quality_check_count = preview.quality_report.checks.len();
             upsert(&mut state.timelines, timeline_for_render.clone());
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
@@ -872,8 +877,12 @@ pub(super) fn apply_skill(
             Ok(json!({
                 "tool": "render_preview",
                 "status": "ok",
-                "timelineVersionId": timeline_version_id,
-                "versionNumber": version_number
+                "artifact": {
+                    "type": "preview",
+                    "timelineVersionId": timeline_version_id,
+                    "versionNumber": version_number,
+                    "qualityCheckCount": quality_check_count
+                }
             }))
         }
         "create_jianying_draft" => {

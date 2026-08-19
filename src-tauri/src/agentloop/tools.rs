@@ -11,12 +11,17 @@ const GET_ASSET_HEALTH_SUMMARY: &str = "get_asset_health_summary";
 const LIST_ASSETS: &str = "list_assets";
 #[allow(dead_code)]
 const GET_TIMELINE: &str = "get_timeline";
+#[allow(dead_code)]
+const RENDER_PREVIEW: &str = "render_preview";
 
-/// 第一批只读原生工具。调用方暂不自动注册到用户请求；保留集中入口供 Provider
-/// 适配器接入时直接复用，避免在各请求路径复制 schema。
+/// 第一批只读原生工具保持独立入口，供 NativeToolLoop 的默认观察集合复用。
 #[allow(dead_code)]
 pub(crate) fn native_observation_function_tools() -> Vec<Value> {
-    vec![
+    native_function_tools(false)
+}
+
+pub(crate) fn native_function_tools(include_render_preview: bool) -> Vec<Value> {
+    let mut tools = vec![
         function_tool(
             GET_ASSET_HEALTH_SUMMARY,
             "Read persisted asset source-health counts and safe reason codes for the current project.",
@@ -40,7 +45,21 @@ pub(crate) fn native_observation_function_tools() -> Vec<Value> {
             }),
             vec!["timelineVersionId"],
         ),
-    ]
+    ];
+    if include_render_preview {
+        tools.push(function_tool(
+            RENDER_PREVIEW,
+            "Render a low-resolution local preview from the current project's selected timeline.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version identifier; use null to select the current timeline."
+                }
+            }),
+            vec!["timelineVersionId"],
+        ));
+    }
+    tools
 }
 
 #[allow(dead_code)]
@@ -123,6 +142,37 @@ mod tests {
         let property = &tool["parameters"]["properties"]["timelineVersionId"];
         assert_eq!(property["type"], json!(["string", "null"]));
         assert_eq!(tool["parameters"]["required"], json!(["timelineVersionId"]));
+    }
+
+    #[test]
+    fn render_preview_schema_is_strict_and_scope_free() {
+        let tool = native_function_tools(true)
+            .into_iter()
+            .find(|tool| tool["name"] == RENDER_PREVIEW)
+            .expect("render_preview tool");
+        assert_eq!(tool["strict"], true);
+        assert_eq!(tool["parameters"]["additionalProperties"], false);
+        assert_eq!(tool["parameters"]["required"], json!(["timelineVersionId"]));
+        assert_eq!(
+            tool["parameters"]["properties"]["timelineVersionId"]["type"],
+            json!(["string", "null"])
+        );
+        let definition = tool.to_string();
+        for forbidden in [
+            "projectId",
+            "conversationId",
+            "sourcePath",
+            "localPath",
+            "ffmpeg",
+        ] {
+            assert!(!definition.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn render_preview_is_only_added_when_policy_allows_it() {
+        assert_eq!(native_function_tools(false).len(), 3);
+        assert_eq!(native_function_tools(true).len(), 4);
     }
 
     #[test]

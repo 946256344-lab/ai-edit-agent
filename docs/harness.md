@@ -94,6 +94,6 @@ npm run harness:test
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback；受影响文件（agent.rs、agentloop.rs、assets.rs）均通过架构预算检查，harness:check 无新触发规则。
 维护记录（2026-08-17）：check-agent-contracts.mjs 新增扫描 src-tauri/src/agentloop/runtime.rs，以定位重构后迁入该文件的 canonical 控制动作 matches! 表达式；其余规则不变。
 维护记录（2026-08-19）：Provider 原生工具调用变更同时更新 AGENTS.md、README.md、docs/architecture.md、docs/api.md、docs/decisions.md 与 TASKS.md，并由 provider-security/desktop-contract/agent-context-guardrails 规则校验。
-维护记录（2026-08-19）：NativeToolLoop 只读实验路径同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具和安全错误边界保持可审查。
+维护记录（2026-08-19）：NativeToolLoop 原生 loop 同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具、受策略过滤的 `render_preview` 和安全错误边界保持可审查。
 维护记录（2026-08-19）：移除架构预算中的代码文件/目录 `maxLines` 指标；字符总量、最长单行、hooks、props、禁止路径和跨层边界仍由架构检查与 ratchet 保护。
 维护记录（2026-08-19）：NativeToolLoop 会话消息变更同步校验 SQLite assistant 角色、原生工具项上下文预算与 Legacy 默认回退；新增迁移 fixture 覆盖旧 messages 约束升级。

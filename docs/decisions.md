@@ -494,7 +494,7 @@
 - 状态：已实现，待真实 Provider 桌面验证
 - 决策：仅当进程环境变量 `NATIVE_TOOL_LOOP=true`（或 `1/on/yes`）时，普通对话绕过 Conversation Router，直接进入只读原生 loop。请求使用 Responses 风格真实 input/output item，固定 `store:false` 和 `parallel_tool_calls:false`；响应先由 `ModelTurn` 统一解析，再执行三项观察工具并追加 `function_call_output`。
 - 原因：先验证原生工具循环的自然回答、项目事实观察和安全失败恢复，不把编辑或副作用能力带入新路径；显式开关让 Legacy Runtime 保持默认可回退。
-- 后果：NativeToolLoop 受既有最大步骤、总超时、单步超时和任务取消边界约束，不使用 `finish`/`done`/`no_action` 或 JSON decision。工具失败只返回脱敏结构化错误，模型仍需形成自然语言回复；Router、LoopGoal、确认门、权限、SQLite 和产物真实性校验保持不变。
+- 后果：NativeToolLoop 受既有最大步骤、总超时、单步超时和任务取消边界约束，不使用 `finish`/`done`/`no_action` 或 JSON decision。工具失败只返回脱敏结构化错误，模型仍需形成自然语言回复；Router、LoopGoal、确认门、权限、SQLite 和产物真实性校验保持不变。后续批次将原生 `render_preview` 纳入显式预览请求，但仍按 RequestToolPolicy 过滤，并在 `apply_skill` 前再次校验作用域和参数；Legacy 默认路径不变。
 
 ## ADR-070：取消代码文件行数架构预算
 
@@ -509,3 +509,10 @@
 - 决策：NativeToolLoop 从 SQLite 按时间顺序读取 user/assistant（兼容旧 agent）消息，直接构造成 Responses input item；本轮模型输出的完整 assistant/function_call item 与 function_call_output 只在内存中追加到下一轮。上下文预算只能删除旧消息，工具调用与对应结果必须成对保留；最终 Native 回复以 assistant 角色保存，Legacy 回复继续使用 agent。
 - 原因：把历史渲染成“用户：/助手：/工具：”文本会丢失协议 role，导致追问“其中视频有几个？”无法可靠承接上一轮，也会把工具事实混入非结构化 Prompt。原生 item 让模型通过真实会话和观察工具获得项目事实。
 - 后果：SQLite schema v15 允许 assistant 消息并保留旧 agent 数据；不新增模型 transcript 或原始工具响应持久化。system 只保留身份、只读安全边界和“项目事实必须观察”的约束，项目状态仍由三项观察工具提供。
+
+## ADR-072：NativeToolLoop 仅按请求授权原生 preview
+
+- 状态：已采用（2026-08-19）
+- 决策：NativeToolLoop 只在用户明确提出预览生成动作且 RequestToolPolicy 未识别“只查看/只检查/不要生成预览”时注册 `render_preview`。模型 schema 不包含作用域、路径或 FFmpeg 参数；Rust 在 `apply_skill` 前再次校验权限、参数和当前项目时间线，成功返回脱敏产物收据，失败返回安全错误。工具结果必须进入下一轮模型请求；只有带 `status=ok` 且 `artifact.type=preview` 的结果才通过预览完成门。
+- 原因：preview 是本地产物副作用，不能像观察工具一样默认暴露，也不能只依赖模型服从提示；同时最终回复需要根据真实收据自然生成，而不是由 Legacy 的 `last_outcome` 固定文案覆盖。
+- 后果：最终任务结果保留 `apply_skill` 验证过的 preview 引用与步骤产物审计，但正常完成时显示消息替换为模型对真实工具结果的总结。preview 已生成而后续模型总结失败时，真实产物仍以 `partially_completed` 保存，并显示诚实恢复文案；无时间线或越权调用不会产生成功收据，模型不得声称成功。Router、LoopGoal、其他编辑工具和 Legacy 默认路径不变。
