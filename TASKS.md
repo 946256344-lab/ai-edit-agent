@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-19，architecture-budget）：移除代码行数预算。
 - [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。
 - [x] 完成（2026-08-19，provider-tools）：为 get_asset_health_summary、list_assets、get_timeline 建立集中式原生 Function Tools 定义与 strict JSON Schema 合约测试；不接入用户请求、不迁移编辑或副作用工具。121 个 Rust 库测试 + 2 个契约测试、前端 lint/build、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-function-tools.md`。
 - [x] 完成（2026-08-19，provider）：改造 Provider 数据结构以统一解析 Responses 与 Chat Completions 的 message/function_call/tool call，并透传原生 tools/tool_choice/parallel_tool_calls；保留旧 JSON decision 接口，不接入 Agent Runtime。固定 JSON fixture、完整 Rust/前端/契约验证通过；变更记录见 `docs/changes/2026-08-19-provider-native-tool-turns.md`。

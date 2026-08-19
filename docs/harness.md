@@ -28,10 +28,10 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 
 `.harness/architecture-budgets.json` 是结构预算的唯一机器可读来源。当前硬门包括：
 
-- `App.tsx` 的行数、字符总量、最长单行、`useState`、`useEffect` 和所有 async 声明上限；
-- `src/components/**/*.tsx` 与 `src/hooks/**/*.{ts,tsx}` 的单文件行数、字符总量和最长单行上限，避免通过压缩代码绕过行数门；
+- `App.tsx` 的字符总量、最长单行、`useState`、`useEffect` 和所有 async 声明上限；
+- `src/components/**/*.tsx` 与 `src/hooks/**/*.{ts,tsx}` 的单文件字符总量和最长单行上限；
 - 核心工作区组件的一至两个顶层领域 props；props 签名无法解析时检查直接失败，不把未知结构误当作零 props；
-- `local-store.ts`、父 `agentloop.rs`、纯 `agentloop/policy.rs` 和其他 Rust 热点的行数、字符总量与最长单行只降不升棘轮；
+- `local-store.ts`、父 `agentloop.rs`、纯 `agentloop/policy.rs` 和其他 Rust 热点的字符总量与最长单行只降不升棘轮；
 - 受保护文件删除或改名时必须通过永久保留的 `budgetReplacements` 显式指向新预算，把旧路径加入 `forbiddenPaths`，并让新目标以不放宽的值继承全部数值指标和原路径跨层禁止规则；目录预算即使暂时为空也作为防回归墓碑保留；
 - 已删除 `ConversationWorkspace` 不得恢复，Agent 对账、素材分页、成果交付和 Provider 状态不得回流 `App.tsx`。
 
@@ -95,3 +95,4 @@ npm run harness:test
 维护记录（2026-08-17）：check-agent-contracts.mjs 新增扫描 src-tauri/src/agentloop/runtime.rs，以定位重构后迁入该文件的 canonical 控制动作 matches! 表达式；其余规则不变。
 维护记录（2026-08-19）：Provider 原生工具调用变更同时更新 AGENTS.md、README.md、docs/architecture.md、docs/api.md、docs/decisions.md 与 TASKS.md，并由 provider-security/desktop-contract/agent-context-guardrails 规则校验。
 维护记录（2026-08-19）：NativeToolLoop 只读实验路径同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具和安全错误边界保持可审查。
+维护记录（2026-08-19）：移除架构预算中的代码文件/目录 `maxLines` 指标；字符总量、最长单行、hooks、props、禁止路径和跨层边界仍由架构检查与 ratchet 保护。

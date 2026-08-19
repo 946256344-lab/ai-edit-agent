@@ -7,7 +7,6 @@ import process from 'node:process'
 const root = process.cwd()
 const budgetPath = '.harness/architecture-budgets.json'
 const numericLimits = [
-  'maxLines',
   'maxCharacters',
   'maxLineLength',
   'maxUseState',
@@ -74,11 +73,6 @@ function listDirectoryFiles(directory, extensions, staged) {
   return files
 }
 
-function countLines(content) {
-  if (!content) return 0
-  return content.replace(/\r\n/g, '\n').split('\n').length - (content.endsWith('\n') ? 1 : 0)
-}
-
 function countHookCalls(content, hookName) {
   return content
     .split(/\r?\n/)
@@ -103,7 +97,6 @@ function countCharacters(content) {
 
 function metrics(content) {
   return {
-    lines: countLines(content),
     characters: countCharacters(content),
     maxLineLength: maxLineLength(content),
     useState: countHookCalls(content, 'useState'),
@@ -126,7 +119,6 @@ export function evaluateArchitecture(config, contents, directoryFiles = new Map(
     checkedPaths.add(budget.path)
     const actual = metrics(content)
     const limits = [
-      ['maxLines', 'lines', '行数'],
       ['maxCharacters', 'characters', '字符数'],
       ['maxLineLength', 'maxLineLength', '最长单行字符数'],
       ['maxUseState', 'useState', 'useState 调用数'],
@@ -152,7 +144,6 @@ export function evaluateArchitecture(config, contents, directoryFiles = new Map(
       checkedPaths.add(filePath)
       const actual = metrics(content)
       const limits = [
-        ['maxLines', 'lines', '行数'],
         ['maxCharacters', 'characters', '字符数'],
         ['maxLineLength', 'maxLineLength', '最长单行字符数'],
       ]
@@ -235,7 +226,7 @@ export function evaluateBudgetRatchet(config, baseline, contents, directoryFiles
       errors.push(`不得移除目录架构预算：${previous.directory}。空目录预算保留为防回归墓碑。`)
       continue
     }
-    for (const key of ['maxLines', 'maxCharacters', 'maxLineLength']) {
+    for (const key of ['maxCharacters', 'maxLineLength']) {
       if (previous[key] === undefined) continue
       if (current[key] === undefined || current[key] > previous[key]) {
         errors.push(`${previous.directory} 的 ${key} 不得从 ${previous[key]} 放宽为 ${current[key] ?? '未限制'}。`)

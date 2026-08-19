@@ -18,7 +18,7 @@
 - React hooks 规则由 Oxlint 强制。证据：`.oxlintrc.json`。
 - 仓库没有 Prettier 配置；现有 TS 使用无分号、单引号风格，但这不是独立 formatter 强制的完整规则。[TODO] 如需格式统一，应先形成明确 formatter 决策。
 - Rust 使用标准 `cargo fmt`；MSRV 在 Cargo manifest 中为 1.77.2。
-- 架构预算限制核心文件行数、字符数、最长单行、hooks 和 props；不得提高预算代替拆分。
+- 架构预算限制核心文件字符总量、最长单行、hooks 和 props；代码文件行数不再作为预算指标，不得提高其它预算代替拆分。
 
 ## 3）导入与模块约定
 

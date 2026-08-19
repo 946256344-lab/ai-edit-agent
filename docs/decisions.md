@@ -47,9 +47,9 @@
 ## ADR-060：前端按领域 controller 收敛，并以架构预算阻止反向膨胀
 
 - 状态：已实现，真实 Tauri 回归待本变更关闭
-- 决策：`App.tsx` 只保留项目、剪辑任务、conversation、消息路由和三种工作区的顶层组合。Provider、素材、成果交付和 Agent task 终态对账分别由 `useProviderController`、`useAssetWorkspaceController`、`useArtifactWorkspaceController` 与 `useAgentRunReconciliation` 独占；Agent 与成果模式拆为互斥的 `AgentWorkspace`/`ArtifactsWorkspace`，核心工作区使用 `model/actions` 等一至两个顶层领域入口，删除承载两种模式和大量扁平 props 的 `ConversationWorkspace`。`.harness/architecture-budgets.json` 对入口与组件/controller 的行数、字符总量、最长单行、顶层 props、state/effect/async 声明，以及命令桥接和当前 Rust 热点设置只降不升的硬门；无法解析受保护 props 签名或使用 rest props 时 fail-closed。受保护文件迁移必须显式声明并永久保留 replacement、新目标预算与旧路径禁用记录，新目标继承全部旧数值上限和跨层禁止规则。`harness:check` 和 pre-commit 均执行该门。
+- 决策：`App.tsx` 只保留项目、剪辑任务、conversation、消息路由和三种工作区的顶层组合。Provider、素材、成果交付和 Agent task 终态对账分别由 `useProviderController`、`useAssetWorkspaceController`、`useArtifactWorkspaceController` 与 `useAgentRunReconciliation` 独占；Agent 与成果模式拆为互斥的 `AgentWorkspace`/`ArtifactsWorkspace`，核心工作区使用 `model/actions` 等一至两个顶层领域入口，删除承载两种模式和大量扁平 props 的 `ConversationWorkspace`。`.harness/architecture-budgets.json` 对入口与组件/controller 的字符总量、最长单行、顶层 props、state/effect/async 声明，以及命令桥接和当前 Rust 热点设置只降不升的硬门；代码文件行数不再作为预算指标。无法解析受保护 props 签名或使用 rest props 时 fail-closed。受保护文件迁移必须显式声明并永久保留 replacement、新目标预算与旧路径禁用记录，新目标继承全部旧数值上限和跨层禁止规则。`harness:check` 和 pre-commit 均执行该门。
 - 原因：Markdown 能表达边界，但不能阻止后续迭代把新状态、副作用和 props 再次塞回单体文件。此前素材管理虽然已有 Agent-first 决策，仍在连续功能叠加中增长成约 500 行/50 props，并破坏最初简单的目录开合。必须同时减少当前耦合并让越界增长自动失败。
-- 后果：Provider、素材和成果的状态与副作用各自只有一个具名 controller 入口；这些 hooks 仍由 `App.tsx` 调用，因此本决策约束职责和依赖方向，不声称隔离 React 顶层重渲染。Agent 对账原有真实 task ID、早到事件、`working` 恢复和作用域门保持不变。预算不是语义正确性的替代品；检查会与 Git `HEAD` 比较并拒绝提高已有数值、移除指标或撤掉禁止项，超过预算必须拆分。现有超大 Rust 模块先被冻结在当前行数，后续按子领域逐个拆分，不能继续把新行为写入热点文件。没有改变 Tauri API、SQLite schema、媒体处理、Provider 选择或工具副作用。
+- 后果：Provider、素材和成果的状态与副作用各自只有一个具名 controller 入口；这些 hooks 仍由 `App.tsx` 调用，因此本决策约束职责和依赖方向，不声称隔离 React 顶层重渲染。Agent 对账原有真实 task ID、早到事件、`working` 恢复和作用域门保持不变。预算不是语义正确性的替代品；检查会与 Git `HEAD` 比较并拒绝提高已有数值、移除指标或撤掉禁止项，超过预算必须拆分。现有超大 Rust 模块继续受字符、单行和结构边界保护，不能继续把新行为写入热点文件。没有改变 Tauri API、SQLite schema、媒体处理、Provider 选择或工具副作用。
 
 ## ADR-059：素材工作区重建为最小目录浏览器
 
@@ -452,7 +452,7 @@
 
 ## ADR-064：Rust 测试模块独立文件降低架构预算压力
 
-- 状态：已采用（2026-08-15）
+- 状态：历史，行数部分已由 ADR-070 取代（2026-08-19）
 - 决策：当修复或新增测试使文件超过行数/字符预算时，将 #[cfg(test)] mod tests 块提取为 <module>_tests.rs 并通过 #[path] 挂载，不提高既有预算。
 - 原因：架构 ratchet 禁止预算放宽；测试代码是独立职责，提取为独立文件符合预算分割语义，子模块可通过 super::* 访问父模块私有项，行为等价。
 - 后果：受保护文件只降不升；新测试文件需同时添加预算条目。
@@ -495,3 +495,10 @@
 - 决策：仅当进程环境变量 `NATIVE_TOOL_LOOP=true`（或 `1/on/yes`）时，普通对话绕过 Conversation Router，直接进入只读原生 loop。请求使用 Responses 风格真实 input/output item，固定 `store:false` 和 `parallel_tool_calls:false`；响应先由 `ModelTurn` 统一解析，再执行三项观察工具并追加 `function_call_output`。
 - 原因：先验证原生工具循环的自然回答、项目事实观察和安全失败恢复，不把编辑或副作用能力带入新路径；显式开关让 Legacy Runtime 保持默认可回退。
 - 后果：NativeToolLoop 受既有最大步骤、总超时、单步超时和任务取消边界约束，不使用 `finish`/`done`/`no_action` 或 JSON decision。工具失败只返回脱敏结构化错误，模型仍需形成自然语言回复；Router、LoopGoal、确认门、权限、SQLite 和产物真实性校验保持不变。
+
+## ADR-070：取消代码文件行数架构预算
+
+- 状态：已采用（2026-08-19）
+- 决策：移除 `.harness/architecture-budgets.json` 中路径和目录预算的 `maxLines` 指标，并从架构检查器和 ratchet 中删除行数度量。保留字符总量、最长单行、hooks、props、禁止路径、禁止文本和跨层边界保护；删除旧 `maxLines` 不视为放宽其它预算。
+- 原因：代码行数受格式化、测试放置和合法实现风格影响较大，不能稳定代表职责边界；保留字符、单行和结构指标即可继续约束无界膨胀与跨层回流。
+- 后果：文件可以因真实职责或测试需要自然增加行数，不再触发行数预算失败；架构边界、代码密度和可审查性仍由其余机器检查与文档规则负责。历史变更记录中的旧行数仅作为当时事实，不是当前预算。
