@@ -25,6 +25,11 @@ const CREATE_TIMELINE_DRAFT: &str = "create_timeline_draft";
 const REPLACE_CLIPS: &str = "replace_clips";
 const CHANGE_CLIP_DURATION: &str = "change_clip_duration";
 const REORDER_CLIPS: &str = "reorder_clips";
+const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
+const DOWNLOAD_MUSIC: &str = "download_music";
+const USE_ONLINE_MUSIC: &str = "use_online_music";
+const REPLACE_MUSIC_TRACKS: &str = "replace_music_tracks";
+const CREATE_JIANYING_DRAFT: &str = "create_jianying_draft";
 
 /// 只读原生工具保持独立入口，供 NativeToolLoop 的默认观察集合复用。
 #[allow(dead_code)]
@@ -172,7 +177,7 @@ pub(crate) fn native_function_tools_for_request(
 }
 
 fn main_chain_function_tools() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         function_tool(
             REQUEST_ASSET_ANALYSIS,
             "Request bounded analysis for selected imported assets in the current project.",
@@ -279,7 +284,198 @@ fn main_chain_function_tools() -> Vec<Value> {
             }),
             vec!["timelineVersionId", "order"],
         ),
+    ];
+    tools.extend(delivery_function_tools());
+    tools
+}
+
+fn delivery_function_tools() -> Vec<Value> {
+    vec![
+        function_tool(
+            REPLACE_TEXT_TRACKS,
+            "Create a scoped timeline version by replacing text tracks with backend-validated recipes.",
+            json!({
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version."),
+                "textTracks": {
+                    "type": "array", "minItems": 0, "maxItems": 21,
+                    "items": text_track_schema()
+                }
+            }),
+            vec!["timelineVersionId", "textTracks"],
+        ),
+        function_tool(
+            DOWNLOAD_MUSIC,
+            "Download exactly one eligible catalog music track into the current project for normal local analysis.",
+            json!({
+                "trackId": bounded_required_string_schema("Eligible catalog track identifier returned by search_music.", 200)
+            }),
+            vec!["trackId"],
+        ),
+        function_tool(
+            USE_ONLINE_MUSIC,
+            "Download one eligible catalog track, complete local analysis, and create a scoped timeline version using it.",
+            json!({
+                "trackId": bounded_required_string_schema("Eligible catalog track identifier returned by search_music.", 200),
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version.")
+            }),
+            vec!["trackId", "timelineVersionId"],
+        ),
+        function_tool(
+            REPLACE_MUSIC_TRACKS,
+            "Create a scoped timeline version using ready local audio assets and validated music cues.",
+            json!({
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version."),
+                "musicTracks": {
+                    "type": "array", "minItems": 0, "maxItems": 100,
+                    "items": music_track_schema()
+                }
+            }),
+            vec!["timelineVersionId", "musicTracks"],
+        ),
+        function_tool(
+            CREATE_JIANYING_DRAFT,
+            "Create a new local Jianying draft from the selected scoped timeline without replacing an existing draft.",
+            json!({
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version.")
+            }),
+            vec!["timelineVersionId"],
+        ),
     ]
+}
+
+fn nullable_timeline_version(description: &str) -> Value {
+    json!({
+        "type": ["string", "null"],
+        "minLength": 1,
+        "maxLength": 200,
+        "description": description
+    })
+}
+
+fn bounded_required_string_schema(description: &str, max_length: usize) -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": max_length,
+        "description": description
+    })
+}
+
+fn text_track_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": bounded_required_string_schema("Stable text track identifier.", 200),
+            "role": {"type": "string", "enum": ["subtitle", "headline", "callout", "cta", "label"]},
+            "layer": {"type": "integer", "minimum": 0, "maximum": 20},
+            "enabled": {"type": "boolean"},
+            "cues": {"type": "array", "minItems": 0, "maxItems": 100, "items": text_cue_schema()}
+        },
+        "required": ["id", "role", "layer", "enabled", "cues"],
+        "additionalProperties": false
+    })
+}
+
+fn text_cue_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": bounded_required_string_schema("Stable text cue identifier.", 200),
+            "templateId": {"type": ["string", "null"], "enum": ["subtitle_safe", "headline_rise", "headline_pop", "headline_drop", "callout_card", "cta_card", null]},
+            "startMs": {"type": "integer", "minimum": 0},
+            "endMs": {"type": "integer", "minimum": 1},
+            "text": bounded_required_string_schema("Visible text content.", 280),
+            "style": nullable_text_style_schema(),
+            "layout": nullable_text_layout_schema(),
+            "entrance": nullable_text_animation_schema(),
+            "exit": nullable_text_animation_schema(),
+            "loopAnimation": nullable_text_animation_schema()
+        },
+        "required": ["id", "templateId", "startMs", "endMs", "text", "style", "layout", "entrance", "exit", "loopAnimation"],
+        "additionalProperties": false
+    })
+}
+
+fn nullable_text_style_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "properties": {
+            "fontKey": bounded_required_string_schema("Verified local font key.", 200),
+            "fontSize": {"type": "number", "minimum": 0.01, "maximum": 0.30},
+            "bold": {"type": "boolean"},
+            "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+            "strokeColor": {"type": ["string", "null"], "pattern": "^#[0-9A-Fa-f]{6}$"},
+            "strokeWidth": {"type": "number", "minimum": 0.0, "maximum": 10.0},
+            "shadow": {"type": "boolean"},
+            "backgroundColor": {"type": ["string", "null"], "pattern": "^#[0-9A-Fa-f]{6}$"},
+            "alignment": {"type": "string", "enum": ["left", "center", "right"]},
+            "letterSpacing": {"type": "integer", "minimum": -100, "maximum": 100},
+            "lineSpacing": {"type": "integer", "minimum": -100, "maximum": 100}
+        },
+        "required": ["fontKey", "fontSize", "bold", "color", "strokeColor", "strokeWidth", "shadow", "backgroundColor", "alignment", "letterSpacing", "lineSpacing"],
+        "additionalProperties": false
+    })
+}
+
+fn nullable_text_layout_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "properties": {
+            "anchor": {"type": "string", "enum": ["top", "center", "bottom"]},
+            "x": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "y": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "maxWidth": {"type": "number", "minimum": 0.20, "maximum": 1.0},
+            "safeArea": {"type": "string", "enum": ["title_safe", "action_safe"]}
+        },
+        "required": ["anchor", "x", "y", "maxWidth", "safeArea"],
+        "additionalProperties": false
+    })
+}
+
+fn nullable_text_animation_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "properties": {
+            "templateId": {"type": "string", "enum": ["fade", "slide_up", "slide_down", "pop", "wipe"]},
+            "durationMs": {"type": "integer", "minimum": 0},
+            "intensity": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+        },
+        "required": ["templateId", "durationMs", "intensity"],
+        "additionalProperties": false
+    })
+}
+
+fn music_track_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": bounded_required_string_schema("Stable music track identifier.", 200),
+            "enabled": {"type": "boolean"},
+            "cues": {"type": "array", "minItems": 0, "maxItems": 100, "items": music_cue_schema()}
+        },
+        "required": ["id", "enabled", "cues"],
+        "additionalProperties": false
+    })
+}
+
+fn music_cue_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": bounded_required_string_schema("Stable music cue identifier.", 200),
+            "assetId": bounded_required_string_schema("Ready local audio asset identifier.", 200),
+            "sourceStartMs": {"type": "integer", "minimum": 0},
+            "sourceEndMs": {"type": "integer", "minimum": 1},
+            "timelineStartMs": {"type": "integer", "minimum": 0},
+            "timelineEndMs": {"type": "integer", "minimum": 1},
+            "loopEnabled": {"type": ["boolean", "null"]},
+            "volume": {"type": "number", "minimum": 0.0, "maximum": 2.0},
+            "fadeInMs": {"type": ["integer", "null"], "minimum": 0},
+            "fadeOutMs": {"type": ["integer", "null"], "minimum": 0}
+        },
+        "required": ["id", "assetId", "sourceStartMs", "sourceEndMs", "timelineStartMs", "timelineEndMs", "loopEnabled", "volume", "fadeInMs", "fadeOutMs"],
+        "additionalProperties": false
+    })
 }
 
 fn nullable_bounded_string(description: &str, max_length: usize) -> Value {
@@ -480,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn main_chain_catalog_has_exact_native_migration_batch() {
+    fn native_write_catalog_includes_only_migrated_batches() {
         let tools = native_function_tools_for_request(false, true);
         let names = tools
             .iter()
@@ -494,17 +690,13 @@ mod tests {
             "replace_clips",
             "change_clip_duration",
             "reorder_clips",
-        ] {
-            assert!(names.contains(name), "missing {name}");
-        }
-        for forbidden in [
             "replace_text_tracks",
-            "replace_music_tracks",
             "download_music",
             "use_online_music",
+            "replace_music_tracks",
             "create_jianying_draft",
         ] {
-            assert!(!names.contains(forbidden), "unexpected {forbidden}");
+            assert!(names.contains(name), "missing {name}");
         }
     }
 
@@ -556,6 +748,70 @@ mod tests {
                 ["properties"]["newDurationMs"]["type"],
             json!(["integer", "null"])
         );
+
+        for name in [
+            "replace_text_tracks",
+            "replace_music_tracks",
+            "download_music",
+            "use_online_music",
+            "create_jianying_draft",
+        ] {
+            let tool = by_name(name);
+            assert_eq!(tool["strict"], true, "{name}");
+            assert_eq!(tool["parameters"]["additionalProperties"], false, "{name}");
+            assert!(!tool.to_string().contains("projectId"), "{name}");
+            assert!(!tool.to_string().contains("localPath"), "{name}");
+        }
+        assert_eq!(
+            by_name("use_online_music")["parameters"]["properties"]["timelineVersionId"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            by_name("replace_text_tracks")["parameters"]["properties"]["textTracks"]["items"]
+                ["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            by_name("replace_music_tracks")["parameters"]["properties"]["musicTracks"]["items"]
+                ["additionalProperties"],
+            false
+        );
+    }
+
+    #[test]
+    fn delivery_nested_schemas_are_closed_with_complete_required_keys() {
+        let tools = native_function_tools_for_request(false, true);
+        for name in ["replace_text_tracks", "replace_music_tracks"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("delivery tool");
+            assert_closed_object_schema(&tool["parameters"]);
+        }
+    }
+
+    fn assert_closed_object_schema(schema: &Value) {
+        let is_object = schema["type"] == "object"
+            || schema["type"]
+                .as_array()
+                .is_some_and(|types| types.iter().any(|kind| kind == "object"));
+        if is_object {
+            assert_eq!(schema["additionalProperties"], false);
+            let properties = schema["properties"].as_object().expect("properties");
+            let required = schema["required"].as_array().expect("required");
+            let names = required
+                .iter()
+                .map(|name| name.as_str().expect("required name"))
+                .collect::<HashSet<_>>();
+            assert_eq!(names.len(), required.len());
+            assert_eq!(names.len(), properties.len());
+            for property in properties.values() {
+                assert_closed_object_schema(property);
+            }
+        }
+        if let Some(items) = schema.get("items") {
+            assert_closed_object_schema(items);
+        }
     }
 
     #[test]

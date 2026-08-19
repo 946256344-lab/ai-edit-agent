@@ -530,3 +530,10 @@
 - 决策：在集中式 `agentloop/tools.rs` 注册 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 六个主链工具。非只读请求才将它们加入本轮 tools；只读请求继续只提供观察工具。每个工具使用 strict 闭合 schema，模型不传 project、conversation、路径或其他作用域字段；Rust 从 `LoopState` 补齐作用域并在 Native 参数边界与既有 `apply_skill` 前后复核。
 - 原因：Provider 原生调用能力已在前序任务验证，需要逐步迁移真实主链，同时保留 Legacy Runtime、现有素材证据、源时间范围、版本、事务、审计和权限校验。把未迁移的文本、音乐下载/编辑和 Jianying 工具带入 Native 会扩大本轮副作用边界。
 - 后果：`queued`（素材分析）与 `needs_confirmation`（storyboard）作为既有安全成功状态进入 `function_call_output`，模型可继续完成“分析素材 → storyboard → timeline”复合流程；工具失败仍通过安全错误交给模型。六个工具之外的写工具保持 Legacy 路径，Router、LoopGoal、确认门和 SQLite schema 不变。
+
+## ADR-074：NativeToolLoop 迁移文本、音乐与 Jianying 工具适配层
+
+- 状态：已采用（2026-08-19）
+- 决策：在 `agentloop/tools.rs` 的集中原生目录加入 `replace_text_tracks`、`download_music`、`use_online_music`、`replace_music_tracks` 和 `create_jianying_draft`；既有 `get_text_capabilities`、`search_music` 与 `render_preview` 继续作为同一原生目录的观察或交付工具。嵌套文本和音乐参数均使用 strict 闭合 schema，语义可选值以 nullable 表示；模型不能传入 project、conversation、路径、许可证或 Jianying 兼容性。`native_policy.rs` 仅把用户明确的中文/英文写入、下载或交付表达授权给对应工具，`native.rs` 在 `apply_skill` 前再做同一策略和参数复核。
+- 原因：原生 Provider 工具调用需要覆盖现有的文本、音乐和交付能力，但这些能力已有许可证限制、下载流程、文字能力矩阵、Jianying 单向兼容性和 storyboard 确认边界。复制或重写领域逻辑会引入行为漂移和权限旁路。
+- 后果：Native loop 继续复用 `skills::apply_skill`、现有版本写入、事务、审计与作用域校验；`use_online_music` 的新时间线版本也进入持久化产物审计。文本风格和动画仍由后端矩阵验证，音乐许可仍由 Provider 确定，Jianying 继续只创建新草稿；`needs_confirmation` 后的所有非观察写工具仍被阻止。Router、LoopGoal、领域算法和 Legacy 默认路径不变。

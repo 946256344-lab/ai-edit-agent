@@ -118,7 +118,72 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
     {
         tools.push("reorder_clips");
     }
-    tools
+    if [
+        "添加字幕",
+        "替换字幕",
+        "替换文本轨",
+        "编辑字幕",
+        "replacetexttracks",
+        "addcaptions",
+        "addsubtitles",
+        "editsubtitles",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase))
+    {
+        tools.push("replace_text_tracks");
+    }
+    if ["下载音乐", "下载背景音乐", "downloadmusic"]
+        .iter()
+        .any(|phrase| compact.contains(phrase))
+    {
+        tools.push("download_music");
+    }
+    if [
+        "使用在线音乐",
+        "添加在线音乐",
+        "用在线音乐",
+        "useonlinemusic",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase))
+    {
+        tools.push("use_online_music");
+    }
+    if [
+        "替换音乐",
+        "替换背景音乐",
+        "编辑音乐",
+        "replacemusictracks",
+        "replacebackgroundmusic",
+        "editmusic",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase))
+    {
+        tools.push("replace_music_tracks");
+    }
+    if [
+        "创建剪映草稿",
+        "生成剪映草稿",
+        "制作剪映草稿",
+        "createjianyingdraft",
+        "generatejianyingdraft",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase))
+        || ((compact.contains("create") || compact.contains("generate"))
+            && compact.contains("jianyingdraft"))
+    {
+        tools.push("create_jianying_draft");
+    }
+    let mut unique_tools = Vec::new();
+    for tool in tools {
+        if !unique_tools.contains(&tool) {
+            unique_tools.push(tool);
+        }
+    }
+    unique_tools
 }
 
 #[cfg(test)]
@@ -145,6 +210,22 @@ mod tests {
         assert_eq!(
             explicitly_requested_native_tools("Analyze these assets and generate a storyboard"),
             ["request_asset_analysis", "generate_storyboard"]
+        );
+    }
+
+    #[test]
+    fn delivery_requests_authorize_only_the_matching_native_tools() {
+        assert_eq!(
+            explicitly_requested_native_tools("添加字幕并替换背景音乐"),
+            ["replace_text_tracks", "replace_music_tracks"]
+        );
+        assert_eq!(
+            explicitly_requested_native_tools("Download music and create a Jianying draft"),
+            ["download_music", "create_jianying_draft"]
+        );
+        assert_eq!(
+            explicitly_requested_native_tools("Use online music"),
+            ["use_online_music"]
         );
     }
 }

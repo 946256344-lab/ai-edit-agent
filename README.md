@@ -86,4 +86,4 @@ npm run harness:check
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback，错误路径改为输出真实原因；见 ADR-065 与 docs/changes/2026-08-16-remove-silent-fallbacks.md。
 维护记录（2026-08-17）：agentloop.rs 分层重构完成；路由/执行/提示/纯类型分入 agentloop/{runtime,skills,prompt,schema}.rs；check-agent-contracts.mjs 扩展扫描 runtime.rs。
 维护记录（2026-08-19）：Provider 原生工具调用先在协议适配器内统一为 ModelTurn/ModelOutputItem/FunctionCall，Legacy Runtime 暂不接入。
-维护记录（2026-08-19）：NativeToolLoop 通过显式 `NATIVE_TOOL_LOOP=true` opt-in；原生 loop 默认提供 9 项只读观察工具，非只读请求按权限额外提供六个主链工具，明确“生成预览”且未被只读限制时再提供受作用域和权限校验的 `render_preview`，默认仍走 Legacy Runtime。
+维护记录（2026-08-19）：NativeToolLoop 通过显式 `NATIVE_TOOL_LOOP=true` opt-in；原生 loop 默认提供 9 项只读观察工具，非只读请求按明确权限额外提供主链、文本、音乐下载/编辑和 Jianying 工具；`render_preview` 仍要求明确预览意图。所有调用复用既有许可证、下载、文字矩阵、剪映兼容性和确认边界，默认仍走 Legacy Runtime。

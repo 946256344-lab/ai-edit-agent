@@ -48,6 +48,11 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "replace_clips",
     "change_clip_duration",
     "reorder_clips",
+    "replace_text_tracks",
+    "download_music",
+    "use_online_music",
+    "replace_music_tracks",
+    "create_jianying_draft",
 ];
 
 /// NativeToolLoop 是显式 opt-in；缺省值保持 Legacy Runtime。
@@ -817,7 +822,7 @@ fn native_tool_call_allowed(
 }
 
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
-    let value = serde_json::from_str::<Value>(arguments).map_err(|_| invalid_arguments())?;
+    let mut value = serde_json::from_str::<Value>(arguments).map_err(|_| invalid_arguments())?;
     let Some(object) = value.as_object() else {
         return Err(invalid_arguments());
     };
@@ -1016,7 +1021,70 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
             Ok(value)
         }
-        _ => Ok(value),
+        "download_music" => {
+            if object.len() != 1
+                || !object.contains_key("trackId")
+                || !bounded_required_string(&object["trackId"], 200)
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "use_online_music" => {
+            if object.len() != 2
+                || !object.contains_key("trackId")
+                || !object.contains_key("timelineVersionId")
+                || !bounded_required_string(&object["trackId"], 200)
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "create_jianying_draft" => {
+            if object.len() != 1
+                || !object.contains_key("timelineVersionId")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "replace_text_tracks" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("textTracks")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(tracks) = object["textTracks"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if tracks.len() > 21 || !tracks.iter().all(valid_text_track_argument) {
+                return Err(invalid_arguments());
+            }
+            normalize_nullable_text_fields(&mut value);
+            Ok(value)
+        }
+        "replace_music_tracks" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("musicTracks")
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(tracks) = object["musicTracks"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if tracks.len() > 100 || !tracks.iter().all(valid_music_track_argument) {
+                return Err(invalid_arguments());
+            }
+            normalize_nullable_music_fields(&mut value);
+            Ok(value)
+        }
+        _ => Err(invalid_arguments()),
     }
 }
 
@@ -1082,6 +1150,273 @@ fn valid_clip_adjustment(value: &Value) -> bool {
         && (duration_present || source_start_present)
         && valid_duration
         && valid_source_start
+}
+
+fn valid_text_track_argument(value: &Value) -> bool {
+    let Some(track) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["id", "role", "layer", "enabled", "cues"];
+    if !closed_object_has_keys(track, KEYS)
+        || !bounded_required_string(&track["id"], 200)
+        || !matches!(
+            track["role"].as_str(),
+            Some("subtitle" | "headline" | "callout" | "cta" | "label")
+        )
+        || !bounded_integer(&track["layer"], 0, 20)
+        || !track["enabled"].is_boolean()
+    {
+        return false;
+    }
+    track["cues"]
+        .as_array()
+        .is_some_and(|cues| cues.len() <= 100 && cues.iter().all(valid_text_cue_argument))
+}
+
+fn valid_text_cue_argument(value: &Value) -> bool {
+    let Some(cue) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &[
+        "id",
+        "templateId",
+        "startMs",
+        "endMs",
+        "text",
+        "style",
+        "layout",
+        "entrance",
+        "exit",
+        "loopAnimation",
+    ];
+    if !closed_object_has_keys(cue, KEYS)
+        || !bounded_required_string(&cue["id"], 200)
+        || !nullable_text_template(&cue["templateId"])
+        || !bounded_required_string(&cue["text"], 280)
+        || !valid_nullable_text_style(&cue["style"])
+        || !valid_nullable_text_layout(&cue["layout"])
+        || !valid_nullable_text_animation(&cue["entrance"])
+        || !valid_nullable_text_animation(&cue["exit"])
+        || !valid_nullable_text_animation(&cue["loopAnimation"])
+    {
+        return false;
+    }
+    cue["startMs"]
+        .as_i64()
+        .zip(cue["endMs"].as_i64())
+        .is_some_and(|(start, end)| start >= 0 && end > start)
+}
+
+fn nullable_text_template(value: &Value) -> bool {
+    value.is_null()
+        || matches!(
+            value.as_str(),
+            Some(
+                "subtitle_safe"
+                    | "headline_rise"
+                    | "headline_pop"
+                    | "headline_drop"
+                    | "callout_card"
+                    | "cta_card"
+            )
+        )
+}
+
+fn valid_nullable_text_style(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let Some(style) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &[
+        "fontKey",
+        "fontSize",
+        "bold",
+        "color",
+        "strokeColor",
+        "strokeWidth",
+        "shadow",
+        "backgroundColor",
+        "alignment",
+        "letterSpacing",
+        "lineSpacing",
+    ];
+    closed_object_has_keys(style, KEYS)
+        && bounded_required_string(&style["fontKey"], 200)
+        && bounded_number(&style["fontSize"], 0.01, 0.30)
+        && style["bold"].is_boolean()
+        && valid_hex_color(&style["color"])
+        && nullable_hex_color(&style["strokeColor"])
+        && bounded_number(&style["strokeWidth"], 0.0, 10.0)
+        && style["shadow"].is_boolean()
+        && nullable_hex_color(&style["backgroundColor"])
+        && matches!(
+            style["alignment"].as_str(),
+            Some("left" | "center" | "right")
+        )
+        && bounded_integer(&style["letterSpacing"], -100, 100)
+        && bounded_integer(&style["lineSpacing"], -100, 100)
+}
+
+fn valid_nullable_text_layout(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let Some(layout) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["anchor", "x", "y", "maxWidth", "safeArea"];
+    closed_object_has_keys(layout, KEYS)
+        && matches!(layout["anchor"].as_str(), Some("top" | "center" | "bottom"))
+        && bounded_number(&layout["x"], 0.0, 1.0)
+        && bounded_number(&layout["y"], 0.0, 1.0)
+        && bounded_number(&layout["maxWidth"], 0.20, 1.0)
+        && matches!(
+            layout["safeArea"].as_str(),
+            Some("title_safe" | "action_safe")
+        )
+}
+
+fn valid_nullable_text_animation(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let Some(animation) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["templateId", "durationMs", "intensity"];
+    closed_object_has_keys(animation, KEYS)
+        && matches!(
+            animation["templateId"].as_str(),
+            Some("fade" | "slide_up" | "slide_down" | "pop" | "wipe")
+        )
+        && animation["durationMs"]
+            .as_i64()
+            .is_some_and(|value| value >= 0)
+        && bounded_number(&animation["intensity"], 0.0, 1.0)
+}
+
+fn valid_music_track_argument(value: &Value) -> bool {
+    let Some(track) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &["id", "enabled", "cues"];
+    if !closed_object_has_keys(track, KEYS)
+        || !bounded_required_string(&track["id"], 200)
+        || !track["enabled"].is_boolean()
+    {
+        return false;
+    }
+    track["cues"]
+        .as_array()
+        .is_some_and(|cues| cues.len() <= 100 && cues.iter().all(valid_music_cue_argument))
+}
+
+fn valid_music_cue_argument(value: &Value) -> bool {
+    let Some(cue) = value.as_object() else {
+        return false;
+    };
+    const KEYS: &[&str] = &[
+        "id",
+        "assetId",
+        "sourceStartMs",
+        "sourceEndMs",
+        "timelineStartMs",
+        "timelineEndMs",
+        "loopEnabled",
+        "volume",
+        "fadeInMs",
+        "fadeOutMs",
+    ];
+    if !closed_object_has_keys(cue, KEYS)
+        || !bounded_required_string(&cue["id"], 200)
+        || !bounded_required_string(&cue["assetId"], 200)
+        || !(cue["loopEnabled"].is_null() || cue["loopEnabled"].is_boolean())
+        || !bounded_number(&cue["volume"], 0.0, 2.0)
+        || !non_negative_integer_or_null(&cue["fadeInMs"])
+        || !non_negative_integer_or_null(&cue["fadeOutMs"])
+    {
+        return false;
+    }
+    let Some(source_start) = cue["sourceStartMs"].as_i64() else {
+        return false;
+    };
+    let Some(source_end) = cue["sourceEndMs"].as_i64() else {
+        return false;
+    };
+    let Some(timeline_start) = cue["timelineStartMs"].as_i64() else {
+        return false;
+    };
+    let Some(timeline_end) = cue["timelineEndMs"].as_i64() else {
+        return false;
+    };
+    source_start >= 0
+        && source_end > source_start
+        && timeline_start >= 0
+        && timeline_end > timeline_start
+}
+
+fn closed_object_has_keys(object: &serde_json::Map<String, Value>, keys: &[&str]) -> bool {
+    object.len() == keys.len() && object.keys().all(|key| keys.contains(&key.as_str()))
+}
+
+fn bounded_number(value: &Value, minimum: f64, maximum: f64) -> bool {
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && (minimum..=maximum).contains(&number))
+}
+
+fn valid_hex_color(value: &Value) -> bool {
+    value.as_str().is_some_and(|color| {
+        color.len() == 7
+            && color.starts_with('#')
+            && color[1..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+    })
+}
+
+fn nullable_hex_color(value: &Value) -> bool {
+    value.is_null() || valid_hex_color(value)
+}
+
+fn normalize_nullable_text_fields(value: &mut Value) {
+    let Some(tracks) = value["textTracks"].as_array_mut() else {
+        return;
+    };
+    for track in tracks {
+        let Some(cues) = track["cues"].as_array_mut() else {
+            continue;
+        };
+        for cue in cues {
+            for key in ["style", "layout"] {
+                if cue[key].is_null() {
+                    cue.as_object_mut().expect("validated text cue").remove(key);
+                }
+            }
+        }
+    }
+}
+
+fn normalize_nullable_music_fields(value: &mut Value) {
+    let Some(tracks) = value["musicTracks"].as_array_mut() else {
+        return;
+    };
+    for track in tracks {
+        let Some(cues) = track["cues"].as_array_mut() else {
+            continue;
+        };
+        for cue in cues {
+            for key in ["loopEnabled", "fadeInMs", "fadeOutMs"] {
+                if cue[key].is_null() {
+                    cue.as_object_mut()
+                        .expect("validated music cue")
+                        .remove(key);
+                }
+            }
+        }
+    }
 }
 
 fn non_negative_integer_or_null(value: &Value) -> bool {
@@ -1916,7 +2251,7 @@ mod tests {
     }
 
     #[test]
-    fn native_main_chain_tool_selection_excludes_unmigrated_writes() {
+    fn native_write_tool_selection_includes_the_delivery_batch() {
         let tools = native_function_tools_for_request(false, true);
         let names = tools
             .iter()
@@ -1929,17 +2264,13 @@ mod tests {
             "replace_clips",
             "change_clip_duration",
             "reorder_clips",
-        ] {
-            assert!(names.contains(name));
-        }
-        for name in [
             "replace_text_tracks",
             "replace_music_tracks",
             "download_music",
             "use_online_music",
             "create_jianying_draft",
         ] {
-            assert!(!names.contains(name));
+            assert!(names.contains(name));
         }
         let read_only_tools = native_function_tools_for_request(false, false);
         assert!(read_only_tools.iter().all(|tool| ![
@@ -1949,6 +2280,11 @@ mod tests {
             "replace_clips",
             "change_clip_duration",
             "reorder_clips",
+            "replace_text_tracks",
+            "replace_music_tracks",
+            "download_music",
+            "use_online_music",
+            "create_jianying_draft",
         ]
         .contains(&tool["name"].as_str().unwrap())));
     }
@@ -2038,6 +2374,119 @@ mod tests {
             json!({"query":"street", "assetId":null, "offset":0, "limit":21}),
         ] {
             assert!(parse_native_arguments("search_asset_segments", &invalid.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn delivery_arguments_are_scope_free_and_strictly_bounded() {
+        assert!(parse_native_arguments("download_music", r#"{"trackId":"track-1"}"#).is_ok());
+        assert!(parse_native_arguments("download_music", r#"{"trackId":""}"#).is_err());
+        assert!(parse_native_arguments(
+            "download_music",
+            r#"{"trackId":"track-1","projectId":"project-1"}"#
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "use_online_music",
+            r#"{"trackId":"track-1","timelineVersionId":null}"#
+        )
+        .is_ok());
+        assert!(
+            parse_native_arguments("create_jianying_draft", r#"{"timelineVersionId":null}"#)
+                .is_ok()
+        );
+
+        let text_tracks = json!({
+            "timelineVersionId": null,
+            "textTracks": [{
+                "id": "subtitle-1",
+                "role": "subtitle",
+                "layer": 0,
+                "enabled": true,
+                "cues": [{
+                    "id": "cue-1", "templateId": null, "startMs": 0, "endMs": 1_000,
+                    "text": "hello", "style": null, "layout": null,
+                    "entrance": null, "exit": null, "loopAnimation": null
+                }]
+            }]
+        });
+        assert!(parse_native_arguments("replace_text_tracks", &text_tracks.to_string()).is_ok());
+        let mut invalid_text_tracks = text_tracks.clone();
+        invalid_text_tracks["textTracks"][0]["cues"][0]["jianyingCompatibility"] =
+            json!("deliverable");
+        assert!(
+            parse_native_arguments("replace_text_tracks", &invalid_text_tracks.to_string())
+                .is_err()
+        );
+
+        let music_tracks = json!({
+            "timelineVersionId": null,
+            "musicTracks": [{
+                "id": "music-1", "enabled": true,
+                "cues": [{
+                    "id": "cue-1", "assetId": "asset-1", "sourceStartMs": 0,
+                    "sourceEndMs": 1_000, "timelineStartMs": 0, "timelineEndMs": 1_000,
+                    "loopEnabled": false, "volume": 0.35, "fadeInMs": 0, "fadeOutMs": 0
+                }]
+            }]
+        });
+        assert!(parse_native_arguments("replace_music_tracks", &music_tracks.to_string()).is_ok());
+        let mut invalid_music_tracks = music_tracks.clone();
+        invalid_music_tracks["musicTracks"][0]["cues"][0]["licenseUrl"] = json!("untrusted");
+        assert!(
+            parse_native_arguments("replace_music_tracks", &invalid_music_tracks.to_string())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delivery_execution_rechecks_explicit_authorization() {
+        let denied = RequestToolPolicy::from_request("Explain music options");
+        let authorized =
+            RequestToolPolicy::from_request("Download music and create a Jianying draft");
+        for tool in [
+            "download_music",
+            "use_online_music",
+            "replace_music_tracks",
+            "replace_text_tracks",
+            "create_jianying_draft",
+        ] {
+            assert!(!native_tool_call_allowed(tool, &denied, false), "{tool}");
+        }
+        assert!(native_tool_call_allowed(
+            "download_music",
+            &authorized,
+            false
+        ));
+        assert!(native_tool_call_allowed(
+            "create_jianying_draft",
+            &authorized,
+            false
+        ));
+    }
+
+    #[test]
+    fn delivery_requests_expose_only_their_authorized_native_tools() {
+        let policy = RequestToolPolicy::from_request("添加字幕并替换背景音乐");
+        let tools = filtered_native_tools(
+            native_function_tools_for_request(false, policy.has_native_write_authorization()),
+            &policy,
+            false,
+        );
+        let names = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect::<std::collections::HashSet<_>>();
+        assert!(names.contains("replace_text_tracks"));
+        assert!(names.contains("replace_music_tracks"));
+        for unauthorized in [
+            "download_music",
+            "use_online_music",
+            "create_jianying_draft",
+            "request_asset_analysis",
+            "generate_storyboard",
+        ] {
+            assert!(!names.contains(unauthorized), "{unauthorized}");
         }
     }
 

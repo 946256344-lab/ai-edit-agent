@@ -3,7 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-08-19，native-main-chain-tools）：将 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 迁移到 Native Function Tool 目录；保留现有素材证据、源时间范围、作用域、版本与事务校验，新增“分析素材 → storyboard → timeline”固定 fixture 复合测试，不迁移其他写工具。
+- [x] 完成（2026-08-19，native-delivery-tools）：将 `get_text_capabilities`、`replace_text_tracks`、`search_music`、`download_music`、`use_online_music`、`replace_music_tracks`、`render_preview`、`create_jianying_draft` 迁移到 Native Function Tool 目录与受限执行入口；strict 嵌套 Schema、参数边界、工具选择及执行前授权测试通过，保留许可证、下载、文字能力矩阵、剪映兼容性、确认边界和领域算法，不迁移其他工具或改变领域实现。变更记录见 `docs/changes/2026-08-19-native-delivery-tools.md`。
 - [x] 完成（2026-08-19，native-observation-tools）：将剩余只读/观察工具迁移到原生 Function Tool 目录；仅包含 `get_edit_status`、`search_assets`、`search_asset_segments`、`search_music`、`get_storyboard`、`get_text_capabilities`，不迁移任何写操作。9 个 Native 工具均有 strict schema、完整 required 和安全结果包络；149 个 Rust 测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-tools.md`。
 - [x] 完成（2026-08-19，native-context-budget）：修复大型只读工具结果触发固定失败文案的问题；输入预算裁剪保留最新 `function_call`/`function_call_output` 完整配对，避免模型因看不到观察结果重复调用直至达到最大步骤数。Native loop 回归测试与完整 Rust 测试通过。
 - [x] 完成（2026-08-19，native-preview）：在 NativeToolLoop 安全接入 render_preview；仅明确预览生成意图且未被只读/拒绝策略禁止时注册，Rust 执行前复核权限、严格参数与当前项目时间线，真实收据或安全错误继续交给模型总结。模型总结失败时保留已验证 preview 并标记部分完成。145 个 Rust 单元测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查和独立审查闭环通过；变更记录见 `docs/changes/2026-08-19-native-render-preview.md`。
@@ -12,6 +12,8 @@
 - [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。
 - [x] 完成（2026-08-19，provider-tools）：为 get_asset_health_summary、list_assets、get_timeline 建立集中式原生 Function Tools 定义与 strict JSON Schema 合约测试；不接入用户请求、不迁移编辑或副作用工具。121 个 Rust 库测试 + 2 个契约测试、前端 lint/build、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-function-tools.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-19，native-main-chain-tools）：将 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 迁移到 Native Function Tool 目录；保留素材证据、源时间范围、作用域、版本与事务校验，并新增“分析素材 → storyboard → timeline”固定 fixture 复合测试。提交 `05cefdb`；真实 Provider 在工具调用后偶发未生成最终回复，确认门桌面验收仍待后续可靠性任务处理。
 
 
 - [x] 完成（2026-08-18，refactor）：重构 storyboard 生成为三阶段架构。原有实现对整个素材池（426 个视频）做一次全局排序，取 TOP-5 候选，导致整条时间线只能从同一组 5 个素材中反复选择。新架构分为三个阶段：**Phase 1（叙事结构生成）** - 模型根据 brief 和内容的自然节奏、节奏要求和叙事复杂度拆分为合适数量的 beats（简单消息可能 3-4 个，故事驱动内容可能 8-12 个或更多，由内容引导而非人为限制），每个 beat 包含 id/purpose/requiredVisual，不涉及素材选择；**Phase 2（逐 beat 粗选镜）** - 对每个 beat 单独对素材池排序（使用 `scoring::rank_segment_candidates`），提供该 beat 专属的 TOP-5 候选素材（带关键帧网格），模型为该 beat 选择 1 个素材 + 时间范围；**Phase 3（精剪与节奏优化）** - 模型调整精确时间范围（对齐场景边界、避免重叠）、节奏控制、镜头组合和过渡优化，输出最终可执行的 `StoryboardContent`。重试循环只在 Phase 3，验证失败时带反馈重新精剪，最多 3 次。新增 `src-tauri/src/storyboard/phases.rs` 子模块（231 行）定义三阶段函数和中间数据结构（`NarrativeStructure`、`RoughStoryboard`）；主流程 `storyboard.rs:generate_storyboard_internal` 重构为三阶段顺序调用（Phase 1/2 不重试，Phase 3 重试）。架构优势：素材多样性提升（每个 beat 独立 TOP-5，不再受全局 5 个素材限制）、语义匹配精度提升（排序针对每个 beat 的 `requiredVisual` 计算）、重试效率提升（Phase 3 验证失败时只重新精剪，Phase 1/2 结果保持稳定）。Tauri 命令签名不变，SQLite schema 不变，最终持久化的 `StoryboardVersion` 结构不变。

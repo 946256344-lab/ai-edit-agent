@@ -35,7 +35,8 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
-        | "replace_music_tracks" => Some("timeline"),
+        | "replace_music_tracks"
+        | "use_online_music" => Some("timeline"),
         "render_preview" => Some("preview"),
         "create_jianying_draft" => Some("jianying_draft"),
         _ => None,
@@ -57,7 +58,8 @@ pub(super) fn persisted_artifact_for_tool(
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
-        | "replace_music_tracks" => result
+        | "replace_music_tracks"
+        | "use_online_music" => result
             .timeline
             .as_ref()
             .map(|artifact| ("timeline_version", artifact.id.clone())),
