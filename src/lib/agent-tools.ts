@@ -27,12 +27,4 @@ export type AgentSideEffectToolName =
   | 'render_preview'
   | 'create_jianying_draft'
 
-/** Canonical control actions defined by the versioned contract fixture. */
-export type AgentControlToolName = 'ask_user' | 'finish'
-
-/** Accepted aliases; the current production prompt still advertises `no_action`. */
-export type AgentControlToolAlias = 'no_action' | 'done'
-
-export type AgentToolName = AgentObservationToolName | AgentSideEffectToolName | AgentControlToolName
-
-export type AgentAcceptedToolName = AgentToolName | AgentControlToolAlias
+export type AgentToolName = AgentObservationToolName | AgentSideEffectToolName

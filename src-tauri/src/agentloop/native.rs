@@ -1,8 +1,7 @@
-//! 原生只读 Agent Loop。
+//! 原生 Function Tool Agent Loop。
 //!
-//! 只有显式开启 `NATIVE_TOOL_LOOP` 时才使用本模块。它消费 Provider 的统一
-//! `ModelTurn`，把 Responses 的完整 output item 或 Chat 适配后的等价项目带入下一轮；
-//! 工具执行仍由 `skills::apply_skill` 拥有，Legacy JSON decision loop 不经过这里。
+//! 所有对话请求统一由本模块消费 Provider 的 `ModelTurn`；Responses 的完整 output
+//! item 或 Chat 适配后的等价项目会进入下一轮，工具副作用仍只由 `skills::apply_skill` 执行。
 
 use crate::audit::{
     begin_agent_run_step, finish_agent_run_step, record_agent_diagnostic,
@@ -18,9 +17,7 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-use super::policy::{
-    request_requires_project_observation, LoopGoal, RequestToolPolicy, OBSERVATION_TOOLS,
-};
+use super::policy::{request_requires_project_observation, RequestToolPolicy, OBSERVATION_TOOLS};
 use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
     MAX_STEPS,
@@ -30,7 +27,6 @@ use super::skills::{
 };
 use super::tools::native_function_tools_for_request;
 
-const NATIVE_TOOL_LOOP_ENV: &str = "NATIVE_TOOL_LOOP";
 const NATIVE_TOOL_NAMES: &[&str] = &[
     "get_edit_status",
     "get_asset_health_summary",
@@ -54,79 +50,6 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "replace_music_tracks",
     "create_jianying_draft",
 ];
-
-/// NativeToolLoop 是显式 opt-in；缺省值保持 Legacy Runtime。
-pub(crate) fn native_tool_loop_enabled() -> bool {
-    native_tool_loop_enabled_from(std::env::var(NATIVE_TOOL_LOOP_ENV).ok().as_deref())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_configured_loop(
-    app: &AppHandle,
-    connection: &Connection,
-    agent_task_id: &str,
-    project_id: &str,
-    editing_task_id: &str,
-    conversation_id: &str,
-    request: &str,
-    task_brief: &str,
-    access: &ModelAccess,
-    storyboard: Option<&StoryboardVersion>,
-    timelines: &[TimelineVersion],
-    initial_skill: Option<super::schema::InitialAgentSkill>,
-) -> Result<AgentLoopResult, String> {
-    if native_tool_loop_enabled() && initial_skill.is_none() {
-        return run_native_tool_loop(
-            app,
-            connection,
-            agent_task_id,
-            project_id,
-            editing_task_id,
-            conversation_id,
-            request,
-            task_brief,
-            access,
-            storyboard,
-            timelines,
-        );
-    }
-    if let Some(initial_skill) = initial_skill {
-        return super::runtime::run_agent_loop_with_initial_skill(
-            app,
-            connection,
-            agent_task_id,
-            project_id,
-            editing_task_id,
-            conversation_id,
-            request,
-            task_brief,
-            access,
-            storyboard,
-            timelines,
-            Some(initial_skill),
-        );
-    }
-    super::runtime::run_agent_loop(
-        app,
-        connection,
-        agent_task_id,
-        project_id,
-        editing_task_id,
-        conversation_id,
-        request,
-        task_brief,
-        access,
-        storyboard,
-        timelines,
-    )
-}
-
-fn native_tool_loop_enabled_from(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_native_tool_loop(
@@ -168,19 +91,11 @@ pub(crate) fn run_native_tool_loop(
         editing_task_id,
         conversation_id,
         task_brief: task_brief.to_owned(),
-        goal: LoopGoal::Question,
-        goal_locked: true,
         tool_policy: tool_policy.clone(),
-        pending_clarification: None,
-        run_started_at,
-        run_deadline,
-        history: Vec::new(),
         storyboard: storyboard.cloned(),
         timelines: timelines.to_vec(),
         last_outcome: None,
-        executed_steps: Vec::new(),
         last_failed_tool_error_code: None,
-        project_fact_question: false,
         successful_observation: false,
     };
     let is_custom = access.custom_config().is_some();
@@ -242,11 +157,7 @@ pub(crate) fn run_native_tool_loop(
     Ok(AgentLoopResult {
         result,
         status,
-        goal: if receipt.needs_confirmation {
-            LoopGoal::Storyboard
-        } else {
-            LoopGoal::Question
-        },
+        clarification_goal: receipt.needs_confirmation.then_some("storyboard"),
     })
 }
 
@@ -1591,14 +1502,6 @@ mod tests {
         .expect("fixture loop");
         drop(execute);
         (message, requests, calls)
-    }
-
-    #[test]
-    fn switch_defaults_to_legacy_and_accepts_explicit_values() {
-        assert!(!native_tool_loop_enabled_from(None));
-        assert!(!native_tool_loop_enabled_from(Some("false")));
-        assert!(native_tool_loop_enabled_from(Some("true")));
-        assert!(native_tool_loop_enabled_from(Some("ON")));
     }
 
     #[test]

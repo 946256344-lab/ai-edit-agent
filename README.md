@@ -12,7 +12,7 @@
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、注册和打开。
 - 非显式自然语言请求由模型在受控工具中逐步决策；模型可请求分析项目内已导入但未分析的素材，但不能直接执行文件、SQLite 或 FFmpeg 操作。storyboard 的镜头数和时长由模型提案，应用只保留本地处理安全上限。
-- 显式 `NATIVE_TOOL_LOOP=true` 时，原生路径按 SQLite 时间顺序发送真实 user/assistant 会话消息；只读请求使用观察工具，非只读请求按权限使用六个已迁移主链工具；Legacy Runtime 仍是默认路径。
+- 对话请求统一按 SQLite 时间顺序发送真实 user/assistant 会话消息进入 NativeToolLoop；只读请求使用观察工具，非只读请求按 RequestToolPolicy 暴露获授权的原生工具，Legacy JSON decision/Router 路径已移除。
 
 这不是生产就绪的 Agent 编排系统。自定义模型适配器、生产安装包中的媒体运行时、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
 
@@ -85,5 +85,5 @@ npm run harness:check
 维护记录（2026-08-15）：agentloop 与 taskrouter 路由验证新增 validate-then-correct 重试；fast_goal 降级为提示；Agent run 超时从 90 s 提升至 300 s。
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback，错误路径改为输出真实原因；见 ADR-065 与 docs/changes/2026-08-16-remove-silent-fallbacks.md。
 维护记录（2026-08-17）：agentloop.rs 分层重构完成；路由/执行/提示/纯类型分入 agentloop/{runtime,skills,prompt,schema}.rs；check-agent-contracts.mjs 扩展扫描 runtime.rs。
-维护记录（2026-08-19）：Provider 原生工具调用先在协议适配器内统一为 ModelTurn/ModelOutputItem/FunctionCall，Legacy Runtime 暂不接入。
-维护记录（2026-08-19）：NativeToolLoop 通过显式 `NATIVE_TOOL_LOOP=true` opt-in；原生 loop 默认提供 9 项只读观察工具，非只读请求按明确权限额外提供主链、文本、音乐下载/编辑和 Jianying 工具；`render_preview` 仍要求明确预览意图。所有调用复用既有许可证、下载、文字矩阵、剪映兼容性和确认边界，默认仍走 Legacy Runtime。
+维护记录（2026-08-19）：Provider 原生工具调用统一为 ModelTurn/ModelOutputItem/FunctionCall，并由 NativeToolLoop 消费；非 Native 的 storyboard/视觉请求仍保留旧 JSON 提取接口。
+维护记录（2026-08-19）：NativeToolLoop 已移除前置对话 Router，统一处理普通聊天、澄清、项目事实和工具执行；原生 loop 提供观察、主链、文本、音乐与 Jianying 工具，RequestToolPolicy、确认门、作用域、超时和审计边界保持不变。

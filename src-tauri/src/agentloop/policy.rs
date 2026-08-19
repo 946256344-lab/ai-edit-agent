@@ -4,8 +4,6 @@
 //! 目标产物是什么、当前结果是否满足完成门。它不得持有数据库、文件系统、Tauri、
 //! Provider 或外部进程句柄，因此这里的判断本身不能产生任何副作用。
 
-use crate::models::AgentEditResult;
-
 use super::native_policy::explicitly_requested_native_tools;
 pub(super) use super::native_policy::request_requires_project_observation;
 
@@ -38,17 +36,7 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "create_jianying_draft",
 ];
 
-/// 一次请求必须真实达到的目标。循环不能只凭模型声称"完成"就越过产物门。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LoopGoal {
-    Question,
-    Storyboard,
-    Timeline,
-    Preview,
-    JianyingDraft,
-}
-
-/// 明确表达时间线修改意图的动词；普通领域名词不能单独触发编辑。
+/// 本地权限判断所需的显式动作词；它们只扩大本轮可用工具，不选择首个工具。
 pub(super) const EDIT_VERBS: &[&str] = &[
     "替换",
     "换成",
@@ -83,7 +71,6 @@ pub(super) const EDIT_VERBS: &[&str] = &[
     "speed up",
 ];
 
-/// 明确请求创建产物的动词；它们只锁定目标，不直接选择具体执行技能。
 pub(super) const CREATE_VERBS: &[&str] = &[
     "生成",
     "创建",
@@ -228,16 +215,6 @@ impl RequestToolPolicy {
         self.denied_tools.contains(&tool)
     }
 
-    pub(super) fn forbids_goal(&self, goal: LoopGoal) -> bool {
-        match goal {
-            LoopGoal::Question => false,
-            LoopGoal::Storyboard => self.forbids("generate_storyboard"),
-            LoopGoal::Timeline => self.read_only,
-            LoopGoal::Preview => self.forbids("render_preview"),
-            LoopGoal::JianyingDraft => self.forbids("create_jianying_draft"),
-        }
-    }
-
     /// Native 主链写工具必须由用户明确请求；没有授权时默认只暴露观察目录。
     pub(super) fn native_tool_exposed(&self, tool: &str) -> bool {
         !self.forbids(tool)
@@ -250,14 +227,6 @@ impl RequestToolPolicy {
 
     pub(super) fn has_native_write_authorization(&self) -> bool {
         !self.authorized_native_tools.is_empty()
-    }
-
-    pub(super) fn prompt_label(&self) -> String {
-        if self.denied_tools.is_empty() {
-            "none".to_owned()
-        } else {
-            self.denied_tools.join(", ")
-        }
     }
 }
 
@@ -459,199 +428,4 @@ fn explicitly_denies_target(request: &str, targets: &[&str], actions: &[&str]) -
                     })
                 })
         })
-}
-
-/// 通常表示用户在询问解释，而不是要求修改产物的表达。
-const QUESTION_PHRASES: &[&str] = &[
-    "为什么",
-    "为何",
-    "怎么",
-    "如何",
-    "请告诉我",
-    "告诉我",
-    "解释",
-    "说明",
-    "介绍一下",
-    "是什么",
-    "逻辑",
-    "原因",
-    "讲讲",
-    "帮我看看",
-    "请问",
-    "能不能",
-    "可不可以",
-    "应该选",
-    "建议",
-];
-
-/// 只为无歧义请求锁定目标；模糊表达交给首轮模型声明，不继续堆关键词直通分支。
-pub(super) fn fast_goal(request: &str) -> Option<LoopGoal> {
-    let text = request.trim().to_lowercase();
-    let tool_policy = RequestToolPolicy::from_request(request);
-    if tool_policy.read_only {
-        return Some(LoopGoal::Question);
-    }
-    let contains = |words: &[&str]| words.iter().any(|word| text.contains(word));
-    let edit_verb = contains(EDIT_VERBS);
-    let create_verb = contains(CREATE_VERBS);
-    let action_verb = edit_verb || create_verb;
-    let question = text.ends_with('？') || text.ends_with('?') || contains(QUESTION_PHRASES);
-    if question && !action_verb {
-        return Some(LoopGoal::Question);
-    }
-    if question {
-        return None;
-    }
-    if create_verb && contains(&["预览", "preview"]) && !tool_policy.forbids("render_preview") {
-        return Some(LoopGoal::Preview);
-    }
-    if action_verb && contains(&["时间线", "timeline"]) {
-        return Some(LoopGoal::Timeline);
-    }
-    if create_verb
-        && contains(&["剪映", "jianying", "draft"])
-        && !tool_policy.forbids("create_jianying_draft")
-    {
-        return Some(LoopGoal::JianyingDraft);
-    }
-    if create_verb && contains(&["storyboard", "分镜"]) {
-        return Some(LoopGoal::Storyboard);
-    }
-    if edit_verb {
-        return Some(LoopGoal::Timeline);
-    }
-    None
-}
-
-pub(super) fn parse_declared_goal(
-    goal: Option<&str>,
-    is_question: Option<bool>,
-) -> Option<LoopGoal> {
-    if is_question == Some(true) {
-        return Some(LoopGoal::Question);
-    }
-    match goal {
-        Some("question") => Some(LoopGoal::Question),
-        Some("storyboard") => Some(LoopGoal::Storyboard),
-        Some("timeline") => Some(LoopGoal::Timeline),
-        Some("preview") => Some(LoopGoal::Preview),
-        Some("jianying" | "jianying_draft") => Some(LoopGoal::JianyingDraft),
-        _ => None,
-    }
-}
-
-/// fast_goal 是提示而非硬阻断；模型选择 respond 路由时不拒绝，让纠偏逻辑决定。
-pub(super) fn pinned_goal_allows_response(_pinned_goal: Option<LoopGoal>) -> bool {
-    true
-}
-
-impl LoopGoal {
-    pub(crate) fn code(&self) -> &'static str {
-        match self {
-            LoopGoal::Question => "question",
-            LoopGoal::Storyboard => "storyboard",
-            LoopGoal::Timeline => "timeline",
-            LoopGoal::Preview => "preview",
-            LoopGoal::JianyingDraft => "jianying_draft",
-        }
-    }
-
-    pub(super) fn label(&self) -> &'static str {
-        match self {
-            LoopGoal::Question => "问答/观察",
-            LoopGoal::Storyboard => "storyboard",
-            LoopGoal::Timeline => "内部时间线",
-            LoopGoal::Preview => "preview",
-            LoopGoal::JianyingDraft => "剪映草稿",
-        }
-    }
-
-    /// 产物型目标只认真实返回对象；模型文字不能替代 storyboard、timeline 或文件。
-    pub(super) fn satisfied_by(&self, last: &Option<AgentEditResult>) -> bool {
-        match self {
-            LoopGoal::Question => true,
-            LoopGoal::Storyboard => last
-                .as_ref()
-                .is_some_and(|result| result.storyboard.is_some()),
-            LoopGoal::Timeline => last
-                .as_ref()
-                .is_some_and(|result| result.timeline.is_some()),
-            LoopGoal::Preview => last.as_ref().is_some_and(|result| result.preview.is_some()),
-            LoopGoal::JianyingDraft => last
-                .as_ref()
-                .is_some_and(|result| result.jianying_draft.is_some()),
-        }
-    }
-}
-
-/// Provider 失败时直接透传真实原因，不掩盖具体错误。
-pub(super) fn model_unavailable_message(goal: LoopGoal, error: &str) -> String {
-    let action = match goal {
-        LoopGoal::Question => "本轮没有给出回答，也没有改动任何 storyboard、时间线或 preview",
-        LoopGoal::Storyboard => "本轮没有生成 storyboard，也没有修改现有内容",
-        LoopGoal::Timeline => "本轮没有修改内部时间线",
-        LoopGoal::Preview => "本轮没有生成 preview，也没有修改现有内容",
-        LoopGoal::JianyingDraft => "本轮没有创建剪映草稿",
-    };
-    format!("{error}。{action}。")
-}
-
-pub(super) fn run_deadline_message(goal: LoopGoal) -> String {
-    match goal {
-        LoopGoal::Question => {
-            "本轮已达到交互等待时限，因此没有继续等待模型回答，也没有修改任何产物；请重试。"
-                .to_owned()
-        }
-        LoopGoal::Storyboard => {
-            "本轮已达到交互等待时限，没有生成新的 storyboard；现有内容未被覆盖。".to_owned()
-        }
-        LoopGoal::Timeline => {
-            "本轮已达到交互等待时限，没有完成内部时间线修改；已落地的中间版本会保留供审阅。"
-                .to_owned()
-        }
-        LoopGoal::Preview => {
-            "本轮已达到交互等待时限，没有完成新的 preview；已落地的中间版本会保留供审阅。"
-                .to_owned()
-        }
-        LoopGoal::JianyingDraft => {
-            "本轮已达到交互等待时限，没有完成新的剪映草稿；已落地的中间版本会保留供审阅。"
-                .to_owned()
-        }
-    }
-}
-
-/// 循环结束但没有目标产物时，禁止复述模型可能捏造的"已完成"。
-pub(super) fn honest_no_change(goal: LoopGoal) -> String {
-    match goal {
-        LoopGoal::Question => "本轮没有形成可用回答，也没有修改任何 storyboard、时间线或 preview。请补充说明后重试。".to_owned(),
-        LoopGoal::Storyboard => "本轮没有生成新的 storyboard，也没有修改现有内容；如需继续，请补充创作目标后重试。".to_owned(),
-        LoopGoal::Timeline => "本轮没有修改内部时间线，也没有把已完成的改动当成成功执行；如需继续，请说明你希望保留的具体片段后重试。".to_owned(),
-        LoopGoal::Preview => "本轮没有生成新的 preview，也没有修改现有 storyboard、时间线或 preview；请补充说明后重试。".to_owned(),
-        LoopGoal::JianyingDraft => "本轮没有创建新的剪映草稿，也没有修改现有内容；请补充说明后重试。".to_owned(),
-    }
-}
-
-/// 循环结束但没有目标产物时的失败消息，带具体错误代码的诊断提示。
-pub(super) fn honest_no_change_with_diagnostic(goal: LoopGoal, error_code: &str) -> String {
-    let base = honest_no_change(goal);
-    let hint = match error_code {
-        "invalid_source_time_range" => "失败原因：素材时间范围重叠或超出源媒体长度。",
-        "missing_timeline" => "失败原因：缺少时间线前置条件。",
-        "unavailable_media" => "失败原因：所需素材不可访问或视觉证据不完整。",
-        "missing_or_invalid_prerequisite" => "失败原因：缺少 storyboard 或 timeline 等前置产物。",
-        "skill_execution_failed" => "失败原因：工具执行被拒绝或底层操作失败。",
-        _ => return base,
-    };
-    format!("{}。{}", hint, base)
-}
-
-/// 模型过早结束时回送纠偏信息，循环仍受父模块的最大步数限制。
-pub(super) fn corrective_message(goal: LoopGoal) -> String {
-    match goal {
-        LoopGoal::Question => "不要在没有执行任何技能时直接声称完成了剪辑操作。可以先用观察技能（list_assets/get_storyboard/get_timeline）获取信息，再给出如实回答。".to_owned(),
-        LoopGoal::Storyboard => "你选择了结束，但尚未真正生成 storyboard。请调用 generate_storyboard 产出新版本后再结束；若缺少必要输入，请改用 ask_user 向用户澄清。".to_owned(),
-        LoopGoal::Timeline => "你选择了结束，但尚未真正修改或创建内部时间线。请调用 create_timeline_draft、replace_clips、change_clip_duration 或 reorder_clips 产出新版本后再结束；若缺少必要输入，请改用 ask_user 向用户澄清。".to_owned(),
-        LoopGoal::Preview => "你选择了结束，但尚未真正渲染出 preview。请先确保存在时间线，再调用 render_preview 产出 preview 后再结束；若缺少必要输入，请改用 ask_user 向用户澄清。".to_owned(),
-        LoopGoal::JianyingDraft => "你选择了结束，但尚未真正创建剪映草稿。请调用 create_jianying_draft 产出草稿后再结束；若缺少必要输入，请改用 ask_user 向用户澄清。".to_owned(),
-    }
 }

@@ -131,8 +131,7 @@ fn tool_contract_catalog_matches_the_agent_loop_whitelist() {
         .pointer("/argumentConvention/removedMetaKeys")
         .and_then(Value::as_array)
         .expect("removedMetaKeys must be an array");
-    assert!(removed_meta_keys.iter().any(|value| value == "goal"));
-    assert!(removed_meta_keys.iter().any(|value| value == "isQuestion"));
+    assert!(removed_meta_keys.is_empty());
     assert_eq!(
         fixture
             .pointer("/runtimePolicy/maximumSteps")

@@ -1,7 +1,7 @@
 // 校验 Agent 上下文入口、IPC/进程/网络所有权、工具目录与文档结构没有漂移。
 import { execFileSync } from 'node:child_process'
 import { extname, resolve } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import process from 'node:process'
 
 const root = process.cwd()
@@ -41,7 +41,9 @@ function loadRepository(staged) {
     if (!relevantExtensions.has(extname(filePath)) && !filePath.startsWith('docs/codebase/') && filePath !== '.githooks/pre-commit') {
       continue
     }
-    const content = staged ? stagedFileContent(filePath) : readFileSync(resolve(root, filePath), 'utf8')
+    const content = staged
+      ? stagedFileContent(filePath)
+      : (existsSync(resolve(root, filePath)) ? readFileSync(resolve(root, filePath), 'utf8') : undefined)
     if (content !== undefined) {
       contents.set(filePath, content)
     }
@@ -270,6 +272,18 @@ export function evaluateAgentContracts(contents, config) {
   const contractControls = fixtureControls.flatMap((tool) => [tool.name, ...(tool.aliases ?? [])]).filter((name) => name !== 'empty tool')
   if (!sameValues(runtimeControls, contractControls)) {
     errors.push('Rust 接受的控制动作与 TypeScript/版本化 fixture 发生漂移。')
+  }
+
+  const nativeProductionFiles = [...contents.keys()].filter((filePath) =>
+    filePath === 'src-tauri/src/agent.rs'
+      || filePath === 'src-tauri/src/agentloop.rs'
+      || (filePath.startsWith('src-tauri/src/agentloop/') && filePath.endsWith('.rs')),
+  )
+  const forbiddenConversationRouter = /\b(?:decide_conversation_route|ConversationRouteDecision|ConversationRouteResponse|InitialAgentSkill|run_agent_loop_with_initial_skill)\b|\bgoalReasoning\b|\bgoal_reasoning\b|\bisQuestion\b|\bis_question\b|\binformationScope\b|\binformation_scope\b/
+  for (const filePath of nativeProductionFiles) {
+    if (forbiddenConversationRouter.test(contents.get(filePath) ?? '')) {
+      errors.push(`NativeToolLoop 单入口不得恢复前置对话 Router 或首工具协议：${filePath}`)
+    }
   }
 
   return { errors }

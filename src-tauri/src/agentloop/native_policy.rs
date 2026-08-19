@@ -5,7 +5,7 @@
 
 use super::policy::{RequestToolPolicy, CREATE_VERBS, EDIT_VERBS};
 
-/// Router 解析失败时的保守事实策略只决定是否需要观察，不选择具体工具。
+/// 保守事实策略只决定是否需要观察，不选择具体工具。
 pub(super) fn request_requires_project_observation(request: &str) -> bool {
     let policy = RequestToolPolicy::from_request(request);
     if policy.read_only {

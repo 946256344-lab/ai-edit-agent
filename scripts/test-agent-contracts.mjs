@@ -89,6 +89,8 @@ assert.match(errorsFor((repository) => repository.set('docs/api.md', 'Narrative 
 assert.match(errorsFor((repository) => repository.set('src/lib/agent-tools.ts', "export type AgentObservationToolName = 'other'")), /观察工具.*发生漂移/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop/policy.rs', '')), /观察工具.*发生漂移/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop.rs', 'const OBSERVATION_TOOLS: &[&str] = &["observe"];\nconst EDIT_TOOLS: &[&str] = &["edit"];\nlet accepted = matches!(tool.as_str(), "ask_user" | "finish" | "later");')), /Rust 接受的控制动作/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agent.rs', '//! 对话入口。\nuse crate::agentloop::decide_conversation_route;\nlet route = decide_conversation_route();')), /NativeToolLoop 单入口/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop/runtime.rs', '//! Legacy Router。\nstruct ConversationRouteResponse { route: String, goal_reasoning: String, is_question: bool, information_scope: String }')), /NativeToolLoop 单入口/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'Command::new("ffmpeg")')), /Windows 外部进程创建.*只能/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'use std::process::Command as ProcessCommand;')), /Windows 外部进程创建.*只能/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'use std::{process::Command as Child};')), /Windows 外部进程创建.*只能/)

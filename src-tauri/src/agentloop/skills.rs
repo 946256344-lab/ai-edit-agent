@@ -27,6 +27,7 @@ use super::schema::LoopState;
 // 工具产物映射
 // ──────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
     match tool {
         "generate_storyboard" => Some("storyboard"),
@@ -161,6 +162,7 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn safe_failure_explanation(explanation: &str) -> bool {
     let explanation = explanation.trim().to_lowercase();
     !explanation.is_empty()
@@ -176,14 +178,6 @@ pub(super) fn safe_failure_explanation(explanation: &str) -> bool {
         ]
         .iter()
         .any(|claim| explanation.contains(claim))
-}
-
-pub(super) fn should_redirect_storyboard_after_failed_generation(
-    goal: super::policy::LoopGoal,
-    last_failed_tool_error_code: Option<&str>,
-) -> bool {
-    goal == super::policy::LoopGoal::Storyboard
-        && matches!(last_failed_tool_error_code, Some("skill_execution_failed"))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

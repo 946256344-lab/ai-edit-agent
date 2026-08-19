@@ -99,3 +99,4 @@ npm run harness:test
 维护记录（2026-08-19）：NativeToolLoop 会话消息变更同步校验 SQLite assistant 角色、原生工具项上下文预算与 Legacy 默认回退；新增迁移 fixture 覆盖旧 messages 约束升级。
 维护记录（2026-08-19）：7B Native 主链审查新增本地逐工具授权、成功只读观察完成门、RunReceipt 真实性和确认作用域/有效期/重放测试；授权解析拆到 native_policy.rs 以保持策略模块架构预算。
 维护记录（2026-08-19）：Native 文本、音乐与 Jianying 工具迁移需同步检查嵌套 strict schema、nullable 参数边界、显式授权和 apply_skill 复用；许可证、文字矩阵、确认与剪映兼容性不可被 Provider 参数绕过。
+维护记录（2026-08-19）：NativeToolLoop 已成为唯一对话模型入口；契约检查器负向扫描生产源码中的旧 Conversation Router、首工具和 route/goal 协议，Task Resolver 仅保留作用域 receipt。

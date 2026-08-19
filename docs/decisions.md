@@ -537,3 +537,10 @@
 - 决策：在 `agentloop/tools.rs` 的集中原生目录加入 `replace_text_tracks`、`download_music`、`use_online_music`、`replace_music_tracks` 和 `create_jianying_draft`；既有 `get_text_capabilities`、`search_music` 与 `render_preview` 继续作为同一原生目录的观察或交付工具。嵌套文本和音乐参数均使用 strict 闭合 schema，语义可选值以 nullable 表示；模型不能传入 project、conversation、路径、许可证或 Jianying 兼容性。`native_policy.rs` 仅把用户明确的中文/英文写入、下载或交付表达授权给对应工具，`native.rs` 在 `apply_skill` 前再做同一策略和参数复核。
 - 原因：原生 Provider 工具调用需要覆盖现有的文本、音乐和交付能力，但这些能力已有许可证限制、下载流程、文字能力矩阵、Jianying 单向兼容性和 storyboard 确认边界。复制或重写领域逻辑会引入行为漂移和权限旁路。
 - 后果：Native loop 继续复用 `skills::apply_skill`、现有版本写入、事务、审计与作用域校验；`use_online_music` 的新时间线版本也进入持久化产物审计。文本风格和动画仍由后端矩阵验证，音乐许可仍由 Provider 确定，Jianying 继续只创建新草稿；`needs_confirmation` 后的所有非观察写工具仍被阻止。Router、LoopGoal、领域算法和 Legacy 默认路径不变。
+
+## ADR-075：移除前置对话 Router，统一进入 NativeToolLoop
+
+- 状态：已采用（2026-08-19）
+- 决策：`submit_conversation_turn` 在消费 Task Resolver 的一次性作用域 receipt 后，所有普通聊天、澄清、项目事实和工具执行都创建同一种 Agent task，并直接进入 NativeToolLoop。删除 `decide_conversation_route`、ConversationRoute*、InitialAgentSkill、旧 JSON decision/首工具选择协议和 `NATIVE_TOOL_LOOP` 开关；NativeToolLoop 成为生产对话唯一模型入口。
+- 原因：前置 Router 让同一请求先经过模型分类再经过模型执行，重复决策且把首个工具选择与业务目标耦合；原生函数工具循环已经具备请求级权限、观察完成门、确认门、超时、取消和审计边界。
+- 后果：Task Resolver 仍只负责项目/任务/会话归属和 receipt，不选择工具或回复 route；RequestToolPolicy、`apply_skill`、SQLite 事务、版本/素材证据、真实产物校验和确认状态保持不变。Native 统一保存 assistant 回复，旧 JSON 提取接口仅供 storyboard/视觉等非对话请求使用。历史 ADR 与 changes 中关于 Router/开关的描述保留为当时事实，不代表当前生产路径。

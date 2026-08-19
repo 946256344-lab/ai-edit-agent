@@ -6,7 +6,7 @@
 
 - React 只提交意图；Rust 校验 project、editing task、conversation、storyboard、timeline、asset 和路径作用域，并决定真实副作用与完成状态。
 - 用户消息进入 conversation 或产生副作用前，必须先由 Task Resolver 确定归属并签发一次性 route receipt；Resolver 只选任务，不选工具。
-- Conversation Router 的执行型首轮决定必须复用为 Agent loop step 1。Agent loop 封闭、有界，工具参数在 JSON 顶层，完成门由真实产物验证。
+- 对话请求必须直接进入 NativeToolLoop；不得新增前置模型 Router、首工具选择或 route/goal JSON 协议。Agent loop 封闭、有界，工具参数在 JSON 顶层，完成门由真实产物验证。
 - 只读请求禁用编辑和交付工具；用户明确排除的 preview、Jianying draft 或素材分析必须同时从路由、目标与技能策略中排除。
 - 观察工具不得暗中触发分析；编辑与交付必须是具名、作用域化、可审计的工具调用。未知中断不得自动重放副作用。
 

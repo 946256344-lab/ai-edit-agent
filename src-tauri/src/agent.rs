@@ -1,13 +1,10 @@
 //! 对话提交、异步 Agent task 生命周期与终态事务边界。
 //! 这里负责任务落库和恢复，不决定模型应该调用哪个具体领域技能。
 
-use crate::agentloop::{
-    decide_conversation_route, native_tool_loop_enabled, read_scoped_edit_status,
-    run_configured_loop, run_explicit_command, ConversationRouteDecision, InitialAgentSkill,
-};
+use crate::agentloop::run_native_tool_loop;
 use crate::audit::{record_agent_operation, update_agent_task};
 use crate::db::{now_millis, open_connection};
-use crate::models::{AgentEditResult, ConversationTurnResult, StoryboardVersion, TimelineVersion};
+use crate::models::{AgentEditResult, ConversationTurnResult, StoryboardVersion};
 use crate::provider::ModelAccess;
 use crate::storyboard::load_storyboard_version;
 use crate::timeline::{timeline_candidates_for_editing_task, timeline_candidates_for_storyboard};
@@ -15,103 +12,6 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
-
-/// 精确单命令绕过模型并直接执行具名技能；其他请求统一进入有界 Agent loop。
-pub(crate) fn explicit_command_tool(request: &str) -> Option<&'static str> {
-    let normalized = request.trim().trim_matches(|character: char| {
-        matches!(
-            character,
-            '。' | '！' | '？' | '.' | '!' | '?' | '，' | ',' | ' '
-        )
-    });
-    match normalized {
-        "剪好了吗" | "剪好没有" | "做好了吗" | "完成了吗" | "现在剪好了吗" => {
-            Some("get_edit_status")
-        }
-        "生成剪映草稿" | "创建剪映草稿" | "生成 Jianying draft" | "创建 Jianying draft" => {
-            Some("create_jianying_draft")
-        }
-        "生成内部时间线"
-        | "创建内部时间线"
-        | "生成时间线"
-        | "创建时间线"
-        | "生成时间线草稿"
-        | "创建时间线草稿" => Some("create_timeline_draft"),
-        "生成预览" | "渲染预览" | "生成预览视频" | "渲染预览视频" | "生成低清预览" => {
-            Some("render_preview")
-        }
-        _ => None,
-    }
-}
-
-fn explicit_command_needs_model_recovery(
-    tool: Option<&str>,
-    has_storyboard: bool,
-    has_requested_timeline: bool,
-) -> bool {
-    !has_storyboard
-        && has_requested_timeline
-        && matches!(tool, Some("render_preview" | "create_jianying_draft"))
-}
-
-fn should_use_native_loop(
-    native_enabled: bool,
-    has_initial_skill: bool,
-    explicit_tool: Option<&str>,
-) -> bool {
-    native_enabled && !has_initial_skill && matches!(explicit_tool, None | Some("render_preview"))
-}
-
-fn load_agent_context(
-    connection: &Connection,
-    project_id: &str,
-    editing_task_id: &str,
-    conversation_id: &str,
-    storyboard_version_id: Option<&str>,
-    timeline_version_id: Option<&str>,
-) -> Result<(String, Option<StoryboardVersion>, Vec<TimelineVersion>), String> {
-    let conversation_exists: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?1 AND project_id = ?2 AND editing_task_id = ?3)",
-            params![conversation_id, project_id, editing_task_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Conversation does not belong to the current editing task.".to_owned())?;
-    if !conversation_exists {
-        return Err("Conversation does not belong to the current editing task.".to_owned());
-    }
-    let storyboard: Option<StoryboardVersion> = storyboard_version_id
-        .map(|id| load_storyboard_version(connection, id))
-        .transpose()
-        .map_err(|error| error.to_string())?;
-    if let Some(value) = &storyboard {
-        if value.project_id != project_id || value.editing_task_id != editing_task_id {
-            return Err("Storyboard does not belong to the current editing task.".to_owned());
-        }
-    }
-    let task_brief: String = connection
-        .query_row(
-            "SELECT brief FROM editing_tasks WHERE id = ?1 AND project_id = ?2",
-            params![editing_task_id, project_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Editing task is unavailable.".to_owned())?;
-    let mut timelines = match &storyboard {
-        Some(value) => timeline_candidates_for_storyboard(connection, project_id, &value.id)?,
-        None => timeline_candidates_for_editing_task(connection, project_id, editing_task_id)?,
-    };
-    if let Some(timeline_id) = timeline_version_id {
-        let timeline = timelines
-            .iter()
-            .find(|timeline| timeline.id == timeline_id)
-            .cloned()
-            .ok_or_else(|| {
-                "Selected timeline does not belong to the current editing task.".to_owned()
-            })?;
-        timelines = vec![timeline];
-    }
-    Ok((task_brief, storyboard, timelines))
-}
 
 fn safe_tool_failure(tool_name: &str, error: &str) -> serde_json::Value {
     let code = match error {
@@ -348,8 +248,6 @@ pub fn execute_agent_edit(
         storyboard_version_id,
         timeline_version_id,
         request,
-        None,
-        None,
     )
 }
 
@@ -369,14 +267,6 @@ pub fn submit_conversation_turn(
         return Err("Conversation request cannot be empty.".to_owned());
     }
     let connection = open_connection(&app)?;
-    let (task_brief, storyboard, timelines) = load_agent_context(
-        &connection,
-        &project_id,
-        &editing_task_id,
-        &conversation_id,
-        storyboard_version_id.as_deref(),
-        timeline_version_id.as_deref(),
-    )?;
     crate::taskrouter::consume_route_receipt(
         &connection,
         &project_id,
@@ -386,151 +276,17 @@ pub fn submit_conversation_turn(
         &route_receipt,
         true,
     )?;
-    let explicit_tool = explicit_command_tool(&request);
-    if explicit_tool != Some("get_edit_status") {
-        crate::taskrouter::note_task_request(&connection, &project_id, &editing_task_id, &request)?;
-    }
-    if explicit_tool == Some("get_edit_status") {
-        let message = read_scoped_edit_status(
-            &app,
-            &connection,
-            &project_id,
-            &editing_task_id,
-            &conversation_id,
-            None,
-        )?;
-        return Ok(ConversationTurnResult::Immediate {
-            status: "response".to_owned(),
-            message,
-        });
-    }
-    if explicit_tool.is_some() {
-        let agent_task_id = spawn_agent_run(
-            app,
-            project_id,
-            editing_task_id,
-            conversation_id,
-            storyboard_version_id,
-            timeline_version_id,
-            request,
-            None,
-            None,
-        )?;
-        return Ok(ConversationTurnResult::Run { agent_task_id });
-    }
-    if native_tool_loop_enabled() {
-        let agent_task_id = spawn_agent_run(
-            app,
-            project_id,
-            editing_task_id,
-            conversation_id,
-            storyboard_version_id,
-            timeline_version_id,
-            request,
-            None,
-            None,
-        )?;
-        return Ok(ConversationTurnResult::Run { agent_task_id });
-    }
-    let access = ModelAccess::resolve().map_err(|_| "Agent model is unavailable.".to_owned())?;
-    let route_decision = match decide_conversation_route(
-        &connection,
-        &project_id,
-        &editing_task_id,
-        &conversation_id,
-        &request,
-        &task_brief,
-        &access,
-        storyboard.as_ref(),
-        &timelines,
-    ) {
-        Ok(decision) => decision,
-        Err(error) => {
-            log::warn!("Conversation route failed closed: {error}");
-            let agent_task_id = spawn_agent_run(
-                app,
-                project_id,
-                editing_task_id,
-                conversation_id,
-                storyboard_version_id,
-                timeline_version_id,
-                request,
-                None,
-                None,
-            )?;
-            return Ok(ConversationTurnResult::Run { agent_task_id });
-        }
-    };
-    match route_decision {
-        ConversationRouteDecision::Respond {
-            message,
-            resolved_clarification_id,
-        } => {
-            if let Some(clarification_id) = resolved_clarification_id {
-                let transaction = connection
-                    .unchecked_transaction()
-                    .map_err(|error| error.to_string())?;
-                resolve_pending_clarification(
-                    &transaction,
-                    &project_id,
-                    &editing_task_id,
-                    &conversation_id,
-                    &clarification_id,
-                )?;
-                transaction.commit().map_err(|error| error.to_string())?;
-            }
-            Ok(ConversationTurnResult::Immediate {
-                status: "response".to_owned(),
-                message,
-            })
-        }
-        ConversationRouteDecision::Clarify(message) => {
-            let transaction = connection
-                .unchecked_transaction()
-                .map_err(|error| error.to_string())?;
-            replace_pending_clarification(
-                &transaction,
-                &project_id,
-                &editing_task_id,
-                &conversation_id,
-                "router",
-                None,
-                None,
-                &message,
-            )?;
-            transaction.commit().map_err(|error| error.to_string())?;
-            Ok(ConversationTurnResult::Immediate {
-                status: "clarification".to_owned(),
-                message,
-            })
-        }
-        ConversationRouteDecision::Run {
-            goal,
-            tool,
-            args,
-            project_fact_question,
-            resolved_clarification_id,
-        } => {
-            drop(connection);
-            let agent_task_id = spawn_agent_run(
-                app,
-                project_id,
-                editing_task_id,
-                conversation_id,
-                storyboard_version_id,
-                timeline_version_id,
-                request,
-                Some(InitialAgentSkill {
-                    project_fact_question,
-                    goal,
-                    tool,
-                    args,
-                }),
-                resolved_clarification_id,
-            )?;
-            Ok(ConversationTurnResult::Run { agent_task_id })
-        }
-    }
+    crate::taskrouter::note_task_request(&connection, &project_id, &editing_task_id, &request)?;
+    let agent_task_id = spawn_agent_run(
+        app,
+        project_id,
+        editing_task_id,
+        conversation_id,
+        storyboard_version_id,
+        timeline_version_id,
+        request,
+    )?;
+    Ok(ConversationTurnResult::Run { agent_task_id })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -542,13 +298,11 @@ fn spawn_agent_run(
     storyboard_version_id: Option<String>,
     timeline_version_id: Option<String>,
     request: String,
-    initial_skill: Option<InitialAgentSkill>,
-    resolved_clarification_id: Option<String>,
 ) -> Result<String, String> {
     if request.trim().is_empty() {
         return Err("Agent request cannot be empty.".to_owned());
     }
-    log::info!("Starting AI edit decision.");
+    log::info!("Starting NativeToolLoop agent task.");
     let connection = open_connection(&app)?;
     let agent_task_id = Uuid::new_v4().to_string();
     let transaction = connection
@@ -572,15 +326,6 @@ fn spawn_agent_run(
             ],
         )
         .map_err(|error| error.to_string())?;
-    if let Some(clarification_id) = resolved_clarification_id {
-        resolve_pending_clarification(
-            &transaction,
-            &project_id,
-            &editing_task_id,
-            &conversation_id,
-            &clarification_id,
-        )?;
-    }
     transaction.commit().map_err(|error| error.to_string())?;
     let worker_app = app.clone();
     let worker_task_id = agent_task_id.clone();
@@ -597,7 +342,6 @@ fn spawn_agent_run(
             storyboard_version_id,
             timeline_version_id,
             request,
-            initial_skill,
         );
     });
     Ok(agent_task_id)
@@ -612,7 +356,6 @@ fn run_agent_edit(
     storyboard_version_id: Option<String>,
     timeline_version_id: Option<String>,
     request: String,
-    initial_skill: Option<InitialAgentSkill>,
 ) {
     let emit = |status: &str, result: AgentEditResult| {
         let event = crate::models::AgentEditEvent {
@@ -631,7 +374,6 @@ fn run_agent_edit(
         storyboard_version_id,
         timeline_version_id,
         request,
-        initial_skill,
     );
     match outcome {
         Ok(result) => {
@@ -839,7 +581,6 @@ fn run_agent_edit_pipeline(
     storyboard_version_id: Option<String>,
     timeline_version_id: Option<String>,
     request: String,
-    initial_skill: Option<InitialAgentSkill>,
 ) -> Result<AgentEditResult, String> {
     let connection = open_connection(&app)?;
     let conversation_exists: bool = connection
@@ -884,8 +625,7 @@ fn run_agent_edit_pipeline(
         timelines = vec![timeline];
     }
 
-    let explicit_tool = explicit_command_tool(&request);
-    let tool_name = explicit_tool.unwrap_or("agent_loop").to_owned();
+    let tool_name = "agent_loop".to_owned();
     update_agent_task(
         &connection,
         agent_task_id,
@@ -895,79 +635,45 @@ fn run_agent_edit_pipeline(
         None,
     )?;
 
-    let needs_model_recovery = explicit_command_needs_model_recovery(
-        explicit_tool,
-        storyboard.is_some(),
-        timeline_version_id.is_some(),
-    );
-    let native_completion = should_use_native_loop(
-        native_tool_loop_enabled(),
-        initial_skill.is_some(),
-        explicit_tool,
-    );
-    let (outcome, terminal_status, clarification_goal) =
-        if let Some(tool) = explicit_tool.filter(|_| !needs_model_recovery && !native_completion) {
-            (
-                run_explicit_command(
-                    &app,
-                    &connection,
-                    agent_task_id,
-                    &project_id,
-                    &editing_task_id,
-                    &conversation_id,
-                    &task_brief,
-                    tool,
-                    timeline_version_id.as_deref(),
-                    storyboard.as_ref(),
-                    &timelines,
-                ),
-                "completed",
-                None,
-            )
-        } else {
-            let access = match ModelAccess::resolve() {
-                Ok(access) => access,
-                Err(error) => {
-                    log::warn!("AI edit could not access the configured provider: {error}.");
-                    let tool_result = json!({
-                        "tool": "agent_loop",
-                        "status": "failed",
-                        "code": "provider_unavailable"
-                    });
-                    update_agent_task(
-                        &connection,
-                        agent_task_id,
-                        None,
-                        "failed",
-                        Some(&tool_result),
-                        Some(&error),
-                    )?;
-                    return Ok(failed_agent_edit_result(
-                        agent_task_id.to_owned(),
-                        "当前无法连接 Agent 模型，因此没有执行剪辑操作。请检查模型连接后重试。",
-                    ));
-                }
-            };
-            let loop_result = run_configured_loop(
-                &app,
+    let access = match ModelAccess::resolve() {
+        Ok(access) => access,
+        Err(error) => {
+            log::warn!("AI edit could not access the configured provider: {error}.");
+            let tool_result = json!({
+                "tool": "agent_loop",
+                "status": "failed",
+                "code": "provider_unavailable"
+            });
+            update_agent_task(
                 &connection,
                 agent_task_id,
-                &project_id,
-                &editing_task_id,
-                &conversation_id,
-                &request,
-                &task_brief,
-                &access,
-                storyboard.as_ref(),
-                &timelines,
-                initial_skill,
+                None,
+                "failed",
+                Some(&tool_result),
+                Some(&error),
             )?;
-            (
-                Ok(loop_result.result),
-                loop_result.status.as_str(),
-                Some(loop_result.goal.code()),
-            )
-        };
+            return Ok(failed_agent_edit_result(
+                agent_task_id.to_owned(),
+                "当前无法连接 Agent 模型，因此没有执行剪辑操作。请检查模型连接后重试。",
+            ));
+        }
+    };
+    let loop_result = run_native_tool_loop(
+        &app,
+        &connection,
+        agent_task_id,
+        &project_id,
+        &editing_task_id,
+        &conversation_id,
+        &request,
+        &task_brief,
+        &access,
+        storyboard.as_ref(),
+        &timelines,
+    )?;
+    let outcome = Ok(loop_result.result);
+    let terminal_status = loop_result.status.as_str();
+    let clarification_goal = loop_result.clarification_goal;
     finalize_agent_task(
         &connection,
         agent_task_id,
@@ -978,11 +684,7 @@ fn run_agent_edit_pipeline(
         outcome,
         terminal_status,
         clarification_goal,
-        if native_completion {
-            "assistant"
-        } else {
-            "agent"
-        },
+        "assistant",
     )
 }
 
@@ -998,63 +700,6 @@ mod tests {
         );
         assert_eq!(failure["code"], "invalid_source_time_range");
         assert!(failure.get("error").is_none());
-    }
-
-    #[test]
-    fn unqualified_draft_command_stays_in_the_model_loop() {
-        assert_eq!(explicit_command_tool("生成草稿"), None);
-        assert_eq!(
-            explicit_command_tool("创建时间线草稿"),
-            Some("create_timeline_draft")
-        );
-        assert_eq!(
-            explicit_command_tool("生成低清预览"),
-            Some("render_preview")
-        );
-        assert_eq!(explicit_command_tool("草稿为什么没出现"), None);
-        assert_eq!(explicit_command_tool("请把镜头 2 换成另一个素材"), None);
-        assert_eq!(explicit_command_tool("剪好了吗？"), Some("get_edit_status"));
-    }
-
-    #[test]
-    fn incomplete_preview_context_is_deferred_to_the_model() {
-        assert!(explicit_command_needs_model_recovery(
-            Some("render_preview"),
-            false,
-            true,
-        ));
-        assert!(explicit_command_needs_model_recovery(
-            Some("create_jianying_draft"),
-            false,
-            true,
-        ));
-        assert!(!explicit_command_needs_model_recovery(
-            Some("render_preview"),
-            true,
-            true,
-        ));
-        assert!(!explicit_command_needs_model_recovery(
-            Some("create_timeline_draft"),
-            false,
-            true,
-        ));
-    }
-
-    #[test]
-    fn native_switch_routes_only_migrated_preview_explicit_command_to_native_loop() {
-        assert!(should_use_native_loop(true, false, Some("render_preview")));
-        assert!(should_use_native_loop(true, false, None));
-        assert!(!should_use_native_loop(
-            true,
-            false,
-            Some("create_timeline_draft")
-        ));
-        assert!(!should_use_native_loop(
-            false,
-            false,
-            Some("render_preview")
-        ));
-        assert!(!should_use_native_loop(true, true, Some("render_preview")));
     }
 
     #[test]
