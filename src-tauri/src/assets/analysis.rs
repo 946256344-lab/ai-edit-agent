@@ -649,16 +649,37 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
     {
         return Ok(());
     }
+    log::info!("[PERF] resume_incomplete_analysis: starting");
+    let start = std::time::Instant::now();
+
+    let step_start = std::time::Instant::now();
     if let Err(error) = super::visual::recover_interrupted_visual_batches(app) {
         RECOVERY_STARTED.store(false, Ordering::Release);
         return Err(error);
     }
+    log::info!(
+        "[PERF] resume_incomplete_analysis: recover_interrupted_visual_batches took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     if let Err(error) = super::visual::backfill_queued_visual_batches(app) {
         RECOVERY_STARTED.store(false, Ordering::Release);
         return Err(error);
     }
-    super::visual::spawn_visual_analysis_worker(app.clone());
+    log::info!(
+        "[PERF] resume_incomplete_analysis: backfill_queued_visual_batches took {:?}",
+        step_start.elapsed()
+    );
 
+    let step_start = std::time::Instant::now();
+    super::visual::spawn_visual_analysis_worker(app.clone());
+    log::info!(
+        "[PERF] resume_incomplete_analysis: spawn_visual_analysis_worker took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     let result = (|| {
         let connection = open_connection(app)?;
         connection
@@ -667,6 +688,8 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 params![now_millis()],
             )
             .map_err(|error| error.to_string())?;
+
+        let step_start_inner = std::time::Instant::now();
         let mut statement = connection
             .prepare(
                 "
@@ -685,6 +708,7 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         drop(statement);
+        log::info!("[PERF] resume_incomplete_analysis: query queued analyze_asset tasks took {:?}, found {} rows", step_start_inner.elapsed(), rows.len());
 
         // Every asset that already has any analyze_asset task (queued, running,
         // completed, failed, or cancelled) must never be enqueued again.
@@ -752,10 +776,15 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 tasked_asset_ids.insert(asset_id);
             }
         }
+        log::info!(
+            "[PERF] resume_incomplete_analysis: collected {} tasked asset IDs",
+            tasked_asset_ids.len()
+        );
 
         // Re-enqueue analysis for assets that are queued or in progress but had
         // never had an analyze_asset task persisted (for example after an import
         // was interrupted), so they no longer sit in "正在分析媒体" forever.
+        let step_start_inner = std::time::Instant::now();
         let mut orphan_statement = connection
             .prepare(
                 "
@@ -773,7 +802,13 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         drop(orphan_statement);
+        log::info!(
+            "[PERF] resume_incomplete_analysis: query orphan assets took {:?}, found {} orphans",
+            step_start_inner.elapsed(),
+            orphan_assets.len()
+        );
         let orphan_timestamp = now_millis();
+        let mut created_orphan_tasks = 0;
         for (asset_id, project_id) in orphan_assets {
             if tasked_asset_ids.contains(&asset_id) {
                 continue;
@@ -786,11 +821,23 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 )
                 .map_err(|error| error.to_string())?;
             tasks.push((asset_id.clone(), task_id));
+            created_orphan_tasks += 1;
         }
+        log::info!("[PERF] resume_incomplete_analysis: created {} orphan tasks, total tasks before truncate: {}", created_orphan_tasks, tasks.len());
         tasks.truncate(STARTUP_ANALYSIS_BATCH);
+        log::info!("[PERF] resume_incomplete_analysis: will spawn {} analysis tasks (STARTUP_ANALYSIS_BATCH={})", tasks.len(), STARTUP_ANALYSIS_BATCH);
         spawn_technical_analysis_tasks(app.clone(), tasks);
         Ok(())
     })();
+    log::info!(
+        "[PERF] resume_incomplete_analysis: technical analysis recovery took {:?}",
+        step_start.elapsed()
+    );
+
+    log::info!(
+        "[PERF] resume_incomplete_analysis: total time {:?}",
+        start.elapsed()
+    );
 
     if result.is_err() {
         RECOVERY_STARTED.store(false, Ordering::Release);

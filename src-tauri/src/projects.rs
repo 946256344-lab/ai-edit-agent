@@ -109,29 +109,84 @@ fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<
 
 #[tauri::command]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
+    let start = std::time::Instant::now();
+    log::info!("[PERF] initialize_local_store: starting");
+
     let connection = open_connection(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: open_connection took {:?}",
+        start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE agent_tasks SET status = 'needs_review', error_message = COALESCE(error_message, 'The application stopped before this Agent operation completed.'), updated_at = ?1 WHERE status IN ('queued', 'running') AND editing_task_id IS NOT NULL",
         params![now_millis()],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE agent_tasks took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE agent_run_steps SET status = 'failed', error_code = COALESCE(error_code, 'interrupted_requires_review'), completed_at = ?1, updated_at = ?1 WHERE status IN ('queued', 'running') AND agent_task_id IN (SELECT id FROM agent_tasks WHERE status = 'needs_review')",
         params![now_millis()],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE agent_run_steps took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     recover_missing_agent_completion_messages(&connection)?;
+    log::info!(
+        "[PERF] initialize_local_store: recover_missing_agent_completion_messages took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection.execute(
         "UPDATE conversations SET status = 'review' WHERE status = 'working' AND id IN (SELECT conversation_id FROM agent_tasks WHERE status = 'needs_review' AND conversation_id IS NOT NULL)",
         [],
     ).map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE conversations (review) took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     connection
         .execute(
             "UPDATE conversations SET status = 'ready' WHERE status = 'working' AND id NOT IN (SELECT conversation_id FROM agent_tasks WHERE status = 'needs_review' AND conversation_id IS NOT NULL)",
             [],
         )
         .map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] initialize_local_store: UPDATE conversations (ready) took {:?}",
+        step_start.elapsed()
+    );
+
     drop(connection);
+
+    let step_start = std::time::Instant::now();
     resume_incomplete_analysis(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: resume_incomplete_analysis took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     resume_pending_jianying_registrations(&app)?;
+    log::info!(
+        "[PERF] initialize_local_store: resume_pending_jianying_registrations took {:?}",
+        step_start.elapsed()
+    );
+
+    log::info!(
+        "[PERF] initialize_local_store: total time {:?}",
+        start.elapsed()
+    );
     Ok(StoreStatus {
         database_ready: true,
         schema_version: crate::db::SCHEMA_VERSION,

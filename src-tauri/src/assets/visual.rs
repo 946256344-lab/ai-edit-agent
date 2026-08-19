@@ -776,6 +776,8 @@ fn schedule_visual_analysis_wake(app: AppHandle, retry_after: Duration) {
 }
 
 pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), String> {
+    log::info!("[PERF] recover_interrupted_visual_batches: starting");
+    let start = std::time::Instant::now();
     let connection = open_connection(app)?;
     let rows = connection
         .prepare(
@@ -786,6 +788,10 @@ pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), 
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    log::info!(
+        "[PERF] recover_interrupted_visual_batches: found {} interrupted batches",
+        rows.len()
+    );
     let mut asset_ids = Vec::new();
     let mut invalid_asset_ids = Vec::new();
     for (task_id, input_json) in rows {
@@ -844,12 +850,20 @@ pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), 
     if !asset_ids.is_empty() {
         update_visual_metadata(app, &asset_ids, "queued", &HashMap::new(), None)?;
     }
+    log::info!(
+        "[PERF] recover_interrupted_visual_batches: total time {:?}",
+        start.elapsed()
+    );
     Ok(())
 }
 
 pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), String> {
+    log::info!("[PERF] backfill_queued_visual_batches: starting");
+    let start = std::time::Instant::now();
     let connection = open_connection(app)?;
     let mut active_ids = HashSet::new();
+
+    let step_start = std::time::Instant::now();
     let mut tasks = connection
         .prepare("SELECT input_json FROM agent_tasks WHERE tool_name = 'analyze_asset_visual_batch' AND status IN ('queued', 'running')")
         .map_err(|error| error.to_string())?;
@@ -859,6 +873,12 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     drop(tasks);
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: query active batches took {:?}, found {} batches",
+        step_start.elapsed(),
+        active_rows.len()
+    );
+
     for input_json in active_rows {
         if let Some(ids) = serde_json::from_str::<serde_json::Value>(&input_json)
             .ok()
@@ -872,6 +892,12 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
             active_ids.extend(ids.iter().filter_map(|id| id.as_str().map(str::to_owned)));
         }
     }
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: collected {} active asset IDs",
+        active_ids.len()
+    );
+
+    let step_start = std::time::Instant::now();
     let mut statement = connection
         .prepare("SELECT id, project_id, kind, metadata_json FROM assets WHERE analysis_status = 'ready'")
         .map_err(|error| error.to_string())?;
@@ -889,6 +915,13 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
         .map_err(|error| error.to_string())?;
     drop(statement);
     drop(connection);
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: query ready assets took {:?}, found {} assets",
+        step_start.elapsed(),
+        rows.len()
+    );
+
+    let step_start = std::time::Instant::now();
     let mut by_project = HashMap::<String, Vec<String>>::new();
     for (asset_id, project_id, kind, metadata_json) in rows {
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
@@ -899,11 +932,28 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
             by_project.entry(project_id).or_default().push(asset_id);
         }
     }
+    let orphan_count: usize = by_project.values().map(|v| v.len()).sum();
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: identified {} orphan assets needing batches",
+        orphan_count
+    );
+
+    let mut created_batches = 0;
     for asset_ids in by_project.into_values() {
         for batch in asset_ids.chunks(VISUAL_ANALYSIS_BATCH_SIZE) {
             queue_visual_analysis_batch(app, batch)?;
+            created_batches += 1;
         }
     }
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: created {} new batches, took {:?}",
+        created_batches,
+        step_start.elapsed()
+    );
+    log::info!(
+        "[PERF] backfill_queued_visual_batches: total time {:?}",
+        start.elapsed()
+    );
     Ok(())
 }
 

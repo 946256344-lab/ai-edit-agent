@@ -3,6 +3,8 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-19，feature）：添加启动性能诊断日志。用户报告应用启动时严重卡顿（打开程序特别卡、执行任务开始跑 agent 更是卡的不得了、agent 跑起来后倒是没那么卡）。为诊断根本原因，在启动流程关键步骤添加 [PERF] 前缀的性能日志：`initialize_local_store`（10 处，测量数据库连接、清理 agent_tasks/agent_run_steps/conversations、恢复缺失完成消息、标记会话状态）、`resume_incomplete_analysis`（7 处，测量 recover_interrupted_visual_batches、backfill_queued_visual_batches、spawn_visual_analysis_worker、收集已有任务素材 ID、查询孤立素材、创建孤立任务）、`recover_interrupted_visual_batches`（3 处）、`backfill_queued_visual_batches`（6 处）。所有日志使用 `log::info!` 级别，使用 `std::time::Instant` 测量耗时。只添加日志，不改变执行逻辑、公开命令或 SQLite schema。后续根据实际耗时数据确定瓶颈（可能的优化方向：减少 STARTUP_ANALYSIS_BATCH、延迟启动 worker、增加 busy_timeout、优化全表扫描查询）。
+- [x] 本项完成门：113 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-19-add-startup-performance-logging.md`。
 - [x] 完成（2026-08-18，bugfix）：在 Phase 3 prompt 中明确 matchLevel 枚举值。Phase 3 是独立模型调用，原 prompt 只说 "Each shot must contain: ... matchLevel" 未列举合法值，可能导致模型返回其他字符串（如 `"high"`、`"medium"`）引发验证失败。补充 "matchLevel must be 'direct' (evidence visibly supports the beat) or 'contextual' (honest scene-setting)"，与 Phase 2 prompt 保持一致。不改变 `StoryboardContent` schema、公开命令或工具白名单。
 - [x] 本项完成门：113 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-clarify-phase3-matchlevel-enum.md`。
 - [x] 完成（2026-08-18，bugfix）：在路由决策 prompt 中明确列举 goal 枚举值。修复模型漏填 `goal` 字段或返回不合法值（如 `"storyboard_generation"` 而非 `"storyboard"`）导致的路由验证失败。Prompt 从模糊描述（"Include goal"）改为明确列举 5 个合法值（question, storyboard, timeline, preview, jianying）+ 对应推荐工具，降低模型猜测错误的概率。不改变 `ConversationRouteResponse` schema、公开命令或工具白名单。

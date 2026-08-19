@@ -212,6 +212,10 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 已提供非空文案并要求剪辑的调用，如果 storyboard 生成因非前置条件校验失败，模型会收到该事实并继续决定重试或自然语言解释，而不会退化成“请描述成片目标”。只有缺少已分析素材等真实前置条件时才能返回 `needs_clarification`。
 
 - 官方 OpenAI OAuth 的授权 URL、scope、令牌刷新和支持的模型能力。
+
+## 维护记录
+
+2026-08-19：为诊断用户报告的应用启动卡顿问题，在 `projects.rs::initialize_local_store`、`assets/analysis.rs::resume_incomplete_analysis`、`assets/visual.rs::recover_interrupted_visual_batches` 和 `backfill_queued_visual_batches` 添加性能诊断日志（26 处 [PERF] 标记点），测量数据库连接、清理中断任务、恢复分析批次、启动后台 worker 等关键步骤的实际耗时。所有日志使用 `log::info!` 级别，使用 `std::time::Instant` 计时。只添加诊断日志，不改变执行逻辑、公开命令签名或 SQLite schema。
 - 除 OpenAI 兼容 chat/completions 外，其他模型 Provider 适配器 schema。
 - 用户提供的 voice API 鉴权、请求体、音色选择、响应和异步任务处理。
 
