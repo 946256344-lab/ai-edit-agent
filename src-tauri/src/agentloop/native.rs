@@ -30,9 +30,15 @@ use super::tools::native_function_tools;
 
 const NATIVE_TOOL_LOOP_ENV: &str = "NATIVE_TOOL_LOOP";
 const NATIVE_TOOL_NAMES: &[&str] = &[
+    "get_edit_status",
     "get_asset_health_summary",
     "list_assets",
+    "search_assets",
+    "search_asset_segments",
+    "search_music",
+    "get_storyboard",
     "get_timeline",
+    "get_text_capabilities",
     "render_preview",
 ];
 
@@ -335,7 +341,7 @@ fn drive_native_loop(
                         "role": "system",
                         "content": [{
                             "type": "input_text",
-                            "text": "This request asks about current project facts. Call one of the three read-only observation functions before answering."
+                            "text": "This request asks about current project facts. Call one allowed read-only observation function before answering."
                         }]
                     }));
                     continue;
@@ -615,6 +621,24 @@ fn execute_native_tool(
     );
     match result {
         Ok(value) => {
+            let value = match prepare_native_tool_result(&call.name, value) {
+                Ok(value) => value,
+                Err(error) => {
+                    finish_agent_run_step(
+                        state.connection,
+                        state.project_id,
+                        state.editing_task_id,
+                        state.agent_task_id,
+                        &step_id,
+                        "failed",
+                        None,
+                        None,
+                        Some("unsafe_tool_result"),
+                    )?;
+                    state.last_failed_tool_error_code = Some("unsafe_tool_result");
+                    return Ok(error);
+                }
+            };
             state.successful_observation = true;
             let artifact = persisted_artifact_for_tool(state, &call.name);
             finish_agent_run_step(
@@ -663,16 +687,94 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         return Err(invalid_arguments());
     };
     match tool {
-        "get_asset_health_summary" | "list_assets" if !object.is_empty() => {
-            Err(invalid_arguments())
+        "get_edit_status"
+        | "get_asset_health_summary"
+        | "list_assets"
+        | "get_storyboard"
+        | "get_text_capabilities"
+            if object.is_empty() =>
+        {
+            Ok(value)
         }
+        "get_edit_status"
+        | "get_asset_health_summary"
+        | "list_assets"
+        | "get_storyboard"
+        | "get_text_capabilities" => Err(invalid_arguments()),
         "get_timeline" => {
-            if object.keys().any(|key| key != "timelineVersionId") {
+            if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
             if object
                 .get("timelineVersionId")
                 .is_some_and(|value| !(value.is_null() || value.is_string()))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "search_assets" => {
+            const KEYS: &[&str] = &[
+                "query",
+                "kind",
+                "minDurationMs",
+                "maxDurationMs",
+                "minRating",
+                "favoriteOnly",
+                "tag",
+                "collectionId",
+                "offset",
+                "limit",
+            ];
+            if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str()))
+            {
+                return Err(invalid_arguments());
+            }
+            if !nullable_bounded_string_argument(&object["query"], 200)
+                || !nullable_bounded_string_argument(&object["tag"], 200)
+                || !nullable_bounded_string_argument(&object["collectionId"], 200)
+                || !matches!(
+                    object["kind"].as_str(),
+                    None | Some("video" | "image" | "audio" | "other")
+                )
+                || !non_negative_integer_or_null(&object["minDurationMs"])
+                || !non_negative_integer_or_null(&object["maxDurationMs"])
+                || !nullable_integer_in_range(&object["minRating"], 0, 5)
+                || !object["favoriteOnly"].is_boolean()
+                || !bounded_integer(&object["offset"], 0, 10_000)
+                || !bounded_integer(&object["limit"], 1, 20)
+            {
+                return Err(invalid_arguments());
+            }
+            if let (Some(min), Some(max)) = (
+                object["minDurationMs"].as_i64(),
+                object["maxDurationMs"].as_i64(),
+            ) {
+                if min > max {
+                    return Err(invalid_arguments());
+                }
+            }
+            Ok(value)
+        }
+        "search_asset_segments" => {
+            const KEYS: &[&str] = &["query", "assetId", "offset", "limit"];
+            if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str()))
+            {
+                return Err(invalid_arguments());
+            }
+            if !bounded_required_string(&object["query"], 200)
+                || !nullable_bounded_string_argument(&object["assetId"], 200)
+                || !bounded_integer(&object["offset"], 0, 10_000)
+                || !bounded_integer(&object["limit"], 1, 20)
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "search_music" => {
+            if object.len() != 1
+                || !object.contains_key("query")
+                || !bounded_required_string(&object["query"], 200)
             {
                 return Err(invalid_arguments());
             }
@@ -692,6 +794,76 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         }
         _ => Ok(value),
     }
+}
+
+fn bounded_required_string(value: &Value, max_length: usize) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max_length)
+}
+
+fn nullable_bounded_string_argument(value: &Value, max_length: usize) -> bool {
+    value.is_null() || bounded_required_string(value, max_length)
+}
+
+fn non_negative_integer_or_null(value: &Value) -> bool {
+    value.is_null() || value.as_i64().is_some_and(|number| number >= 0)
+}
+
+fn nullable_integer_in_range(value: &Value, minimum: i64, maximum: i64) -> bool {
+    value.is_null()
+        || value
+            .as_i64()
+            .is_some_and(|number| (minimum..=maximum).contains(&number))
+}
+
+fn bounded_integer(value: &Value, minimum: i64, maximum: i64) -> bool {
+    value
+        .as_i64()
+        .is_some_and(|number| (minimum..=maximum).contains(&number))
+}
+
+fn prepare_native_tool_result(tool: &str, mut result: Value) -> Result<Value, Value> {
+    if result["tool"] != tool || result["status"] != "ok" {
+        return Err(unsafe_tool_result());
+    }
+    redact_native_scope_fields(&mut result);
+    Ok(result)
+}
+
+fn redact_native_scope_fields(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(redact_native_scope_fields),
+        Value::Object(object) => {
+            for key in [
+                "projectId",
+                "conversationId",
+                "editingTaskId",
+                "sourcePath",
+                "localPath",
+                "previewPath",
+                "thumbnailPath",
+                "keyframeGridPath",
+                "draftDirectory",
+                "outputDirectory",
+            ] {
+                object.remove(key);
+            }
+            object.values_mut().for_each(redact_native_scope_fields);
+        }
+        _ => {}
+    }
+}
+
+fn unsafe_tool_result() -> Value {
+    json!({
+        "status": "failed",
+        "operation": "native_observation",
+        "stage": "result_validation",
+        "code": "unsafe_tool_result",
+        "retryable": false,
+        "responseInstruction": "Explain that the observation result could not be safely verified. Do not claim a project fact that was not returned by a safe tool."
+    })
 }
 
 fn invalid_arguments() -> Value {
@@ -793,7 +965,7 @@ mod tests {
         assert!(calls.is_empty());
         assert_eq!(requests[0]["parallel_tool_calls"], false);
         assert_eq!(requests[0]["store"], false);
-        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(3));
+        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(9));
     }
 
     #[test]
@@ -965,6 +1137,183 @@ mod tests {
         assert!(parse_native_arguments("render_preview", "{}").is_err());
         assert!(parse_native_arguments("render_preview", "{\"projectId\":\"project-1\"}").is_err());
         assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":42}").is_err());
+    }
+
+    #[test]
+    fn remaining_observation_arguments_are_strictly_bounded() {
+        for tool in ["get_edit_status", "get_storyboard", "get_text_capabilities"] {
+            assert!(parse_native_arguments(tool, "{}").is_ok(), "{tool}");
+            assert!(
+                parse_native_arguments(tool, "{\"unexpected\":true}").is_err(),
+                "{tool}"
+            );
+        }
+
+        assert!(parse_native_arguments("search_music", "{\"query\":\"calm\"}").is_ok());
+        assert!(parse_native_arguments("search_music", "{}").is_err());
+        assert!(parse_native_arguments("search_music", "{\"query\":\"\"}").is_err());
+        let long_query = "x".repeat(201);
+        assert!(
+            parse_native_arguments("search_music", &json!({"query": long_query}).to_string())
+                .is_err()
+        );
+
+        let asset_search = json!({
+            "query": null,
+            "kind": "video",
+            "minDurationMs": 0,
+            "maxDurationMs": 60_000,
+            "minRating": null,
+            "favoriteOnly": false,
+            "tag": null,
+            "collectionId": null,
+            "offset": 0,
+            "limit": 20
+        });
+        assert!(parse_native_arguments("search_assets", &asset_search.to_string()).is_ok());
+        let with_asset_search_value = |key: &str, value: Value| {
+            let mut object = asset_search.as_object().unwrap().clone();
+            object.insert(key.to_owned(), value);
+            Value::Object(object)
+        };
+        for invalid in [
+            json!({}),
+            with_asset_search_value("kind", json!("document")),
+            with_asset_search_value("minDurationMs", json!(-1)),
+            with_asset_search_value("minRating", json!(6)),
+            with_asset_search_value("offset", json!(10_001)),
+            with_asset_search_value("limit", json!(0)),
+        ] {
+            assert!(parse_native_arguments("search_assets", &invalid.to_string()).is_err());
+        }
+
+        let segment_search = json!({
+            "query": "street",
+            "assetId": null,
+            "offset": 0,
+            "limit": 12
+        });
+        assert!(
+            parse_native_arguments("search_asset_segments", &segment_search.to_string()).is_ok()
+        );
+        for invalid in [
+            json!({"query":"street"}),
+            json!({"query":"", "assetId":null, "offset":0, "limit":12}),
+            json!({"query":"street", "assetId":42, "offset":0, "limit":12}),
+            json!({"query":"street", "assetId":null, "offset":0, "limit":21}),
+        ] {
+            assert!(parse_native_arguments("search_asset_segments", &invalid.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn model_can_select_each_remaining_observation_tool() {
+        let cases = [
+            ("get_edit_status", json!({})),
+            (
+                "search_assets",
+                json!({
+                    "query": null, "kind": null, "minDurationMs": null, "maxDurationMs": null,
+                    "minRating": null, "favoriteOnly": false, "tag": null, "collectionId": null,
+                    "offset": 0, "limit": 12
+                }),
+            ),
+            (
+                "search_asset_segments",
+                json!({"query":"street", "assetId":null, "offset":0, "limit":12}),
+            ),
+            ("search_music", json!({"query":"calm"})),
+            ("get_storyboard", json!({})),
+            ("get_text_capabilities", json!({})),
+        ];
+
+        for (tool, arguments) in cases {
+            let call_id = format!("call_{tool}");
+            let call = json!({
+                "id": format!("resp_{tool}"),
+                "output": [{
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": tool,
+                    "arguments": arguments.to_string()
+                }]
+            })
+            .to_string();
+            let reply = json!({
+                "id": format!("reply_{tool}"),
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type":"output_text", "text":"已读取。"}]
+                }]
+            })
+            .to_string();
+            let mut fixtures = vec![call, reply].into_iter();
+            let mut input = vec![json!({
+                "role": "user",
+                "content": [{"type": "input_text", "text": "fixture request"}]
+            })];
+            let mut selected = Vec::new();
+            let mut respond = |_payload: &Value, _timeout: Duration| {
+                Ok::<_, String>(fixtures.next().expect("fixture response"))
+            };
+            let mut execute = |call: &FunctionCall, _step: usize| {
+                selected.push(call.name.clone());
+                Ok::<_, String>(json!({"tool":call.name,"status":"ok","result":{}}))
+            };
+            let mut preview_succeeded = false;
+            let message = drive_native_loop(
+                &mut input,
+                false,
+                false,
+                &RequestToolPolicy::default(),
+                &mut preview_succeeded,
+                "fixture request",
+                Instant::now() + Duration::from_secs(5),
+                &mut respond,
+                &mut execute,
+                || false,
+                |_body, _step| {},
+            )
+            .expect("native tool selection");
+            drop(execute);
+            assert_eq!(message, "已读取。");
+            assert_eq!(selected, [tool]);
+        }
+    }
+
+    #[test]
+    fn native_observation_results_keep_safe_envelopes_and_remove_scope_fields() {
+        let result = prepare_native_tool_result(
+            "get_storyboard",
+            json!({
+                "tool": "get_storyboard",
+                "status": "ok",
+                "storyboard": {
+                    "id": "storyboard-1",
+                    "projectId": "project-1",
+                    "editingTaskId": "task-1",
+                    "shots": [{"assetId":"asset-1", "sourcePath":"C:\\private\\clip.mp4"}]
+                }
+            }),
+        )
+        .expect("safe storyboard result");
+        let encoded = result.to_string();
+        assert!(!encoded.contains("projectId"));
+        assert!(!encoded.contains("editingTaskId"));
+        assert!(!encoded.contains("sourcePath"));
+        assert!(encoded.contains("asset-1"));
+
+        assert!(prepare_native_tool_result(
+            "search_assets",
+            json!({"tool":"search_assets","status":"ok","results":{}})
+        )
+        .is_ok());
+        assert!(prepare_native_tool_result(
+            "search_assets",
+            json!({"tool":"get_storyboard","status":"ok","results":{}})
+        )
+        .is_err());
     }
 
     #[test]
