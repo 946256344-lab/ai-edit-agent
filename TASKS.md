@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-19，native-context-budget）：修复大型只读工具结果触发固定失败文案的问题；输入预算裁剪保留最新 `function_call`/`function_call_output` 完整配对，避免模型因看不到观察结果重复调用直至达到最大步骤数。Native loop 回归测试与完整 Rust 测试通过。
 - [x] 完成（2026-08-19，native-preview）：在 NativeToolLoop 安全接入 render_preview；仅明确预览生成意图且未被只读/拒绝策略禁止时注册，Rust 执行前复核权限、严格参数与当前项目时间线，真实收据或安全错误继续交给模型总结。模型总结失败时保留已验证 preview 并标记部分完成。145 个 Rust 单元测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查和独立审查闭环通过；变更记录见 `docs/changes/2026-08-19-native-render-preview.md`。
 - [x] 完成（2026-08-19）：取消代码行数预算。
 - [x] 完成（2026-08-19，native-memory）：NativeToolLoop 从 SQLite 按时间读取真实 user/assistant 消息，以原生 function_call/function_call_output 维持观察上下文；保留 Legacy 默认路径。133 个 Rust 库测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-session-messages.md`。

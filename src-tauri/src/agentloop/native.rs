@@ -462,12 +462,25 @@ fn trim_native_input(input: &mut Vec<Value>, request: &str) {
 }
 
 fn trim_native_input_to_budget(input: &mut Vec<Value>, request: &str, max_chars: usize) {
+    let protected_call_id = input.iter().rev().find_map(|item| {
+        (item["type"] == "function_call")
+            .then(|| item["call_id"].as_str().map(str::to_owned))
+            .flatten()
+    });
     while input_char_count(input) > max_chars {
         let current_index = input
             .iter()
             .rposition(|item| is_current_user_item(item, request));
-        let Some(remove_index) = (1..input.len()).find(|index| Some(*index) != current_index)
-        else {
+        let Some(remove_index) = (1..input.len()).find(|index| {
+            Some(*index) != current_index
+                && !protected_call_id.as_ref().is_some_and(|call_id| {
+                    input[*index]["call_id"].as_str() == Some(call_id.as_str())
+                        && matches!(
+                            input[*index]["type"].as_str(),
+                            Some("function_call") | Some("function_call_output")
+                        )
+                })
+        }) else {
             break;
         };
         if input[remove_index]["type"] == "function_call" {
@@ -1079,7 +1092,7 @@ mod tests {
             json!({"role": "assistant", "content": [{"type": "output_text", "text": "很长的旧回答"}]}),
             json!({"role": "user", "content": [{"type": "input_text", "text": "当前问题"}]}),
             json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
-            json!({"type": "function_call_output", "call_id": "call_1", "output": "{\"status\":\"ok\"}"}),
+            json!({"type": "function_call_output", "call_id": "call_1", "output": "x".repeat(1000)}),
         ];
 
         trim_native_input_to_budget(&mut input, "当前问题", 400);

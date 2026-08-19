@@ -9,6 +9,7 @@ NativeToolLoop 现在可在用户明确要求“生成预览”时提供原生 `
 - Native 开关下的显式“生成预览”进入原生 loop；其他显式 Legacy 命令保持原路径。执行边界复核同一份正向授权，问句和解释性请求不获得预览工具。
 - 明确预览请求有真实完成门：只有 `function_call_output` 含 `status=ok` 和 `artifact.type=preview` 才算成功；失败结果仍交模型解释，但任务不会被标为完成。
 - preview 已验证但模型总结请求失败时，任务保留真实产物并标记 `partially_completed`，使用诚实恢复文案，不回退为“未生成”。
+- 后续回归修复：大型只读工具结果超过输入预算时，裁剪逻辑保留最新 `function_call` 与对应 `function_call_output`，避免模型看不到观察结果而重复调用工具并耗尽步骤；旧历史仍按预算淘汰。
 
 同步文档：
 
