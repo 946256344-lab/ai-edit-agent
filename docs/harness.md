@@ -94,3 +94,4 @@ npm run harness:test
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback；受影响文件（agent.rs、agentloop.rs、assets.rs）均通过架构预算检查，harness:check 无新触发规则。
 维护记录（2026-08-17）：check-agent-contracts.mjs 新增扫描 src-tauri/src/agentloop/runtime.rs，以定位重构后迁入该文件的 canonical 控制动作 matches! 表达式；其余规则不变。
 维护记录（2026-08-19）：Provider 原生工具调用变更同时更新 AGENTS.md、README.md、docs/architecture.md、docs/api.md、docs/decisions.md 与 TASKS.md，并由 provider-security/desktop-contract/agent-context-guardrails 规则校验。
+维护记录（2026-08-19）：NativeToolLoop 只读实验路径同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具和安全错误边界保持可审查。

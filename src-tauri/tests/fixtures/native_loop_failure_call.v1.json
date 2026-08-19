@@ -1,0 +1,13 @@
+{
+  "id": "resp_fixture_failure_call",
+  "output": [
+    {
+      "id": "fc_fixture_failure",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_failure",
+      "name": "list_assets",
+      "arguments": "{}"
+    }
+  ]
+}

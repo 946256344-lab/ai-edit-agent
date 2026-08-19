@@ -54,6 +54,7 @@ src/main.tsx
 | `taskrouter.rs` | 项目内任务归属、快照、pending route、一次性 receipt |
 | `agent.rs` | conversation route 入口、异步 run、原子终态提交 |
 | `agentloop.rs` | Conversation Router、prompt、状态快照、有界循环与技能派发 |
+| `agentloop/native.rs` | 显式开关下的只读原生 Function Tool 循环；保留 Legacy 默认路径 |
 | `agentloop/policy.rs` | 工具白名单、负向约束、目标解析、真实产物完成门与固定降级文案 |
 | `agentloop/tools.rs` | 首批只读原生 Function Tool 的集中 strict JSON Schema；暂不接入用户请求 |
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |

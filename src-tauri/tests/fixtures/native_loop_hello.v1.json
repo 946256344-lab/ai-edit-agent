@@ -1,0 +1,16 @@
+{
+  "id": "resp_fixture_hello",
+  "output": [
+    {
+      "id": "msg_fixture_hello",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "你好！有什么我可以帮你查看的吗？"
+        }
+      ]
+    }
+  ]
+}

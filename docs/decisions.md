@@ -488,3 +488,10 @@
 - 决策：在 `agentloop/tools.rs` 集中定义 `get_asset_health_summary`、`list_assets`、`get_timeline` 三个原生 Function Tool。定义采用 Responses 风格的 `type/function/name/description/parameters/strict` 结构，参数 schema 关闭额外属性；可选 `timelineVersionId` 使用 `string|null`。工具定义不携带 project、conversation 或路径作用域字段。
 - 原因：Provider 已能承载原生工具调用，但首批工具必须先拥有稳定、可审查的协议契约；把 schema 分散到请求路径会导致名称、参数和安全边界漂移。
 - 后果：本轮只提供定义和合约测试，不自动注册到用户请求；三个工具仍由既有 `skills::apply_skill` 执行，编辑类和副作用工具留待后续批次。
+
+## ADR-069：NativeToolLoop 只读原生 Agent Loop opt-in
+
+- 状态：已实现，待真实 Provider 桌面验证
+- 决策：仅当进程环境变量 `NATIVE_TOOL_LOOP=true`（或 `1/on/yes`）时，普通对话绕过 Conversation Router，直接进入只读原生 loop。请求使用 Responses 风格真实 input/output item，固定 `store:false` 和 `parallel_tool_calls:false`；响应先由 `ModelTurn` 统一解析，再执行三项观察工具并追加 `function_call_output`。
+- 原因：先验证原生工具循环的自然回答、项目事实观察和安全失败恢复，不把编辑或副作用能力带入新路径；显式开关让 Legacy Runtime 保持默认可回退。
+- 后果：NativeToolLoop 受既有最大步骤、总超时、单步超时和任务取消边界约束，不使用 `finish`/`done`/`no_action` 或 JSON decision。工具失败只返回脱敏结构化错误，模型仍需形成自然语言回复；Router、LoopGoal、确认门、权限、SQLite 和产物真实性校验保持不变。

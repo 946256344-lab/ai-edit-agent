@@ -290,7 +290,7 @@ fn chat_turn_from_value(value: &Value) -> Option<ModelTurn> {
             .unwrap_or("assistant")
             .to_owned();
         let content = chat_message_content(message.get("content"));
-        if message.get("content").is_some() || message.get("tool_calls").is_none() {
+        if !content.is_empty() || message.get("tool_calls").is_none() {
             output.push(ModelOutputItem::Message {
                 id: message.get("id").and_then(Value::as_str).map(str::to_owned),
                 role,
@@ -1004,6 +1004,28 @@ mod tests {
             string_request["messages"][0]["content"][0]["text"],
             "A prior assistant message."
         );
+    }
+
+    #[test]
+    fn chat_tool_only_assistant_message_maps_to_one_assistant_tool_call_message() {
+        let payload = json!({
+            "store": false,
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "当前有多少素材"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "{\"status\":\"ok\"}"}
+            ]
+        });
+        let request = chat_completions_request(&custom_config(""), &payload);
+        assert_eq!(request["messages"].as_array().map(Vec::len), Some(3));
+        assert_eq!(request["messages"][1]["role"], "assistant");
+        assert_eq!(
+            request["messages"][1]["tool_calls"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(request["messages"][2]["tool_call_id"], "call_1");
     }
 
     #[test]

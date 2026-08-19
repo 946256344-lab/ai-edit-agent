@@ -58,3 +58,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 <!-- 维护记录（2026-08-16）：后端 Rust 静默 fallback 已全部移除；错误路径必须输出真实原因，见 ADR-065。 -->
 <!-- 维护记录（2026-08-17）：agentloop.rs 拆分完成；路由/执行/提示/类型分入 agentloop/{runtime,skills,prompt,schema}.rs 四个子模块；check-agent-contracts.mjs 扩展扫描 runtime.rs 以定位 canonical 控制动作匹配。 -->
 <!-- 维护记录（2026-08-19）：Provider 新增协议无关的 ModelTurn/ModelOutputItem/FunctionCall 解析边界，Responses 与 Chat Completions 原生工具调用先在适配器内统一，Legacy Runtime 暂不接入。 -->
+<!-- 维护记录（2026-08-19）：显式 NATIVE_TOOL_LOOP=true 才启用只读原生 Agent Loop；仅调用三项观察工具并将安全 function_call_output 回传模型，Legacy Runtime 默认路径不变。 -->

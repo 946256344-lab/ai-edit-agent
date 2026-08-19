@@ -2,9 +2,8 @@
 //! 这里负责任务落库和恢复，不决定模型应该调用哪个具体领域技能。
 
 use crate::agentloop::{
-    decide_conversation_route, read_scoped_edit_status, run_agent_loop,
-    run_agent_loop_with_initial_skill, run_explicit_command, ConversationRouteDecision,
-    InitialAgentSkill,
+    decide_conversation_route, native_tool_loop_enabled, read_scoped_edit_status,
+    run_configured_loop, run_explicit_command, ConversationRouteDecision, InitialAgentSkill,
 };
 use crate::audit::{record_agent_operation, update_agent_task};
 use crate::db::{now_millis, open_connection};
@@ -392,6 +391,20 @@ pub fn submit_conversation_turn(
         });
     }
     if explicit_tool.is_some() {
+        let agent_task_id = spawn_agent_run(
+            app,
+            project_id,
+            editing_task_id,
+            conversation_id,
+            storyboard_version_id,
+            timeline_version_id,
+            request,
+            None,
+            None,
+        )?;
+        return Ok(ConversationTurnResult::Run { agent_task_id });
+    }
+    if native_tool_loop_enabled() {
         let agent_task_id = spawn_agent_run(
             app,
             project_id,
@@ -893,36 +906,20 @@ fn run_agent_edit_pipeline(
                     ));
                 }
             };
-            let loop_result = if let Some(initial_skill) = initial_skill {
-                run_agent_loop_with_initial_skill(
-                    &app,
-                    &connection,
-                    agent_task_id,
-                    &project_id,
-                    &editing_task_id,
-                    &conversation_id,
-                    &request,
-                    &task_brief,
-                    &access,
-                    storyboard.as_ref(),
-                    &timelines,
-                    Some(initial_skill),
-                )?
-            } else {
-                run_agent_loop(
-                    &app,
-                    &connection,
-                    agent_task_id,
-                    &project_id,
-                    &editing_task_id,
-                    &conversation_id,
-                    &request,
-                    &task_brief,
-                    &access,
-                    storyboard.as_ref(),
-                    &timelines,
-                )?
-            };
+            let loop_result = run_configured_loop(
+                &app,
+                &connection,
+                agent_task_id,
+                &project_id,
+                &editing_task_id,
+                &conversation_id,
+                &request,
+                &task_brief,
+                &access,
+                storyboard.as_ref(),
+                &timelines,
+                initial_skill,
+            )?;
             (
                 Ok(loop_result.result),
                 loop_result.status.as_str(),
