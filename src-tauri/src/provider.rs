@@ -573,6 +573,15 @@ pub(crate) fn post_responses_json(
     payload: &Value,
     timeout: Option<Duration>,
 ) -> Result<String, String> {
+    post_responses_json_with_wire_observer(access, payload, timeout, &mut |_, _| {})
+}
+
+fn post_responses_json_with_wire_observer(
+    access: &AuthorizedOAuth,
+    payload: &Value,
+    timeout: Option<Duration>,
+    observe_response: &mut dyn FnMut(u16, &str),
+) -> Result<String, String> {
     let mut request_builder = http_agent()
         .post(RESPONSES_ENDPOINT)
         .set("Content-Type", "application/json")
@@ -584,19 +593,42 @@ pub(crate) fn post_responses_json(
     if let Some(timeout) = timeout {
         request_builder = request_builder.timeout(timeout);
     }
-    request_builder
-        .send_string(&payload.to_string())
-        .map_err(|error| match error {
+    match request_builder.send_string(&payload.to_string()) {
+        Ok(response) => {
+            let status = response.status();
+            let body = response
+                .into_string()
+                .map_err(|_| "实验性 OAuth 响应为空".to_owned())?;
+            observe_wire_response(
+                observe_response,
+                status,
+                &body,
+                &[
+                    access.access_token.as_str(),
+                    access.account_id.as_deref().unwrap_or_default(),
+                ],
+            );
+            Ok(body)
+        }
+        Err(error) => Err(match error {
             ureq::Error::Status(status, response) => {
-                let _ = response.into_string();
+                let body = response.into_string().unwrap_or_default();
+                observe_wire_response(
+                    observe_response,
+                    status,
+                    &body,
+                    &[
+                        access.access_token.as_str(),
+                        access.account_id.as_deref().unwrap_or_default(),
+                    ],
+                );
                 format!("实验性 OAuth 请求失败:HTTP {status}")
             }
             ureq::Error::Transport(transport) => {
                 format!("实验性 OAuth 请求失败:网络错误 {transport}")
             }
-        })?
-        .into_string()
-        .map_err(|_| "实验性 OAuth 响应为空".to_owned())
+        }),
+    }
 }
 
 /// Converts an OAuth Responses-style request into an OpenAI-compatible
@@ -767,8 +799,19 @@ pub(crate) fn post_model_payload(
     payload: &Value,
     timeout: Option<Duration>,
 ) -> Result<String, String> {
+    post_model_payload_with_wire_observer(access, payload, timeout, &mut |_, _| {})
+}
+
+/// NativeToolLoop 的显式开发检查器可观察真实 HTTP 响应正文；调用者只能把它
+/// 保存在进程内，不能写入日志、SQLite 或文件。请求头和凭据不经过该回调。
+pub(crate) fn post_model_payload_with_wire_observer(
+    access: &ModelAccess,
+    payload: &Value,
+    timeout: Option<Duration>,
+    observe_response: &mut dyn FnMut(u16, &str),
+) -> Result<String, String> {
     let _priority = begin_interactive_request();
-    post_model_payload_with_custom_model(access, payload, timeout, None)
+    post_model_payload_with_custom_model(access, payload, timeout, None, observe_response)
 }
 
 /// Coarse visual analysis may use a separately configured custom model. OAuth
@@ -783,7 +826,7 @@ pub(crate) fn post_visual_model_payload(
     }
     let _priority = begin_visual_request();
     let custom_model = access.custom_config().map(visual_model);
-    post_model_payload_with_custom_model(access, payload, timeout, custom_model)
+    post_model_payload_with_custom_model(access, payload, timeout, custom_model, &mut |_, _| {})
 }
 
 fn visual_model(config: &CustomApiConfig) -> &str {
@@ -799,9 +842,12 @@ fn post_model_payload_with_custom_model(
     payload: &Value,
     timeout: Option<Duration>,
     custom_model: Option<&str>,
+    observe_response: &mut dyn FnMut(u16, &str),
 ) -> Result<String, String> {
     match access {
-        ModelAccess::OAuth(access) => post_responses_json(access, payload, timeout),
+        ModelAccess::OAuth(access) => {
+            post_responses_json_with_wire_observer(access, payload, timeout, observe_response)
+        }
         ModelAccess::Custom(config) => {
             let request = custom_model.map_or_else(
                 || chat_completions_request(config, payload),
@@ -814,11 +860,33 @@ fn post_model_payload_with_custom_model(
             if let Some(timeout) = timeout {
                 request_builder = request_builder.timeout(timeout);
             }
-            request_builder
-                .send_string(&request.to_string())
-                .map_err(|error| match error {
+            match request_builder.send_string(&request.to_string()) {
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response.into_string().map_err(|_| {
+                        format!(
+                            "自定义 API 响应为空（{}，模型 {}）",
+                            config.base_url,
+                            custom_model.unwrap_or(&config.model)
+                        )
+                    })?;
+                    observe_wire_response(
+                        observe_response,
+                        status,
+                        &body,
+                        &[config.api_key.as_str(), config.base_url.as_str()],
+                    );
+                    Ok(body)
+                }
+                Err(error) => Err(match error {
                     ureq::Error::Status(status, response) => {
-                        let _ = response.into_string();
+                        let body = response.into_string().unwrap_or_default();
+                        observe_wire_response(
+                            observe_response,
+                            status,
+                            &body,
+                            &[config.api_key.as_str(), config.base_url.as_str()],
+                        );
                         format!(
                             "自定义 API 不可用（{}，模型 {}）:HTTP {status}",
                             config.base_url,
@@ -831,17 +899,25 @@ fn post_model_payload_with_custom_model(
                         custom_model.unwrap_or(&config.model),
                         transport
                     ),
-                })?
-                .into_string()
-                .map_err(|_| {
-                    format!(
-                        "自定义 API 响应为空（{}，模型 {}）",
-                        config.base_url,
-                        custom_model.unwrap_or(&config.model)
-                    )
-                })
+                }),
+            }
         }
     }
+}
+
+fn observe_wire_response(
+    observer: &mut dyn FnMut(u16, &str),
+    status: u16,
+    body: &str,
+    sensitive_values: &[&str],
+) {
+    let mut safe_body = body.to_owned();
+    for value in sensitive_values {
+        if !value.is_empty() {
+            safe_body = safe_body.replace(value, "[REDACTED]");
+        }
+    }
+    observer(status, &safe_body);
 }
 
 /// Extracts the first embedded JSON decision string from a raw model body,
@@ -912,6 +988,8 @@ fn parse_chat_body(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     const RESPONSES_TOOL_TURN: &str =
         include_str!("../tests/fixtures/provider_responses_tool_turn.v1.json");
@@ -944,6 +1022,88 @@ mod tests {
             coarse_visual_model: coarse_visual_model.to_owned(),
             api_key: "secret".to_owned(),
         }
+    }
+
+    #[test]
+    fn wire_observer_receives_complete_http_error_body_without_request_credentials() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider fixture");
+        let address = listener.local_addr().expect("read local provider address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept provider request");
+            let mut request_bytes = Vec::new();
+            let mut chunk = [0u8; 2048];
+            loop {
+                let size = stream.read(&mut chunk).expect("read provider request");
+                request_bytes.extend_from_slice(&chunk[..size]);
+                let Some(header_end) = request_bytes
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request_bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length: ")
+                            .or_else(|| line.strip_prefix("content-length: "))
+                    })
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request_bytes.len() >= header_end + content_length {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request_bytes);
+            assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+            assert!(request.contains("Authorization: Bearer trace-secret-api-key"));
+
+            let body = format!(
+                r#"{{"error":{{"message":"complete-provider-error-marker","authorization":"Bearer trace-secret-api-key","endpoint":"http://{address}"}}}}"#
+            );
+            write!(
+                stream,
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write provider fixture response");
+        });
+        let config = CustomApiConfig {
+            base_url: format!("http://{address}"),
+            model: "trace-model".to_owned(),
+            coarse_visual_model: String::new(),
+            api_key: "trace-secret-api-key".to_owned(),
+        };
+        let access = ModelAccess::Custom(config.clone());
+        let mut observed = Vec::new();
+
+        let error = post_model_payload_with_wire_observer(
+            &access,
+            &json!({
+                "input": [{
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "complete-input-marker"}]
+                }]
+            }),
+            Some(Duration::from_secs(5)),
+            &mut |status, body| observed.push((status, body.to_owned())),
+        )
+        .expect_err("fixture returns HTTP 400");
+        server.join().expect("join provider fixture server");
+
+        assert!(
+            error.contains("HTTP 400"),
+            "unexpected provider error: {error}"
+        );
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].0, 400);
+        assert!(observed[0].1.contains("complete-provider-error-marker"));
+        assert!(observed[0].1.contains("Bearer [REDACTED]"));
+        assert!(observed[0].1.contains(r#""endpoint":"[REDACTED]""#));
+        assert!(!observed[0].1.contains(&config.api_key));
+        assert!(!observed[0].1.contains(&config.base_url));
     }
 
     #[test]

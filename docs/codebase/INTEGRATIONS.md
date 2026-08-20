@@ -49,6 +49,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 
 - `tauri-plugin-log` 记录固定阶段日志。
 - `agent_diagnostics` 只保存阶段、长度、耗时和安全错误码。
+- debug 构建可用 `NATIVE_PROVIDER_FULL_TRACE=1` 将 NativeToolLoop 每次真实 HTTP 尝试的完整 wire request/response 追加到 `src-tauri/target/native-provider-full-trace.jsonl`；成功与 HTTP 错误正文都保留，写入前精确遮蔽当前 Provider 凭据、账户标识和自定义 Base URL，未收到响应时不伪造 output。它不进入普通产品日志、SQLite、localStorage、Tauri 命令或前端，release 构建强制关闭，且记录不含 HTTP 请求头。
 - `agent_run_steps` 保存 payload-free 步骤，`operation_logs` 保存产物副作用摘要。
 - 没有 APM、分布式 tracing、metrics exporter 或集中日志系统。[TODO]
 - 媒体 worker 的队列深度可从本地任务状态展示，但没有长期吞吐/失败率指标。[TODO]

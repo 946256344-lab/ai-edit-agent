@@ -10,5 +10,6 @@ mod prompt;
 mod schema;
 mod skills;
 mod tools;
+mod trace;
 
 pub(crate) use native::run_native_tool_loop;

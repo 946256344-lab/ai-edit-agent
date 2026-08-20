@@ -4,7 +4,7 @@
 
 <!-- ACTIVE_TASKS_START -->
 - [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
-- [ ] 待办（chore/native-provider-trace）：debug 完整 Provider INPUT/OUTPUT 检查器，见 worktree `D:\worktrees\native-provider-trace`；等重试合入后再做。
+- [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
 - [ ] 待办（codex/session-isolation-mismatch-test）：会话隔离负向测试与变更记录路径收尾，见 `D:\worktrees\session-isolation-mismatch-test`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
 - [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。

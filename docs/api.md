@@ -72,6 +72,8 @@
 
 Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。
 
+debug 构建且 `NATIVE_PROVIDER_FULL_TRACE=1` 时，NativeToolLoop 每次真实 HTTP 尝试把实际发送的完整 JSON 和服务器响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。每行是 `{ recordId, stepNumber, attemptNumber, direction, adapter, httpStatus, body, createdAt }`。响应正文在写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识与自定义 Base URL；请求头从不进入该文件。网络层没有收到响应时只有 request，不伪造 response。该文件在 gitignored 的 `target/` 内，进程首次开启时截断，不进入 SQLite、浏览器存储、Tauri 命令或前端。`npm run tauri:dev` 会设置该开关；release 构建即使设置同名变量也强制关闭。
+
 Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴露凭据或完整媒体路径。
 
 “剪好了吗”“完成了吗”等精确状态问题也走 NativeToolLoop 的只读 `get_edit_status`，不绕过统一 Agent task。它读取同一项目、剪辑任务和会话的上一条 Agent task 状态，并以当前 task 最新 storyboard、该 storyboard 最新时间线状态及磁盘实际 preview 文件作为产物事实；不会把后台视觉分析任务或较旧 task result 当作当前剪辑完成状态。

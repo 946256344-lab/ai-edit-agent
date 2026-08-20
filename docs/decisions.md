@@ -559,4 +559,11 @@
 - 原因：真实桌面运行中，观察工具已经成功且 `function_call_output` 已加入上下文，但下一次模型总结请求在响应体到达前失败，旧实现直接落入固定恢复文案。对整个循环或工具步骤重试会重复本地副作用；完全不重试则把短暂限流或传输中断暴露为无模型回复。
 - 后果：瞬时 Provider 故障可在不重复工具和不扩大超时边界的前提下恢复自然语言回复。URL、模型名、凭据、原始响应和底层传输详情不进入 Agent 诊断；连续三次失败或永久错误仍封闭失败，并按 RunReceipt 保留已经验证的真实产物。历史运行在该诊断投影加入前只能定位到 Provider 传输阶段，不能追溯具体 HTTP/网络错误码。
 
+## ADR-078：完整 Provider 原文仅进入显式开发 JSONL 转储
+
+- 状态：已采用（2026-08-20），桌面已验证 JSONL 可读
+- 决策：生产日志、SQLite 诊断、审计和前端继续禁止 prompt、模型原文、Provider 响应与凭据。为定位 NativeToolLoop 的协议兼容问题，debug 构建在 `NATIVE_PROVIDER_FULL_TRACE=1` 时，将每次真实 HTTP 尝试实际发送的完整 Provider JSON 与服务器返回的响应正文追加到 gitignored 的 `src-tauri/target/native-provider-full-trace.jsonl`。带正文的 HTTP 错误同样写入，未收到响应的网络错误不伪造 output。自定义 Provider 写入转换后的 Chat Completions body，OAuth 写入 Responses body；HTTP 请求头不进入文件，响应正文在写入前精确遮蔽当前 Provider 的 Authorization/API Key、OAuth token、账户标识与自定义 Base URL。不注册 Tauri 命令，不向 WebView 发送原文。release 构建强制禁用。
+- 原因：仅有长度和安全错误码无法判断自定义适配器是否错误转换 assistant tool calls、tool_call_id 或 function_call_output；把完整原文写入普通日志、SQLite 或前端会违反本地会话与凭据边界。显式开启的 `target/` JSONL 允许本机调试读取真实请求/响应，同时不改变生产持久化策略。
+- 后果：本机调试可以按步骤阅读完整 INPUT/OUTPUT；该文件不是任务真实性或审计事实来源，不随安装包分发，也不进入会话恢复。该能力仅覆盖 NativeToolLoop，不改变 storyboard/视觉等非对话模型调用。工具目录整理不在本决策范围内。
+
 <!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->

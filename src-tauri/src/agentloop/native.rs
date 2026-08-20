@@ -9,8 +9,9 @@ use crate::audit::{
 };
 use crate::models::{AgentEditResult, StoryboardVersion, TimelineVersion};
 use crate::provider::{
-    classify_model_request_failure, model_turn_from_chat_completions, model_turn_from_responses,
-    post_model_payload, FunctionCall, ModelAccess, ModelOutputItem,
+    chat_completions_request, classify_model_request_failure, model_turn_from_chat_completions,
+    model_turn_from_responses, post_model_payload_with_wire_observer, FunctionCall, ModelAccess,
+    ModelOutputItem,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -106,8 +107,46 @@ pub(crate) fn run_native_tool_loop(
     let mut model_step_number = 0usize;
     let mut respond = |payload: &Value, timeout: Duration| {
         model_step_number += 1;
+        let trace_enabled = super::trace::native_provider_full_trace_enabled();
+        let trace_adapter = if access.custom_config().is_some() {
+            "chat_completions"
+        } else {
+            "responses"
+        };
+        let trace_request = trace_enabled.then(|| {
+            access.custom_config().map_or_else(
+                || payload.to_string(),
+                |config| chat_completions_request(config, payload).to_string(),
+            )
+        });
+        let mut attempt_number = 0usize;
         let mut respond_once = |payload: &Value, attempt_timeout: Duration| {
-            post_model_payload(access, payload, Some(attempt_timeout))
+            attempt_number += 1;
+            let current_attempt = attempt_number;
+            if let Some(trace_request) = &trace_request {
+                super::trace::emit_native_provider_request(
+                    model_step_number,
+                    current_attempt,
+                    trace_adapter,
+                    trace_request,
+                );
+            }
+            post_model_payload_with_wire_observer(
+                access,
+                payload,
+                Some(attempt_timeout),
+                &mut |status, body| {
+                    if trace_enabled {
+                        super::trace::emit_native_provider_response(
+                            model_step_number,
+                            current_attempt,
+                            trace_adapter,
+                            status,
+                            body,
+                        );
+                    }
+                },
+            )
         };
         let mut request_cancelled = || native_task_cancelled(connection, agent_task_id);
         request_native_model_with_retry(

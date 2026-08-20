@@ -104,3 +104,4 @@ npm run harness:test
 维护记录（2026-08-19）：NativeToolLoop 删除固定单目标终止假设；契约检查器禁止 LoopGoal/目标锁与 finish/done/no_action 回流，回归 fixture 以原生工具调用和 assistantReply 表达多步执行与自然语言结束。
 维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭），防止跨会话数据泄漏。Rust 内部实现变更，不改变验证流程、机器约束、审查闭环或完成门要求；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
 维护记录（2026-08-20）：Native Provider 后续模型步骤的有界重试需独立审查“不重复工具副作用、诊断不泄密、永久错误不重试、单步/总超时和取消边界不扩大”；每次 HTTP 只用剩余预算的一份，不扩大 120 秒单步或 300 秒总预算。见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
+维护记录（2026-08-20）：完整 Provider JSONL 转储需独立审查“release 强制关闭、不写 SQLite/浏览器存储/普通产品日志、不进前端、文件不含 Authorization/API Key、不改变生产诊断边界”。见 docs/changes/2026-08-20-native-provider-full-trace.md。

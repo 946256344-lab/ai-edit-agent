@@ -236,6 +236,8 @@ NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序
 
 Provider 重试位于工具执行之后的独立模型请求边界，只重发同一 payload，不重新进入 `execute_native_tool`，因此不能重复本地副作用。每次尝试前及退避等待期间都会重新查询任务取消状态；取消后不再发下一次 Provider 请求。诊断仅保存 `provider_http_<status>`、`provider_timeout`、`provider_network`、`provider_empty_response` 或 `provider_unknown` 及尝试次数；Base URL、模型名、凭据、响应正文和传输详情不得进入 Agent 诊断。若重试仍失败，已有真实产物按 RunReceipt 保留，UI 才使用确定性诚实恢复文案。
 
+完整请求/响应排查不放宽生产日志、SQLite 或前端状态边界。debug 构建只有在 `NATIVE_PROVIDER_FULL_TRACE=1` 时，才把 NativeToolLoop 每次真实 HTTP 尝试实际发送的完整 JSON 和 Provider 响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。该文件只存在于 gitignored 的 `target/` 目录，供本机调试读取，不进入 WebView、Tauri 命令、SQLite 或普通产品日志。写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识和自定义 Base URL；请求头从不进入文件。网络层没有收到响应时不伪造 OUTPUT。进程首次开启时截断旧文件；release 构建即使设置同名环境变量也强制关闭。`npm run tauri:dev` 会设置该开关。
+
 Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
 
 Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑 `AgentStateSnapshot`，以当前项目/任务/会话、素材分析可用性、真实产物存在性、已执行步骤、剩余步数与未满足条件作为权威状态；确定性前置条件提示只约束真实依赖，不强制所有合法编辑经过 storyboard。循环技能和显式直通技能均持久化步骤开始/终态；应用中断后运行进入 `needs_review`，未完成步骤标记为 `interrupted_requires_review`，但不自动重放。
