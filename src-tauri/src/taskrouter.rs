@@ -92,7 +92,10 @@ pub fn resolve_conversation_task(
             }
         }
     }
-    let access = ModelAccess::resolve().map_err(|_| "Task resolver model is unavailable.".to_owned())?;
+    let access = ModelAccess::resolve().map_err(|original_error| {
+        log::error!("[TaskRouter] ModelAccess::resolve() failed: {}", original_error);
+        format!("Task resolver model is unavailable: {}", original_error)
+    })?;
     let prompt = build_task_route_prompt(request, active_task_id.as_deref(), &candidates, pending.as_ref());
     let body = json!({"model":"gpt-5.4","store":false,"stream":true,
         "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],

@@ -12,18 +12,26 @@ const MAX_HISTORY_CHARS: usize = 8_000;
 pub(super) fn load_native_message_history(
     connection: &Connection,
     conversation_id: &str,
+    editing_task_id: &str,
     exclude_request: &str,
 ) -> Vec<Value> {
     let mut statement = match connection.prepare(
-        "SELECT role, content FROM messages
-         WHERE conversation_id = ?1 AND role IN ('user', 'assistant', 'agent')
-         ORDER BY created_at DESC, id DESC LIMIT ?2",
+        "SELECT messages.role, messages.content FROM messages
+         JOIN conversations ON conversations.id = messages.conversation_id
+         WHERE messages.conversation_id = ?1
+           AND conversations.editing_task_id = ?2
+           AND messages.role IN ('user', 'assistant', 'agent')
+         ORDER BY messages.created_at DESC, messages.id DESC LIMIT ?3",
     ) {
         Ok(statement) => statement,
         Err(_) => return Vec::new(),
     };
     let rows = match statement.query_map(
-        params![conversation_id, MAX_HISTORY_MESSAGES as i64 + 1],
+        params![
+            conversation_id,
+            editing_task_id,
+            MAX_HISTORY_MESSAGES as i64 + 1
+        ],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     ) {
         Ok(rows) => rows,
@@ -82,7 +90,7 @@ mod tests {
             )
             .expect("seed history messages");
 
-        let history = load_native_message_history(&connection, "c", "现在有多少素材？");
+        let history = load_native_message_history(&connection, "c", "t", "现在有多少素材？");
 
         assert_eq!(history.len(), 2);
         assert_eq!(history[0]["role"], "user");

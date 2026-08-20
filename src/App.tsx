@@ -378,14 +378,31 @@ function App() {
         conversationId,
         resolved.context.storyboardVersionId,
       )
-    } catch {
+    } catch (error) {
       setIsSending(false)
       setRouteStatusText('这轮请求未完成')
       setRouteStatusDetail(null)
       setRouteStatusTone('warning')
-      setComposerNotice(context
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error('[App] sendMessage failed:', errorMessage, error)
+      let userMessage = context
         ? '这次请求没有完成，请重试；现有 storyboard、时间线和 preview 未被修改。'
-        : '无法准备当前剪辑任务，请重试或重新选择项目。')
+        : '无法准备当前剪辑任务，请重试或重新选择项目。'
+
+      // 提供更具体的错误诊断
+      if (errorMessage.includes('Task resolver model is unavailable')) {
+        userMessage = 'AI 模型服务暂时不可用。请检查自定义 API 配置或 OAuth 登录状态。'
+      } else if (errorMessage.includes('Custom API credential read failed')) {
+        userMessage = '自定义 API 凭据读取失败，请检查配置文件。'
+      } else if (errorMessage.includes('OAuth not logged in')) {
+        userMessage = 'OAuth 未登录或已过期，请重新登录。'
+      } else if (errorMessage.includes('Current local project could not be verified')) {
+        userMessage = '当前项目不存在或已损坏，请重新选择项目。'
+      } else if (errorMessage.includes('Task Resolver did not')) {
+        userMessage = `任务归属失败：${errorMessage}`
+      }
+
+      setComposerNotice(userMessage)
       if (context) {
         try {
           await appendStoredMessage(context.conversationId, context.sessionId, 'agent', '这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。')

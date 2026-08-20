@@ -67,7 +67,12 @@ pub(crate) fn run_native_tool_loop(
 ) -> Result<AgentLoopResult, String> {
     let run_started_at = Instant::now();
     let run_deadline = run_started_at + AGENT_RUN_TIMEOUT;
-    let history = super::prompt::load_native_message_history(connection, conversation_id, request);
+    let history = super::prompt::load_native_message_history(
+        connection,
+        conversation_id,
+        editing_task_id,
+        request,
+    );
     let tool_policy = RequestToolPolicy::from_request(request);
     let mut input = vec![json!({
         "role": "system",

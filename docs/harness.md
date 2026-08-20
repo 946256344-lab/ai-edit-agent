@@ -102,3 +102,4 @@ npm run harness:test
 维护记录（2026-08-19）：Native 文本、音乐与 Jianying 工具迁移需同步检查嵌套 strict schema、nullable 参数边界、显式授权和 apply_skill 复用；许可证、文字矩阵、确认与剪映兼容性不可被 Provider 参数绕过。
 维护记录（2026-08-19）：NativeToolLoop 已成为唯一对话模型入口；契约检查器负向扫描生产源码中的旧 Conversation Router、首工具和 route/goal 协议，Task Resolver 仅保留作用域 receipt。
 维护记录（2026-08-19）：NativeToolLoop 删除固定单目标终止假设；契约检查器禁止 LoopGoal/目标锁与 finish/done/no_action 回流，回归 fixture 以原生工具调用和 assistantReply 表达多步执行与自然语言结束。
+维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤），防止跨会话数据泄漏。Rust 内部实现变更，不改变验证流程、机器约束、审查闭环或完成门要求；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。

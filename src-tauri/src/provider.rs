@@ -185,19 +185,35 @@ impl ModelAccess {
 
         match (custom_result, oauth_result) {
             // 自定义 API 配置成功 → 只用自定义
-            (Ok(Some(config)), _) => Ok(ModelAccess::Custom(config)),
+            (Ok(Some(config)), _) => {
+                log::info!(
+                    "[ModelAccess] Resolved to Custom API: base_url={}",
+                    config.base_url
+                );
+                Ok(ModelAccess::Custom(config))
+            }
 
             // 自定义 API 未配置，OAuth 成功 → 只用 OAuth
-            (Ok(None), Ok(oauth)) => Ok(ModelAccess::OAuth(oauth)),
+            (Ok(None), Ok(oauth)) => {
+                log::info!("[ModelAccess] Resolved to OAuth (Custom API not configured)");
+                Ok(ModelAccess::OAuth(oauth))
+            }
 
             // 自定义 API 凭据读取失败（不是"未配置"，是真的失败了）
             (Err(custom_error), _) => {
-                Err(format!("Custom API credential read failed: {custom_error}"))
+                let msg = format!("Custom API credential read failed: {custom_error}");
+                log::error!("[ModelAccess] {}", msg);
+                Err(msg)
             }
 
             // custom API not configured, OAuth also failed
             (Ok(None), Err(oauth_error)) => {
-                Err(format!("OAuth not logged in or expired: {oauth_error}"))
+                let msg = format!("OAuth not logged in or expired: {oauth_error}");
+                log::error!(
+                    "[ModelAccess] Custom API not configured, OAuth failed: {}",
+                    oauth_error
+                );
+                Err(msg)
             }
         }
     }

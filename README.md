@@ -89,3 +89,4 @@ npm run harness:check
 维护记录（2026-08-19）：Provider 原生工具调用统一为 ModelTurn/ModelOutputItem/FunctionCall，并由 NativeToolLoop 消费；非 Native 的 storyboard/视觉请求仍保留旧 JSON 提取接口。
 维护记录（2026-08-19）：NativeToolLoop 已移除前置对话 Router，统一处理普通聊天、澄清、项目事实和工具执行；原生 loop 提供观察、主链、文本、音乐与 Jianying 工具，RequestToolPolicy、确认门、作用域、超时和审计边界保持不变。
 维护记录（2026-08-19）：NativeToolLoop 已移除固定 LoopGoal 与 finish/done/no_action 控制动作；复合请求可跨多个授权工具，超时和步骤上限按真实 RunReceipt 保留部分产物。
+维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤），防止跨会话数据泄漏；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
