@@ -124,6 +124,7 @@ pub(crate) fn request_storyboard(
         id: "global".to_owned(),
         purpose: "全局候选排序".to_owned(),
         required_visual: "高质量素材".to_owned(),
+        narration: String::new(),
     };
 
     let ranked = scoring::rank_segment_candidates(
@@ -541,7 +542,6 @@ fn normalize_storyboard_candidate(
         content.shots.len(),
         content.target_duration_ms
     );
-    let mut total_duration = 0_i64;
     let mut corrections = 0;
     for shot in &mut content.shots {
         if let Some(source) = sources
@@ -552,18 +552,22 @@ fn normalize_storyboard_candidate(
                 let original_start = shot.source_start_ms;
                 let original_end = shot.source_end_ms;
                 let duration = source.duration_ms.unwrap_or(0).max(1);
-                let desired_duration = shot.duration_ms.clamp(1, duration);
-                let (mut start, mut end) = choose_storyboard_video_range(
-                    source,
-                    desired_duration,
-                    shot.source_start_ms,
-                    shot.source_end_ms,
-                );
-                if end - start < desired_duration {
-                    let fallback_start = (duration.saturating_sub(desired_duration)) / 2;
-                    start = fallback_start.clamp(0, duration.saturating_sub(1));
-                    end = (start + desired_duration).min(duration).max(start + 1);
-                }
+                let preferred_span = (original_end - original_start).max(1);
+                let desired_duration = shot.duration_ms.min(preferred_span).clamp(1, duration);
+                let range_already_valid = original_start >= 0
+                    && original_end > original_start
+                    && original_end <= duration
+                    && desired_duration <= original_end - original_start;
+                let (start, end) = if range_already_valid {
+                    (original_start, original_end)
+                } else {
+                    choose_storyboard_video_range(
+                        source,
+                        desired_duration,
+                        original_start,
+                        original_end,
+                    )
+                };
                 if start != original_start || end != original_end {
                     corrections += 1;
                     log::info!(
@@ -578,15 +582,47 @@ fn normalize_storyboard_candidate(
                 }
                 shot.source_start_ms = start;
                 shot.source_end_ms = end;
-                shot.duration_ms = (end - start).max(1);
+                shot.duration_ms = (end - start).min(desired_duration).max(1);
             } else {
                 shot.source_start_ms = 0;
                 shot.source_end_ms = 0;
                 shot.duration_ms = shot.duration_ms.max(1);
             }
         }
-        total_duration += shot.duration_ms.max(1);
     }
+    resolve_overlapping_video_ranges(&mut content.shots, sources);
+    content
+        .uncovered_beat_ids
+        .retain(|beat_id| !content.shots.iter().any(|shot| shot.beat_id == *beat_id));
+    for (index, shot) in content.shots.iter_mut().enumerate() {
+        shot.order_index = index as i64 + 1;
+    }
+    let beat_narration = content
+        .beats
+        .iter()
+        .map(|beat| {
+            let spoken = if !beat.narration.trim().is_empty() {
+                beat.narration.trim().to_owned()
+            } else {
+                beat.purpose.trim().to_owned()
+            };
+            (beat.id.clone(), spoken)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    for shot in &mut content.shots {
+        if shot.narration_text.trim().is_empty() {
+            shot.narration_text = beat_narration
+                .get(&shot.beat_id)
+                .cloned()
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| shot.purpose.trim().to_owned());
+        }
+    }
+    let total_duration: i64 = content
+        .shots
+        .iter()
+        .map(|shot| shot.duration_ms.max(1))
+        .sum();
     if total_duration > 0 {
         content.target_duration_ms = total_duration;
     }
@@ -605,6 +641,143 @@ fn normalize_storyboard_candidate(
         content.script_mode
     );
     content
+}
+
+fn resolve_overlapping_video_ranges(
+    shots: &mut [crate::models::StoryboardShot],
+    sources: &[StoryboardSource],
+) {
+    let mut used: std::collections::HashMap<String, Vec<(i64, i64)>> =
+        std::collections::HashMap::new();
+    for shot in shots.iter_mut() {
+        let Some(source) = sources
+            .iter()
+            .find(|source| source.asset_id == shot.asset_id)
+        else {
+            continue;
+        };
+        if source.kind != "video" {
+            continue;
+        }
+        let duration = source.duration_ms.unwrap_or(0).max(1);
+        let need = shot.duration_ms.clamp(1, duration);
+        let occupied = used.entry(shot.asset_id.clone()).or_default();
+        let mut start = shot.source_start_ms.max(0);
+        let mut end = shot.source_end_ms.min(duration).max(start + 1);
+        if ranges_overlap(start, end, occupied) {
+            if let Some((free_start, free_end)) = find_free_window(duration, need, occupied, start)
+            {
+                start = free_start;
+                end = free_end;
+            } else if let Some((free_start, free_end)) =
+                find_free_window(duration, 1, occupied, start)
+            {
+                start = free_start;
+                end = free_end;
+            }
+        }
+        shot.source_start_ms = start;
+        shot.source_end_ms = end.min(duration).max(start + 1);
+        shot.duration_ms = (shot.source_end_ms - shot.source_start_ms).min(need).max(1);
+        occupied.push((shot.source_start_ms, shot.source_end_ms));
+    }
+    let asset_ids = used.keys().cloned().collect::<Vec<_>>();
+    for asset_id in asset_ids {
+        let duration = sources
+            .iter()
+            .find(|source| source.asset_id == asset_id)
+            .and_then(|source| source.duration_ms)
+            .unwrap_or(0)
+            .max(1);
+        if video_asset_ranges_overlap(shots, &asset_id) {
+            pack_video_asset_shots(shots, &asset_id, duration);
+        }
+    }
+}
+
+fn video_asset_ranges_overlap(shots: &[crate::models::StoryboardShot], asset_id: &str) -> bool {
+    let ranges = shots
+        .iter()
+        .filter(|shot| shot.asset_id == asset_id)
+        .map(|shot| (shot.source_start_ms, shot.source_end_ms))
+        .collect::<Vec<_>>();
+    ranges.iter().enumerate().any(|(index, (start, end))| {
+        ranges
+            .iter()
+            .skip(index + 1)
+            .any(|(other_start, other_end)| start < other_end && other_start < end)
+    })
+}
+
+fn pack_video_asset_shots(
+    shots: &mut [crate::models::StoryboardShot],
+    asset_id: &str,
+    duration: i64,
+) {
+    let mut indices = shots
+        .iter()
+        .enumerate()
+        .filter(|(_, shot)| shot.asset_id == asset_id)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if indices.len() < 2 {
+        return;
+    }
+    indices.sort_by_key(|&index| shots[index].source_start_ms);
+    let slice = (duration / indices.len() as i64).max(1);
+    let last = indices.len() - 1;
+    for (offset, &index) in indices.iter().enumerate() {
+        let start = offset as i64 * slice;
+        let end = if offset == last {
+            duration
+        } else {
+            (start + slice).min(duration)
+        };
+        shots[index].source_start_ms = start.min(duration.saturating_sub(1));
+        shots[index].source_end_ms = end.max(shots[index].source_start_ms + 1).min(duration);
+        shots[index].duration_ms =
+            (shots[index].source_end_ms - shots[index].source_start_ms).max(1);
+    }
+}
+
+fn ranges_overlap(start: i64, end: i64, used: &[(i64, i64)]) -> bool {
+    used.iter()
+        .any(|(used_start, used_end)| start < *used_end && *used_start < end)
+}
+
+fn find_free_window(
+    duration: i64,
+    need: i64,
+    used: &[(i64, i64)],
+    preferred_start: i64,
+) -> Option<(i64, i64)> {
+    let mut intervals = used.to_vec();
+    intervals.sort_by_key(|item| item.0);
+    let mut cursor = 0_i64;
+    let mut gaps = Vec::new();
+    for (start, end) in intervals {
+        if start > cursor {
+            gaps.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < duration {
+        gaps.push((cursor, duration));
+    }
+    let need = need.clamp(1, duration);
+    gaps.iter()
+        .filter(|(start, end)| end - start >= need)
+        .min_by_key(|(start, _)| (*start - preferred_start).abs())
+        .map(|(start, end)| {
+            let placed = preferred_start.clamp(*start, end - need);
+            (placed, placed + need)
+        })
+        .or_else(|| {
+            gaps.iter()
+                .max_by_key(|(start, end)| end - start)
+                .filter(|(start, end)| end - start > 1)
+                .map(|(start, end)| (*start, *end))
+        })
 }
 
 fn choose_storyboard_video_range(
@@ -674,7 +847,7 @@ fn choose_storyboard_video_range(
 
 #[cfg(test)]
 mod tests {
-    use super::{minimum_storyboard_duration, validate_storyboard};
+    use super::{minimum_storyboard_duration, normalize_storyboard_candidate, validate_storyboard};
     use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
 
     fn source() -> StoryboardSource {
@@ -702,11 +875,13 @@ mod tests {
                     id: "context".to_owned(),
                     purpose: "Set the scene".to_owned(),
                     required_visual: "A verified product view".to_owned(),
+                    narration: "This is the opening scene.".to_owned(),
                 },
                 StoryboardBeat {
                     id: "missing".to_owned(),
                     purpose: "Explain a hidden technical value".to_owned(),
                     required_visual: "Measured technical data".to_owned(),
+                    narration: String::new(),
                 },
             ],
             uncovered_beat_ids: vec!["missing".to_owned()],
@@ -715,6 +890,7 @@ mod tests {
                 duration_ms: 10_000,
                 purpose: "Set the scene".to_owned(),
                 on_screen_text: String::new(),
+                narration_text: String::new(),
                 asset_id: "asset-1".to_owned(),
                 source_start_ms: 0,
                 source_end_ms: 10_000,
@@ -743,6 +919,7 @@ mod tests {
             duration_ms: 5_000,
             purpose: "Repeat the same source".to_owned(),
             on_screen_text: String::new(),
+            narration_text: String::new(),
             asset_id: "asset-1".to_owned(),
             source_start_ms: 5_000,
             source_end_ms: 10_000,
@@ -760,6 +937,85 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(minimum_storyboard_duration(&brief), 36_000);
+    }
+
+    #[test]
+    fn normalize_keeps_a_valid_preferred_video_range() {
+        let mut storyboard = content("direct");
+        storyboard.shots[0].source_start_ms = 2_000;
+        storyboard.shots[0].source_end_ms = 6_000;
+        storyboard.shots[0].duration_ms = 4_000;
+        let normalized = normalize_storyboard_candidate(storyboard, &[source()], "brief");
+        assert_eq!(normalized.shots[0].source_start_ms, 2_000);
+        assert_eq!(normalized.shots[0].source_end_ms, 6_000);
+        assert_eq!(normalized.shots[0].duration_ms, 4_000);
+    }
+
+    #[test]
+    fn normalize_splits_overlapping_ranges_on_the_same_asset() {
+        let mut long = source();
+        long.duration_ms = Some(20_000);
+        let mut storyboard = content("direct");
+        storyboard.beats.push(StoryboardBeat {
+            id: "second".to_owned(),
+            purpose: "Show another beat".to_owned(),
+            required_visual: "A second verified view".to_owned(),
+            narration: String::new(),
+        });
+        storyboard.uncovered_beat_ids.clear();
+        storyboard.shots[0].source_start_ms = 0;
+        storyboard.shots[0].source_end_ms = 20_000;
+        storyboard.shots[0].duration_ms = 20_000;
+        storyboard.shots.push(StoryboardShot {
+            order_index: 2,
+            duration_ms: 20_000,
+            purpose: "Show another beat".to_owned(),
+            on_screen_text: String::new(),
+            narration_text: String::new(),
+            asset_id: "asset-1".to_owned(),
+            source_start_ms: 0,
+            source_end_ms: 20_000,
+            reason: "Same source reused.".to_owned(),
+            beat_id: "second".to_owned(),
+            match_level: "direct".to_owned(),
+        });
+        let normalized = normalize_storyboard_candidate(storyboard, &[long.clone()], "brief");
+        assert!(validate_non_overlapping_after(&normalized, &[long]));
+        assert!(
+            normalized.shots[0].source_end_ms <= normalized.shots[1].source_start_ms
+                || normalized.shots[1].source_end_ms <= normalized.shots[0].source_start_ms
+        );
+    }
+
+    #[test]
+    fn normalize_fills_missing_narration_from_the_beat() {
+        let mut storyboard = content("direct");
+        storyboard.shots[0].narration_text = String::new();
+        let normalized = normalize_storyboard_candidate(storyboard, &[source()], "brief");
+        assert_eq!(
+            normalized.shots[0].narration_text,
+            "This is the opening scene."
+        );
+        assert_ne!(
+            normalized.shots[0].narration_text,
+            normalized.shots[0].on_screen_text
+        );
+    }
+
+    #[test]
+    fn normalize_drops_uncovered_ids_that_already_have_shots() {
+        let mut storyboard = content("direct");
+        storyboard.uncovered_beat_ids = vec!["context".to_owned(), "missing".to_owned()];
+        let normalized = normalize_storyboard_candidate(storyboard, &[source()], "brief");
+        assert_eq!(normalized.uncovered_beat_ids, ["missing"]);
+        assert!(validate_storyboard(&normalized, &[source()], "brief").is_ok());
+    }
+
+    fn validate_non_overlapping_after(
+        content: &StoryboardContent,
+        sources: &[StoryboardSource],
+    ) -> bool {
+        super::validate_non_overlapping_video_sources(&content.shots, sources).is_ok()
     }
 
     #[test]

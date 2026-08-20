@@ -20,6 +20,8 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 | --- | --- |
 | Tauri 命令与存储入口（`main.rs`、`lib.rs`、`src-tauri/src/*.rs`、`oauth.rs`、`commands/`）、`local-store.ts`、`agent-tools.ts` | `docs/architecture.md`、`docs/api.md`、`TASKS.md` |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`provider.rs`、`agent.rs` | `AGENTS.md`、`docs/decisions.md` |
+
+ElevenLabs 配音的密钥和 HTTP 走 `music_provider.rs`；合成、指纹缓存与 alignment 不扩大凭据/HTTP 允许名单。
 | `package.json`、Cargo、Tauri 配置 | `README.md`、`docs/architecture.md`、`docs/decisions.md`、`TASKS.md` |
 | 架构预算配置或检查脚本 | `docs/architecture.md`、`docs/decisions.md`、`docs/harness.md`、`TASKS.md` |
 | 根/前端/Rust Agent 指令、Agent 上下文清单或契约检查脚本 | `AGENTS.md`、`README.md`、`docs/architecture.md`、`docs/decisions.md`、`docs/harness.md`、`TASKS.md` |

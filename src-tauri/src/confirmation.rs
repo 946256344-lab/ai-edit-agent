@@ -432,21 +432,48 @@ fn run_confirmation_sequence_pipeline(
         .map_err(|error| error.to_string())?;
 
     // 步骤 1: create_timeline_draft
-    let timeline = crate::timeline::create_timeline_draft(
+    let mut timeline = crate::timeline::create_timeline_draft(
         app.clone(),
         project_id.clone(),
         storyboard.id.clone(),
     )?;
+    let mut voiceover_failed = None;
+    if let Some(narration) = crate::voice_provider::storyboard_narration_text(Some(&storyboard)) {
+        match crate::voice_provider::synthesize_voiceover_for_timeline(
+            &app,
+            &connection,
+            &project_id,
+            &editing_task_id,
+            &conversation_id,
+            agent_task_id,
+            &timeline,
+            &narration,
+            None,
+        ) {
+            Ok((updated, _)) => timeline = updated,
+            Err(error) => {
+                log::warn!("Storyboard confirmation voiceover failed: {error}");
+                voiceover_failed = Some(error);
+            }
+        }
+    }
     let timeline_version_id = timeline.id.clone();
     let timeline_version_number = timeline.version_number;
 
     // 步骤 2: render_preview
     let preview = crate::preview::render_preview(app.clone(), timeline.id.clone())?;
 
-    let message = format!(
-        "已确认 storyboard v{}，自动创建了时间线 v{} 并生成了预览。",
-        storyboard.version_number, timeline_version_number
-    );
+    let message = if voiceover_failed.is_some() {
+        format!(
+            "已确认 storyboard v{}，已创建时间线 v{} 并生成预览。配音未写入：ElevenLabs 拒绝了本次语音请求。可再说一次「配音」重试。",
+            storyboard.version_number, timeline_version_number
+        )
+    } else {
+        format!(
+            "已确认 storyboard v{}，自动创建了时间线 v{} 并生成了预览。",
+            storyboard.version_number, timeline_version_number
+        )
+    };
 
     let result = AgentEditResult {
         agent_task_id: agent_task_id.to_owned(),

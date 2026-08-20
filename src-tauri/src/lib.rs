@@ -28,6 +28,8 @@ mod music_provider;
 mod oauth;
 /// FFmpeg preview 渲染、文字/音乐合成与质量检查。
 mod preview;
+/// Preview 旁白与 BGM 混音；禁止用 `-shortest` 截断口播。
+mod preview_audio;
 /// 隐藏 Windows 子进程的创建与有界执行。
 mod process;
 /// Project/task/conversation/message 命令与启动恢复协调。
@@ -40,6 +42,10 @@ mod storyboard;
 mod taskrouter;
 /// 内部 timeline 创建、校验编辑、文字/音乐轨与版本查询。
 mod timeline;
+/// 旁白写入时间线：补画面、替换系统字幕、创建旁白轨版本。
+mod timeline_voice;
+/// ElevenLabs 配音凭据、合成、指纹缓存与 alignment 字幕。
+mod voice_provider;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -63,6 +69,10 @@ pub fn run() {
             custom_api::clear_custom_api,
             music_provider::get_jamendo_status,
             music_provider::save_jamendo_client_id,
+            music_provider::get_elevenlabs_status,
+            music_provider::save_elevenlabs_api_key,
+            music_provider::clear_elevenlabs_api_key,
+            music_provider::import_elevenlabs_api_key_from_environment,
             projects::initialize_local_store,
             projects::create_project,
             projects::list_projects,

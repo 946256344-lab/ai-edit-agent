@@ -1,11 +1,18 @@
 # 技术决策记录
 
+## ADR-075：ElevenLabs 配音是时间线时钟
+
+- 状态：已实现（2026-08-20）
+- 决策：首个 Voice Provider 是 ElevenLabs。密钥只进 Credential Manager；可用环境变量一次性导入，运行时不偷读环境变量、不注入 Chrome 会话。默认音色 Charlie；Charlie 不可用则失败并返回可用音色，禁止静默换声。`synthesize_voiceover` 对外一条工具，内部按指纹缓存、staging 原子提交、真实音频时长、画面补尾、alignment 字幕分阶段执行。HTTP 超时不自动重试。旁白 cue 时长等于完整音频；画面可以略长，不得截断口播；过长画面只警告不裁 storyboard。字幕只替换 `origin=storyboard_generated|voice_alignment`。preview 混音禁止 `-shortest`。
+- 原因：批处理编辑器已验证 `with-timestamps` 链路，也曾因旧 manifest 短于新配音而截断尾句。配音必须成为时钟，字幕必须跟 alignment，失败不得显示成功。
+- 后果：新增 `voice_provider.rs` 与 `preview_audio.rs`；时间线 JSON 加性 `voiceoverTracks`、`narrationText`、字幕 `origin`、freeze-frame 派生段。不把旁白映射进 Jianying。不把 `onScreenText` 当旁白朗读。
+
 ## ADR-074：Native 主链授权、观察完成门与确认收据
 
 - 状态：已实现（2026-08-19）
 - 决策：NativeToolLoop 默认只暴露观察工具；主链写工具必须由 `RequestToolPolicy` 根据本轮明确的创建、分析或修改意图逐项授权。loop 使用结构化 `NativeRunReceipt` 记录是否要求项目观察、是否成功观察、工具失败和确认状态；项目事实请求没有成功只读观察时不能以事实回答完成，工具失败允许模型基于安全错误自然解释但终态保持失败或部分完成。`needs_confirmation` 只创建 storyboard 待确认状态；确认命令必须匹配项目、任务、会话、待确认 storyboard、来源 task 和有效期，并在同一 SQLite 事务内消费 pending、写入确认消息和排队唯一任务，通过一次性状态防止重放或半消费。
 - 原因：模型文本不是副作用或项目事实证据；把所有写工具放入普通请求会扩大权限，把“调用过工具”当作观察会允许失败或写操作满足事实门，确认不绑定持久化 pending 会允许跨作用域或重复执行。
-- 后果：Legacy Runtime、Router、LoopGoal 默认路径和既有 `apply_skill`、SQLite 事务、版本与审计保持不变；Native 主链仅迁移六项工具。安全 fixture 覆盖中文/英文授权、伪造调用、成功/失败观察、虚假完成、确认过期和作用域重放。
+- 后果：Legacy Runtime、Router、LoopGoal 默认路径和既有 `apply_skill`、SQLite 事务、版本与审计保持不变；Native 主链仅迁移六项工具。安全 fixture 覆盖中文/英文授权、伪造调用、成功/失败观察、虚假完成、确认过期和作用域重放。「生成视频」或「生成配音」视为制作请求，授权 storyboard、内部时间线和配音，避免只有观察工具时把步骤预算耗尽。
 
 ## ADR-065：故事板选镜采用固定时间采样替代场景检测
 

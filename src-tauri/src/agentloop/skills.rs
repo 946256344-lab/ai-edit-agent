@@ -18,6 +18,7 @@ use crate::timeline::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::Path;
 use tauri::Manager;
 
@@ -37,7 +38,8 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
-        | "use_online_music" => Some("timeline"),
+        | "use_online_music"
+        | "synthesize_voiceover" => Some("timeline"),
         "render_preview" => Some("preview"),
         "create_jianying_draft" => Some("jianying_draft"),
         _ => None,
@@ -60,7 +62,8 @@ pub(super) fn persisted_artifact_for_tool(
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
-        | "use_online_music" => result
+        | "use_online_music"
+        | "synthesize_voiceover" => result
             .timeline
             .as_ref()
             .map(|artifact| ("timeline_version", artifact.id.clone())),
@@ -87,6 +90,20 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         "unavailable_media"
     } else if error.contains("time range") || error.contains("source range") {
         "invalid_source_time_range"
+    } else if error.contains("Narration text is required") {
+        "missing_narration"
+    } else if error.starts_with("storyboard_phase2") {
+        "storyboard_selection_failed"
+    } else if error.contains("ElevenLabs") || error.contains("voice Provider") {
+        if error.contains("not configured") || error.contains("Credential Manager") {
+            "voice_provider_unconfigured"
+        } else if error.contains("timed out") {
+            "voice_provider_timeout"
+        } else if error.contains("API key was rejected") {
+            "voice_provider_unauthorized"
+        } else {
+            "voice_provider_error"
+        }
     } else if error.contains("storyboard") || error.contains("timeline") {
         "missing_or_invalid_prerequisite"
     } else if error.contains("asset") || error.contains("media") {
@@ -116,8 +133,51 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "code": "missing_timeline",
             "facts": ["当前剪辑任务还没有时间线。"],
             "retryable": true,
-            "recovery": "请先调用 create_timeline_draft 创建内部时间线，然后再生成预览或剪映草稿。",
-            "responseInstruction": "Tell the user they need to create a timeline first (create_timeline_draft), then they can generate preview or Jianying draft. Do not claim the preview or draft was created."
+            "recovery": "若还没有分镜，先调用 generate_storyboard；用户确认后再调用 create_timeline_draft，然后重试当前工具。",
+            "responseInstruction": "Tell the user this step needs an internal timeline. If generate_storyboard and create_timeline_draft are available, use that path. Do not claim the requested artifact was created."
+        });
+    }
+    if code == "missing_narration" {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "voiceover_text",
+            "code": code,
+            "facts": ["Spoken narration is required; on-screen titles are not spoken."],
+            "retryable": true,
+            "recovery": "Call generate_storyboard so it writes narrationText, then retry synthesize_voiceover with text null. Do not speak onScreenText.",
+            "responseInstruction": "Tell the user voiceover was not created because there is no spoken narration yet. Generate a storyboard that writes narration, then synthesize. Do not claim voiceover was created."
+        });
+    }
+    if code == "storyboard_selection_failed" {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "storyboard_selection",
+            "code": code,
+            "facts": ["Storyboard shot selection did not finish a complete board."],
+            "retryable": true,
+            "recovery": "Retry generate_storyboard with the user's narration as brief. Do not assemble shots with list_assets or search_assets.",
+            "responseInstruction": "Tell the user the storyboard was not created. Retry generate_storyboard only. Do not claim shots were selected from a library listing."
+        });
+    }
+    if code.starts_with("voice_provider_") {
+        let retryable = code == "voice_provider_error";
+        let fact = match code {
+            "voice_provider_unconfigured" => "ElevenLabs 密钥未写入 Credential Manager。",
+            "voice_provider_unauthorized" => "ElevenLabs API key was rejected.",
+            "voice_provider_timeout" => "ElevenLabs request timed out.",
+            _ => "ElevenLabs rejected the speech request.",
+        };
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "voice_provider",
+            "code": code,
+            "facts": [fact],
+            "retryable": retryable,
+            "recovery": "Ask the user to save or import the ElevenLabs API key in settings. Do not keep listing assets or searching music.",
+            "responseInstruction": "Explain that voiceover cannot run until ElevenLabs is configured in settings. Do not claim narration was synthesized."
         });
     }
 
@@ -394,6 +454,58 @@ pub(super) fn apply_skill(
             let tracks = search_tracks(query)?;
             Ok(json!({"tool":"search_music","status":"ok","tracks":tracks}))
         }
+        "list_voices" => {
+            let voices = crate::voice_provider::list_voices_for_agent()?;
+            Ok(json!({"tool":"list_voices","status":"ok","voices":voices}))
+        }
+        "synthesize_voiceover" => {
+            let existing = select_timeline_for_tool(state, args)?;
+            let tool_text = args.get("text").and_then(Value::as_str);
+            let storyboard_text =
+                crate::voice_provider::storyboard_narration_text(state.storyboard.as_ref());
+            let text = crate::voice_provider::resolve_tool_narration_text(
+                tool_text,
+                storyboard_text.as_deref(),
+            )?;
+            let voice_id = args.get("voiceId").and_then(Value::as_str);
+            let (timeline, applied) = crate::voice_provider::synthesize_voiceover_for_timeline(
+                state.app,
+                state.connection,
+                state.project_id,
+                state.editing_task_id,
+                state.conversation_id,
+                &agent_task_id,
+                &existing,
+                &text,
+                voice_id,
+            )?;
+            let timeline_version_id = timeline.id.clone();
+            let version_number = timeline.version_number;
+            upsert(&mut state.timelines, timeline.clone());
+            state.last_outcome = Some(AgentEditResult {
+                agent_task_id,
+                message: format!(
+                    "已根据旁白生成配音并写入内部时间线 v{}。口播时长 {} ms，自动字幕 {} 条。",
+                    version_number, applied.duration_ms, applied.subtitle_cue_count
+                ),
+                storyboard: None,
+                timeline: Some(timeline),
+                preview: None,
+                jianying_draft: None,
+            });
+            Ok(json!({
+                "tool": "synthesize_voiceover",
+                "status": "ok",
+                "assetId": applied.asset_id,
+                "generationId": applied.generation_id,
+                "durationMs": applied.duration_ms,
+                "timelineVersionId": timeline_version_id,
+                "versionNumber": version_number,
+                "subtitleCueCount": applied.subtitle_cue_count,
+                "reusedCache": applied.reused_cache,
+                "qualityWarnings": applied.quality_warnings
+            }))
+        }
         "download_music" => {
             let track_id = args
                 .get("trackId")
@@ -476,8 +588,24 @@ pub(super) fn apply_skill(
                 state.app.clone(),
                 state.project_id.to_owned(),
             )?;
-            let summary: Vec<Value> = assets
-                .iter()
+            const LIST_ASSETS_AGENT_SAMPLE: usize = 20;
+            let mut counts_by_kind = BTreeMap::new();
+            let mut counts_by_analysis_status = BTreeMap::new();
+            for asset in &assets {
+                *counts_by_kind.entry(asset.kind.clone()).or_insert(0) += 1;
+                *counts_by_analysis_status
+                    .entry(asset.analysis_status.clone())
+                    .or_insert(0) += 1;
+            }
+            let mut ordered = assets.iter().collect::<Vec<_>>();
+            ordered.sort_by_key(|asset| match asset.analysis_status.as_str() {
+                "ready" => 0u8,
+                "analyzing" | "queued" => 1,
+                _ => 2,
+            });
+            let sample: Vec<Value> = ordered
+                .into_iter()
+                .take(LIST_ASSETS_AGENT_SAMPLE)
                 .map(|asset| {
                     json!({
                         "id": asset.id,
@@ -489,7 +617,12 @@ pub(super) fn apply_skill(
                     })
                 })
                 .collect();
-            Ok(json!({ "tool": "list_assets", "status": "ok", "assets": summary }))
+            Ok(compact_list_assets_observation(
+                assets.len(),
+                counts_by_kind,
+                counts_by_analysis_status,
+                sample,
+            ))
         }
         "get_asset_health_summary" => {
             let summary = crate::assets::get_asset_health_summary_for_agent(
@@ -915,5 +1048,53 @@ pub(super) fn apply_skill(
             }))
         }
         other => Err(format!("Unknown skill: {other}")),
+    }
+}
+
+/// `list_assets` 必须报告全库计数；样本只给模型看形状，筛选走 search 工具。
+fn compact_list_assets_observation(
+    total: usize,
+    counts_by_kind: BTreeMap<String, usize>,
+    counts_by_analysis_status: BTreeMap<String, usize>,
+    sample: Vec<Value>,
+) -> Value {
+    let returned = sample.len();
+    json!({
+        "tool": "list_assets",
+        "status": "ok",
+        "total": total,
+        "returned": returned,
+        "truncated": total > returned,
+        "countsByKind": counts_by_kind,
+        "countsByAnalysisStatus": counts_by_analysis_status,
+        "assets": sample,
+        "filterHint": "Inventory only. Call generate_storyboard to pick shots; it ranks five matching candidates per beat from the full ready library."
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_list_assets_observation;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn list_assets_observation_keeps_full_counts_with_a_short_sample() {
+        let mut kinds = BTreeMap::new();
+        kinds.insert("video".to_owned(), 780);
+        kinds.insert("image".to_owned(), 20);
+        let mut analysis = BTreeMap::new();
+        analysis.insert("ready".to_owned(), 790);
+        analysis.insert("failed".to_owned(), 10);
+        let sample = vec![json!({"id": "a1", "kind": "video"})];
+        let value = compact_list_assets_observation(800, kinds, analysis, sample);
+        assert_eq!(value["total"], 800);
+        assert_eq!(value["returned"], 1);
+        assert_eq!(value["truncated"], true);
+        assert_eq!(value["countsByKind"]["video"], 780);
+        assert_eq!(value["countsByAnalysisStatus"]["ready"], 790);
+        assert!(value["filterHint"]
+            .as_str()
+            .is_some_and(|text| text.contains("generate_storyboard")));
     }
 }

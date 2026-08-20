@@ -5,10 +5,11 @@
 | 系统 | 类型 | 用途 | 鉴权 | 关键性 | 证据 |
 | --- | --- | --- | --- | --- | --- |
 | SQLite | 本地数据库 | 项目、任务、消息、素材、版本、审计 | 本机文件权限 | 高 | `src-tauri/src/db.rs` |
-| Windows Credential Manager | secrets store | OAuth、自定义 API、Jamendo 凭据 | Windows 用户上下文 | 高 | `oauth.rs`、`custom_api.rs`、`music_provider.rs` |
+| Windows Credential Manager | secrets store | OAuth、自定义 API、Jamendo、ElevenLabs 凭据 | Windows 用户上下文 | 高 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`voice_provider.rs` |
 | 实验性 OpenCode 兼容 OAuth | OAuth/HTTP API | 模型访问 | loopback PKCE + token | 高、实验性 | `oauth.rs`、`provider.rs` |
 | 自定义 OpenAI-compatible API | HTTP API | 主模型/粗视觉模型 | Bearer API key | 高 | `custom_api.rs`、`provider.rs` |
 | Jamendo | HTTP API + download | 搜索/下载 CC0、CC-BY 音乐 | client ID | 中 | `music_provider.rs` |
+| ElevenLabs | HTTP API | 旁白 TTS、音色列表、alignment 字幕 | xi-api-key | 高 | `voice_provider.rs` |
 | FFmpeg / FFprobe | 本机进程 | 分析、抽帧、preview、质量检查 | 无 | 高 | `assets.rs`、`preview.rs` |
 | Tesseract | 本机进程 | OCR | 无 | 中 | `assets.rs` |
 | Python + pyJianYingDraft | 本机适配器 | Jianying draft 文件生成 | 无 | 高、实验性 | `jianying.rs`、`create_jianying_draft.py` |
@@ -29,7 +30,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 
 ## 3）凭据与数据边界
 
-- 凭据不进入 SQLite、localStorage、日志、Agent 工具结果或文档示例。
+- 凭据不进入 SQLite、localStorage、日志、Agent 工具结果或文档示例。ElevenLabs 密钥与 Jamendo/自定义 API 一样只进 Credential Manager。
 - 自定义 API 配置整体保存到 Credential Manager；读取错误不会静默回退 OAuth。
 - 模型只接收精简 prompt、证据文本和低分辨率派生帧，不接收原始媒体或本机路径。
 - Jamendo 工具只接受 API 明示允许下载且为 CC0/CC-BY 的曲目，并保留 CC-BY attribution。
@@ -60,5 +61,6 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 - `src-tauri/src/custom_api.rs`
 - `src-tauri/src/oauth.rs`
 - `src-tauri/src/music_provider.rs`
+- `src-tauri/src/voice_provider.rs`
 - `src-tauri/src/process.rs`
 - `src-tauri/tauri.conf.json`

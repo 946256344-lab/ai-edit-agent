@@ -35,6 +35,7 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "search_assets",
     "search_asset_segments",
     "search_music",
+    "list_voices",
     "get_storyboard",
     "get_timeline",
     "get_text_capabilities",
@@ -49,6 +50,7 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "download_music",
     "use_online_music",
     "replace_music_tracks",
+    "synthesize_voiceover",
     "create_jianying_draft",
 ];
 
@@ -79,7 +81,7 @@ pub(crate) fn run_native_tool_loop(
         "role": "system",
         "content": [{
             "type": "input_text",
-            "text": "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function."
+            "text": native_system_prompt(&tool_policy)
         }]
     })];
     input.extend(history);
@@ -394,6 +396,7 @@ fn merge_native_outcomes(
                 | "replace_text_tracks"
                 | "replace_music_tracks"
                 | "use_online_music"
+                | "synthesize_voiceover"
         );
         if !invalidates_preview {
             current.preview = previous.preview;
@@ -560,6 +563,7 @@ fn drive_native_loop(
             .map(str::to_owned),
     );
     let mut storyboard_confirmation_pending = false;
+    let mut tool_step_number = 0usize;
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
@@ -627,12 +631,13 @@ fn drive_native_loop(
             if cancelled() {
                 return Err("native_tool_loop_cancelled".to_owned());
             }
+            tool_step_number += 1;
             let result = if storyboard_confirmation_pending
                 && !OBSERVATION_TOOLS.contains(&call.name.as_str())
             {
                 storyboard_confirmation_required(&call.name)
             } else {
-                execute(&call, step_number)?
+                execute(&call, tool_step_number)?
             };
             let result_status = result["status"].as_str();
             if result_status == Some("needs_confirmation") {
@@ -671,6 +676,18 @@ fn drive_native_loop(
         }
     }
     Err("native_tool_loop_max_steps".to_owned())
+}
+
+fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
+    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
+    if tool_policy.native_write_authorized("generate_storyboard")
+        || tool_policy.native_write_authorized("synthesize_voiceover")
+    {
+        prompt.push_str(
+            " If the user asked for a video or voiceover, call generate_storyboard. If they supplied spoken copy, pass it as brief; if they did not, still generate the storyboard and let it write narrationText per shot. Do not assemble shots with list_assets or search_assets. After the user confirms, call synthesize_voiceover with text null so it uses storyboard narrationText. Never speak onScreenText. voiceId and timelineVersionId may be null.",
+        );
+    }
+    prompt
 }
 
 fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy) -> bool {
@@ -748,12 +765,30 @@ fn output_item_for_input(item: &ModelOutputItem, is_custom: bool) -> Option<Valu
 }
 
 const MAX_NATIVE_INPUT_CHARS: usize = 16_000;
+const MAX_NATIVE_TOOL_OUTPUT_CHARS: usize = 4_000;
+
+fn compact_oversized_tool_outputs(input: &mut [Value], max_output_chars: usize) {
+    for item in input.iter_mut() {
+        if item["type"] != "function_call_output" {
+            continue;
+        }
+        let Some(output) = item["output"].as_str() else {
+            continue;
+        };
+        if output.chars().count() <= max_output_chars {
+            continue;
+        }
+        let truncated: String = output.chars().take(max_output_chars).collect();
+        item["output"] = Value::String(format!("{truncated}…[truncated]"));
+    }
+}
 
 fn trim_native_input(input: &mut Vec<Value>, request: &str) {
     trim_native_input_to_budget(input, request, MAX_NATIVE_INPUT_CHARS);
 }
 
 fn trim_native_input_to_budget(input: &mut Vec<Value>, request: &str, max_chars: usize) {
+    compact_oversized_tool_outputs(input, MAX_NATIVE_TOOL_OUTPUT_CHARS);
     let protected_call_id = input.iter().rev().find_map(|item| {
         (item["type"] == "function_call")
             .then(|| item["call_id"].as_str().map(str::to_owned))
@@ -983,6 +1018,19 @@ fn native_tool_call_allowed(
 
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
     let mut value = serde_json::from_str::<Value>(arguments).map_err(|_| invalid_arguments())?;
+    match tool {
+        "search_assets" => {
+            coerce_blank_strings_to_null(&mut value, &["query", "kind", "tag", "collectionId"])
+        }
+        "search_asset_segments" => coerce_blank_strings_to_null(&mut value, &["assetId"]),
+        "get_timeline" | "render_preview" | "create_jianying_draft" => {
+            coerce_blank_strings_to_null(&mut value, &["timelineVersionId"]);
+        }
+        "synthesize_voiceover" => {
+            coerce_blank_strings_to_null(&mut value, &["text", "voiceId", "timelineVersionId"])
+        }
+        _ => {}
+    }
     let Some(object) = value.as_object() else {
         return Err(invalid_arguments());
     };
@@ -990,6 +1038,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "get_edit_status"
         | "get_asset_health_summary"
         | "list_assets"
+        | "list_voices"
         | "get_storyboard"
         | "get_text_capabilities"
             if object.is_empty() =>
@@ -1169,6 +1218,26 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
             Ok(value)
         }
+        "list_voices" => {
+            if object.is_empty() {
+                Ok(value)
+            } else {
+                Err(invalid_arguments())
+            }
+        }
+        "synthesize_voiceover" => {
+            if object.len() != 3
+                || !object.contains_key("text")
+                || !object.contains_key("voiceId")
+                || !object.contains_key("timelineVersionId")
+                || !nullable_bounded_string_argument(&object["text"], 5_000)
+                || !nullable_bounded_string_argument(&object["voiceId"], 200)
+                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
         "render_preview" => {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
@@ -1256,6 +1325,21 @@ fn bounded_required_string(value: &Value, max_length: usize) -> bool {
 
 fn nullable_bounded_string_argument(value: &Value, max_length: usize) -> bool {
     value.is_null() || bounded_required_string(value, max_length)
+}
+
+fn coerce_blank_strings_to_null(value: &mut Value, keys: &[&str]) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    for key in keys {
+        if object
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.trim().is_empty())
+        {
+            object.insert((*key).to_owned(), Value::Null);
+        }
+    }
 }
 
 fn nullable_timeline_id(value: &Value) -> bool {
@@ -1770,7 +1854,61 @@ mod tests {
         assert!(calls.is_empty());
         assert_eq!(requests[0]["parallel_tool_calls"], false);
         assert_eq!(requests[0]["store"], false);
-        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(9));
+        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(10));
+    }
+
+    #[test]
+    fn one_model_turn_with_two_function_calls_uses_distinct_tool_step_numbers() {
+        let call = json!({
+            "id": "resp_two_tools",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_get_timeline",
+                    "name": "get_timeline",
+                    "arguments": "{\"timelineVersionId\":null}"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_list_voices",
+                    "name": "list_voices",
+                    "arguments": "{}"
+                }
+            ]
+        })
+        .to_string();
+        let mut responses = vec![call, HELLO.to_owned()].into_iter();
+        let mut steps = Vec::new();
+        let mut names = Vec::new();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "用这个文案生成配音 Hello factory."}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(responses.next().expect("two-tool response"))
+        };
+        let mut execute = |call: &FunctionCall, step_number: usize| {
+            names.push(call.name.clone());
+            steps.push(step_number);
+            Ok::<_, String>(json!({"tool": call.name, "status": "ok"}))
+        };
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("用这个文案生成配音 Hello factory."),
+            &mut NativeRunReceipt::default(),
+            "用这个文案生成配音 Hello factory.",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("two tools in one turn");
+        assert_eq!(names, ["get_timeline", "list_voices"]);
+        assert_eq!(steps, [1, 2]);
+        assert!(message.contains("你好") || !message.trim().is_empty());
     }
 
     #[test]
@@ -2993,6 +3131,33 @@ mod tests {
     }
 
     #[test]
+    fn storyboard_phase2_failure_tells_the_model_to_retry_generate_storyboard() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            "storyboard_phase2_empty: no beat received a valid shot from its top candidates.",
+        );
+        assert_eq!(failure["code"], "storyboard_selection_failed");
+        assert_eq!(failure["retryable"], true);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("generate_storyboard")
+                && text.contains("Do not assemble shots")));
+    }
+
+    #[test]
+    fn unconfigured_voice_provider_returns_a_closed_failure() {
+        let failure = safe_tool_failure_context(
+            "list_voices",
+            "ElevenLabs voice Provider is not configured.",
+        );
+        assert_eq!(failure["code"], "voice_provider_unconfigured");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("ElevenLabs")));
+    }
+
+    #[test]
     fn render_preview_arguments_are_scope_free_and_strictly_validated() {
         assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":null}").is_ok());
         assert!(
@@ -3076,6 +3241,7 @@ mod tests {
             "replace_music_tracks",
             "download_music",
             "use_online_music",
+            "synthesize_voiceover",
             "create_jianying_draft",
         ] {
             assert!(names.contains(name));
@@ -3092,6 +3258,7 @@ mod tests {
             "replace_music_tracks",
             "download_music",
             "use_online_music",
+            "synthesize_voiceover",
             "create_jianying_draft",
         ]
         .contains(&tool["name"].as_str().unwrap())));
@@ -3175,6 +3342,19 @@ mod tests {
         assert!(
             parse_native_arguments("search_asset_segments", &segment_search.to_string()).is_ok()
         );
+        let blank_filters = parse_native_arguments(
+            "search_assets",
+            r#"{"query":"factory","kind":"video","minDurationMs":0,"maxDurationMs":30000,"minRating":0,"favoriteOnly":false,"tag":"","collectionId":"","offset":0,"limit":10}"#,
+        )
+        .expect("blank search filters become null");
+        assert!(blank_filters["tag"].is_null());
+        assert!(blank_filters["collectionId"].is_null());
+        let blank_segment = parse_native_arguments(
+            "search_asset_segments",
+            r#"{"query":"factory","assetId":"","offset":0,"limit":10}"#,
+        )
+        .expect("blank assetId becomes null");
+        assert!(blank_segment["assetId"].is_null());
         for invalid in [
             json!({"query":"street"}),
             json!({"query":"", "assetId":null, "offset":0, "limit":12}),
@@ -3203,6 +3383,18 @@ mod tests {
             parse_native_arguments("create_jianying_draft", r#"{"timelineVersionId":null}"#)
                 .is_ok()
         );
+        assert!(parse_native_arguments("list_voices", "{}").is_ok());
+        assert!(parse_native_arguments(
+            "synthesize_voiceover",
+            r#"{"text":"Hello factory.","voiceId":null,"timelineVersionId":null}"#
+        )
+        .is_ok());
+        let blank_voiceover = parse_native_arguments(
+            "synthesize_voiceover",
+            r#"{"text":"","voiceId":null,"timelineVersionId":null}"#,
+        )
+        .expect("blank narration becomes null");
+        assert!(blank_voiceover["text"].is_null());
 
         let text_tracks = json!({
             "timelineVersionId": null,
@@ -3290,6 +3482,7 @@ mod tests {
         for unauthorized in [
             "download_music",
             "use_online_music",
+            "synthesize_voiceover",
             "create_jianying_draft",
             "request_asset_analysis",
             "generate_storyboard",
@@ -3586,5 +3779,48 @@ mod tests {
         assert!(!input
             .iter()
             .any(|item| item.to_string().contains("很长的旧问题")));
+    }
+
+    #[test]
+    fn input_budget_truncates_huge_tool_output_before_dropping_current_turn() {
+        let mut input = vec![
+            json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
+            json!({"role": "user", "content": [{"type": "input_text", "text": "用这个文案生成视频"}]}),
+            json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
+            json!({"type": "function_call_output", "call_id": "call_1", "output": "x".repeat(20_000)}),
+        ];
+        trim_native_input_to_budget(&mut input, "用这个文案生成视频", 8_000);
+        let output = input
+            .iter()
+            .find(|item| item["type"] == "function_call_output")
+            .expect("kept tool output")["output"]
+            .as_str()
+            .expect("output text");
+        assert!(output.chars().count() <= MAX_NATIVE_TOOL_OUTPUT_CHARS + 20);
+        assert!(output.contains("[truncated]"));
+        assert!(input.iter().any(
+            |item| item["role"] == "user" && item["content"][0]["text"] == "用这个文案生成视频"
+        ));
+    }
+
+    #[test]
+    fn generating_a_video_exposes_storyboard_timeline_and_voiceover_tools() {
+        let policy = RequestToolPolicy::from_request("用这个文案生成视频");
+        let tools = filtered_native_tools(
+            native_function_tools_for_request(false, policy.has_native_write_authorization()),
+            &policy,
+            false,
+        );
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        for name in [
+            "generate_storyboard",
+            "create_timeline_draft",
+            "synthesize_voiceover",
+        ] {
+            assert!(names.contains(name), "{name}");
+        }
     }
 }

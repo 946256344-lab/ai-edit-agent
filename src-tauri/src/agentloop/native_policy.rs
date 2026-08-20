@@ -103,6 +103,13 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
         &["字幕", "subtitle", "subtitles", "caption", "captions"],
         &["", "加", "添加", "替换", "add", "replace", "edit"],
     );
+    let negates_voiceover = explicitly_denies_target(
+        request,
+        &["配音", "旁白", "voiceover", "tts", "narration"],
+        &[
+            "", "加", "添加", "生成", "做", "add", "create", "generate", "make",
+        ],
+    );
     let negates_preview = explicitly_denies_target(
         request,
         &["预览", "preview"],
@@ -116,6 +123,26 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
             || compact.contains("制作30秒剪辑")
             || compact.contains("makea30secondedit")
             || compact.contains("createa30secondedit"));
+    let creates_video = has_action(&["视频", "video", "影片"]);
+    let requests_voiceover = [
+        "配音",
+        "旁白",
+        "加旁白",
+        "加配音",
+        "生成配音",
+        "voiceover",
+        "narration",
+        "texttospeech",
+        "synthesizevoiceover",
+    ]
+    .iter()
+    .any(|phrase| compact.contains(phrase));
+    let wants_voiceover = !negates_voiceover
+        && (creates_edit
+            || creates_video
+            || has_action(&["timeline", "时间线"])
+            || requests_voiceover);
+    let wants_production = creates_edit || creates_video || wants_voiceover;
     let explains_preview = compact.starts_with("解释")
         || compact.starts_with("说明")
         || compact.starts_with("explain")
@@ -125,10 +152,10 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
     if analysis {
         tools.push("request_asset_analysis");
     }
-    if creates_edit || has_action(&["storyboard", "分镜"]) {
+    if wants_production || has_action(&["storyboard", "分镜"]) {
         tools.push("generate_storyboard");
     }
-    if creates_edit || has_action(&["timeline", "时间线"]) {
+    if wants_production || has_action(&["timeline", "时间线"]) {
         tools.push("create_timeline_draft");
     }
     if compact.contains("replaceclips") || compact.contains("替换片段") {
@@ -214,6 +241,9 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
     {
         tools.push("replace_music_tracks");
     }
+    if wants_voiceover {
+        tools.push("synthesize_voiceover");
+    }
     if [
         "创建剪映草稿",
         "生成剪映草稿",
@@ -255,11 +285,11 @@ fn explicitly_denies_native_tool(request: &str, tool: &str) -> bool {
             &["分析", "重新分析", "analyze", "reanalyze", "request", "run"],
         ),
         "generate_storyboard" => denied(
-            &["storyboard", "分镜"],
+            &["storyboard", "分镜", "视频", "video", "影片"],
             &["生成", "创建", "制作", "generate", "create", "make"],
         ),
         "create_timeline_draft" => denied(
-            &["timeline", "时间线"],
+            &["timeline", "时间线", "视频", "video", "影片"],
             &["生成", "创建", "制作", "generate", "create", "make"],
         ),
         "replace_clips" => denied(&["片段", "clips"], &["替换", "replace", "swap"]),
@@ -293,6 +323,30 @@ fn explicitly_denies_native_tool(request: &str, tool: &str) -> bool {
         "replace_music_tracks" => denied(
             &["音乐", "背景音乐", "music", "backgroundmusic"],
             &["替换", "编辑", "replace", "edit"],
+        ),
+        "synthesize_voiceover" => denied(
+            &[
+                "配音",
+                "旁白",
+                "voiceover",
+                "tts",
+                "narration",
+                "视频",
+                "video",
+                "影片",
+            ],
+            &[
+                "加",
+                "添加",
+                "生成",
+                "做",
+                "合成",
+                "add",
+                "create",
+                "generate",
+                "make",
+                "synthesize",
+            ],
         ),
         "render_preview" => denied(
             &["预览", "preview"],
@@ -361,7 +415,8 @@ mod tests {
                 "generate_storyboard",
                 "create_timeline_draft",
                 "replace_text_tracks",
-                "render_preview"
+                "render_preview",
+                "synthesize_voiceover"
             ]
         );
         assert!(super::request_requires_project_observation(
@@ -397,6 +452,7 @@ mod tests {
             ("不要替换背景音乐", "replace_music_tracks"),
             ("不要生成预览", "render_preview"),
             ("不要创建剪映草稿", "create_jianying_draft"),
+            ("不要配音", "synthesize_voiceover"),
             ("Do not generate a storyboard", "generate_storyboard"),
             ("Do not create a timeline", "create_timeline_draft"),
             ("Do not download music", "download_music"),
@@ -406,5 +462,44 @@ mod tests {
                 "negated request authorized {denied_tool}: {request}"
             );
         }
+    }
+
+    #[test]
+    fn voiceover_is_authorized_for_edits_unless_denied() {
+        assert!(
+            explicitly_requested_native_tools("把这段文案配音").contains(&"synthesize_voiceover")
+        );
+        assert!(explicitly_requested_native_tools("做 30 秒剪辑").contains(&"synthesize_voiceover"));
+        assert!(!explicitly_requested_native_tools("做 30 秒剪辑，不要配音")
+            .contains(&"synthesize_voiceover"));
+        assert!(
+            !explicitly_requested_native_tools("素材有多少个").contains(&"synthesize_voiceover")
+        );
+    }
+
+    #[test]
+    fn generating_a_video_or_voiceover_authorizes_the_main_chain() {
+        assert_eq!(
+            explicitly_requested_native_tools("用这个文案生成视频"),
+            [
+                "generate_storyboard",
+                "create_timeline_draft",
+                "synthesize_voiceover"
+            ]
+        );
+        assert_eq!(
+            explicitly_requested_native_tools("用这个文案生成配音 Hello factory."),
+            [
+                "generate_storyboard",
+                "create_timeline_draft",
+                "synthesize_voiceover"
+            ]
+        );
+        assert_eq!(
+            explicitly_requested_native_tools("生成视频，不要配音"),
+            ["generate_storyboard", "create_timeline_draft"]
+        );
+        assert!(explicitly_requested_native_tools("不要生成视频").is_empty());
+        assert!(explicitly_requested_native_tools("不要配音").is_empty());
     }
 }

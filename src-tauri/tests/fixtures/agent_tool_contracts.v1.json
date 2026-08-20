@@ -127,6 +127,26 @@
       "returns": ["eligible_tracks"]
     },
     {
+      "name": "list_voices",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "configured_elevenlabs_voice_provider",
+        "resolution": "lists voices for the stored API key without synthesizing audio"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again; the loop does not automatically retry",
+      "preconditions": ["ElevenLabs API key is configured"],
+      "produces": [],
+      "returns": ["voices"]
+    },
+    {
       "name": "get_storyboard",
       "version": 1,
       "kind": "observation",
@@ -543,6 +563,41 @@
       "preconditions": ["a scoped timeline exists", "all audio assets are ready in the current project"],
       "produces": ["timeline_version", "operation_log"],
       "returns": ["timelineVersionId"]
+    },
+    {
+      "name": "synthesize_voiceover",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "text": { "type": ["string", "null"] },
+          "voiceId": { "type": ["string", "null"] },
+          "timelineVersionId": { "type": ["string", "null"] }
+        },
+        "required": ["text", "voiceId", "timelineVersionId"]
+      },
+      "scope": {
+        "boundary": "timeline_in_current_editing_task",
+        "resolution": "synthesizes narration, fits picture to voiceover duration, and replaces generated subtitles"
+      },
+      "sideEffect": true,
+      "idempotency": "fingerprint_cached_generation_then_new_timeline_version",
+      "retryPolicy": "do not automatically retry HTTP; identical fingerprints reuse the cached generation",
+      "preconditions": [
+        "a scoped timeline exists",
+        "explicit narration text or storyboard narrationText is present",
+        "ElevenLabs API key is configured"
+      ],
+      "produces": ["audio_asset", "timeline_version", "operation_log"],
+      "returns": [
+        "assetId",
+        "generationId",
+        "durationMs",
+        "timelineVersionId",
+        "subtitleCueCount",
+        "reusedCache"
+      ]
     },
     {
       "name": "render_preview",

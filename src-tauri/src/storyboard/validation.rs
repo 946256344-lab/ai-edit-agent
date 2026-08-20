@@ -79,6 +79,7 @@ mod tests {
                 id: "beat-1".to_owned(),
                 purpose: "test".to_owned(),
                 required_visual: "test visual".to_owned(),
+                narration: String::new(),
             }],
             uncovered_beat_ids: vec![],
             shots: vec![StoryboardShot {
@@ -86,6 +87,7 @@ mod tests {
                 duration_ms: 5_000,
                 purpose: "test shot".to_owned(),
                 on_screen_text: String::new(),
+                narration_text: String::new(),
                 asset_id: "asset-1".to_owned(),
                 source_start_ms: 0,
                 source_end_ms: 5_000,

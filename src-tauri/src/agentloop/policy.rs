@@ -15,6 +15,7 @@ pub(super) const OBSERVATION_TOOLS: &[&str] = &[
     "search_assets",
     "search_asset_segments",
     "search_music",
+    "list_voices",
     "get_storyboard",
     "get_timeline",
     "get_text_capabilities",
@@ -32,6 +33,7 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "reorder_clips",
     "replace_text_tracks",
     "replace_music_tracks",
+    "synthesize_voiceover",
     "render_preview",
     "create_jianying_draft",
 ];

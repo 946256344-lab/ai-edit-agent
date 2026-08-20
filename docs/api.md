@@ -65,6 +65,10 @@
 | `clear_custom_api` | 无 | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
 | `get_jamendo_status` | 无 | `JamendoStatus` | 只检查 Windows Credential Manager 中是否存在可读取的 Jamendo client ID，返回 `connected` 或 `disconnected`。 |
 | `save_jamendo_client_id` | `{ clientId }` | `JamendoStatus` | 将非空 Jamendo client ID 写入 Windows Credential Manager；失败时只返回 `failed`，不回传凭据。 |
+| `get_elevenlabs_status` | 无 | `ElevenLabsStatus` | 返回密钥是否已存、音色列表是否可读、可空的 TTS 授权探测和安全错误码；不返回 API Key。 |
+| `save_elevenlabs_api_key` | `{ apiKey }` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
+| `clear_elevenlabs_api_key` | 无 | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |
+| `import_elevenlabs_api_key_from_environment` | 无 | `ElevenLabsStatus` | 当凭据库未配置时，从本机 `ELEVENLABS_API_KEY` 导入一次；不在每次 HTTP 时偷读环境变量。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 
@@ -151,12 +155,13 @@ NativeToolLoop 中，`render_preview` 只会在当前请求包含明确的预览
 | `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
 | `request_asset_analysis` | Native `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
-| `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。 |
-| `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
-| `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `sourceStartMs/sourceEndMs`、安全视觉标签、固定命中原因和游标；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
+| `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
+| `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
+| `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `sourceStartMs/sourceEndMs`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
-| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。 |
+| `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
+| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。内部先生成 beats，再对每个 beat 从全库排序取 5 个匹配预选并读关键帧后挑选，直到分镜填满或诚实留空。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
@@ -164,6 +169,7 @@ NativeToolLoop 中，`render_preview` 只会在当前请求包含明确的预览
 | `change_clip_duration` | Native `{ timelineVersionId: string|null, adjustments: [{ shotIndex, newDurationMs: number|null, newSourceStartMs: number|null }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
 | `reorder_clips` | Native `{ timelineVersionId: string|null, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
 | `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
+| `synthesize_voiceover` | `{ text, voiceId, timelineVersionId }` 均可空；空 `text` 用 storyboard `narrationText` | 已实现：ElevenLabs `with-timestamps` 合成旁白。用户没给文案时由 storyboard 撰写 `narrationText`。禁止朗读 `onScreenText`。真实音频时长写入 `voiceoverTracks`，画面不得短于口播，alignment 只替换系统生成字幕。相同指纹复用缓存；HTTP 超时不自动重试。 |
 “分析素材”“重新分析视频/图片/媒体文件”等请求由 NativeToolLoop 在请求级权限允许时自主选择观察或分析工具；没有独立对话 Router 替模型决定首个工具。澄清通过模型自然语言和持久化确认状态表达，不使用 `ask_user`/`finish` 控制动作。
 
 ### `replace_music_tracks`
@@ -223,7 +229,7 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 
 2026-08-19：优化 `projects.rs::recover_missing_agent_completion_messages` 查询性能。用窗口函数（`ROW_NUMBER() OVER PARTITION BY`）+ CTE 替代相关子查询，将查询复杂度从 O(N²) 降至 O(N log N)。原查询在有几百条任务记录时耗时 ~300ms（占启动总时间 80%），优化后预期降至 <20ms。查询语义完全等价，不影响公开命令或 SQLite schema。
 - 除 OpenAI 兼容 chat/completions 外，其他模型 Provider 适配器 schema。
-- 用户提供的 voice API 鉴权、请求体、音色选择、响应和异步任务处理。
+- 用户提供的 voice API 鉴权、请求体、音色选择、响应和异步任务处理。（首个 ElevenLabs 适配器已落地；其他 Voice Provider 契约仍待定。）
 
 ## 开发期文档同步 Harness
 

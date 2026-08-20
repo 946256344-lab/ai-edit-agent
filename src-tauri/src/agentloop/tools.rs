@@ -13,6 +13,7 @@ const LIST_ASSETS: &str = "list_assets";
 const SEARCH_ASSETS: &str = "search_assets";
 const SEARCH_ASSET_SEGMENTS: &str = "search_asset_segments";
 const SEARCH_MUSIC: &str = "search_music";
+const LIST_VOICES: &str = "list_voices";
 const GET_STORYBOARD: &str = "get_storyboard";
 #[allow(dead_code)]
 const GET_TIMELINE: &str = "get_timeline";
@@ -29,6 +30,7 @@ const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
 const DOWNLOAD_MUSIC: &str = "download_music";
 const USE_ONLINE_MUSIC: &str = "use_online_music";
 const REPLACE_MUSIC_TRACKS: &str = "replace_music_tracks";
+const SYNTHESIZE_VOICEOVER: &str = "synthesize_voiceover";
 const CREATE_JIANYING_DRAFT: &str = "create_jianying_draft";
 
 /// 只读原生工具保持独立入口，供 NativeToolLoop 的默认观察集合复用。
@@ -60,13 +62,13 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             LIST_ASSETS,
-            "List the current project's persisted asset status summaries without starting analysis.",
+            "Inventory counts and a short sample only. Do not use this to pick storyboard shots.",
             json!({}),
             Vec::new(),
         ),
         function_tool(
             SEARCH_ASSETS,
-            "Search current-project assets with bounded metadata filters without starting analysis.",
+            "Filter the full current-project library by text, kind, duration, rating, tag, or collection. Returns one page plus total and nextOffset.",
             json!({
                 "query": nullable_bounded_string("Optional text matched against persisted searchable metadata.", 200),
                 "kind": {
@@ -106,7 +108,7 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             SEARCH_ASSET_SEGMENTS,
-            "Search verified scene and source-time evidence within current-project video or image assets.",
+            "Filter verified scene and source-time evidence across the full current-project video or image library.",
             json!({
                 "query": {
                     "type": "string",
@@ -119,6 +121,12 @@ pub(crate) fn native_function_tools_for_request(
                 "limit": bounded_page_integer("Maximum source ranges to return.", 1, 20)
             }),
             vec!["query", "assetId", "offset", "limit"],
+        ),
+        function_tool(
+            LIST_VOICES,
+            "List ElevenLabs voices available to the configured voice Provider without synthesizing audio.",
+            json!({}),
+            Vec::new(),
         ),
         function_tool(
             SEARCH_MUSIC,
@@ -197,7 +205,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Generate an evidence-bound storyboard from analyzed media and the current editing brief.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read five matching candidates, and pick one until every beat is filled or honestly uncovered. If the user gave no copy, still write spoken narration. Never use onScreenText as voiceover.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
@@ -331,6 +339,21 @@ fn delivery_function_tools() -> Vec<Value> {
                 }
             }),
             vec!["timelineVersionId", "musicTracks"],
+        ),
+        function_tool(
+            SYNTHESIZE_VOICEOVER,
+            "Synthesize narration with ElevenLabs, fit picture duration to the voiceover, and replace generated subtitles using alignment. Pass narration text explicitly; do not speak on-screen titles.",
+            json!({
+                "text": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 5000,
+                    "description": "Spoken narration. Null uses storyboard narrationText when present. Never use onScreenText."
+                },
+                "voiceId": nullable_bounded_string("Optional ElevenLabs voice id; null selects Charlie when available.", 200),
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version.")
+            }),
+            vec!["text", "voiceId", "timelineVersionId"],
         ),
         function_tool(
             CREATE_JIANYING_DRAFT,
@@ -694,6 +717,7 @@ mod tests {
             "download_music",
             "use_online_music",
             "replace_music_tracks",
+            "synthesize_voiceover",
             "create_jianying_draft",
         ] {
             assert!(names.contains(name), "missing {name}");

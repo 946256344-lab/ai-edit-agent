@@ -1,9 +1,10 @@
 //! 从已持久化 timeline 生成可重建的低清 preview；不负责最终导出或覆盖用户文件。
 use crate::db::open_connection;
 use crate::models::{
-    MusicTrack, PreviewQualityCheck, PreviewQualityReport, PreviewResult, TextAnimation, TextCue,
-    TextTrack, TimelineClip, TimelineContent,
+    PreviewQualityCheck, PreviewQualityReport, PreviewResult, TextAnimation, TextCue, TextTrack,
+    TimelineClip,
 };
+use crate::preview_audio::mix_preview_audio;
 use crate::process::hidden_command;
 use crate::timeline::load_timeline_version;
 use rusqlite::params;
@@ -34,10 +35,33 @@ fn render_timeline_clip(
     // 填充黑帧或静帧（源时长 < 槽位时长时会发生这种情况）。
     let timeline_duration_ms = clip.timeline_end_ms - clip.timeline_start_ms;
     let source_duration_ms = clip.source_end_ms - clip.source_start_ms;
-    let duration = timeline_duration_ms.min(source_duration_ms) as f64 / 1000.0;
+    let freeze = clip.clip_kind == "freeze_frame";
+    let duration = if freeze {
+        timeline_duration_ms as f64 / 1000.0
+    } else {
+        timeline_duration_ms.min(source_duration_ms) as f64 / 1000.0
+    };
     let mut command = hidden_command("ffmpeg");
     command.args(["-y", "-hide_banner", "-loglevel", "error"]);
-    if kind == "video" {
+    if freeze && kind == "video" {
+        let frame_path = destination.with_extension("jpg");
+        let status = hidden_command("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-ss"])
+            .arg(format!("{:.3}", clip.source_start_ms as f64 / 1000.0))
+            .arg("-i")
+            .arg(source)
+            .args(["-frames:v", "1"])
+            .arg(&frame_path)
+            .status()
+            .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
+        if !status.success() {
+            return Err("FFmpeg could not extract a freeze-frame.".to_owned());
+        }
+        command
+            .args(["-loop", "1", "-i"])
+            .arg(&frame_path)
+            .args(["-t", &format!("{duration:.3}")]);
+    } else if kind == "video" {
         command
             .args([
                 "-ss",
@@ -237,117 +261,6 @@ fn ass_filter_path(path: &Path) -> String {
         .replace('\\', "/")
         .replace(':', "\\:")
         .replace('\'', "\\'")
-}
-
-fn music_filter_for_cue(input_index: usize, cue: &crate::models::MusicCue) -> String {
-    let source_duration_ms = cue.source_end_ms - cue.source_start_ms;
-    let timeline_duration_ms = cue.timeline_end_ms - cue.timeline_start_ms;
-    let mut filter = format!(
-        "[{input_index}:a]aresample=48000,atrim=start={:.3}:end={:.3},asetpts=PTS-STARTPTS",
-        cue.source_start_ms as f64 / 1000.0,
-        cue.source_end_ms as f64 / 1000.0,
-    );
-    if cue.loop_enabled {
-        let loop_count = (timeline_duration_ms + source_duration_ms - 1) / source_duration_ms - 1;
-        filter.push_str(&format!(
-            ",aloop=loop={loop_count}:size={},atrim=duration={:.3},asetpts=PTS-STARTPTS",
-            source_duration_ms * 48,
-            timeline_duration_ms as f64 / 1000.0,
-        ));
-    } else {
-        filter.push_str(&format!(
-            ",atrim=duration={:.3}",
-            timeline_duration_ms as f64 / 1000.0,
-        ));
-    }
-    filter.push_str(&format!(",volume={:.3}", cue.volume));
-    if cue.fade_in_ms > 0 {
-        filter.push_str(&format!(
-            ",afade=t=in:st=0:d={:.3}",
-            cue.fade_in_ms as f64 / 1000.0
-        ));
-    }
-    if cue.fade_out_ms > 0 {
-        filter.push_str(&format!(
-            ",afade=t=out:st={:.3}:d={:.3}",
-            (timeline_duration_ms - cue.fade_out_ms) as f64 / 1000.0,
-            cue.fade_out_ms as f64 / 1000.0
-        ));
-    }
-    filter.push_str(&format!(
-        ",adelay={}:all=1[music{}]",
-        cue.timeline_start_ms,
-        input_index - 1
-    ));
-    filter
-}
-
-fn mix_music_tracks(
-    connection: &rusqlite::Connection,
-    project_id: &str,
-    video_path: &Path,
-    output_path: &Path,
-    tracks: &[MusicTrack],
-) -> Result<bool, String> {
-    let cues = tracks
-        .iter()
-        .filter(|track| track.enabled)
-        .flat_map(|track| track.cues.iter())
-        .collect::<Vec<_>>();
-    if cues.is_empty() {
-        return Ok(false);
-    }
-    let mut command = hidden_command("ffmpeg");
-    command
-        .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
-        .arg(video_path);
-    let mut filters = Vec::new();
-    for (index, cue) in cues.iter().enumerate() {
-        let source: String = connection.query_row(
-            "SELECT source_reference FROM assets WHERE id = ?1 AND project_id = ?2 AND kind = 'audio'",
-            params![cue.asset_id, project_id], |row| row.get(0),
-        ).map_err(|_| "Music cue references an unavailable audio asset.".to_owned())?;
-        if !Path::new(&source).is_file() {
-            return Err("Music source media is no longer available.".to_owned());
-        }
-        command.arg("-i").arg(source);
-        filters.push(music_filter_for_cue(index + 1, cue));
-    }
-    let labels = (0..cues.len())
-        .map(|index| format!("[music{index}]"))
-        .collect::<String>();
-    if cues.len() == 1 {
-        filters.push("[music0]anull[aout]".to_owned());
-    } else {
-        filters.push(format!(
-            "{labels}amix=inputs={}:normalize=0[aout]",
-            cues.len()
-        ));
-    }
-    command
-        .args([
-            "-filter_complex",
-            &filters.join(";"),
-            "-map",
-            "0:v:0",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-shortest",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(output_path);
-    let status = command
-        .status()
-        .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
-    status
-        .success()
-        .then_some(true)
-        .ok_or_else(|| "FFmpeg could not mix music into the preview.".to_owned())
 }
 
 fn inspect_preview_quality(
@@ -562,17 +475,19 @@ pub fn render_preview(
             return Err("FFmpeg could not render text tracks in the preview.".to_owned());
         }
     }
-    if !timeline.music_tracks.is_empty() {
+    if !timeline.music_tracks.is_empty() || !timeline.voiceover_tracks.is_empty() {
         let mixed_path = directory.join("preview_mixed.mp4");
-        if mix_music_tracks(
+        if mix_preview_audio(
             &connection,
             &timeline.project_id,
             &preview_path,
             &mixed_path,
             &timeline.music_tracks,
+            &timeline.voiceover_tracks,
+            timeline.visual_duration_ms(),
         )? {
             fs::rename(&mixed_path, &preview_path)
-                .map_err(|_| "Could not finalize the music preview.".to_owned())?;
+                .map_err(|_| "Could not finalize the mixed preview.".to_owned())?;
         }
     }
     let quality_report = inspect_preview_quality(
@@ -581,13 +496,10 @@ pub fn render_preview(
         &rendered,
         &timeline.text_tracks,
     );
-    let content_json = serde_json::to_string(&TimelineContent {
-        clips: timeline.clips.clone(),
-        text_tracks: timeline.text_tracks.clone(),
-        music_tracks: timeline.music_tracks.clone(),
-        quality_report: Some(quality_report.clone()),
-    })
-    .map_err(|error| error.to_string())?;
+    let mut timeline_for_store = timeline.clone();
+    timeline_for_store.quality_report = Some(quality_report.clone());
+    let content_json = serde_json::to_string(&timeline_for_store.to_content())
+        .map_err(|error| error.to_string())?;
     connection
         .execute(
             "UPDATE timeline_versions SET status = 'preview_ready', content_json = ?1 WHERE id = ?2",

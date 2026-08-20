@@ -1,5 +1,5 @@
-//! Jamendo 音乐搜索、授权资格、下载与凭据状态适配器。
-//! 下载后的音频仍通过素材模块登记并进入本地分析与审计流程。
+//! Jamendo 音乐与 ElevenLabs 配音的凭据、有界 HTTP 适配器。
+//! 下载后的音频仍通过素材模块登记并进入本地分析与审计流程；TTS 领域算法在 voice_provider。
 
 use crate::assets::store_downloaded_audio;
 use crate::models::Asset;
@@ -215,9 +215,226 @@ pub fn save_jamendo_client_id(client_id: String) -> JamendoStatus {
     }
 }
 
+const ELEVENLABS_ACCOUNT: &str = "elevenlabs-voice-provider";
+const ELEVENLABS_API_ROOT: &str = "https://api.elevenlabs.io/v1";
+const ELEVENLABS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElevenLabsStatus {
+    pub key_stored: bool,
+    pub voices_readable: bool,
+    pub tts_authorized: Option<bool>,
+    pub last_error_code: Option<String>,
+    pub importable: bool,
+}
+
+fn elevenlabs_entry() -> Result<Entry, String> {
+    Entry::new(CREDENTIAL_SERVICE, ELEVENLABS_ACCOUNT)
+        .map_err(|_| "ElevenLabs Credential Manager is unavailable.".to_owned())
+}
+
+fn elevenlabs_stored_key() -> Result<String, String> {
+    elevenlabs_entry()?
+        .get_password()
+        .map_err(|_| "ElevenLabs voice Provider is not configured.".to_owned())
+        .and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Err("ElevenLabs voice Provider is not configured.".to_owned())
+            } else {
+                Ok(trimmed.to_owned())
+            }
+        })
+}
+
+fn elevenlabs_environment_key() -> Option<String> {
+    std::env::var("ELEVENLABS_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn elevenlabs_json_request(
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let api_key = elevenlabs_stored_key()?;
+    let url = format!("{ELEVENLABS_API_ROOT}{path}");
+    let mut request = if method == "POST" {
+        ureq::post(&url)
+    } else {
+        ureq::get(&url)
+    };
+    request = request
+        .set("xi-api-key", &api_key)
+        .set("Accept", "application/json")
+        .timeout(ELEVENLABS_TIMEOUT);
+    let result = if let Some(payload) = body {
+        request
+            .set("Content-Type", "application/json")
+            .send_string(&payload.to_string())
+    } else {
+        request.call()
+    };
+    match result {
+        Ok(response) => response
+            .into_string()
+            .map_err(|_| "ElevenLabs returned an invalid JSON response.".to_owned())
+            .and_then(|body| {
+                serde_json::from_str(&body)
+                    .map_err(|_| "ElevenLabs returned an invalid JSON response.".to_owned())
+            }),
+        Err(ureq::Error::Status(code, response)) => {
+            let detail = response.into_string().unwrap_or_default();
+            Err(classify_elevenlabs_http_error(code, &detail))
+        }
+        Err(ureq::Error::Transport(transport)) => {
+            let message = transport.to_string().to_ascii_lowercase();
+            if message.contains("timed out") || message.contains("timeout") {
+                Err("ElevenLabs request timed out.".to_owned())
+            } else {
+                Err("ElevenLabs is unavailable.".to_owned())
+            }
+        }
+    }
+}
+
+fn classify_elevenlabs_http_error(code: u16, detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    if code == 402 && lower.contains("paid_plan_required") {
+        return "This ElevenLabs voice requires a paid plan. Choose Charlie or another premade voice.".to_owned();
+    }
+    if code == 401 {
+        return "ElevenLabs API key was rejected.".to_owned();
+    }
+    if lower.contains("voices_read") {
+        return "voices_read_missing".to_owned();
+    }
+    if code == 400 {
+        if lower.contains("voice") {
+            return "ElevenLabs rejected the selected voice.".to_owned();
+        }
+        if lower.contains("model") {
+            return "ElevenLabs rejected the selected model.".to_owned();
+        }
+        return "ElevenLabs rejected the speech request.".to_owned();
+    }
+    format!("ElevenLabs API error {code}.")
+}
+
+fn elevenlabs_error_code(error: &str) -> String {
+    if error.contains("timed out") {
+        "timeout".to_owned()
+    } else if error.contains("rejected") {
+        "unauthorized".to_owned()
+    } else if error.contains("paid plan") {
+        "paid_plan_required".to_owned()
+    } else if error == "voices_read_missing" {
+        error.to_owned()
+    } else {
+        "elevenlabs_error".to_owned()
+    }
+}
+
+#[tauri::command]
+pub fn get_elevenlabs_status() -> ElevenLabsStatus {
+    let key_stored = elevenlabs_stored_key().is_ok();
+    let importable = !key_stored && elevenlabs_environment_key().is_some();
+    if !key_stored {
+        return ElevenLabsStatus {
+            key_stored: false,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: None,
+            importable,
+        };
+    }
+    match elevenlabs_json_request("GET", "/voices", None) {
+        Ok(_) => ElevenLabsStatus {
+            key_stored: true,
+            voices_readable: true,
+            tts_authorized: None,
+            last_error_code: None,
+            importable: false,
+        },
+        Err(error) if error == "voices_read_missing" => ElevenLabsStatus {
+            key_stored: true,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: Some(error),
+            importable: false,
+        },
+        Err(error) => ElevenLabsStatus {
+            key_stored: true,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: Some(elevenlabs_error_code(&error)),
+            importable: false,
+        },
+    }
+}
+
+#[tauri::command]
+pub fn save_elevenlabs_api_key(api_key: String) -> ElevenLabsStatus {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return ElevenLabsStatus {
+            key_stored: false,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: Some("empty_key".to_owned()),
+            importable: elevenlabs_environment_key().is_some(),
+        };
+    }
+    if elevenlabs_entry()
+        .and_then(|entry| {
+            entry
+                .set_password(trimmed)
+                .map_err(|_| "Could not save ElevenLabs credentials.".to_owned())
+        })
+        .is_err()
+    {
+        return ElevenLabsStatus {
+            key_stored: false,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: Some("credential_store_failed".to_owned()),
+            importable: elevenlabs_environment_key().is_some(),
+        };
+    }
+    get_elevenlabs_status()
+}
+
+#[tauri::command]
+pub fn clear_elevenlabs_api_key() -> ElevenLabsStatus {
+    if let Ok(entry) = elevenlabs_entry() {
+        let _ = entry.delete_credential();
+    }
+    get_elevenlabs_status()
+}
+
+#[tauri::command]
+pub fn import_elevenlabs_api_key_from_environment() -> ElevenLabsStatus {
+    if elevenlabs_stored_key().is_ok() {
+        return get_elevenlabs_status();
+    }
+    let Some(api_key) = elevenlabs_environment_key() else {
+        return ElevenLabsStatus {
+            key_stored: false,
+            voices_readable: false,
+            tts_authorized: None,
+            last_error_code: Some("environment_key_missing".to_owned()),
+            importable: false,
+        };
+    };
+    save_elevenlabs_api_key(api_key)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{allowed, attribution_for, JamendoTrack};
+    use super::{allowed, attribution_for, classify_elevenlabs_http_error, JamendoTrack};
 
     fn track(license_ccurl: &str, audiodownload_allowed: bool) -> JamendoTrack {
         JamendoTrack {
@@ -228,6 +445,18 @@ mod tests {
             license_ccurl: license_ccurl.to_owned(),
             audiodownload_allowed,
         }
+    }
+
+    #[test]
+    fn elevenlabs_http_400_is_classified_without_echoing_the_body() {
+        let error = classify_elevenlabs_http_error(
+            400,
+            r#"{"detail":{"status":"voice_not_found","message":"secret"}}"#,
+        );
+        assert!(error.contains("voice"));
+        assert!(!error.contains("secret"));
+        let generic = classify_elevenlabs_http_error(400, r#"{"detail":"bad request"}"#);
+        assert_eq!(generic, "ElevenLabs rejected the speech request.");
     }
 
     #[test]

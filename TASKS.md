@@ -3,15 +3,19 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：「生成视频/配音」步骤耗尽修复。授权 storyboard+时间线+配音；有界 list_assets；空串当 null；Chat 工具消息合并；配音失败码。198 个库测试通过。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
+- [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：ElevenLabs 文案转配音。配音是时钟、字幕跟 alignment、失败封闭、密钥进 Credential Manager。191 个 Rust 库测试、lint/build、agent/harness 通过；真机合成未跑。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
 - [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
 - [x] 完成（2026-08-20，fix/isolate-resolver-from-sibling-tasks）：Task Resolver 只看见当前激活任务；兄弟任务 title/brief/active_subgoal 不再进入路由模型。见 `docs/changes/2026-08-20-isolate-resolver-from-sibling-tasks.md`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
 - [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
 - [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
-- [x] 完成（2026-08-19，native-observation-tools）：迁移剩余只读观察工具到 Native Function Tool 目录。见 `docs/changes/2026-08-19-native-observation-tools.md`。
-- [x] 完成（2026-08-19，native-preview）：Native 安全接入 render_preview。见 `docs/changes/2026-08-19-native-render-preview.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-19，native-observation-tools）：迁移剩余只读观察工具到 Native Function Tool 目录。见 `docs/changes/2026-08-19-native-observation-tools.md`。
+
+- [x] 完成（2026-08-19，native-preview）：Native 安全接入 render_preview。见 `docs/changes/2026-08-19-native-render-preview.md`。
 
 - [x] 完成（2026-08-19，native-memory）：NativeToolLoop 从 SQLite 按时间读取真实 user/assistant 消息，以原生 function_call/function_call_output 维持观察上下文；保留 Legacy 默认路径。133 个 Rust 库测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-session-messages.md`。
 - [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。

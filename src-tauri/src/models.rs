@@ -301,8 +301,30 @@ pub struct TimelineVersion {
     pub clips: Vec<TimelineClip>,
     pub text_tracks: Vec<TextTrack>,
     pub music_tracks: Vec<MusicTrack>,
+    #[serde(default)]
+    pub voiceover_tracks: Vec<VoiceoverTrack>,
     pub quality_report: Option<PreviewQualityReport>,
     pub created_at: i64,
+}
+
+impl TimelineVersion {
+    pub(crate) fn to_content(&self) -> TimelineContent {
+        TimelineContent {
+            clips: self.clips.clone(),
+            text_tracks: self.text_tracks.clone(),
+            music_tracks: self.music_tracks.clone(),
+            voiceover_tracks: self.voiceover_tracks.clone(),
+            quality_report: self.quality_report.clone(),
+        }
+    }
+
+    pub(crate) fn visual_duration_ms(&self) -> i64 {
+        self.clips
+            .iter()
+            .map(|clip| clip.timeline_end_ms)
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -345,12 +367,70 @@ fn default_music_jianying_compatibility() -> String {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VoiceoverTrack {
+    pub id: String,
+    pub enabled: bool,
+    pub cues: Vec<VoiceoverCue>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceoverCue {
+    pub id: String,
+    pub asset_id: String,
+    pub generation_id: String,
+    pub source_start_ms: i64,
+    pub source_end_ms: i64,
+    pub timeline_start_ms: i64,
+    pub timeline_end_ms: i64,
+    pub volume: f64,
+    pub fade_in_ms: i64,
+    pub fade_out_ms: i64,
+    pub provider: String,
+    pub voice_id: String,
+    pub voice_name: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextTrack {
     pub id: String,
     pub role: String,
     pub layer: i64,
     pub enabled: bool,
+    #[serde(default = "default_text_origin")]
+    pub origin: String,
+    #[serde(default)]
+    pub generation_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub editable: bool,
+    #[serde(default)]
+    pub locked: bool,
     pub cues: Vec<TextCue>,
+}
+
+fn default_text_origin() -> String {
+    "storyboard_generated".to_owned()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for TextTrack {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            role: "subtitle".to_owned(),
+            layer: 1,
+            enabled: true,
+            origin: default_text_origin(),
+            generation_id: None,
+            editable: true,
+            locked: false,
+            cues: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -466,6 +546,33 @@ pub struct TimelineClip {
     pub timeline_start_ms: i64,
     pub timeline_end_ms: i64,
     pub on_screen_text: String,
+    #[serde(default = "default_clip_kind")]
+    pub clip_kind: String,
+    #[serde(default)]
+    pub derived_from_shot_index: Option<i64>,
+    #[serde(default)]
+    pub fit_reason: Option<String>,
+}
+
+fn default_clip_kind() -> String {
+    "source".to_owned()
+}
+
+impl Default for TimelineClip {
+    fn default() -> Self {
+        Self {
+            shot_index: 0,
+            asset_id: String::new(),
+            source_start_ms: 0,
+            source_end_ms: 0,
+            timeline_start_ms: 0,
+            timeline_end_ms: 0,
+            on_screen_text: String::new(),
+            clip_kind: default_clip_kind(),
+            derived_from_shot_index: None,
+            fit_reason: None,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -476,6 +583,8 @@ pub struct TimelineContent {
     pub(crate) text_tracks: Vec<TextTrack>,
     #[serde(default)]
     pub(crate) music_tracks: Vec<MusicTrack>,
+    #[serde(default)]
+    pub(crate) voiceover_tracks: Vec<VoiceoverTrack>,
     #[serde(default)]
     pub(crate) quality_report: Option<PreviewQualityReport>,
 }
@@ -635,6 +744,8 @@ pub struct StoryboardShot {
     pub duration_ms: i64,
     pub purpose: String,
     pub on_screen_text: String,
+    #[serde(default)]
+    pub narration_text: String,
     pub asset_id: String,
     pub source_start_ms: i64,
     pub source_end_ms: i64,
@@ -655,6 +766,9 @@ pub struct StoryboardBeat {
     pub id: String,
     pub purpose: String,
     pub required_visual: String,
+    /// 该 beat 的口播文案。用户没给文案时由 Phase 1 撰写；不得用 onScreenText 代替。
+    #[serde(default)]
+    pub narration: String,
 }
 
 #[derive(Deserialize, Serialize)]

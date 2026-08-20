@@ -60,10 +60,13 @@ src/main.tsx
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |
 | `storyboard.rs` | 证据候选、模型提案、校验和版本 |
 | `timeline.rs` | 时间线版本、镜头/文本/音乐编辑和查询 |
+| `timeline_voice.rs` | 旁白写入、画面补尾、系统字幕替换 |
 | `preview.rs` | FFmpeg 渲染、文本/音乐合成、质量检查 |
+| `preview_audio.rs` | 旁白与 BGM 混音；禁止 `-shortest` |
 | `jianying.rs` | 新草稿创建和延迟注册 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
-| `oauth.rs`、`custom_api.rs`、`music_provider.rs` | 外部集成和凭据 |
+| `oauth.rs`、`custom_api.rs`、`music_provider.rs` | 外部集成和凭据；ElevenLabs 密钥/HTTP 在 `music_provider.rs` |
+| `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
 | `db.rs`、`models.rs`、`audit.rs`、`process.rs` | 数据库、边界类型、审计、外部进程基础设施 |
 
 ## 5）命名与组织规则

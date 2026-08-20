@@ -9,6 +9,7 @@ export type AgentObservationToolName =
   | 'search_assets'
   | 'search_asset_segments'
   | 'search_music'
+  | 'list_voices'
   | 'get_storyboard'
   | 'get_timeline'
   | 'get_text_capabilities'
@@ -24,6 +25,7 @@ export type AgentSideEffectToolName =
   | 'reorder_clips'
   | 'replace_text_tracks'
   | 'replace_music_tracks'
+  | 'synthesize_voiceover'
   | 'render_preview'
   | 'create_jianying_draft'
 

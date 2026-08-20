@@ -365,7 +365,12 @@ fn chat_turn_from_value(value: &Value) -> Option<ModelTurn> {
             .unwrap_or("assistant")
             .to_owned();
         let content = chat_message_content(message.get("content"));
-        if !content.is_empty() || message.get("tool_calls").is_none() {
+        let has_visible_text = content.iter().any(|item| {
+            item.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+        });
+        if has_visible_text || message.get("tool_calls").is_none() {
             output.push(ModelOutputItem::Message {
                 id: message.get("id").and_then(Value::as_str).map(str::to_owned),
                 role,
@@ -681,6 +686,9 @@ fn response_input_messages(payload: &Value) -> Value {
                     .last_mut()
                     .filter(|last| last["role"] == "assistant")
                 {
+                    if !last.get("tool_calls").is_some_and(Value::is_array) {
+                        last["tool_calls"] = json!([]);
+                    }
                     if let Some(tool_calls) = last["tool_calls"].as_array_mut() {
                         tool_calls.push(tool_call);
                         continue;
@@ -1173,6 +1181,40 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_chat_content_with_tool_calls_is_not_a_message() {
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "\n\n",
+                    "tool_calls": [
+                        {
+                            "id": "call_timeline",
+                            "type": "function",
+                            "function": {
+                                "name": "get_timeline",
+                                "arguments": "{\"timelineVersionId\":null}"
+                            }
+                        },
+                        {
+                            "id": "call_voices",
+                            "type": "function",
+                            "function": {"name": "list_voices", "arguments": "{}"}
+                        }
+                    ]
+                }
+            }]
+        })
+        .to_string();
+        let turn = model_turn_from_chat_completions(&body).expect("parse whitespace tool turn");
+        assert!(turn
+            .output
+            .iter()
+            .all(|item| item.function_call().is_some()));
+        assert_eq!(turn.function_calls().count(), 2);
+    }
+
+    #[test]
     fn chat_stream_fixture_accumulates_tool_call_deltas() {
         let chunks: Vec<Value> =
             serde_json::from_str(CHAT_TOOL_STREAM).expect("parse Chat stream fixture");
@@ -1261,6 +1303,38 @@ mod tests {
             Some(1)
         );
         assert_eq!(request["messages"][2]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn chat_assistant_text_and_function_calls_merge_into_one_message() {
+        let payload = json!({
+            "store": false,
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "用这个文案生成视频"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "先查看当前分镜。"}]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_storyboard",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "{\"status\":\"ok\"}"
+                }
+            ]
+        });
+        let request = chat_completions_request(&custom_config(""), &payload);
+        let messages = request["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["tool_calls"].as_array().map(Vec::len), Some(1));
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_1");
     }
 
     #[test]

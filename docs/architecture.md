@@ -20,13 +20,14 @@
 | FFmpeg preview（含文本轨 ASS / 音乐混音）| ✅ 已实现 | |
 | Jianying 仅视频 + 受限文本草稿 | ✅ 已实现（实验性）| |
 | Jamendo 在线音乐下载 | ✅ 已实现（实验性）| Jianying UI 试听待验收 |
+| ElevenLabs 文案转配音 | ✅ 已实现 | 密钥进 Credential Manager；旁白轨 + alignment 字幕 + preview 混音 |
 | Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
 | 视觉质量评分 / 语义重复检测 | ⚠️ 部分实现 | 仅单帧低分辨率候选 |
 | 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
 | Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
-| Voice API | ❌ TODO | 契约待获取 |
+| Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
 | Windows CI / 远端分支保护 | ❌ TODO | |
 
 ## 当前组成
@@ -117,7 +118,7 @@ Windows 桌面应用（Tauri + React）
 |- 本地工具服务（部分实现）
 |  |- 导入、FFprobe/FFmpeg/Tesseract 分析、时间线、preview
 |  |- Jianying 仅视频适配器
-|  `- 音频、字幕、生产运行时供应、voice Provider TODO
+|  `- 音频、字幕、ElevenLabs 配音、生产运行时供应 TODO
 |
 |- 模型 Provider（部分实现）
 |  |- 实验性 OpenCode 兼容 OAuth/PKCE
@@ -257,6 +258,10 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 前端会在 Agent 对话工作区展示当前时间线文本 cue 的文案、时间、已解析文本预设、字体、入场和出场模板与 Jianying 兼容状态，供用户审阅模型实际落地的文本设计，而不读取或同步其他 Jianying 草稿。
 
 文本轨的 `layer` 是可交付的叠放语义：local preview 把它写入 ASS event layer，Jianying adapter 按 layer 创建独立且命名的文本轨。一个文本轨内不允许 cue 时间重叠，以匹配 Jianying 轨道段的约束；不同 layer 可以重叠并按层级显示。
+
+## 配音（ElevenLabs，2026-08-20）
+
+有明确旁白文案时默认合成配音。用户只说配音、没给文案时，`generate_storyboard` 仍为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。「生成视频」或「生成配音」会授权 storyboard、内部时间线和 `synthesize_voiceover`；没有时间线时必须先走分镜确认，不能靠观察工具耗尽步骤。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从全库取出 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空。可空字符串参数把空串当成 null。
 
 ## 本地音乐轨（2026-08-12）
 

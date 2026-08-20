@@ -76,6 +76,39 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.customApiStatus.state === 'connected' && (
           <button className="outline-button modal-button" onClick={actions.disconnectCustomApi}>清除自定义 API</button>
         )}
+
+        <div className="provider-divider" />
+        <div className="provider-option chosen">
+          <span>
+            <strong>配音（ElevenLabs）</strong>
+            <small>API Key 只保存在 Windows 凭据库。保存后只探测音色列表，不会合成扣费。</small>
+          </span>
+          <b>{model.elevenLabsStatus.keyStored ? (model.elevenLabsStatus.voicesReadable ? '已连接' : '密钥已存') : '未配置'}</b>
+        </div>
+        <p className="oauth-status">
+          {model.elevenLabsStatus.lastErrorCode
+            ? `配音状态：${model.elevenLabsStatus.lastErrorCode}`
+            : model.elevenLabsStatus.keyStored
+              ? '已保存密钥。'
+              : model.elevenLabsStatus.importable
+                ? '检测到本机环境变量，可以导入。'
+                : '尚未配置。'}
+        </p>
+        <form className="custom-api-form" onSubmit={actions.saveElevenLabsKey}>
+          <label>
+            <span>ElevenLabs API Key</span>
+            <input type="password" value={model.form.elevenLabsKey} onChange={(event) => actions.setElevenLabsKey(event.target.value)} placeholder="xi-..." autoComplete="off" />
+          </label>
+          <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.elevenLabsKey.trim()}>
+            {model.isSavingVoice ? '保存中' : '保存配音密钥'}
+          </button>
+        </form>
+        {model.elevenLabsStatus.importable && (
+          <button className="outline-button modal-button" onClick={actions.importElevenLabsKey} disabled={model.isSavingVoice}>从环境变量导入</button>
+        )}
+        {model.elevenLabsStatus.keyStored && (
+          <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>清除配音密钥</button>
+        )}
         <button className="outline-button modal-button" onClick={actions.close}>关闭</button>
       </section>
     </div>

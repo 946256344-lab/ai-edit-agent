@@ -20,8 +20,8 @@
 ## 外部边界
 
 - 所有 Windows 外部进程通过 `process::hidden_command` 创建，不得在业务模块直接 `Command::new`。素材分析已有硬超时；preview/Jianying 的部分同步交付调用仍无超时（已知债务，见 `docs/codebase/CONCERNS.md` §3 `preview/Jianying 部分同步进程无超时`）。新增或修改长运行调用时必须补超时/取消边界或记录明确 `TODO`，不得声称现状已全部覆盖。
-- Credential Manager 访问只属于 `oauth.rs`、`custom_api.rs` 和 `music_provider.rs`。模型 Provider 凭据必须区分不存在与读取失败，读取失败时封闭；Jamendo 当前仍把两者都投影为 `disconnected`，这是已知债务，不得把它写成已解决。
-- HTTP/网络传输只属于 `provider.rs`、`oauth.rs` 和 `music_provider.rs`；模型 Provider 选择统一经 `ModelAccess`。
+- Credential Manager 访问只属于 `oauth.rs`、`custom_api.rs` 和 `music_provider.rs`。模型 Provider 凭据必须区分不存在与读取失败，读取失败时封闭；Jamendo 当前仍把两者都投影为 `disconnected`，这是已知债务，不得把它写成已解决。ElevenLabs 密钥由 `music_provider.rs` 读写，失败必须封闭，不得在合成模块偷读环境变量或静默换音色。
+- HTTP/网络传输只属于 `provider.rs`、`oauth.rs` 和 `music_provider.rs`；模型 Provider 选择统一经 `ModelAccess`。ElevenLabs HTTP 也走 `music_provider.rs`，超时不得自动重试。
 - 日志、诊断、错误和审计不得包含 prompt、模型响应原文、会话内容、媒体证据、凭据或完整本机路径。
 - Jianying 只创建唯一新 draft；不得覆盖或反向同步。
 

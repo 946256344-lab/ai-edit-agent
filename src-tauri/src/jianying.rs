@@ -467,6 +467,10 @@ mod tests {
                 role: "subtitle".to_owned(),
                 layer: 1,
                 enabled: true,
+                origin: "storyboard_generated".to_owned(),
+                generation_id: None,
+                editable: true,
+                locked: false,
                 cues: vec![TextCue {
                     id: "cue-1".to_owned(),
                     template_id: None,
@@ -500,6 +504,7 @@ mod tests {
                 }],
             }],
             music_tracks: Vec::new(),
+            voiceover_tracks: Vec::new(),
             quality_report: None,
             created_at: 1,
         }

@@ -1,4 +1,4 @@
-// 前端唯一的应用 Tauri command bridge：集中公开类型和静态命令名，不承载 UI 状态。
+// 前端唯一 Tauri command bridge：公开类型与静态命令名，不承载UI状态。
 import { invoke } from '@tauri-apps/api/core'
 
 export type StoreStatus = { databaseReady: boolean; schemaVersion: number }
@@ -20,6 +20,8 @@ export type CustomApiStatus = {
   model: string | null
   coarseVisualModel: string | null
 }
+
+export type ElevenLabsStatus = { keyStored: boolean; voicesReadable: boolean; ttsAuthorized: boolean | null; lastErrorCode: string | null; importable: boolean }
 
 export type StoredProject = { id: string; name: string; createdAt: number; updatedAt: number }
 
@@ -304,115 +306,43 @@ function requireDesktopRuntime() {
   }
 }
 
-export async function initializeLocalStore() {
-  requireDesktopRuntime()
-  return invoke<StoreStatus>('initialize_local_store')
-}
+export async function initializeLocalStore() { requireDesktopRuntime(); return invoke<StoreStatus>('initialize_local_store') }
 
-export async function getExperimentalOpenAIOAuthStatus() {
-  requireDesktopRuntime()
-  return invoke<ExperimentalOAuthStatus>('get_experimental_openai_oauth_status')
-}
+export async function getExperimentalOpenAIOAuthStatus() { requireDesktopRuntime(); return invoke<ExperimentalOAuthStatus>('get_experimental_openai_oauth_status') }
 
-export async function startExperimentalOpenAIOAuth() {
-  requireDesktopRuntime()
-  return invoke<ExperimentalOAuthStart>('start_experimental_openai_oauth')
-}
+export async function startExperimentalOpenAIOAuth() { requireDesktopRuntime(); return invoke<ExperimentalOAuthStart>('start_experimental_openai_oauth') }
+export async function clearExperimentalOpenAIOAuth() { requireDesktopRuntime(); return invoke<ExperimentalOAuthStatus>('clear_experimental_openai_oauth') }
+export async function getCustomApiStatus() { requireDesktopRuntime(); return invoke<CustomApiStatus>('get_custom_api_status') }
+export async function saveCustomApi(baseUrl: string, model: string, coarseVisualModel: string, apiKey: string) { requireDesktopRuntime(); return invoke<CustomApiStatus>('save_custom_api', { baseUrl, model, coarseVisualModel, apiKey }) }
+export async function clearCustomApi() { requireDesktopRuntime(); return invoke<CustomApiStatus>('clear_custom_api') }
 
-export async function clearExperimentalOpenAIOAuth() {
-  requireDesktopRuntime()
-  return invoke<ExperimentalOAuthStatus>('clear_experimental_openai_oauth')
-}
+export async function getElevenLabsStatus() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('get_elevenlabs_status') }
+export async function saveElevenLabsApiKey(apiKey: string) { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('save_elevenlabs_api_key', { apiKey }) }
+export async function clearElevenLabsApiKey() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('clear_elevenlabs_api_key') }
+export async function importElevenLabsApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('import_elevenlabs_api_key_from_environment') }
 
-export async function getCustomApiStatus() {
-  requireDesktopRuntime()
-  return invoke<CustomApiStatus>('get_custom_api_status')
-}
-
-export async function saveCustomApi(baseUrl: string, model: string, coarseVisualModel: string, apiKey: string) {
-  requireDesktopRuntime()
-  return invoke<CustomApiStatus>('save_custom_api', { baseUrl, model, coarseVisualModel, apiKey })
-}
-
-export async function clearCustomApi() {
-  requireDesktopRuntime()
-  return invoke<CustomApiStatus>('clear_custom_api')
-}
-
-export async function listProjects() {
-  requireDesktopRuntime()
-  return invoke<StoredProject[]>('list_projects')
-}
-
-export async function createProject(name: string) {
-  requireDesktopRuntime()
-  return invoke<StoredProject>('create_project', { name })
-}
+export async function listProjects() { requireDesktopRuntime(); return invoke<StoredProject[]>('list_projects') }
+export async function createProject(name: string) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name }) }
 
 export async function listConversations(projectId: string, editingTaskId?: string) {
   requireDesktopRuntime()
   return invoke<StoredConversation[]>('list_conversations', { projectId, editingTaskId })
 }
 
-export async function createConversation(projectId: string, editingTaskId: string, title: string) {
-  requireDesktopRuntime()
-  return invoke<StoredConversation>('create_conversation', { projectId, editingTaskId, title })
-}
+export async function createConversation(projectId: string, editingTaskId: string, title: string) { requireDesktopRuntime(); return invoke<StoredConversation>('create_conversation', { projectId, editingTaskId, title }) }
+export async function createEditingTask(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingTask>('create_editing_task', { projectId, title }) }
+export async function createEditingSession(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingSession>('create_editing_session', { projectId, title }) }
+export async function listEditingSessions(projectId: string) { requireDesktopRuntime(); return invoke<StoredEditingSession[]>('list_editing_sessions', { projectId }) }
 
-export async function createEditingTask(projectId: string, title: string) {
-  requireDesktopRuntime()
-  return invoke<StoredEditingTask>('create_editing_task', { projectId, title })
-}
+export async function listEditingTasks(projectId: string) { requireDesktopRuntime(); return invoke<StoredEditingTask[]>('list_editing_tasks', { projectId }) }
+export async function updateEditingTaskBrief(editingTaskId: string, brief: string) { requireDesktopRuntime(); return invoke<void>('update_editing_task_brief', { editingTaskId, brief }) }
+export async function listMessages(conversationId: string) { requireDesktopRuntime(); return invoke<StoredMessage[]>('list_messages', { conversationId }) }
 
-export async function createEditingSession(projectId: string, title: string) {
-  requireDesktopRuntime()
-  return invoke<StoredEditingSession>('create_editing_session', { projectId, title })
-}
-
-export async function listEditingSessions(projectId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredEditingSession[]>('list_editing_sessions', { projectId })
-}
-
-export async function listEditingTasks(projectId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredEditingTask[]>('list_editing_tasks', { projectId })
-}
-
-export async function updateEditingTaskBrief(editingTaskId: string, brief: string) {
-  requireDesktopRuntime()
-  return invoke<void>('update_editing_task_brief', { editingTaskId, brief })
-}
-
-export async function listMessages(conversationId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredMessage[]>('list_messages', { conversationId })
-}
-
-export async function createMessage(conversationId: string, role: StoredMessage['role'], content: string, routeReceipt?: string) {
-  requireDesktopRuntime()
-  return invoke<StoredMessage>('create_message', { conversationId, role, content, routeReceipt })
-}
-
-export async function setConversationStatus(conversationId: string, status: StoredConversation['status']) {
-  requireDesktopRuntime()
-  return invoke<void>('set_conversation_status', { conversationId, status })
-}
-
-export async function importAssets(projectId: string, sourceReferences: string[]) {
-  requireDesktopRuntime()
-  return invoke<StoredAsset[]>('import_assets', { projectId, sourceReferences })
-}
-
-export async function importAssetFolder(projectId: string, sourceDirectory: string) {
-  requireDesktopRuntime()
-  return invoke<StoredAsset[]>('import_asset_folder', { projectId, sourceDirectory })
-}
-
-export async function previewAssetRelink(projectId: string, sourceDirectory: string) {
-  requireDesktopRuntime()
-  return invoke<AssetRelinkPreview>('preview_asset_relink', { projectId, sourceDirectory })
-}
+export async function createMessage(conversationId: string, role: StoredMessage['role'], content: string, routeReceipt?: string) { requireDesktopRuntime(); return invoke<StoredMessage>('create_message', { conversationId, role, content, routeReceipt }) }
+export async function setConversationStatus(conversationId: string, status: StoredConversation['status']) { requireDesktopRuntime(); return invoke<void>('set_conversation_status', { conversationId, status }) }
+export async function importAssets(projectId: string, sourceReferences: string[]) { requireDesktopRuntime(); return invoke<StoredAsset[]>('import_assets', { projectId, sourceReferences }) }
+export async function importAssetFolder(projectId: string, sourceDirectory: string) { requireDesktopRuntime(); return invoke<StoredAsset[]>('import_asset_folder', { projectId, sourceDirectory }) }
+export async function previewAssetRelink(projectId: string, sourceDirectory: string) { requireDesktopRuntime(); return invoke<AssetRelinkPreview>('preview_asset_relink', { projectId, sourceDirectory }) }
 
 export async function confirmAssetRelink(projectId: string, sourceDirectory: string, assetIds: string[], preserveAnalysis: boolean) {
   requireDesktopRuntime()
@@ -422,129 +352,64 @@ export async function confirmAssetRelink(projectId: string, sourceDirectory: str
 export async function previewCollectProjectMedia(projectId: string) { requireDesktopRuntime(); return invoke<CollectProjectMediaPreview>('preview_collect_project_media', { projectId }) }
 export async function collectProjectMedia(projectId: string, destinationDirectory: string) { requireDesktopRuntime(); return invoke<CollectProjectMediaResult>('collect_project_media', { projectId, destinationDirectory }) }
 
-export async function listAssets(projectId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredAsset[]>('list_assets', { projectId })
-}
+export async function listAssets(projectId: string) { requireDesktopRuntime(); return invoke<StoredAsset[]>('list_assets', { projectId }) }
 
 export async function listAssetPage(projectId: string, options: { search?: string; kind?: StoredAsset['kind']; analysisStatus?: StoredAsset['analysisStatus']; visualStatus?: StoredAsset['visualAnalysisStatus'] | 'storyboard-ready'; directoryKey?: string; userFilter?: 'favorite' | 'excluded' | 'available'; collectionId?: string; offset: number; limit: number }) {
   requireDesktopRuntime()
   return invoke<AssetPage>('list_asset_page', { projectId, ...options })
 }
 
-export async function getAssetTaskCenter(projectId: string) {
-  requireDesktopRuntime()
-  return invoke<AssetTaskCenter>('get_asset_task_center', { projectId })
-}
+export async function getAssetTaskCenter(projectId: string) { requireDesktopRuntime(); return invoke<AssetTaskCenter>('get_asset_task_center', { projectId }) }
 
 export async function getAssetHealthScanSummary(projectId: string) { requireDesktopRuntime(); return invoke<AssetHealthScanSummary>('get_asset_health_scan_summary', { projectId }) }
 export async function startAssetHealthScan(projectId: string) { requireDesktopRuntime(); return invoke<{ taskId: string }>('start_asset_health_scan', { projectId }) }
 export async function cancelAssetHealthScan(projectId: string, taskId: string) { requireDesktopRuntime(); return invoke<void>('cancel_asset_health_scan', { projectId, taskId }) }
 
-export async function retryAssetAnalysisBatch(projectId: string, assetIds: string[]) {
-  requireDesktopRuntime()
-  return invoke<BatchAssetActionResult>('retry_asset_analysis_batch', { projectId, assetIds })
-}
+export async function retryAssetAnalysisBatch(projectId: string, assetIds: string[]) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('retry_asset_analysis_batch', { projectId, assetIds }) }
 
-export async function skipAssetVisualAnalysisBatch(projectId: string, assetIds: string[]) {
-  requireDesktopRuntime()
-  return invoke<BatchAssetActionResult>('skip_asset_visual_analysis_batch', { projectId, assetIds })
-}
+export async function skipAssetVisualAnalysisBatch(projectId: string, assetIds: string[]) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('skip_asset_visual_analysis_batch', { projectId, assetIds }) }
 
 export async function updateAssetUserMetadataBatch(projectId: string, assetIds: string[], fields: { favorite?: boolean; rating?: number; note?: string; excluded?: boolean }) {
   requireDesktopRuntime()
   return invoke<BatchAssetActionResult>('update_asset_user_metadata_batch', { projectId, assetIds, ...fields })
 }
 
-export async function addAssetTagBatch(projectId: string, assetIds: string[], tag: string) {
-  requireDesktopRuntime()
-  return invoke<BatchAssetActionResult>('add_asset_tag_batch', { projectId, assetIds, tag })
-}
-
-export async function removeAssetTagBatch(projectId: string, assetIds: string[], tag: string) {
-  requireDesktopRuntime()
-  return invoke<BatchAssetActionResult>('remove_asset_tag_batch', { projectId, assetIds, tag })
-}
-
-export async function createAssetCollection(projectId: string, name: string) {
-  requireDesktopRuntime()
-  return invoke<AssetCollection>('create_asset_collection', { projectId, name })
-}
-
-export async function listAssetCollections(projectId: string) {
-  requireDesktopRuntime()
-  return invoke<AssetCollection[]>('list_asset_collections', { projectId })
-}
+export async function addAssetTagBatch(projectId: string, assetIds: string[], tag: string) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('add_asset_tag_batch', { projectId, assetIds, tag }) }
+export async function removeAssetTagBatch(projectId: string, assetIds: string[], tag: string) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('remove_asset_tag_batch', { projectId, assetIds, tag }) }
+export async function createAssetCollection(projectId: string, name: string) { requireDesktopRuntime(); return invoke<AssetCollection>('create_asset_collection', { projectId, name }) }
+export async function listAssetCollections(projectId: string) { requireDesktopRuntime(); return invoke<AssetCollection[]>('list_asset_collections', { projectId }) }
 
 export async function addAssetsToCollection(projectId: string, collectionId: string, assetIds: string[]) {
   requireDesktopRuntime()
   return invoke<BatchAssetActionResult>('add_assets_to_collection', { projectId, collectionId, assetIds })
 }
 
-export async function getAssetEvidence(assetId: string) {
-  requireDesktopRuntime()
-  return invoke<AssetEvidence>('get_asset_evidence', { assetId })
+export async function getAssetEvidence(assetId: string) { requireDesktopRuntime(); return invoke<AssetEvidence>('get_asset_evidence', { assetId })
 }
 
-export async function generateStoryboard(projectId: string, editingTaskId: string, brief: string) {
-  requireDesktopRuntime()
-  return invoke<StoryboardVersion>('generate_storyboard', { projectId, editingTaskId, brief })
-}
+export async function generateStoryboard(projectId: string, editingTaskId: string, brief: string) { requireDesktopRuntime(); return invoke<StoryboardVersion>('generate_storyboard', { projectId, editingTaskId, brief }) }
+export async function getLatestStoryboard(projectId: string, editingTaskId: string) { requireDesktopRuntime(); return invoke<StoryboardVersion | null>('get_latest_storyboard', { projectId, editingTaskId }) }
+export async function createTimelineDraft(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<TimelineVersion>('create_timeline_draft', { projectId, storyboardVersionId }) }
 
-export async function getLatestStoryboard(projectId: string, editingTaskId: string) {
-  requireDesktopRuntime()
-  return invoke<StoryboardVersion | null>('get_latest_storyboard', { projectId, editingTaskId })
-}
-
-export async function createTimelineDraft(projectId: string, storyboardVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<TimelineVersion>('create_timeline_draft', { projectId, storyboardVersionId })
-}
-
-export async function getLatestTimeline(projectId: string, storyboardVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<LatestTimeline | null>('get_latest_timeline', { projectId, storyboardVersionId })
-}
+export async function getLatestTimeline(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<LatestTimeline | null>('get_latest_timeline', { projectId, storyboardVersionId }) }
 
 export async function listTimelineVersions(projectId: string, editingTaskId: string, storyboardVersionId: string) {
   requireDesktopRuntime()
   return invoke<TimelineVersion[]>('list_timeline_versions', { projectId, editingTaskId, storyboardVersionId })
 }
 
-export async function listAgentTasks(projectId: string, editingTaskId: string, conversationId?: string) {
-  requireDesktopRuntime()
-  return invoke<StoredAgentTask[]>('list_agent_tasks', { projectId, editingTaskId, conversationId })
-}
+export async function listAgentTasks(projectId: string, editingTaskId: string, conversationId?: string) { requireDesktopRuntime(); return invoke<StoredAgentTask[]>('list_agent_tasks', { projectId, editingTaskId, conversationId }) }
 
-export async function listAgentRunSteps(projectId: string, editingTaskId: string, agentTaskId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredAgentRunStep[]>('list_agent_run_steps', { projectId, editingTaskId, agentTaskId })
-}
+export async function listAgentRunSteps(projectId: string, editingTaskId: string, agentTaskId: string) { requireDesktopRuntime(); return invoke<StoredAgentRunStep[]>('list_agent_run_steps', { projectId, editingTaskId, agentTaskId }) }
 
-export async function listAgentDiagnostics(projectId: string, editingTaskId: string, agentTaskId: string) {
-  requireDesktopRuntime()
-  return invoke<StoredAgentDiagnostic[]>('list_agent_diagnostics', { projectId, editingTaskId, agentTaskId })
-}
+export async function listAgentDiagnostics(projectId: string, editingTaskId: string, agentTaskId: string) { requireDesktopRuntime(); return invoke<StoredAgentDiagnostic[]>('list_agent_diagnostics', { projectId, editingTaskId, agentTaskId }) }
 
-export async function listOperationLogs(projectId: string, editingTaskId: string, agentTaskId?: string) {
-  requireDesktopRuntime()
-  return invoke<StoredOperationLog[]>('list_operation_logs', { projectId, editingTaskId, agentTaskId })
-}
+export async function listOperationLogs(projectId: string, editingTaskId: string, agentTaskId?: string) { requireDesktopRuntime(); return invoke<StoredOperationLog[]>('list_operation_logs', { projectId, editingTaskId, agentTaskId }) }
 
-export async function renderPreview(timelineVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<PreviewResult>('render_preview', { timelineVersionId })
-}
+export async function renderPreview(timelineVersionId: string) { requireDesktopRuntime(); return invoke<PreviewResult>('render_preview', { timelineVersionId }) }
+export async function createJianyingDraft(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingDraftResult>('create_jianying_draft', { timelineVersionId }) }
 
-export async function createJianyingDraft(timelineVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<JianyingDraftResult>('create_jianying_draft', { timelineVersionId })
-}
-
-export async function getJianyingRegistrationStatus(timelineVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<JianyingRegistrationStatus | null>('get_jianying_registration_status', { timelineVersionId })
-}
+export async function getJianyingRegistrationStatus(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingRegistrationStatus | null>('get_jianying_registration_status', { timelineVersionId }) }
 
 export async function executeAgentEdit(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string) {
   requireDesktopRuntime()

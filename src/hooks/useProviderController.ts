@@ -5,13 +5,17 @@ import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   clearCustomApi,
+  clearElevenLabsApiKey,
   clearExperimentalOpenAIOAuth,
   getCustomApiStatus,
+  getElevenLabsStatus,
   getExperimentalOpenAIOAuthStatus,
+  importElevenLabsApiKeyFromEnvironment,
   saveCustomApi,
+  saveElevenLabsApiKey,
   startExperimentalOpenAIOAuth,
 } from '../lib/local-store'
-import type { CustomApiStatus, ExperimentalOAuthStatus } from '../lib/local-store'
+import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus } from '../lib/local-store'
 
 const DISCONNECTED_OAUTH: ExperimentalOAuthStatus = {
   state: 'disconnected',
@@ -27,6 +31,14 @@ const DISCONNECTED_CUSTOM_API: CustomApiStatus = {
   coarseVisualModel: null,
 }
 
+const DISCONNECTED_ELEVENLABS: ElevenLabsStatus = {
+  keyStored: false,
+  voicesReadable: false,
+  ttsAuthorized: null,
+  lastErrorCode: null,
+  importable: false,
+}
+
 /**
  * Owns provider connection UI state. Credential values cross the Tauri bridge
  * only during explicit save/clear actions; persistence and provider selection
@@ -40,7 +52,10 @@ export function useProviderController(desktopRuntime: boolean) {
   const [model, setModel] = useState('')
   const [coarseVisualModel, setCoarseVisualModel] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [elevenLabsStatus, setElevenLabsStatus] = useState<ElevenLabsStatus>(DISCONNECTED_ELEVENLABS)
+  const [elevenLabsKey, setElevenLabsKey] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [isSavingVoice, setIsSavingVoice] = useState(false)
 
   useEffect(() => {
     if (!desktopRuntime) return
@@ -68,6 +83,16 @@ export function useProviderController(desktopRuntime: boolean) {
         baseUrl: null,
         model: null,
         coarseVisualModel: null,
+      }))
+  }, [desktopRuntime])
+
+  useEffect(() => {
+    if (!desktopRuntime) return
+    void getElevenLabsStatus()
+      .then(setElevenLabsStatus)
+      .catch(() => setElevenLabsStatus({
+        ...DISCONNECTED_ELEVENLABS,
+        lastErrorCode: 'status_unreadable',
       }))
   }, [desktopRuntime])
 
@@ -131,18 +156,54 @@ export function useProviderController(desktopRuntime: boolean) {
     }
   }
 
+  async function saveVoiceKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsSavingVoice(true)
+    try {
+      const status = await saveElevenLabsApiKey(elevenLabsKey.trim()).catch(() => ({
+        ...DISCONNECTED_ELEVENLABS,
+        lastErrorCode: 'save_failed',
+      }))
+      setElevenLabsStatus(status)
+      if (status.keyStored) setElevenLabsKey('')
+    } finally {
+      setIsSavingVoice(false)
+    }
+  }
+
+  async function importVoiceKey() {
+    setIsSavingVoice(true)
+    try {
+      setElevenLabsStatus(await importElevenLabsApiKeyFromEnvironment().catch(() => ({
+        ...DISCONNECTED_ELEVENLABS,
+        lastErrorCode: 'import_failed',
+      })))
+    } finally {
+      setIsSavingVoice(false)
+    }
+  }
+
+  async function clearVoiceKey() {
+    setElevenLabsStatus(await clearElevenLabsApiKey().catch(() => ({
+      ...DISCONNECTED_ELEVENLABS,
+      lastErrorCode: 'clear_failed',
+    })))
+  }
+
   return {
     model: {
       isOpen,
       oauthStatus,
       customApiStatus,
+      elevenLabsStatus,
       isSaving,
+      isSavingVoice,
       providerLabel: customApiStatus.state === 'connected'
         ? '自定义 API 已连接'
         : oauthStatus.state === 'connected'
           ? 'GPT OAuth 已连接'
           : '模型未连接',
-      form: { baseUrl, model, coarseVisualModel, apiKey },
+      form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey },
     },
     actions: {
       open: () => setIsOpen(true),
@@ -151,6 +212,10 @@ export function useProviderController(desktopRuntime: boolean) {
       disconnectOAuth: () => void disconnectOAuth(),
       saveCustomApi: (event: FormEvent<HTMLFormElement>) => void saveCustomConnection(event),
       disconnectCustomApi: () => void disconnectCustomApi(),
+      saveElevenLabsKey: (event: FormEvent<HTMLFormElement>) => void saveVoiceKey(event),
+      importElevenLabsKey: () => void importVoiceKey(),
+      clearElevenLabsKey: () => void clearVoiceKey(),
+      setElevenLabsKey,
       setBaseUrl,
       setModel,
       setCoarseVisualModel,

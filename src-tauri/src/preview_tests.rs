@@ -1,7 +1,8 @@
 // preview.rs 的独立测试模块，通过 #[path] 挂载。
 // 覆盖：render_timeline_clip 源范围截断、FFmpeg 片段渲染/拼接、音乐混音、ASS 文字轨渲染。
 use super::*;
-use crate::models::{MusicCue, TextLayout, TextStyle};
+use crate::models::{MusicCue, MusicTrack, TextLayout, TextStyle};
+use crate::preview_audio::mix_preview_audio;
 use rusqlite::Connection;
 use uuid::Uuid;
 
@@ -52,6 +53,7 @@ fn ffmpeg_renders_a_source_bound_vertical_clip() {
         timeline_start_ms: 0,
         timeline_end_ms: 1_000,
         on_screen_text: String::new(),
+        ..Default::default()
     };
     render_timeline_clip(&source, "video", &clip, &destination)
         .expect("render vertical timeline clip");
@@ -125,6 +127,7 @@ fn render_timeline_clip_clamps_duration_to_source_range() {
         timeline_start_ms: 0,
         timeline_end_ms: 3_000,
         on_screen_text: String::new(),
+        ..Default::default()
     };
     render_timeline_clip(&source, "video", &clip, &destination).expect("render source-bound clip");
     assert!(
@@ -196,6 +199,7 @@ fn ffmpeg_assembles_normalized_clips_into_a_preview() {
         timeline_start_ms: 0,
         timeline_end_ms: 1_000,
         on_screen_text: String::new(),
+        ..Default::default()
     };
     render_timeline_clip(&source, "video", &clip, &first).expect("render first clip");
     let second_clip = TimelineClip {
@@ -206,6 +210,7 @@ fn ffmpeg_assembles_normalized_clips_into_a_preview() {
         timeline_start_ms: 1_000,
         timeline_end_ms: 2_000,
         on_screen_text: String::new(),
+        ..Default::default()
     };
     render_timeline_clip(&source, "video", &second_clip, &second).expect("render second clip");
     let list = directory.join("concat.txt");
@@ -261,31 +266,6 @@ fn ffmpeg_assembles_normalized_clips_into_a_preview() {
         "preview must contain both one-second clips"
     );
     let _ = fs::remove_dir_all(directory);
-}
-
-#[test]
-fn music_filter_trims_loops_and_delays_in_milliseconds() {
-    let cue = MusicCue {
-        id: "cue-1".to_owned(),
-        asset_id: "audio-1".to_owned(),
-        source_start_ms: 1_000,
-        source_end_ms: 2_000,
-        timeline_start_ms: 500,
-        timeline_end_ms: 3_500,
-        loop_enabled: true,
-        volume: 0.5,
-        fade_in_ms: 100,
-        fade_out_ms: 200,
-        jianying_compatibility: "not_deliverable".to_owned(),
-        provider: None,
-        license_url: None,
-        attribution: None,
-    };
-    let filter = music_filter_for_cue(1, &cue);
-    assert!(filter.contains("atrim=start=1.000:end=2.000"));
-    assert!(filter.contains("aloop=loop=2:size=48000,atrim=duration=3.000"));
-    assert!(filter.contains("adelay=500:all=1"));
-    assert!(!filter.contains("adelay=24000"));
 }
 
 #[test]
@@ -355,7 +335,7 @@ fn ffmpeg_mixes_a_looped_music_cue_into_a_playable_preview() {
         license_url: None,
         attribution: None,
     };
-    assert!(mix_music_tracks(
+    assert!(mix_preview_audio(
         &connection,
         "project-1",
         &video,
@@ -364,7 +344,9 @@ fn ffmpeg_mixes_a_looped_music_cue_into_a_playable_preview() {
             id: "music-1".to_owned(),
             enabled: true,
             cues: vec![cue]
-        }]
+        }],
+        &[],
+        3_000
     )
     .expect("mix music"));
     let probe = hidden_command("ffprobe")
@@ -390,7 +372,7 @@ fn ffmpeg_mixes_a_looped_music_cue_into_a_playable_preview() {
 #[test]
 fn disabled_music_tracks_do_not_create_a_replacement_preview() {
     let connection = Connection::open_in_memory().expect("open database");
-    assert!(!mix_music_tracks(
+    assert!(!mix_preview_audio(
         &connection,
         "project-1",
         Path::new("missing.mp4"),
@@ -399,7 +381,9 @@ fn disabled_music_tracks_do_not_create_a_replacement_preview() {
             id: "music-1".to_owned(),
             enabled: false,
             cues: Vec::new()
-        }]
+        }],
+        &[],
+        1_000
     )
     .expect("skip disabled music"));
 }
@@ -449,6 +433,7 @@ fn ass_text_tracks_use_the_local_libass_filter() {
             loop_animation: None,
             jianying_compatibility: "local_preview_only".to_owned(),
         }],
+        ..Default::default()
     };
     write_text_tracks_ass(&ass_path, &[track]).expect("write ASS overlay");
     let source = directory.join("source.mp4");
