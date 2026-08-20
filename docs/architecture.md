@@ -70,7 +70,7 @@ Project (项目)
 
 **会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。
 
-**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。
+**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。Task Resolver 只把当前激活剪辑任务的快照交给路由模型，不得读取或提示同一项目内其他任务的 title、brief 或 `active_subgoal`；语言不能切换到其他已有任务，用户在 UI 中激活另一任务后，后续消息按 `continue_current` 归属。
 
 Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话并签发一次性 receipt；receipt 消费后，所有对话类型都直接进入同一个 NativeToolLoop。
 
@@ -212,7 +212,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 `submit_conversation_turn` 先消费与项目、剪辑任务、会话和完整请求绑定的一次性 receipt，再为所有普通聊天、澄清、项目事实问题和工具执行创建同一种 Agent task；它不调用对话分类模型、不解析 route/goal JSON，也不选择首个工具。NativeToolLoop 负责自然语言回复、原生工具调用、观察完成门、确认门和有界终态；`execute_agent_edit` 保留为兼容入口但同样进入 NativeToolLoop。
 
-Task Resolver 仍负责作用域归属：`resolve_conversation_task` 读取当前项目结构化任务快照，输出 `continue_current`、`switch_existing`、`create_new` 或 `clarify`，并以一次性 receipt 绑定确切 task、conversation 和完整请求。任何模型自动归属都要求至少 0.85 置信度；低于门槛时保存项目级 pending 并询问用户。Task Resolver 不选择工具、不决定回复/执行 route；receipt 消费后由 NativeToolLoop 统一处理请求。
+Task Resolver 仍负责作用域归属：`resolve_conversation_task` 只读取当前激活剪辑任务的结构化快照，输出 `continue_current`、`create_new` 或 `clarify`，并以一次性 receipt 绑定确切 task、conversation 和完整请求。没有激活任务时直接创建新任务。模型不得按名称切换其他已有任务；`switch_existing` 若仍被模型返回且目标不在当前任务内，失败封闭。任何模型自动归属都要求至少 0.85 置信度；低于门槛时保存项目级 pending，并只询问继续当前任务还是创建新任务，不列举其他任务名称。Task Resolver 不选择工具、不决定回复/执行 route；receipt 消费后由 NativeToolLoop 统一处理请求。
 
 Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 task 终态、可选产物审计、以任务 ID 派生的确定性最终回复和 conversation 终态；事务提交后才发出 `agent-edit-completed`。事件只是低延迟通知，不再是最终回复的唯一载体。`submit_conversation_turn` 的 `run` 分支以 `{ kind: "run", agentTaskId }` 返回真实任务 ID；Rust enum 字段显式序列化为 camelCase，前端收到空 ID 会失败封闭，不能建立不可对账的 pending ref。前端仍缓存任务 ID 返回前的早到事件，同时在 composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时轮询 `agent_tasks` 终态；一次任务列表暂缺或 task 从 active 变 terminal 都不能结束轮询。没有内存 pending 时，持久化 `working` 本身允许前端对最新同作用域 terminal task 做一次恢复对账，覆盖首次快照已经 terminal 的窗口。事件丢失、窗口切换或快速完成时，会从 SQLite 重载原会话消息、storyboard、时间线和 preview。启动恢复若发现 `working` conversation 的最新 task 已终态却缺少 `agent-task-result-{agentTaskId}`，会把任务标为 `needs_review`、写入固定恢复消息并将会话改为 `review`，绝不猜测已经丢失的模型回答。只有活动项目和剪辑会话与任务作用域一致时才更新当前可见产物。模型响应解析失败只记录固定阶段和响应长度，不记录响应原文。`ModelAccess` 只有在确认自定义凭据不存在时才回退 OAuth，凭据读取错误会阻止请求。Agent loop 超时、解析失败或耗尽步数且未满足目标时，无中间产物持久化为 `failed`，已有真实中间产物为 `partially_completed`；`ask_user` 为 `needs_clarification`。终态状态重新读取失败仍采用 `failed` 的封闭结果。`change_clip_duration` 同时校验已验证源窗口的上下界，并令视频 `sourceEndMs` 精确等于新 `sourceStartMs + newDurationMs`。
 

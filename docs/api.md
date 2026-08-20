@@ -25,7 +25,7 @@
 | `create_message` | `{ conversationId, role, content, routeReceipt? }` | `StoredMessage` | 保存消息并更新时间；`role` 可为 `user`、`assistant`、`agent`、`tool` 或 `system`。`role=user` 必须提供与目标 conversation 和完整 content 匹配、仍未消费的 route receipt，其他角色不需要。 |
 | `set_conversation_status` | `{ conversationId, status }` | `void` | 状态为 `ready`、`working` 或 `review`。 |
 | `list_messages` | `{ conversationId }` | `StoredMessage[]` | 按时间正序。 |
-| `resolve_conversation_task` | `{ projectId, activeEditingTaskId?, request }` | `TaskRouteResult` | 在消息持久化前解析项目内任务归属；候选为最近 12 个任务并始终包含仍属于该项目的显式活动任务。返回继续当前任务、切换已有任务、原子创建新任务或澄清。确定目标时签发一次性 route receipt；只选择任务，不选择 Agent 工具。 |
+| `resolve_conversation_task` | `{ projectId, activeEditingTaskId?, request }` | `TaskRouteResult` | 在消息持久化前解析当前激活任务的归属；候选仅为仍属于该项目的显式活动任务，不把兄弟任务的 title/brief/`active_subgoal` 交给路由模型。返回继续当前任务、原子创建新任务或澄清（继续或新建，不列举其他任务）。没有激活任务时直接创建新任务。确定目标时签发一次性 route receipt；只选择任务，不选择 Agent 工具。 |
 | `import_assets` | `{ projectId, sourceReferences }` | `StoredAsset[]` | 校验本地文件、保存引用并排队分析。 |
 | `import_asset_folder` | `{ projectId, sourceDirectory }` | `StoredAsset[]` | 递归登记支持的媒体，并记录文件夹层级根。 |
 | `preview_asset_relink` | `{ projectId, sourceDirectory }` | `{ matches, unmatchedCount }` | 扫描用户选定的新根目录，仅按唯一的原相对路径与媒体类型给出可确认匹配；不修改项目。 |
@@ -82,7 +82,7 @@ Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴�
 
 运行时覆盖：未限定的“创建草稿”、澄清、事实问答和普通聊天均进入 NativeToolLoop；只有 RequestToolPolicy 明确授权的工具才会进入本轮 tools，模型不能通过文本自证产物已经完成。
 
-schema v11 的 `task_state_snapshots` 是 Task Resolver 的受限输入，只保存目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。任何模型自动归属低于 0.85 都必须澄清，模型不能通过自报请求只读来降低门槛。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
+schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。Task Resolver 只把当前激活任务的快照交给路由模型，不读取同一项目内其他任务的 title、brief 或 `active_subgoal`。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。任何模型自动归属低于 0.85 都必须澄清，模型不能通过自报请求只读来降低门槛。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
 
 桌面应用直接进入 Agent 会话。自然语言消息先调用 `resolve_conversation_task` 绑定项目/任务/会话；新任务与 conversation 由路由事务原子创建，已有任务则由后端校验项目作用域。前端激活返回的目标、保存用户消息后，将同一请求和 `routeReceipt` 交给 `submit_conversation_turn`；保存 user message 会在同一事务中唯一占用凭证，receipt 消费成功后直接进入 NativeToolLoop。若多个凭证引用同一 pending，胜出者消费时会原子删除其余未消费 sibling，且消息占用也要求 pending 仍有效。若保存或提交前中断，项目级 pending 请求仍保持可恢复；若提交失败发生在消费之后，用户消息已经存在于目标 conversation。
 
@@ -239,3 +239,4 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-08-18）：公开 Tauri 命令不变；agentloop/runtime.rs::decide_conversation_route 的路由决策 prompt 明确列举 5 个合法 goal 枚举值（question, storyboard, timeline, preview, jianying）和对应推荐工具，修复模型漏填 goal 字段或返回不合法值导致的路由验证失败。Prompt 改进不改变 ConversationRouteResponse schema、命令签名或工具白名单。
 维护记录（2026-08-18）：公开 Tauri 命令不变；storyboard/phases.rs::phase3_fine_edit 的 Phase 3 prompt 补充 matchLevel 枚举约束（"matchLevel must be 'direct' or 'contextual'"），与 Phase 2 保持一致，防止独立模型调用返回其他字符串导致验证失败。Prompt 改进不改变 StoryboardContent schema、命令签名或工具白名单。
 维护记录（2026-08-20）：公开 Tauri 命令不变；agentloop/prompt.rs::load_native_message_history 内部函数新增 `editing_task_id` 参数，查询改为 JOIN `conversations` 表并同时验证 `conversation_id` 和 `editing_task_id`，确保严格会话隔离，防止跨会话数据泄漏。负向回归：conversation 与 editing_task 不匹配时历史必须为空。修改仅影响 Rust 内部 API，不改变任何 Tauri 命令签名或前端接口。
+维护记录（2026-08-20）：`resolve_conversation_task` 命令签名不变；候选从最近 12 个任务改为仅当前激活任务，路由模型不再接收兄弟任务的 title/brief/`active_subgoal`，也不再按名称切换已有任务。没有激活任务时直接创建新任务。澄清文案不再列举其他任务名称。

@@ -133,7 +133,8 @@
 - 状态：已实现，待真实桌面 Provider 验证
 - 决策：在 `submit_conversation_turn` 前增加项目级 `resolve_conversation_task`。它只基于最近 12 个 `task_state_snapshots` 选择继续当前任务、切换已有任务、原子创建新任务/会话或澄清；任务快照保存受限目标、当前子目标、真实产物阶段/标识、完成项与安全状态，不使用 `conversations.summary` 或完整历史。任何模型自动归属都要求至少 0.85 置信度；不确定请求保存在 `pending_task_routes`。确定目标后签发绑定项目、确切 task、完整请求与可选 pending 记录的一次性 route receipt，公开提交入口必须在后端消费凭证，pending 也只在消费时 resolved。
 - 原因：原 Conversation Router 接收前端已经选定的 `projectId/editingTaskId/conversationId`，只能判断一句话在当前任务内应直接回答、澄清或执行，无法处理“切回刚才的任务”或防止无关请求污染当前任务历史。
-- 后果：Task Resolver 不规划工具，任务确定后仍由 Conversation Router 和十步 Agent loop 负责意图、技能与结果门。schema 升至 v10；`pending_task_routes`、严格绑定 task/conversation/唯一 user message 的 `task_route_receipts`、任务内 `pending_clarifications` 分层管理。`create_message(role=user)` 同样要求并原子占用未消费凭证，`pendingAction=keep` 不再替换旧请求；同一 pending 的并发凭证只有一个能成功消费。当前子目标由已归属的真实用户请求更新，产物事实每次从领域表重建；真实 Provider 下的跨任务语言理解仍需桌面验收。
+- 后果：Task Resolver 不规划工具，任务确定后仍由 Conversation Router 和十步 Agent loop 负责意图、技能与结果门。schema 升至 v10；`pending_task_routes`、严格绑定 task/conversation/唯一 user message 的 `task_route_receipts`、任务内 `pending_clarifications` 分层管理。`create_message(role=user)` 同样要求并原子占用未消费凭证，`pendingAction=keep` 不再替换旧请求；同一 pending 的并发凭证只有一个能成功消费。当前子目标由已归属的真实用户请求更新，产物事实每次从领域表重建。
+- 补充（2026-08-20）：为保持剪辑会话独立，路由模型不再读取最近 12 个任务快照，也不再按名称 `switch_existing`。Resolver 只看见当前激活任务；没有激活任务时直接 `create_new`；澄清只问继续当前任务还是新建，不列举兄弟任务 title/brief/`active_subgoal`。用户要进入另一任务时在 UI 中激活该任务。
 
 ## ADR-044：合并首次目标决策与交互优先 Provider 调度
 
