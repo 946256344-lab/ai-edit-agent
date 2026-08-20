@@ -1,5 +1,12 @@
 # 技术决策记录
 
+## ADR-074：Native 主链授权、观察完成门与确认收据
+
+- 状态：已实现（2026-08-19）
+- 决策：NativeToolLoop 默认只暴露观察工具；主链写工具必须由 `RequestToolPolicy` 根据本轮明确的创建、分析或修改意图逐项授权。loop 使用结构化 `NativeRunReceipt` 记录是否要求项目观察、是否成功观察、工具失败和确认状态；项目事实请求没有成功只读观察时不能以事实回答完成，工具失败允许模型基于安全错误自然解释但终态保持失败或部分完成。`needs_confirmation` 只创建 storyboard 待确认状态；确认命令必须匹配项目、任务、会话、待确认 storyboard、来源 task 和有效期，并在同一 SQLite 事务内消费 pending、写入确认消息和排队唯一任务，通过一次性状态防止重放或半消费。
+- 原因：模型文本不是副作用或项目事实证据；把所有写工具放入普通请求会扩大权限，把“调用过工具”当作观察会允许失败或写操作满足事实门，确认不绑定持久化 pending 会允许跨作用域或重复执行。
+- 后果：Legacy Runtime、Router、LoopGoal 默认路径和既有 `apply_skill`、SQLite 事务、版本与审计保持不变；Native 主链仅迁移六项工具。安全 fixture 覆盖中文/英文授权、伪造调用、成功/失败观察、虚假完成、确认过期和作用域重放。
+
 ## ADR-065：故事板选镜采用固定时间采样替代场景检测
 
 - 状态：已实现（2026-08-18）
@@ -47,9 +54,9 @@
 ## ADR-060：前端按领域 controller 收敛，并以架构预算阻止反向膨胀
 
 - 状态：已实现，真实 Tauri 回归待本变更关闭
-- 决策：`App.tsx` 只保留项目、剪辑任务、conversation、消息路由和三种工作区的顶层组合。Provider、素材、成果交付和 Agent task 终态对账分别由 `useProviderController`、`useAssetWorkspaceController`、`useArtifactWorkspaceController` 与 `useAgentRunReconciliation` 独占；Agent 与成果模式拆为互斥的 `AgentWorkspace`/`ArtifactsWorkspace`，核心工作区使用 `model/actions` 等一至两个顶层领域入口，删除承载两种模式和大量扁平 props 的 `ConversationWorkspace`。`.harness/architecture-budgets.json` 对入口与组件/controller 的行数、字符总量、最长单行、顶层 props、state/effect/async 声明，以及命令桥接和当前 Rust 热点设置只降不升的硬门；无法解析受保护 props 签名或使用 rest props 时 fail-closed。受保护文件迁移必须显式声明并永久保留 replacement、新目标预算与旧路径禁用记录，新目标继承全部旧数值上限和跨层禁止规则。`harness:check` 和 pre-commit 均执行该门。
+- 决策：`App.tsx` 只保留项目、剪辑任务、conversation、消息路由和三种工作区的顶层组合。Provider、素材、成果交付和 Agent task 终态对账分别由 `useProviderController`、`useAssetWorkspaceController`、`useArtifactWorkspaceController` 与 `useAgentRunReconciliation` 独占；Agent 与成果模式拆为互斥的 `AgentWorkspace`/`ArtifactsWorkspace`，核心工作区使用 `model/actions` 等一至两个顶层领域入口，删除承载两种模式和大量扁平 props 的 `ConversationWorkspace`。`.harness/architecture-budgets.json` 对入口与组件/controller 的字符总量、最长单行、顶层 props、state/effect/async 声明，以及命令桥接和当前 Rust 热点设置只降不升的硬门；代码文件行数不再作为预算指标。无法解析受保护 props 签名或使用 rest props 时 fail-closed。受保护文件迁移必须显式声明并永久保留 replacement、新目标预算与旧路径禁用记录，新目标继承全部旧数值上限和跨层禁止规则。`harness:check` 和 pre-commit 均执行该门。
 - 原因：Markdown 能表达边界，但不能阻止后续迭代把新状态、副作用和 props 再次塞回单体文件。此前素材管理虽然已有 Agent-first 决策，仍在连续功能叠加中增长成约 500 行/50 props，并破坏最初简单的目录开合。必须同时减少当前耦合并让越界增长自动失败。
-- 后果：Provider、素材和成果的状态与副作用各自只有一个具名 controller 入口；这些 hooks 仍由 `App.tsx` 调用，因此本决策约束职责和依赖方向，不声称隔离 React 顶层重渲染。Agent 对账原有真实 task ID、早到事件、`working` 恢复和作用域门保持不变。预算不是语义正确性的替代品；检查会与 Git `HEAD` 比较并拒绝提高已有数值、移除指标或撤掉禁止项，超过预算必须拆分。现有超大 Rust 模块先被冻结在当前行数，后续按子领域逐个拆分，不能继续把新行为写入热点文件。没有改变 Tauri API、SQLite schema、媒体处理、Provider 选择或工具副作用。
+- 后果：Provider、素材和成果的状态与副作用各自只有一个具名 controller 入口；这些 hooks 仍由 `App.tsx` 调用，因此本决策约束职责和依赖方向，不声称隔离 React 顶层重渲染。Agent 对账原有真实 task ID、早到事件、`working` 恢复和作用域门保持不变。预算不是语义正确性的替代品；检查会与 Git `HEAD` 比较并拒绝提高已有数值、移除指标或撤掉禁止项，超过预算必须拆分。现有超大 Rust 模块继续受字符、单行和结构边界保护，不能继续把新行为写入热点文件。没有改变 Tauri API、SQLite schema、媒体处理、Provider 选择或工具副作用。
 
 ## ADR-059：素材工作区重建为最小目录浏览器
 
@@ -452,7 +459,7 @@
 
 ## ADR-064：Rust 测试模块独立文件降低架构预算压力
 
-- 状态：已采用（2026-08-15）
+- 状态：历史，行数部分已由 ADR-070 取代（2026-08-19）
 - 决策：当修复或新增测试使文件超过行数/字符预算时，将 #[cfg(test)] mod tests 块提取为 <module>_tests.rs 并通过 #[path] 挂载，不提高既有预算。
 - 原因：架构 ratchet 禁止预算放宽；测试代码是独立职责，提取为独立文件符合预算分割语义，子模块可通过 super::* 访问父模块私有项，行为等价。
 - 后果：受保护文件只降不升；新测试文件需同时添加预算条目。
@@ -474,3 +481,89 @@
 - 决策：将 agentloop.rs（3684 行）按职责分为 `agentloop/schema.rs`（纯类型与常量）、`agentloop/prompt.rs`（提示构建与历史加载）、`agentloop/skills.rs`（技能执行器与状态辅助）、`agentloop/runtime.rs`（路由决策与主循环）四个子模块；父文件缩减为薄 re-export 层加测试。`check-agent-contracts.mjs` 同步扩展扫描 `runtime.rs` 以定位 canonical 控制动作匹配表达式。
 - 原因：单文件超出架构预算且职责混杂；分层后各子模块边界清晰，测试可访问精确函数，预算棘轮可独立守护每层。
 - 后果：公开命令名称、SQLite schema、工具白名单、最大步数、Provider 接口和用户数据均未改变；契约检查器扫描范围扩大一个文件，不影响既有棘轮规则。
+
+## ADR-067：Provider 统一原生工具调用数据结构
+
+- 状态：已采用（2026-08-19）
+- 决策：Provider 新增协议无关的 `ModelTurn`、`ModelOutputItem` 和 `FunctionCall` 类型。Responses 的完整 `response.output`、Responses SSE item 事件、Chat Completions 普通响应和 SSE 增量均可转换为同一结构；自定义 Chat 适配器透传 `tools`、`tool_choice`、`parallel_tool_calls`，并把 Responses 函数调用历史转换为 assistant `tool_calls` 与带 `tool_call_id` 的 tool 消息。
+- 原因：仅提取一段 JSON decision text 会丢失原生函数调用、并行调用和同一响应中的其他 output item；Provider 需要先具备完整协议能力，再由后续任务决定是否接入 Agent Runtime。
+- 后果：现有 `model_response_json_text` 与 Legacy Runtime 路径保持不变；统一结构目前只在 Provider 边界和固定 JSON fixture 测试中启用，不改变 Router、LoopGoal、SQLite schema、权限或副作用流程。fixture 不含凭据、本机路径或原始敏感响应。
+
+## ADR-068：首批原生 Function Tools 只读集中定义
+
+- 状态：已采用（2026-08-19）
+- 决策：在 `agentloop/tools.rs` 集中定义 9 个只读原生 Function Tool：`get_edit_status`、`get_asset_health_summary`、`list_assets`、`search_assets`、`search_asset_segments`、`search_music`、`get_storyboard`、`get_timeline`、`get_text_capabilities`。定义采用 Responses 风格的 `type/function/name/description/parameters/strict` 结构，参数 schema 关闭额外属性；可选值使用 nullable，并对搜索文本、枚举、时长和分页设定边界。工具定义不携带 project、conversation 或路径作用域字段。
+- 原因：Provider 已能承载原生工具调用，但首批工具必须先拥有稳定、可审查的协议契约；把 schema 分散到请求路径会导致名称、参数和安全边界漂移。
+- 后果：9 个只读工具由既有 `skills::apply_skill` 执行并在 NativeToolLoop 中注册；原生结果统一经过安全包络和字段脱敏。编辑类和副作用工具仍不进入原生工具目录。
+
+## ADR-069：NativeToolLoop 只读原生 Agent Loop opt-in
+
+- 状态：已实现，待真实 Provider 桌面验证
+- 决策：仅当进程环境变量 `NATIVE_TOOL_LOOP=true`（或 `1/on/yes`）时，普通对话绕过 Conversation Router，直接进入只读原生 loop。请求使用 Responses 风格真实 input/output item，固定 `store:false` 和 `parallel_tool_calls:false`；响应先由 `ModelTurn` 统一解析，再执行 9 项观察工具并追加 `function_call_output`。
+- 原因：先验证原生工具循环的自然回答、项目事实观察和安全失败恢复，不把编辑或副作用能力带入新路径；显式开关让 Legacy Runtime 保持默认可回退。
+- 后果：NativeToolLoop 受既有最大步骤、总超时、单步超时和任务取消边界约束，不使用 `finish`/`done`/`no_action` 或 JSON decision。工具失败只返回脱敏结构化错误，模型仍需形成自然语言回复；Router、LoopGoal、确认门、权限、SQLite 和产物真实性校验保持不变。后续批次将原生 `render_preview` 纳入显式预览请求，但仍按 RequestToolPolicy 过滤，并在 `apply_skill` 前再次校验作用域和参数；Legacy 默认路径不变。
+
+## ADR-070：取消代码文件行数架构预算
+
+- 状态：已采用（2026-08-19）
+- 决策：移除 `.harness/architecture-budgets.json` 中路径和目录预算的 `maxLines` 指标，并从架构检查器和 ratchet 中删除行数度量。保留字符总量、最长单行、hooks、props、禁止路径、禁止文本和跨层边界保护；删除旧 `maxLines` 不视为放宽其它预算。
+- 原因：代码行数受格式化、测试放置和合法实现风格影响较大，不能稳定代表职责边界；保留字符、单行和结构指标即可继续约束无界膨胀与跨层回流。
+- 后果：文件可以因真实职责或测试需要自然增加行数，不再触发行数预算失败；架构边界、代码密度和可审查性仍由其余机器检查与文档规则负责。历史变更记录中的旧行数仅作为当时事实，不是当前预算。
+
+## ADR-071：NativeToolLoop 使用原生会话消息
+
+- 状态：已采用（2026-08-19）
+- 决策：NativeToolLoop 从 SQLite 按时间顺序读取 user/assistant（兼容旧 agent）消息，直接构造成 Responses input item；本轮模型输出的完整 assistant/function_call item 与 function_call_output 只在内存中追加到下一轮。上下文预算只能删除旧消息，工具调用与对应结果必须成对保留；最终 Native 回复以 assistant 角色保存，Legacy 回复继续使用 agent。
+- 原因：把历史渲染成“用户：/助手：/工具：”文本会丢失协议 role，导致追问“其中视频有几个？”无法可靠承接上一轮，也会把工具事实混入非结构化 Prompt。原生 item 让模型通过真实会话和观察工具获得项目事实。
+- 后果：SQLite schema v15 允许 assistant 消息并保留旧 agent 数据；不新增模型 transcript 或原始工具响应持久化。system 只保留身份、只读安全边界和“项目事实必须观察”的约束，项目状态仍由三项观察工具提供。
+
+## ADR-072：NativeToolLoop 仅按请求授权原生 preview
+
+- 状态：已采用（2026-08-19）
+- 决策：NativeToolLoop 只在用户明确提出预览生成动作且 RequestToolPolicy 未识别“只查看/只检查/不要生成预览”时注册 `render_preview`。模型 schema 不包含作用域、路径或 FFmpeg 参数；Rust 在 `apply_skill` 前再次校验权限、参数和当前项目时间线，成功返回脱敏产物收据，失败返回安全错误。工具结果必须进入下一轮模型请求；只有带 `status=ok` 且 `artifact.type=preview` 的结果才通过预览完成门。
+- 原因：preview 是本地产物副作用，不能像观察工具一样默认暴露，也不能只依赖模型服从提示；同时最终回复需要根据真实收据自然生成，而不是由 Legacy 的 `last_outcome` 固定文案覆盖。
+- 后果：最终任务结果保留 `apply_skill` 验证过的 preview 引用与步骤产物审计，但正常完成时显示消息替换为模型对真实工具结果的总结。preview 已生成而后续模型总结失败时，真实产物仍以 `partially_completed` 保存，并显示诚实恢复文案；无时间线或越权调用不会产生成功收据，模型不得声称成功。Router、LoopGoal、其他编辑工具和 Legacy 默认路径不变。
+
+## ADR-073：NativeToolLoop 迁移主链 Function Tools
+
+- 状态：已采用（2026-08-19）
+- 决策：在集中式 `agentloop/tools.rs` 注册 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 六个主链工具。非只读请求才将它们加入本轮 tools；只读请求继续只提供观察工具。每个工具使用 strict 闭合 schema，模型不传 project、conversation、路径或其他作用域字段；Rust 从 `LoopState` 补齐作用域并在 Native 参数边界与既有 `apply_skill` 前后复核。
+- 原因：Provider 原生调用能力已在前序任务验证，需要逐步迁移真实主链，同时保留 Legacy Runtime、现有素材证据、源时间范围、版本、事务、审计和权限校验。把未迁移的文本、音乐下载/编辑和 Jianying 工具带入 Native 会扩大本轮副作用边界。
+- 后果：`queued`（素材分析）与 `needs_confirmation`（storyboard）作为既有安全成功状态进入 `function_call_output`，模型可继续完成“分析素材 → storyboard → timeline”复合流程；工具失败仍通过安全错误交给模型。六个工具之外的写工具保持 Legacy 路径，Router、LoopGoal、确认门和 SQLite schema 不变。
+
+## ADR-074：NativeToolLoop 迁移文本、音乐与 Jianying 工具适配层
+
+- 状态：已采用（2026-08-19）
+- 决策：在 `agentloop/tools.rs` 的集中原生目录加入 `replace_text_tracks`、`download_music`、`use_online_music`、`replace_music_tracks` 和 `create_jianying_draft`；既有 `get_text_capabilities`、`search_music` 与 `render_preview` 继续作为同一原生目录的观察或交付工具。嵌套文本和音乐参数均使用 strict 闭合 schema，语义可选值以 nullable 表示；模型不能传入 project、conversation、路径、许可证或 Jianying 兼容性。`native_policy.rs` 仅把用户明确的中文/英文写入、下载或交付表达授权给对应工具，`native.rs` 在 `apply_skill` 前再做同一策略和参数复核。
+- 原因：原生 Provider 工具调用需要覆盖现有的文本、音乐和交付能力，但这些能力已有许可证限制、下载流程、文字能力矩阵、Jianying 单向兼容性和 storyboard 确认边界。复制或重写领域逻辑会引入行为漂移和权限旁路。
+- 后果：Native loop 继续复用 `skills::apply_skill`、现有版本写入、事务、审计与作用域校验；`use_online_music` 的新时间线版本也进入持久化产物审计。文本风格和动画仍由后端矩阵验证，音乐许可仍由 Provider 确定，Jianying 继续只创建新草稿；`needs_confirmation` 后的所有非观察写工具仍被阻止。Router、LoopGoal、领域算法和 Legacy 默认路径不变。
+
+## ADR-075：移除前置对话 Router，统一进入 NativeToolLoop
+
+- 状态：已采用（2026-08-19）
+- 决策：`submit_conversation_turn` 在消费 Task Resolver 的一次性作用域 receipt 后，所有普通聊天、澄清、项目事实和工具执行都创建同一种 Agent task，并直接进入 NativeToolLoop。删除 `decide_conversation_route`、ConversationRoute*、InitialAgentSkill、旧 JSON decision/首工具选择协议和 `NATIVE_TOOL_LOOP` 开关；NativeToolLoop 成为生产对话唯一模型入口。
+- 原因：前置 Router 让同一请求先经过模型分类再经过模型执行，重复决策且把首个工具选择与业务目标耦合；原生函数工具循环已经具备请求级权限、观察完成门、确认门、超时、取消和审计边界。
+- 后果：Task Resolver 仍只负责项目/任务/会话归属和 receipt，不选择工具或回复 route；RequestToolPolicy、`apply_skill`、SQLite 事务、版本/素材证据、真实产物校验和确认状态保持不变。Native 统一保存 assistant 回复，旧 JSON 提取接口仅供 storyboard/视觉等非对话请求使用。历史 ADR 与 changes 中关于 Router/开关的描述保留为当时事实，不代表当前生产路径。
+
+## ADR-076：NativeToolLoop 以原生输出结束，不锁定单一目标
+
+- 状态：已采用（2026-08-19）
+- 决策：删除 Native 对话路径中残留的固定目标终止假设。循环每步解析完整 `ModelTurn`：存在 function_call 时执行所有调用、追加 function_call_output 并继续；不存在调用但存在自然语言时结束本轮。不注册或解析 `finish`、`done`、`no_action` 控制动作，也不要求模型声明一次后不可改变的 LoopGoal。RequestToolPolicy 可为一条明确复合请求同时授权多个具名能力，但不选择顺序或首工具。
+- 原因：固定单一目标会把”检查素材，做 30 秒剪辑，加字幕并生成预览”压成一个 deliverable，并在模型已给出自然语言时用目标纠偏强制继续；它也让步骤上限只保留某一种产物。原生函数调用本身已经提供足够的循环信号，安全与完成事实应由后端收据而不是模型控制动作承担。
+- 后果：RunReceipt 只记录实际执行的工具状态：按名称去重的成功 `status=ok` 写工具、仍在排队的操作和未恢复失败；同一工具修正后成功会清除其旧失败，但不会抹掉其他工具的失败。自然语言只结束模型循环，不能创建 completed 状态或 artifact；needs_confirmation、持久化产物和已验证中间结果仍由 Rust 裁决。达到总超时或步骤上限时，任意真实中间产物均保留为 partially_completed，没有成功工具则 failed。storyboard 返回 needs_confirmation 后仍停止后续非观察写工具，确认边界没有放宽。契约检查器禁止固定目标标识和 finish/done/no_action 字符串重新进入 Native 生产路径；历史 ADR 中的旧架构描述保留为当时事实。
+
+## ADR-077：Native Provider 后续模型步骤采用不重放工具的有界重试
+
+- 状态：已采用（2026-08-20），桌面问素材数量已完成并返回自然语言计数
+- 决策：NativeToolLoop 的每个逻辑模型步骤最多尝试三次 Provider 请求。仅 HTTP 408/425/429/500/502/503/504、超时、网络传输中断和空响应可重试；永久 4xx 与未知错误立即失败。尝试共享当前 120 秒单步剩余时间和 300 秒总运行预算；每一次 HTTP 只使用剩余预算除以剩余次数的份额，避免一次挂起耗尽 120 秒后无法重试。每次尝试前及退避期间重新检查任务取消。重试位于 Provider 请求闭包内部，只重发同一 payload，不重新进入 function_call 解析、`execute_native_tool` 或 `apply_skill`。持久化诊断复用既有 `pipeline_error` 类型，只记录安全失败码、尝试次数和恢复/终止阶段，不扩大 SQLite schema。
+- 原因：真实桌面运行中，观察工具已经成功且 `function_call_output` 已加入上下文，但下一次模型总结请求在响应体到达前失败，旧实现直接落入固定恢复文案。对整个循环或工具步骤重试会重复本地副作用；完全不重试则把短暂限流或传输中断暴露为无模型回复。
+- 后果：瞬时 Provider 故障可在不重复工具和不扩大超时边界的前提下恢复自然语言回复。URL、模型名、凭据、原始响应和底层传输详情不进入 Agent 诊断；连续三次失败或永久错误仍封闭失败，并按 RunReceipt 保留已经验证的真实产物。历史运行在该诊断投影加入前只能定位到 Provider 传输阶段，不能追溯具体 HTTP/网络错误码。
+
+## ADR-078：完整 Provider 原文仅进入显式开发 JSONL 转储
+
+- 状态：已采用（2026-08-20），桌面已验证 JSONL 可读
+- 决策：生产日志、SQLite 诊断、审计和前端继续禁止 prompt、模型原文、Provider 响应与凭据。为定位 NativeToolLoop 的协议兼容问题，debug 构建在 `NATIVE_PROVIDER_FULL_TRACE=1` 时，将每次真实 HTTP 尝试实际发送的完整 Provider JSON 与服务器返回的响应正文追加到 gitignored 的 `src-tauri/target/native-provider-full-trace.jsonl`。带正文的 HTTP 错误同样写入，未收到响应的网络错误不伪造 output。自定义 Provider 写入转换后的 Chat Completions body，OAuth 写入 Responses body；HTTP 请求头不进入文件，响应正文在写入前精确遮蔽当前 Provider 的 Authorization/API Key、OAuth token、账户标识与自定义 Base URL。不注册 Tauri 命令，不向 WebView 发送原文。release 构建强制禁用。
+- 原因：仅有长度和安全错误码无法判断自定义适配器是否错误转换 assistant tool calls、tool_call_id 或 function_call_output；把完整原文写入普通日志、SQLite 或前端会违反本地会话与凭据边界。显式开启的 `target/` JSONL 允许本机调试读取真实请求/响应，同时不改变生产持久化策略。
+- 后果：本机调试可以按步骤阅读完整 INPUT/OUTPUT；该文件不是任务真实性或审计事实来源，不随安装包分发，也不进入会话恢复。该能力仅覆盖 NativeToolLoop，不改变 storyboard/视觉等非对话模型调用。工具目录整理不在本决策范围内。
+
+<!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->

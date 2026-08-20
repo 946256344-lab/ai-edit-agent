@@ -57,3 +57,13 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 
 <!-- 维护记录（2026-08-16）：后端 Rust 静默 fallback 已全部移除；错误路径必须输出真实原因，见 ADR-065。 -->
 <!-- 维护记录（2026-08-17）：agentloop.rs 拆分完成；路由/执行/提示/类型分入 agentloop/{runtime,skills,prompt,schema}.rs 四个子模块；check-agent-contracts.mjs 扩展扫描 runtime.rs 以定位 canonical 控制动作匹配。 -->
+<!-- 维护记录（2026-08-19）：Provider 的 ModelTurn/ModelOutputItem/FunctionCall 统一解析边界已由 NativeToolLoop 消费；Responses 与 Chat Completions 原生工具调用在适配器内统一，非 Native 的 storyboard/视觉请求仍可使用旧 JSON 提取接口。 -->
+<!-- 维护记录（2026-08-19）：NativeToolLoop 已成为统一对话生产入口；普通聊天、澄清、项目事实和工具执行均直接进入同一个原生函数工具循环，不再先调用对话 Router 或选择首个工具。 -->
+<!-- 维护记录（2026-08-19）：NativeToolLoop 从 SQLite 读取真实 user/assistant 会话项；上下文裁剪保持 function_call 与 function_call_output 成对，Native 回复以 assistant 角色保存。 -->
+<!-- 维护记录（2026-08-19）：NativeToolLoop 仅对明确且未被请求策略禁止的预览生成意图提供 render_preview；Rust 执行前复核权限、参数和时间线作用域，真实产物收据再交模型总结。 -->
+<!-- 维护记录（2026-08-19）：Native 主链写工具默认不暴露；仅本地请求策略明确授权的分析、Storyboard 或时间线能力进入请求，项目事实终态必须有成功只读观察，确认操作绑定作用域、来源任务和有效期。 -->
+<!-- 维护记录（2026-08-19）：Native 工具目录扩展至文本、音乐下载/编辑和 Jianying draft；工具 schema/参数只适配 Provider，执行仍复用 apply_skill，许可证、文字矩阵、剪映兼容性和确认门由既有 Rust 领域边界裁决。 -->
+<!-- 维护记录（2026-08-19）：NativeToolLoop 不再声明或锁定单一 LoopGoal；function_call 驱动继续，自然语言驱动结束，RunReceipt 与持久化事实独立裁决完成、部分完成和失败。 -->
+<!-- 维护记录（2026-08-20）：agentloop/prompt.rs::load_native_message_history 查询新增 editing_task_id 过滤（通过 JOIN conversations 表），错误任务 ID 失败封闭返回空历史，负向回归覆盖跨任务泄漏。修改仅影响 Rust 内部 API，不改变产品规则或文档原则。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
+<!-- 维护记录（2026-08-20）：NativeToolLoop 的每个逻辑 Provider 步骤对 429/部分 5xx、超时、网络中断和空响应做最多三次有界重试；重试共享原单步/总预算、每次 HTTP 只用剩余预算的一份，每次尝试及退避期间检查取消且不重放工具，只持久化安全错误码与尝试次数。详见 docs/changes/2026-08-20-native-provider-followup-recovery.md。 -->
+<!-- 维护记录（2026-08-20）：完整 Native Provider 输入/输出只允许在 debug 构建且 NATIVE_PROVIDER_FULL_TRACE=1 时写入 src-tauri/target/native-provider-full-trace.jsonl；不写 SQLite/浏览器存储/普通产品日志，不进前端，不含 Authorization/API Key，release 构建强制关闭。 -->

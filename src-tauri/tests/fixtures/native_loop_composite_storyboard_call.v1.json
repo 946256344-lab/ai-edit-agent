@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_storyboard",
+  "output": [{"type":"function_call","call_id":"call_composite_storyboard","name":"generate_storyboard","arguments":"{\"brief\":\"制作 30 秒剪辑\"}"}]
+}

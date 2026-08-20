@@ -28,10 +28,10 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 
 `.harness/architecture-budgets.json` 是结构预算的唯一机器可读来源。当前硬门包括：
 
-- `App.tsx` 的行数、字符总量、最长单行、`useState`、`useEffect` 和所有 async 声明上限；
-- `src/components/**/*.tsx` 与 `src/hooks/**/*.{ts,tsx}` 的单文件行数、字符总量和最长单行上限，避免通过压缩代码绕过行数门；
+- `App.tsx` 的字符总量、最长单行、`useState`、`useEffect` 和所有 async 声明上限；
+- `src/components/**/*.tsx` 与 `src/hooks/**/*.{ts,tsx}` 的单文件字符总量和最长单行上限；
 - 核心工作区组件的一至两个顶层领域 props；props 签名无法解析时检查直接失败，不把未知结构误当作零 props；
-- `local-store.ts`、父 `agentloop.rs`、纯 `agentloop/policy.rs` 和其他 Rust 热点的行数、字符总量与最长单行只降不升棘轮；
+- `local-store.ts`、父 `agentloop.rs`、纯 `agentloop/policy.rs` 和其他 Rust 热点的字符总量与最长单行只降不升棘轮；
 - 受保护文件删除或改名时必须通过永久保留的 `budgetReplacements` 显式指向新预算，把旧路径加入 `forbiddenPaths`，并让新目标以不放宽的值继承全部数值指标和原路径跨层禁止规则；目录预算即使暂时为空也作为防回归墓碑保留；
 - 已删除 `ConversationWorkspace` 不得恢复，Agent 对账、素材分页、成果交付和 Provider 状态不得回流 `App.tsx`。
 
@@ -45,6 +45,7 @@ Markdown 提供产品意图、架构背景和决策记录；脚本、测试、�
 - `src/lib/local-store.ts` 是唯一前端 `invoke` 所有者，所有被调用命令必须在 `lib.rs` 注册，所有已注册公开命令必须出现在 `docs/api.md`；
 - 外部进程、`keyring`/`Entry::new` 与 HTTP/网络传输只能出现在清单允许的 Rust 边界；
 - `agentloop/policy.rs` 的 Rust 观察/编辑工具白名单、TypeScript IDE 镜像和版本化 Agent fixture 的名称完全一致。
+- Native 对话生产路径不得恢复固定 `LoopGoal`、目标锁或 `finish`/`done`/`no_action` 伪控制动作；契约负向测试会阻止这些协议回流。
 
 桌面契约文档触发器同时匹配 `src-tauri/src/*.rs` 与 `src-tauri/src/**/*.rs`，因此后续提取的 Rust 子模块不能绕过架构/API/TASKS/变更记录同步。
 
@@ -93,3 +94,14 @@ npm run harness:test
 维护记录（2026-08-15）：architecture-budgets.json 新增 src-tauri/src/preview_tests.rs 预算条目（489 行），preview.rs 预算从 1015 收紧至 608 行。
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback；受影响文件（agent.rs、agentloop.rs、assets.rs）均通过架构预算检查，harness:check 无新触发规则。
 维护记录（2026-08-17）：check-agent-contracts.mjs 新增扫描 src-tauri/src/agentloop/runtime.rs，以定位重构后迁入该文件的 canonical 控制动作 matches! 表达式；其余规则不变。
+维护记录（2026-08-19）：Provider 原生工具调用变更同时更新 AGENTS.md、README.md、docs/architecture.md、docs/api.md、docs/decisions.md 与 TASKS.md，并由 provider-security/desktop-contract/agent-context-guardrails 规则校验。
+维护记录（2026-08-19）：NativeToolLoop 原生 loop 同步更新 agent.rs、agentloop/native.rs、docs/architecture.md、docs/api.md、docs/decisions.md、docs/codebase/STRUCTURE.md 与 TASKS.md；默认 Legacy 路径、三项观察工具、受策略过滤的 `render_preview` 和安全错误边界保持可审查。
+维护记录（2026-08-19）：移除架构预算中的代码文件/目录 `maxLines` 指标；字符总量、最长单行、hooks、props、禁止路径和跨层边界仍由架构检查与 ratchet 保护。
+维护记录（2026-08-19）：NativeToolLoop 会话消息变更同步校验 SQLite assistant 角色、原生工具项上下文预算与 Legacy 默认回退；新增迁移 fixture 覆盖旧 messages 约束升级。
+维护记录（2026-08-19）：7B Native 主链审查新增本地逐工具授权、成功只读观察完成门、RunReceipt 真实性和确认作用域/有效期/重放测试；授权解析拆到 native_policy.rs 以保持策略模块架构预算。
+维护记录（2026-08-19）：Native 文本、音乐与 Jianying 工具迁移需同步检查嵌套 strict schema、nullable 参数边界、显式授权和 apply_skill 复用；许可证、文字矩阵、确认与剪映兼容性不可被 Provider 参数绕过。
+维护记录（2026-08-19）：NativeToolLoop 已成为唯一对话模型入口；契约检查器负向扫描生产源码中的旧 Conversation Router、首工具和 route/goal 协议，Task Resolver 仅保留作用域 receipt。
+维护记录（2026-08-19）：NativeToolLoop 删除固定单目标终止假设；契约检查器禁止 LoopGoal/目标锁与 finish/done/no_action 回流，回归 fixture 以原生工具调用和 assistantReply 表达多步执行与自然语言结束。
+维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭），防止跨会话数据泄漏。Rust 内部实现变更，不改变验证流程、机器约束、审查闭环或完成门要求；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
+维护记录（2026-08-20）：Native Provider 后续模型步骤的有界重试需独立审查“不重复工具副作用、诊断不泄密、永久错误不重试、单步/总超时和取消边界不扩大”；每次 HTTP 只用剩余预算的一份，不扩大 120 秒单步或 300 秒总预算。见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
+维护记录（2026-08-20）：完整 Provider JSONL 转储需独立审查“release 强制关闭、不写 SQLite/浏览器存储/普通产品日志、不进前端、文件不含 Authorization/API Key、不改变生产诊断边界”。见 docs/changes/2026-08-20-native-provider-full-trace.md。

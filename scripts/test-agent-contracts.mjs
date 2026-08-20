@@ -55,9 +55,9 @@ function validRepository() {
     ['src-tauri/src/oauth.rs', 'keyring::Entry::new("a", "b")'],
     ['src-tauri/src/provider.rs', 'ureq::AgentBuilder::new()'],
     ['src-tauri/src/agentloop/policy.rs', 'const OBSERVATION_TOOLS: &[&str] = &["observe"];\nconst EDIT_TOOLS: &[&str] = &["edit"];'],
-    ['src-tauri/src/agentloop.rs', 'let accepted = matches!(tool.as_str(), "ask_user" | "finish" | "done" | "no_action");'],
-    ['src/lib/agent-tools.ts', "// 中文工具镜像。\nexport type AgentObservationToolName = 'observe'\n\nexport type AgentSideEffectToolName = 'edit'\n\nexport type AgentControlToolName = 'ask_user' | 'finish'\n\nexport type AgentControlToolAlias = 'no_action' | 'done'"],
-    ['src-tauri/tests/fixtures/agent_tool_contracts.v1.json', JSON.stringify({ tools: [{ name: 'observe', kind: 'observation' }, { name: 'edit', kind: 'edit' }], controlActions: [{ name: 'ask_user' }, { name: 'finish', aliases: ['no_action', 'done', 'empty tool'] }] })],
+    ['src-tauri/src/agentloop.rs', 'fn drive_native_loop() {}'],
+    ['src/lib/agent-tools.ts', "// 中文工具镜像。\nexport type AgentObservationToolName = 'observe'\n\nexport type AgentSideEffectToolName = 'edit'"],
+    ['src-tauri/tests/fixtures/agent_tool_contracts.v1.json', JSON.stringify({ tools: [{ name: 'observe', kind: 'observation' }, { name: 'edit', kind: 'edit' }] })],
   ])
 }
 
@@ -88,7 +88,10 @@ assert.deepEqual(evaluateAgentContracts(new Map([...validRepository(), ['src-tau
 assert.match(errorsFor((repository) => repository.set('docs/api.md', 'Narrative mentions `ping` but has no command table.')), /未写入 docs\/api\.md/)
 assert.match(errorsFor((repository) => repository.set('src/lib/agent-tools.ts', "export type AgentObservationToolName = 'other'")), /观察工具.*发生漂移/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop/policy.rs', '')), /观察工具.*发生漂移/)
-assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop.rs', 'const OBSERVATION_TOOLS: &[&str] = &["observe"];\nconst EDIT_TOOLS: &[&str] = &["edit"];\nlet accepted = matches!(tool.as_str(), "ask_user" | "finish" | "later");')), /Rust 接受的控制动作/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop.rs', 'struct LoopGoal;')), /不得恢复固定 LoopGoal/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop/runtime.rs', 'let tool = "finish";')), /不得恢复固定 LoopGoal/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agent.rs', '//! 对话入口。\nuse crate::agentloop::decide_conversation_route;\nlet route = decide_conversation_route();')), /NativeToolLoop 单入口/)
+assert.match(errorsFor((repository) => repository.set('src-tauri/src/agentloop/runtime.rs', '//! Legacy Router。\nstruct ConversationRouteResponse { route: String, goal_reasoning: String, is_question: bool, information_scope: String }')), /NativeToolLoop 单入口/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'Command::new("ffmpeg")')), /Windows 外部进程创建.*只能/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'use std::process::Command as ProcessCommand;')), /Windows 外部进程创建.*只能/)
 assert.match(errorsFor((repository) => repository.set('src-tauri/src/assets.rs', 'use std::{process::Command as Child};')), /Windows 外部进程创建.*只能/)

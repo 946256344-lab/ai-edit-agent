@@ -19,7 +19,7 @@ flowchart LR
   CTRL --> BRIDGE["local-store.ts / Tauri invoke"]
   BRIDGE --> CMD["Rust 命令边界"]
   CMD --> DB[("SQLite local project")]
-  CMD --> AGENT["Task Router + Agent loop"]
+  CMD --> AGENT["Task Resolver + NativeToolLoop"]
   AGENT --> DOMAIN["素材 / storyboard / timeline"]
   DOMAIN --> MEDIA["FFprobe / FFmpeg / Tesseract"]
   AGENT --> MODEL["OAuth 或自定义 Provider"]
@@ -58,23 +58,18 @@ sequenceDiagram
     B->>C: submit_conversation_turn
     C->>T: consume claimed receipt
     T->>S: 原子消费 receipt
-    alt Conversation Router 即时回答/澄清
-      C-->>B: immediate
-      B-->>A: response / clarification
-    else 执行型请求
-      C->>S: 插入 queued agent_task
-      C-->>B: agentTaskId
-      B-->>A: agentTaskId
-      C->>L: 后台 bounded loop
-      L->>D: 单步观察/编辑/交付技能
-      D->>S: 校验后创建版本或审计
-      C->>S: 同一事务提交终态+最终回复+conversation
-      C-->>B: agent-edit-completed 通知
-      B-->>A: scoped event
-      A->>B: 事件或轮询后调用 list/load 命令
-      B->>D: 读取持久化 task/message/artifact 状态
-      D->>S: 查询权威状态
-    end
+    C->>S: 插入 queued agent_task
+    C-->>B: agentTaskId
+    B-->>A: agentTaskId
+    C->>L: 后台 bounded NativeToolLoop
+    L->>D: 原生观察/编辑/交付 function_call
+    D->>S: 校验后创建版本或审计
+    C->>S: 同一事务提交终态+最终回复+conversation
+    C-->>B: agent-edit-completed 通知
+    B-->>A: scoped event
+    A->>B: 事件或轮询后调用 list/load 命令
+    B->>D: 读取持久化 task/message/artifact 状态
+    D->>S: 查询权威状态
   end
 ```
 
@@ -106,9 +101,9 @@ flowchart TD
 | React components | 展示和局部开合状态 | Tauri 调用、任务路由 | `src/components/` |
 | React controllers | 领域投影、轮询、用户动作编排 | SQL、模型 prompt | `src/hooks/` |
 | `taskrouter` | task 归属和 receipt | 具体工具选择 | `src-tauri/src/taskrouter.rs` |
-| `agent` | conversation 决策入口、run 生命周期、原子终态 | 媒体实现 | `src-tauri/src/agent.rs` |
-| `agentloop/policy` | 工具授权、请求负向约束、目标与真实产物完成门 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
-| `agentloop` 父模块 | Router、状态、prompt、技能选择和派发 | 绕过 policy 或任意 SQL 自由访问 | `src-tauri/src/agentloop.rs` |
+| `agent` | conversation run 生命周期、原子终态 | 媒体实现、工具选择 | `src-tauri/src/agent.rs` |
+| `agentloop/policy` | 工具授权、请求负向约束与真实性辅助 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
+| `agentloop` | Native 循环、状态、prompt、技能派发 | 前置 Router、固定 LoopGoal、绕过 policy | `src-tauri/src/agentloop.rs`、`src-tauri/src/agentloop/native.rs` |
 | 领域模块 | 作用域校验后的领域读写 | 用户意图分类 | `assets.rs`、`timeline.rs` 等 |
 | `provider` | 可替换模型传输和调度 | 产物完成事实 | `src-tauri/src/provider.rs` |
 | `db` / `audit` | schema、连接策略、安全审计 | UI 文案与模型原文 | `db.rs`、`audit.rs` |
@@ -131,12 +126,12 @@ flowchart TD
 
 ```text
 agentloop.rs
-  -> agentloop/policy.rs       已完成：负向约束、工具集合、目标门
-  -> agentloop/router.rs       Conversation Router schema/校验
-  -> agentloop/state.rs        历史、快照、产物完成事实
-  -> agentloop/prompt.rs       prompt 与安全失败上下文
-  -> agentloop/executor.rs     run_step / apply_skill / terminal
-  -> agentloop/mod.rs          10 步 orchestration 与公开 crate API
+  -> agentloop/native.rs       原生工具循环、RunReceipt 与有界终止
+  -> agentloop/native_policy.rs 请求级具名写工具授权识别
+  -> agentloop/policy.rs       负向约束与工具集合
+  -> agentloop/prompt.rs       会话历史与安全上下文
+  -> agentloop/skills.rs       apply_skill 与领域状态桥接
+  -> agentloop/mod.rs          crate API 入口
 
 assets.rs
   -> assets/import.rs          导入、store、重链路、收集
@@ -148,11 +143,11 @@ assets.rs
   -> assets/mod.rs             保持现有 Tauri 命令 re-export
 ```
 
-`agentloop/policy.rs` 已完成纯迁移。下一步提取 `assets/library.rs` 的安全目录投影/只读查询，再处理 Agent router/state；然后搬 worker，最后才移动事务和命令入口。每一步保持 `lib.rs` 注册名、TypeScript wrapper、SQL schema 和 fixture 不变。
+Native 对话已迁入统一 `agentloop/native.rs`，不再保留前置 Router 或固定 LoopGoal。后续结构工作仍应保持 `lib.rs` 注册名、TypeScript wrapper、SQL schema 和 fixture 不变。
 
 ## 8）已知架构风险
 
-- `agentloop.rs` 已从 4264 行降至 3599 行，但 Router、状态、prompt、循环、executor 和测试仍耦合；`assets.rs` 仍为 4114 行热点。
+- Native loop、策略、prompt 和技能已分模块，但 `native.rs` 仍同时包含执行编排与较多 fixture 测试；`assets.rs` 仍是热点。
 - `timeline.rs` 1848 行同时含镜头、文本、音乐和查询；应在前两个热点稳定后处理。
 - SQL 分散在多个领域模块，跨表事务移动时容易破坏原子性。
 - Agent fixture 目前验证白名单结构，但完整多轮 provider-script runner 尚未实现。

@@ -1,0 +1,13 @@
+{
+  "id": "resp_fixture_timeline_call",
+  "output": [
+    {
+      "id": "fc_fixture_timeline",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_get_timeline",
+      "name": "get_timeline",
+      "arguments": "{\"timelineVersionId\":null}"
+    }
+  ]
+}

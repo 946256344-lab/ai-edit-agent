@@ -3,15 +3,23 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [x] 完成（2026-08-19，performance）：优化 recover_missing_agent_completion_messages 查询性能。性能诊断日志显示该函数耗时 ~300ms，占启动总时间（~380ms）的 80%，是启动卡顿的根本原因。原查询使用相关子查询对每行外部结果重新执行一次子查询，导致 O(N²) 复杂度。用窗口函数（ROW_NUMBER() OVER PARTITION BY）+ CTE 替代相关子查询，一次性标记每个 conversation 的最新任务，避免重复扫描。查询语义完全等价（最新任务判定、NOT EXISTS 判定逻辑保持不变），预期耗时从 ~300ms 降至 <20ms。不影响公开命令或 SQLite schema。实际性能验证需要用户重启应用，观察优化后的 [PERF] 日志。变更记录见 `docs/changes/2026-08-19-optimize-recovery-query-performance.md`。
-- [x] 完成（2026-08-19，feature）：添加启动性能诊断日志。用户报告应用启动时严重卡顿（打开程序特别卡、执行任务开始跑 agent 更是卡的不得了、agent 跑起来后倒是没那么卡）。为诊断根本原因，在启动流程关键步骤添加 [PERF] 前缀的性能日志：`initialize_local_store`（10 处，测量数据库连接、清理 agent_tasks/agent_run_steps/conversations、恢复缺失完成消息、标记会话状态）、`resume_incomplete_analysis`（7 处，测量 recover_interrupted_visual_batches、backfill_queued_visual_batches、spawn_visual_analysis_worker、收集已有任务素材 ID、查询孤立素材、创建孤立任务）、`recover_interrupted_visual_batches`（3 处）、`backfill_queued_visual_batches`（6 处）。所有日志使用 `log::info!` 级别，使用 `std::time::Instant` 测量耗时。只添加日志，不改变执行逻辑、公开命令或 SQLite schema。变更记录见 `docs/changes/2026-08-19-add-startup-performance-logging.md`。
-- [x] 完成（2026-08-18，bugfix）：在 Phase 3 prompt 中明确 matchLevel 枚举值。Phase 3 是独立模型调用，原 prompt 只说 "Each shot must contain: ... matchLevel" 未列举合法值，可能导致模型返回其他字符串（如 `"high"`、`"medium"`）引发验证失败。补充 "matchLevel must be 'direct' (evidence visibly supports the beat) or 'contextual' (honest scene-setting)"，与 Phase 2 prompt 保持一致。不改变 `StoryboardContent` schema、公开命令或工具白名单。
-- [x] 本项完成门：113 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-clarify-phase3-matchlevel-enum.md`。
-- [x] 完成（2026-08-18，bugfix）：在路由决策 prompt 中明确列举 goal 枚举值。修复模型漏填 `goal` 字段或返回不合法值（如 `"storyboard_generation"` 而非 `"storyboard"`）导致的路由验证失败。Prompt 从模糊描述（"Include goal"）改为明确列举 5 个合法值（question, storyboard, timeline, preview, jianying）+ 对应推荐工具，降低模型猜测错误的概率。不改变 `ConversationRouteResponse` schema、公开命令或工具白名单。
-- [x] 本项完成门：113 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-clarify-route-goal-enum-in-prompt.md`。
-- [x] 完成（2026-08-18，feature）：添加路由决策诊断日志。在 `agentloop/runtime.rs` 的路由决策流程新增三处 info/warn 级别日志：首次路由决策时记录模型返回的原始 route/goal/isQuestion/tool 值和 backend 识别的 pinnedGoal；纠偏重试后记录修正值；验证失败时记录导致失败的原始字段值。用于诊断 storyboard 生成失败时的路由验证问题（模型漏填 goal、返回不合法值、还是 fast_goal 关键词识别遗漏）。不改变执行逻辑或公开命令。
-- [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-add-route-decision-logging.md`。
+- [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
+- [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
+- [ ] 待办（codex/session-isolation-mismatch-test）：会话隔离负向测试与变更记录路径收尾，见 `D:\worktrees\session-isolation-mismatch-test`。
+- [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
+- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
+- [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
+- [x] 完成（2026-08-19，native-observation-tools）：迁移剩余只读观察工具到 Native Function Tool 目录。见 `docs/changes/2026-08-19-native-observation-tools.md`。
+- [x] 完成（2026-08-19，native-preview）：Native 安全接入 render_preview。见 `docs/changes/2026-08-19-native-render-preview.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-19，native-memory）：NativeToolLoop 从 SQLite 按时间读取真实 user/assistant 消息，以原生 function_call/function_call_output 维持观察上下文；保留 Legacy 默认路径。133 个 Rust 库测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-session-messages.md`。
+- [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。
+
+- [x] 完成（2026-08-19，native-delivery-tools）：将 `get_text_capabilities`、`replace_text_tracks`、`search_music`、`download_music`、`use_online_music`、`replace_music_tracks`、`render_preview`、`create_jianying_draft` 迁移到 Native Function Tool 目录与受限执行入口；strict 嵌套 Schema、参数边界、工具选择及执行前授权测试通过，保留许可证、下载、文字能力矩阵、剪映兼容性、确认边界和领域算法，不迁移其他工具或改变领域实现。变更记录见 `docs/changes/2026-08-19-native-delivery-tools.md`。
+
+- [x] 完成（2026-08-19，native-main-chain-tools）：将 `request_asset_analysis`、`generate_storyboard`、`create_timeline_draft`、`replace_clips`、`change_clip_duration`、`reorder_clips` 迁移到 Native Function Tool 目录；保留素材证据、源时间范围、作用域、版本与事务校验，并新增“分析素材 → storyboard → timeline”固定 fixture 复合测试。提交 `05cefdb`；真实 Provider 在工具调用后偶发未生成最终回复，确认门桌面验收仍待后续可靠性任务处理。
+
 
 - [x] 完成（2026-08-18，refactor）：重构 storyboard 生成为三阶段架构。原有实现对整个素材池（426 个视频）做一次全局排序，取 TOP-5 候选，导致整条时间线只能从同一组 5 个素材中反复选择。新架构分为三个阶段：**Phase 1（叙事结构生成）** - 模型根据 brief 和内容的自然节奏、节奏要求和叙事复杂度拆分为合适数量的 beats（简单消息可能 3-4 个，故事驱动内容可能 8-12 个或更多，由内容引导而非人为限制），每个 beat 包含 id/purpose/requiredVisual，不涉及素材选择；**Phase 2（逐 beat 粗选镜）** - 对每个 beat 单独对素材池排序（使用 `scoring::rank_segment_candidates`），提供该 beat 专属的 TOP-5 候选素材（带关键帧网格），模型为该 beat 选择 1 个素材 + 时间范围；**Phase 3（精剪与节奏优化）** - 模型调整精确时间范围（对齐场景边界、避免重叠）、节奏控制、镜头组合和过渡优化，输出最终可执行的 `StoryboardContent`。重试循环只在 Phase 3，验证失败时带反馈重新精剪，最多 3 次。新增 `src-tauri/src/storyboard/phases.rs` 子模块（231 行）定义三阶段函数和中间数据结构（`NarrativeStructure`、`RoughStoryboard`）；主流程 `storyboard.rs:generate_storyboard_internal` 重构为三阶段顺序调用（Phase 1/2 不重试，Phase 3 重试）。架构优势：素材多样性提升（每个 beat 独立 TOP-5，不再受全局 5 个素材限制）、语义匹配精度提升（排序针对每个 beat 的 `requiredVisual` 计算）、重试效率提升（Phase 3 验证失败时只重新精剪，Phase 1/2 结果保持稳定）。Tauri 命令签名不变，SQLite schema 不变，最终持久化的 `StoryboardVersion` 结构不变。
 - [x] 本项完成门：113 个 Rust 库测试、前端 lint/build、Rust fmt/check、harness:test/check 与 diff 检查通过。变更记录见 `docs/changes/2026-08-18-three-phase-storyboard-refactor.md`。

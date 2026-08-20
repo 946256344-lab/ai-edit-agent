@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_preview",
+  "output": [{"type":"function_call","call_id":"call_composite_preview","name":"render_preview","arguments":"{\"timelineVersionId\":null}"}]
+}

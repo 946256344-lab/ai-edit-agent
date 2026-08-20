@@ -20,7 +20,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:verify": "node scripts/verify-tauri-webview.mjs",
-    "tauri:dev": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",
+    "tauri:dev": "set \"NATIVE_PROVIDER_FULL_TRACE=1\" && set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",
     "tauri:build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build"
   },
   "dependencies": {

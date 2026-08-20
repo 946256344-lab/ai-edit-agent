@@ -20,7 +20,7 @@
 | FFmpeg preview（含文本轨 ASS / 音乐混音）| ✅ 已实现 | |
 | Jianying 仅视频 + 受限文本草稿 | ✅ 已实现（实验性）| |
 | Jamendo 在线音乐下载 | ✅ 已实现（实验性）| Jianying UI 试听待验收 |
-| Task Resolver + Conversation Router + Agent loop | ✅ 已实现 | |
+| Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
 | 视觉质量评分 / 语义重复检测 | ⚠️ 部分实现 | 仅单帧低分辨率候选 |
@@ -68,7 +68,11 @@ Project (项目)
     └── Previews / Jianying Drafts (基于 timeline，归任务)
 ```
 
-**会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。Task Resolver 负责把新消息路由到正确的任务或创建新任务；Conversation Router 决定是直接回复还是启动 Agent run。
+**会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。
+
+**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。
+
+Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话并签发一次性 receipt；receipt 消费后，所有对话类型都直接进入同一个 NativeToolLoop。
 
 前端按”入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview、Jianying 状态及交付动作；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。Agent、素材、成果三种顶层模式互斥渲染为 `AgentWorkspace`、`AssetManagementPanel` 和 `ArtifactsWorkspace`；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
 
@@ -164,7 +168,7 @@ schema v12 将收藏、评分、备注、禁止使用、用户标签和素材集
 
 Agent 通过受限只读 `search_assets` 做目标化候选发现，而不是把整个素材库注入模型。查询可组合媒体类型、时长、最低评分、收藏、标签、集合和游标，单页最多 20 条；结果按收藏、评分和更新时间稳定排序并给出固定命中原因码。工具自动排除用户禁止使用的素材，不返回源路径、用户备注正文、OCR 正文、媒体内容或完整视觉证据。`list_assets` 继续只用于紧凑状态盘点和分析排队前观察。
 
-素材浏览不访问源文件系统。schema v14 的 `asset_source_health` 独立保存大小、修改时间基线、最近观察结果和脱敏原因码；只有用户显式启动可取消的 `scan_asset_health` 后台任务时才逐项读取文件元数据。新导入和确认重链路会建立新基线；列表只展示持久化的 `unchecked/online/missing/changed/unreadable` 状态。Agent 通过 `get_asset_health_summary` 读取项目级计数、扫描状态和安全原因码，不接收路径或原始系统错误。
+素材浏览不访问源文件系统。schema v15 的 `asset_source_health` 独立保存大小、修改时间基线、最近观察结果和脱敏原因码，`messages` 同时允许原生 `assistant` 角色；只有用户显式启动可取消的 `scan_asset_health` 后台任务时才逐项读取文件元数据。新导入和确认重链路会建立新基线；列表只展示持久化的 `unchecked/online/missing/changed/unreadable` 状态。Agent 通过 `get_asset_health_summary` 读取项目级计数、扫描状态和安全原因码，不接收路径或原始系统错误。
 
 Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段内绑定 OCR/视觉证据，返回可直接用于剪辑工具的明确源时间范围。结果单页最多 20 条，保留 OCR 正文和本地路径的隐私边界，并排除用户禁止使用及健康状态明确异常的源文件。
 
@@ -180,7 +184,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 `agentloop` 已完成分层拆分（2026-08-17）：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析和产物完成门；`agentloop/schema.rs` 为纯类型与常量；`agentloop/prompt.rs` 负责提示构建与历史加载；`agentloop/skills.rs` 为技能执行器；`agentloop/runtime.rs` 为路由决策与主循环；父 `agentloop.rs` 收缩为薄 re-export 层加测试。`assets.rs` 的素材库查询职责已提取为 `assets/library.rs`，技术/视觉分析提取为 `assets/analysis.rs` 与 `assets/visual.rs`，源健康提取为 `assets/health.rs`；`assets.rs` 收缩为薄协调层（2026-08-17）。热点均受只降不升预算保护，下一步按 `docs/codebase/CONCERNS.md` §6 的顺序渐进拆分。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
 
-仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算同时检查行数、字符总量和最长单行，避免通过代码压缩绕过；async 箭头与 async function 都计数，受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
+仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算检查字符总量、最长单行、hooks 和 props；受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。代码文件/目录行数不再是架构预算指标。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
 
 ### 媒体分析队列
 
@@ -196,29 +200,49 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### Agent 循环与请求策略
 
-自然语言编辑控制器（`agent.rs`）把请求分为两条路径。显式单命令走 `run_explicit_command` 确定性直通路径；其余请求进入 `run_agent_loop`。循环加载最近 12 条、总字符预算 8000 的会话历史。`fast_goal` 只锁定带明确动作的产物请求、明确编辑或清晰提问；仅含产物名词的状态短句和快路径未覆盖的自然语言动作保持 pending，不用扩张正向关键词表猜工具。模糊请求不再消耗独立分类调用，而由首次主模型响应同时声明 `goal`/`isQuestion` 并选择第一个技能或直接 `finish`，随后目标锁定且不能被模型改写。schema v7 的 `pending_clarifications` 按项目、剪辑任务和会话保存尚未回答的问题、来源、目标与生命周期；该结构化状态而非消息顺序启发式进入路由和 Agent 状态快照。长段创作文案即使标题使用修辞疑问句，也应结合待澄清问题和历史理解。模型最多编排 10 步；`finish`/`no_action`/`done` 仍只有在真实产物满足门时才结束。每步参数保持 JSON 顶层，技能继续复用作用域、范围、版本和审计边界。
+自然语言编辑控制器（`agent.rs`）在消费一次性 receipt 后统一进入 `run_native_tool_loop`。循环从 SQLite 按时间顺序加载真实 user/assistant 消息，Provider 返回的 message、function_call 和 function_call_output 作为原生 item 继续下一步；不再调用前置对话分类模型、要求 JSON decision、预选首个工具或声明固定 `LoopGoal`。有 function_call 时逐项执行并继续；没有 function_call 且有自然语言时结束本轮。`RequestToolPolicy` 只做本地权限过滤，模型在允许的工具集合内自行决定观察、澄清或副作用顺序；项目事实仍必须先有成功只读观察，真实产物和确认门由 Rust 完成。模型最多 10 步，受 300 秒总预算、120 秒单步预算和取消检查约束。
 
-每个普通自然语言请求还会生成只在本轮有效的 `RequestToolPolicy`。该策略不决定应该调用哪个工具，只把用户明确写出的负向副作用约束转换为禁用集合：例如“不生成 preview”“不创建 Jianying draft”“不分析素材”分别禁止对应写工具；排除素材分析还会禁止会下载媒体并触发分析的 `download_music`/`use_online_music`；“只读/readonly”禁止全部编辑与交付工具但保留观察工具，并阻止模型 `taskBrief` 写回任务。Agent `list_assets` 调用独立的无调度快照入口，不再复用会推进桌面后台队列的公开命令；Agent `generate_storyboard` 只消费已就绪证据，不会隐式优先、启动或等待视觉分析。`fast_goal` 不得把被否定的 deliverable 词误认成目标；Conversation Router 只向模型公布允许的首步工具，同时拒绝被排除的选择及依赖被禁工具的目标；Agent loop 对首次目标声明、初始技能和后续每一步再次校验，越界工具以 `user_restricted_tool` 硬拒绝。这样模型仍自主编排允许范围内的观察和编辑，但不能用“合理的后续步骤”为由越过当前请求边界。
+每个普通自然语言请求还会生成只在本轮有效的 `RequestToolPolicy`。该策略不决定应该调用哪个工具，只把用户明确写出的负向副作用约束转换为禁用集合：例如“不生成 preview”“不创建 Jianying draft”“不分析素材”分别禁止对应写工具；排除素材分析还会禁止会下载媒体并触发本地分析的 `download_music`/`use_online_music`；“只读/readonly”禁止全部编辑与交付工具但保留观察工具。Agent `list_assets` 调用独立的无调度快照入口，`generate_storyboard` 只消费已就绪证据；越界工具由发送前过滤和执行前复核共同以 `user_restricted_tool` 封闭。策略只缩小权限，不替模型选择首个工具或构造业务目标。
 
 交互 Agent 的模型决策共享 90 秒协作式总预算，每次 Provider 请求取 120 秒单步上限与剩余预算的较小值；达到预算后不启动新的模型调用或副作用，但不会强杀已经开始的 FFmpeg、下载、preview 或 Jianying 副作用。安全诊断只记录固定数字耗时与错误码。Provider 调度在请求边界让交互模型调用优先于尚未开始的粗视觉调用；粗视觉连续三次失败后熔断 60 秒，期间批次保持 `queued`，冷却后只允许一个半开探测并恢复 worker。已经开始的视觉请求允许完成，避免取消未知网络状态。
 
-“剪好了吗”“完成了吗”等精确状态问题是无需模型判断的只读单命令：`get_edit_status` 在同一项目、剪辑任务和会话内读取上一条 Agent task 的运行终态，同时以当前 task 的最新 storyboard、该 storyboard 的最新时间线状态和磁盘中实际存在的 preview 文件作为产物事实。任务状态用于说明处理中、待澄清、失败或部分完成，不能把较早的 task result 覆盖到更新的真实产物上；查询不进入通用 loop、不创建 Agent task，也不受后台视觉任务影响。
+“剪好了吗”“完成了吗”等精确状态问题也作为 NativeToolLoop 的只读请求处理；`get_edit_status` 在同一项目、剪辑任务和会话内读取上一条 Agent task 的运行终态，同时以当前 task 的最新 storyboard、该 storyboard 的最新时间线状态和磁盘中实际存在的 preview 文件作为产物事实。查询不绕过统一 loop，也不接受模型文本替代持久化产物事实。
 
 ### 会话路由与持久化
 
-Conversation Router 的公开入口是 `submit_conversation_turn`。它先验证会话作用域，再让精确只读状态直接返回；其他自然语言请求通过一次首轮路由决策选择 `respond`、`clarify` 或 `run`。顶层 route 不增加分支；`goal=question` 额外声明 `informationScope=general|project`。只有 `general` 可即时 `respond`，依赖当前项目素材、任务、产物、数量、状态或故障原因的 `project` 问题必须 `run` 并由模型选择首个观察工具。前两者不创建 `agent_tasks`，`run` 才创建异步任务；若首轮选择了执行工具，该工具通过 `run_agent_loop_with_initial_skill` 作为第 1 步执行，避免再次调用模型选择同一个工具。存在待澄清时，`respond`/`run` 必须在同一模型响应中声明 `keep` 或 `resolve`；新 `clarify` 会 supersede 旧问题。执行型任务创建与 `resolve`、Agent run 的 `needs_clarification` 终态与新问题写入均使用 SQLite 事务。旧 `execute_agent_edit` 保留给兼容调用。
+`submit_conversation_turn` 先消费与项目、剪辑任务、会话和完整请求绑定的一次性 receipt，再为所有普通聊天、澄清、项目事实问题和工具执行创建同一种 Agent task；它不调用对话分类模型、不解析 route/goal JSON，也不选择首个工具。NativeToolLoop 负责自然语言回复、原生工具调用、观察完成门、确认门和有界终态；`execute_agent_edit` 保留为兼容入口但同样进入 NativeToolLoop。
 
-Conversation Router 之前新增 Task Resolver：`resolve_conversation_task` 读取当前项目最近 12 个结构化任务快照，并始终额外包含仍属于该项目的前端显式活动任务，避免旧任务因候选上限被排除；它不读取 `conversations.summary` 或完整聊天历史，输出 `continue_current`、`switch_existing`、`create_new` 或 `clarify`。任何模型自动归属都要求至少 0.85 置信度；低于门槛时保存项目级 `pending_task_routes` 并询问用户。`pendingAction=keep` 保留原请求；旧 pending 只有在绑定它的 route receipt 被提交入口消费后才变为 resolved。已有任务路由与新任务/会话的原子创建都会签发绑定确切目标和完整请求的一次性凭证；user message 在写入事务中唯一占用凭证，胜出 pending receipt 消费时删除未消费 sibling，避免落败凭证污染其他 conversation。`submit_conversation_turn` 与兼容入口在后端强制消费，不能仅靠前端调用顺序绕过。Task Resolver 不选择工具；任务确定后仍由 Conversation Router 和 Agent loop 决定意图、首个技能和后续执行。
+Task Resolver 仍负责作用域归属：`resolve_conversation_task` 读取当前项目结构化任务快照，输出 `continue_current`、`switch_existing`、`create_new` 或 `clarify`，并以一次性 receipt 绑定确切 task、conversation 和完整请求。任何模型自动归属都要求至少 0.85 置信度；低于门槛时保存项目级 pending 并询问用户。Task Resolver 不选择工具、不决定回复/执行 route；receipt 消费后由 NativeToolLoop 统一处理请求。
 
 Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 task 终态、可选产物审计、以任务 ID 派生的确定性最终回复和 conversation 终态；事务提交后才发出 `agent-edit-completed`。事件只是低延迟通知，不再是最终回复的唯一载体。`submit_conversation_turn` 的 `run` 分支以 `{ kind: "run", agentTaskId }` 返回真实任务 ID；Rust enum 字段显式序列化为 camelCase，前端收到空 ID 会失败封闭，不能建立不可对账的 pending ref。前端仍缓存任务 ID 返回前的早到事件，同时在 composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时轮询 `agent_tasks` 终态；一次任务列表暂缺或 task 从 active 变 terminal 都不能结束轮询。没有内存 pending 时，持久化 `working` 本身允许前端对最新同作用域 terminal task 做一次恢复对账，覆盖首次快照已经 terminal 的窗口。事件丢失、窗口切换或快速完成时，会从 SQLite 重载原会话消息、storyboard、时间线和 preview。启动恢复若发现 `working` conversation 的最新 task 已终态却缺少 `agent-task-result-{agentTaskId}`，会把任务标为 `needs_review`、写入固定恢复消息并将会话改为 `review`，绝不猜测已经丢失的模型回答。只有活动项目和剪辑会话与任务作用域一致时才更新当前可见产物。模型响应解析失败只记录固定阶段和响应长度，不记录响应原文。`ModelAccess` 只有在确认自定义凭据不存在时才回退 OAuth，凭据读取错误会阻止请求。Agent loop 超时、解析失败或耗尽步数且未满足目标时，无中间产物持久化为 `failed`，已有真实中间产物为 `partially_completed`；`ask_user` 为 `needs_clarification`。终态状态重新读取失败仍采用 `failed` 的封闭结果。`change_clip_duration` 同时校验已验证源窗口的上下界，并令视频 `sourceEndMs` 精确等于新 `sourceStartMs + newDurationMs`。
 
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
+NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，最新调用与结果成对保留。默认注册 9 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
+
+```text
+真实会话 input
+  -> Provider 返回 message 或 function_call
+  -> 有 function_call：Rust 校验并执行 apply_skill（一次）
+  -> 追加原始 function_call + 结构化 function_call_output
+  -> 下一逻辑模型步骤请求 Provider
+       -> 瞬时 429/408/425/部分 5xx、超时、网络中断或空响应：
+          在同一 120 秒单步和 300 秒总预算内最多三次尝试；
+          每次 HTTP 只用剩余预算的一份，避免一次挂起占满 120 秒
+       -> 永久 4xx/未知错误：不重试
+  -> Provider 返回自然语言
+  -> RunReceipt + 持久化事实裁决终态，assistant 回复写入 SQLite
+```
+
+Provider 重试位于工具执行之后的独立模型请求边界，只重发同一 payload，不重新进入 `execute_native_tool`，因此不能重复本地副作用。每次尝试前及退避等待期间都会重新查询任务取消状态；取消后不再发下一次 Provider 请求。诊断仅保存 `provider_http_<status>`、`provider_timeout`、`provider_network`、`provider_empty_response` 或 `provider_unknown` 及尝试次数；Base URL、模型名、凭据、响应正文和传输详情不得进入 Agent 诊断。若重试仍失败，已有真实产物按 RunReceipt 保留，UI 才使用确定性诚实恢复文案。
+
+完整请求/响应排查不放宽生产日志、SQLite 或前端状态边界。debug 构建只有在 `NATIVE_PROVIDER_FULL_TRACE=1` 时，才把 NativeToolLoop 每次真实 HTTP 尝试实际发送的完整 JSON 和 Provider 响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。该文件只存在于 gitignored 的 `target/` 目录，供本机调试读取，不进入 WebView、Tauri 命令、SQLite 或普通产品日志。写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识和自定义 Base URL；请求头从不进入文件。网络层没有收到响应时不伪造 OUTPUT。进程首次开启时截断旧文件；release 构建即使设置同名环境变量也强制关闭。`npm run tauri:dev` 会设置该开关。
+
 Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
 
 Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑 `AgentStateSnapshot`，以当前项目/任务/会话、素材分析可用性、真实产物存在性、已执行步骤、剩余步数与未满足条件作为权威状态；确定性前置条件提示只约束真实依赖，不强制所有合法编辑经过 storyboard。循环技能和显式直通技能均持久化步骤开始/终态；应用中断后运行进入 `needs_review`，未完成步骤标记为 `interrupted_requires_review`，但不自动重放。
 
-对话区会把当前作用域最近一次 `agent_tasks` 调用显示为可折叠执行卡。卡片轮询同项目、剪辑任务和 Agent 调用下的 payload-free `agent_run_steps`；父级对话状态同时轮询 `agent_tasks` 终态，避免步骤已结束而卡片仍沿用旧的 `running` 快照。固定工具名会映射为用户可读动作，`finish` 显示为“整理并回答”，不会被误写成副作用；卡片显示步骤状态、已完成数量、运行时长与后端已记录的安全产物类型。模型推理、工具参数、错误原文、本机路径和媒体证据不会进入该卡片；右下角提示仍只表示项目级后台媒体分析，避免与当前对话任务混淆。
+对话区会把当前作用域最近一次 `agent_tasks` 调用显示为可折叠执行卡。卡片轮询同项目、剪辑任务和 Agent 调用下的 payload-free `agent_run_steps`；父级对话状态同时轮询 `agent_tasks` 终态，避免步骤已结束而卡片仍沿用旧的 `running` 快照。固定工具名会映射为用户可读动作，模型澄清或自然语言总结不会被误写成副作用；卡片显示步骤状态、已完成数量、运行时长与后端已记录的安全产物类型。模型推理、工具参数、错误原文、本机路径和媒体证据不会进入该卡片；右下角提示仍只表示项目级后台媒体分析，避免与当前对话任务混淆。
 
 ### 当前 Agent runtime 覆盖说明
 
@@ -252,7 +276,7 @@ storyboard 生成会记录详细日志：入口参数（project_id、editing_tas
 
 历史“未限定草稿直接指 Jianying draft”的说明已废止。只有明确“创建剪映草稿”才是直通命令；未限定草稿及普通交付请求交给模型工具循环。preview/Jianying draft 必须使用模型已显式选择或已有的作用域时间线，后端绝不暗中创建时间线版本。
 
-素材分析请求由模型分类为无产物门的观察目标，避免“分析素材”被误设为 `generate_storyboard`；模型仍在 `run_agent_loop` 的受限循环中自主选择观察、分析请求或澄清工具，不存在关键词直通执行。
+素材分析请求进入 NativeToolLoop 的受限工具集合；模型可在成功观察后选择 `request_asset_analysis` 或自然澄清，Rust 仍验证当前项目的素材证据和参数，不存在前置分类模型或关键词直通执行。
 
 已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
 
@@ -260,7 +284,7 @@ storyboard 生成会记录详细日志：入口参数（project_id、editing_tas
 - Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 
-项目事实问答证据门不新增顶层 route：`project + respond` 在原 90 秒预算内最多纠正一次；项目问答的首步和后续技能均为只读观察，且至少一次观察成功后才能结束回答。Conversation Router 返回无效目标/工具而降级为无初始技能 loop 时，后端仍会从显式只读或当前项目的产物、数量、版本、状态措辞保守恢复该证据门，不能因路由失败直接 `finish` 猜测。循环提示明确要求：一次成功观察已经包含用户所问的数量、状态或事实时，下一步直接 `finish` 并基于该结果回答，不调用语义重叠的观察工具只为重复确认；只有明确缺少被问事实时才继续观察。纠正或观察仍失败时封闭失败，不展示模型猜测。
+项目事实问答证据门不新增顶层 route：NativeToolLoop 记录本轮是否要求观察以及是否成功观察；至少一次观察成功后才能结束回答。循环提示明确要求：观察结果已经包含用户所问的数量、状态或事实时，直接基于该结果回答，不调用语义重叠的观察工具只为重复确认；只有明确缺少被问事实时才继续观察。纠正或观察仍失败时封闭失败，不展示模型猜测。
 
 维护记录（2026-08-15）： 的 FFmpeg `-t` 参数改为 `min(source_range, timeline_slot)`，防止源素材短于时间线槽位时生成黑帧。测试模块提取为独立 `preview_tests.rs`，`preview.rs` 预算从 1015 降至 608 行。
 
@@ -276,3 +300,5 @@ storyboard 生成会记录详细日志：入口参数（project_id、editing_tas
 维护记录（2026-08-18）：storyboard/phases.rs::phase3_fine_edit 的 Phase 3 prompt 补充 matchLevel 枚举约束。Phase 3 是独立模型调用，原 prompt 只说 "Each shot must contain: ... matchLevel" 未列举合法值；现补充 "matchLevel must be 'direct' (evidence visibly supports the beat) or 'contextual' (honest scene-setting)"，与 Phase 2 prompt 保持一致，防止模型返回其他字符串（如 "high"、"medium"）导致验证失败。不改变 StoryboardContent schema、公开命令或运行时边界。
 维护记录（2026-08-19）：为诊断启动卡顿问题，在 projects.rs::initialize_local_store（10 处）、assets/analysis.rs::resume_incomplete_analysis（7 处）、assets/visual.rs::recover_interrupted_visual_batches（3 处）和 backfill_queued_visual_batches（6 处）添加 [PERF] 前缀的性能日志，测量数据库连接、清理中断任务、恢复分析批次、启动后台 worker 等关键步骤的实际耗时。所有日志使用 log::info! 级别，使用 std::time::Instant 计时。只添加诊断日志，不改变执行逻辑、公开命令或 SQLite schema。
 维护记录（2026-08-19）：优化 projects.rs::recover_missing_agent_completion_messages 查询性能。用窗口函数（ROW_NUMBER() OVER PARTITION BY）+ CTE 替代相关子查询，避免对每行外部结果重新执行一次子查询的 O(N²) 复杂度。原查询在有几百条任务记录时耗时 ~300ms（占启动时间 80%），优化后预期降至 <20ms。查询语义完全等价（最新任务判定逻辑、NOT EXISTS 判定逻辑保持不变），不影响公开命令或 SQLite schema。SQLite 3.25+ 支持窗口函数，Tauri 自带 SQLite 3.45+ 满足要求。
+维护记录（2026-08-19）：Provider 新增协议无关的 ModelTurn/ModelOutputItem/FunctionCall。Responses 完整 response.output、Responses SSE item、Chat Completions 普通响应与 SSE tool-call 增量均可解析；自定义 Chat 适配器保留 tools/tool_choice/parallel_tool_calls，并将函数调用历史映射为 assistant.tool_calls 与 tool_call_id。Legacy Runtime、Router、LoopGoal 和副作用流程不变，store:false 不影响 output item 保留。
+维护记录（2026-08-19）：`agentloop/tools.rs` 集中维护 9 个只读原生 Function Tools、六个主链工具及文本、音乐和 Jianying 交付批次。每项使用 strict JSON Schema 与 additionalProperties=false；严格 schema 的所有属性都列入 required，语义可选值使用 nullable 类型并由 Native loop 再次校验长度、范围和枚举。模型不携带 projectId、conversationId 或本地路径；执行仍由既有 apply_skill 负责，许可证、文字兼容矩阵、确认门与领域算法不移入工具适配层。

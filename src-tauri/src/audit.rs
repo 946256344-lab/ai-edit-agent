@@ -545,4 +545,47 @@ mod tests {
             .expect("count diagnostics");
         assert_eq!(count, 1);
     }
+
+    #[test]
+    fn provider_retry_diagnostics_persist_only_safe_codes_and_attempt_counts() {
+        let connection = Connection::open_in_memory().expect("open audit test database");
+        migrate(&connection).expect("migrate audit test database");
+        insert_run_scope(&connection, "project-a", "edit-a", "run-a");
+
+        for content in [
+            "provider_retry_code=provider_http_429_attempt=1",
+            "provider_recovery_code=provider_http_429_attempts=2",
+            "provider_failure_code=provider_http_400_attempts=1",
+        ] {
+            record_agent_diagnostic(
+                &connection,
+                "project-a",
+                "edit-a",
+                "edit-a-conversation",
+                "run-a",
+                Some(2),
+                "pipeline_error",
+                content,
+            )
+            .expect("record provider diagnostic");
+        }
+
+        let persisted = connection
+            .prepare("SELECT kind, content FROM agent_diagnostics ORDER BY created_at, rowid")
+            .expect("prepare provider diagnostics query")
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("query provider diagnostics")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect provider diagnostics");
+        assert_eq!(persisted.len(), 3);
+        assert!(persisted.iter().all(|(kind, _)| kind == "pipeline_error"));
+        assert!(persisted[0].1.starts_with("provider_retry_code="));
+        assert!(persisted[1].1.starts_with("provider_recovery_code="));
+        assert!(persisted[2].1.starts_with("provider_failure_code="));
+        assert!(persisted
+            .iter()
+            .all(|(_, content)| !content.contains("sensitive") && !content.contains("private")));
+    }
 }

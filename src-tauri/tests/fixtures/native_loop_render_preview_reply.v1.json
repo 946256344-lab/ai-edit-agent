@@ -1,0 +1,16 @@
+{
+  "id": "resp_fixture_render_preview_reply",
+  "output": [
+    {
+      "id": "msg_fixture_render_preview_reply",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "预览已生成，可以检查节奏和字幕。"
+        }
+      ]
+    }
+  ]
+}

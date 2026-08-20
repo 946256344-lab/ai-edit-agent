@@ -5,22 +5,12 @@
     "location": "top_level",
     "case": "camelCase",
     "unknownKeys": "tolerated",
-    "removedMetaKeys": [
-      "goal",
-      "isQuestion",
-      "tool",
-      "reason",
-      "answer",
-      "question",
-      "taskBrief",
-      "clarificationAction",
-      "informationScope"
-    ]
+    "removedMetaKeys": []
   },
   "runtimePolicy": {
     "maximumSteps": 10,
-    "firstDecision": "ambiguous requests declare goal and isQuestion while choosing the first tool or finish in the same response; deterministic backend goals remain authoritative",
-    "interactiveModelBudgetSeconds": 90,
+    "conversationEntry": "ordinary chat, clarification, project facts, and tool execution all enter one bounded NativeToolLoop; the model chooses native function calls directly",
+    "interactiveModelBudgetSeconds": 300,
     "failedSkillHandling": "return the error to the model transcript and continue within the bounded loop",
     "automaticSkillRetry": false,
     "interruptedRunHandling": "needs_review; do not replay unknown side effects"
@@ -627,19 +617,6 @@
         "timelineVersionId",
         "registrationStatus"
       ]
-    }
-  ],
-  "controlActions": [
-    {
-      "name": "ask_user",
-      "input": ["question"],
-      "effect": "ends the loop with a clarification message and no artifact"
-    },
-    {
-      "name": "finish",
-      "aliases": ["no_action", "done", "empty tool"],
-      "input": ["answer"],
-      "effect": "ends only when the goal's real artifact gate is satisfied; Question may finish with an answer"
     }
   ],
   "knownImplementationNotes": [

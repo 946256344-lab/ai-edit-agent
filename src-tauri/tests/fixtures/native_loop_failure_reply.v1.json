@@ -1,0 +1,16 @@
+{
+  "id": "resp_fixture_failure_reply",
+  "output": [
+    {
+      "id": "msg_fixture_failure_reply",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "当前无法读取素材状态，我可以稍后再试。"
+        }
+      ]
+    }
+  ]
+}

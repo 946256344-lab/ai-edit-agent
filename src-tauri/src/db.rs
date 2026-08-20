@@ -11,7 +11,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 14;
+pub(crate) const SCHEMA_VERSION: i64 = 15;
 
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
@@ -62,7 +62,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         );
         CREATE TABLE IF NOT EXISTS messages (
           id TEXT PRIMARY KEY NOT NULL, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
-          role TEXT NOT NULL CHECK(role IN ('user', 'agent', 'tool', 'system')), content TEXT NOT NULL, created_at INTEGER NOT NULL
+          role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'agent', 'tool', 'system')), content TEXT NOT NULL, created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS assets (
           id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
@@ -141,6 +141,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS asset_source_health_project_status_idx ON asset_source_health(project_id, status, checked_at DESC);
         ",
     ).map_err(|error| error.to_string())?;
+    ensure_assistant_message_role(connection)?;
     let folder_reference_column_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('assets') WHERE name = 'folder_reference'",
@@ -407,6 +408,36 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_assistant_message_role(connection: &Connection) -> Result<(), String> {
+    let schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if schema.contains("'assistant'") {
+        return Ok(());
+    }
+    connection
+        .execute_batch(
+            "CREATE TABLE messages_with_assistant (
+               id TEXT PRIMARY KEY NOT NULL,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE RESTRICT,
+               role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'agent', 'tool', 'system')),
+               content TEXT NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             INSERT INTO messages_with_assistant (id, conversation_id, role, content, created_at)
+               SELECT id, conversation_id, role, content, created_at FROM messages;
+             DROP TABLE messages;
+             ALTER TABLE messages_with_assistant RENAME TO messages;
+             CREATE INDEX IF NOT EXISTS messages_conversation_created_idx
+               ON messages(conversation_id, created_at ASC);",
+        )
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,5 +676,74 @@ mod tests {
             })
             .expect("read schema version");
         assert_eq!(schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_allows_assistant_conversation_messages() {
+        let connection = Connection::open_in_memory().expect("open assistant message database");
+        migrate(&connection).expect("migrate assistant message database");
+        let schema: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read messages schema");
+        assert!(schema.contains("'assistant'"));
+    }
+
+    #[test]
+    fn migration_upgrades_legacy_messages_constraint_without_losing_rows() {
+        let connection = Connection::open_in_memory().expect("open legacy message database");
+        connection
+            .execute_batch(
+                "CREATE TABLE messages (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   conversation_id TEXT NOT NULL,
+                   role TEXT NOT NULL CHECK(role IN ('user', 'agent', 'tool', 'system')),
+                   content TEXT NOT NULL,
+                   created_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE projects (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   settings_json TEXT NOT NULL DEFAULT '{}',
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE conversations (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+                   title TEXT NOT NULL,
+                   summary TEXT NOT NULL DEFAULT '',
+                   status TEXT NOT NULL DEFAULT 'ready',
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO projects (id, name, created_at, updated_at)
+                   VALUES ('project', 'Legacy project', 1, 1);
+                 INSERT INTO conversations (id, project_id, title, created_at, updated_at)
+                   VALUES ('conversation', 'project', 'Legacy conversation', 1, 1);
+                 INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES ('legacy', 'conversation', 'agent', '旧回复', 1);",
+            )
+            .expect("seed legacy message table");
+
+        migrate(&connection).expect("upgrade legacy message table");
+
+        let content: String = connection
+            .query_row(
+                "SELECT content FROM messages WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated message");
+        assert_eq!(content, "旧回复");
+        connection
+            .execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('assistant', 'conversation', 'assistant', '新回复', 2)",
+                [],
+            )
+            .expect("insert assistant message");
     }
 }

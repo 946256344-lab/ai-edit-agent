@@ -1,5 +1,4 @@
 //! 消息写入前的任务归属与一次性 receipt 边界；只选作用域，不选择 Agent 工具。
-use crate::agent::explicit_command_tool;
 use crate::db::{now_millis, open_connection};
 use crate::models::TaskRouteResult;
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
@@ -76,13 +75,6 @@ pub fn resolve_conversation_task(
     let active_task_id = active_editing_task_id
         .filter(|id| candidates.iter().any(|c| c.task_id == *id));
     let pending = load_pending_task_route(&connection, &project_id)?;
-    // 精确单命令只使用用户显式选中的 task；无 Provider 状态路径也绝不猜测另一个作用域。
-    if pending.is_none() && explicit_command_tool(request).is_some() {
-        if let Some(candidate) = selected_candidate(&candidates, active_task_id.as_deref()) {
-            let result = result_for_candidate("continue_current", candidate, 1.0, "explicit_current_task", None);
-            return issue_route_receipt(&connection, &project_id, request, result, None);
-        }
-    }
     // 快路径：激活任务是全新空任务（planning 阶段、无产物、无历史子目标）。
     // 用户通过按钮显式创建并激活了这个会话；直接归属，无需模型介入。
     // 这防止旧任务候选干扰新会话的第一条消息。
@@ -100,7 +92,10 @@ pub fn resolve_conversation_task(
             }
         }
     }
-    let access = ModelAccess::resolve().map_err(|_| "Task resolver model is unavailable.".to_owned())?;
+    let access = ModelAccess::resolve().map_err(|original_error| {
+        log::error!("[TaskRouter] ModelAccess::resolve() failed: {}", original_error);
+        format!("Task resolver model is unavailable: {}", original_error)
+    })?;
     let prompt = build_task_route_prompt(request, active_task_id.as_deref(), &candidates, pending.as_ref());
     let body = json!({"model":"gpt-5.4","store":false,"stream":true,
         "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
@@ -311,19 +306,6 @@ fn ambiguous_route_result(
         deferred_request,
         route_receipt: None,
     }
-}
-
-fn selected_candidate<'a>(
-    candidates: &'a [TaskCandidate],
-    active_task_id: Option<&str>,
-) -> Option<&'a TaskCandidate> {
-    active_task_id
-        .and_then(|task_id| {
-            candidates
-                .iter()
-                .find(|candidate| candidate.task_id == task_id)
-        })
-        .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))
 }
 
 fn result_for_candidate(

@@ -5,7 +5,6 @@ import { evaluateArchitecture, evaluateBudgetRatchet } from './check-architectur
 const config = {
   pathBudgets: [{
     path: 'src/App.tsx',
-    maxLines: 3,
     maxCharacters: 100,
     maxLineLength: 50,
     maxUseState: 1,
@@ -15,7 +14,6 @@ const config = {
   directoryBudgets: [{
     directory: 'src/components',
     extensions: ['.tsx'],
-    maxLines: 2,
     maxCharacters: 80,
     maxLineLength: 60,
   }],
@@ -34,6 +32,16 @@ const passing = evaluateArchitecture(
 )
 assert.deepEqual(passing.errors, [])
 
+const longButBounded = evaluateArchitecture(
+  config,
+  new Map([
+    ['src/App.tsx', `export function App({ model, actions }: Props) {\n}${'\n'.repeat(20)}`],
+    ['src/components/Panel.tsx', `export function Panel({ model, actions }: Props) {}\n${'\n'.repeat(20)}`],
+  ]),
+  new Map([['src/components', ['src/components/Panel.tsx']]]),
+)
+assert.deepEqual(longButBounded.errors, [])
+
 const failing = evaluateArchitecture(
   config,
   new Map([
@@ -43,7 +51,6 @@ const failing = evaluateArchitecture(
   ]),
   new Map([['src/components', ['src/components/Panel.tsx', 'src/components/Legacy.tsx']]]),
 )
-assert.match(failing.errors.join('\n'), /行数/)
 assert.match(failing.errors.join('\n'), /useState/)
 assert.match(failing.errors.join('\n'), /旧调用不得恢复/)
 assert.match(failing.errors.join('\n'), /已废弃边界不得恢复/)
@@ -73,8 +80,6 @@ const compressedLine = evaluateArchitecture(
 assert.match(compressedLine.errors.join('\n'), /最长单行字符数/)
 
 const weakened = structuredClone(config)
-weakened.pathBudgets[0].maxLines = 4
-weakened.directoryBudgets[0].maxLines = 3
 delete weakened.pathBudgets[0].maxCharacters
 weakened.directoryBudgets[0].maxLineLength = 61
 weakened.forbiddenText = []
@@ -84,10 +89,17 @@ const ratchetErrors = evaluateBudgetRatchet(
   new Map([['src/App.tsx', 'current\n']]),
   new Map([['src/components', ['src/components/Panel.tsx']]]),
 )
-assert.match(ratchetErrors.join('\n'), /不得从 2 放宽为 3/)
 assert.match(ratchetErrors.join('\n'), /maxCharacters.*未限制/)
 assert.match(ratchetErrors.join('\n'), /maxLineLength.*61/)
 assert.match(ratchetErrors.join('\n'), /不得移除跨层调用保护/)
+
+const legacyBaseline = structuredClone(config)
+legacyBaseline.pathBudgets[0].maxLines = 3
+legacyBaseline.directoryBudgets[0].maxLines = 2
+assert.deepEqual(
+  evaluateBudgetRatchet(config, legacyBaseline, new Map([['src/App.tsx', 'current\n']]), new Map([['src/components', ['src/components/Panel.tsx']]])),
+  [],
+)
 
 const removedBudget = structuredClone(config)
 removedBudget.pathBudgets = []

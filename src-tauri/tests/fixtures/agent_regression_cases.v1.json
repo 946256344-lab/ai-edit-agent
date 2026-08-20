@@ -1,13 +1,13 @@
 {
   "suiteVersion": 1,
-  "target": "src-tauri/src/agentloop.rs + src-tauri/src/agentloop/policy.rs",
+  "target": "src-tauri/src/agentloop/native.rs + src-tauri/src/agentloop/policy.rs",
   "executionModel": {
     "kind": "fixture_contract",
-    "currentAutomation": "cargo test validates fixture structure and coverage; a scripted ToolDecisionProvider-equivalent loop harness is not implemented",
+    "currentAutomation": "cargo test validates fixture structure and coverage; representative NativeToolLoop fixtures execute separately",
     "oraclePriority": [
       "no unintended side effect",
       "real artifact gate",
-      "correct goal or clarification",
+      "correct tool scope or clarification",
       "honest terminal message"
     ]
   },
@@ -25,11 +25,10 @@
         "scopedTimelines": ["timeline-current"]
       },
       "providerScript": [
-        { "tool": "render_preview", "timelineVersionId": "timeline-current" },
-        { "tool": "finish", "answer": "预览已生成。" }
+        { "tool": "render_preview", "timelineVersionId": "timeline-current" }
       ],
+      "assistantReply": "预览已生成。",
       "expected": {
-        "goal": "preview",
         "mustInvoke": ["render_preview"],
         "mustProduce": ["local_preview"],
         "mustNotProduce": ["jianying_draft"],
@@ -54,11 +53,6 @@
           "shot2CurrentDurationMs": 4000
         }
       },
-      "classificationResponse": {
-        "goal": "timeline",
-        "isQuestion": false,
-        "reason": "contains a concrete duration edit"
-      },
       "providerScript": [
         {
           "tool": "change_clip_duration",
@@ -66,11 +60,10 @@
           "adjustments": [
             { "shotIndex": 2, "newDurationMs": 3000 }
           ]
-        },
-        { "tool": "finish", "answer": "已缩短第二个镜头。" }
+        }
       ],
+      "assistantReply": "已缩短第二个镜头。",
       "expected": {
-        "goal": "timeline",
         "mustInvoke": ["change_clip_duration"],
         "mustProduce": ["timeline_version", "operation_log"],
         "terminalKind": "completed_with_real_artifact"
@@ -92,11 +85,6 @@
         "scopedTimelines": ["timeline-v4"],
         "latestReferencedShotIndex": 2
       },
-      "classificationResponse": {
-        "goal": "timeline",
-        "isQuestion": false,
-        "reason": "continues the prior duration edit"
-      },
       "providerScript": [
         {
           "tool": "change_clip_duration",
@@ -104,11 +92,10 @@
           "adjustments": [
             { "shotIndex": 2, "newDurationMs": 2500 }
           ]
-        },
-        { "tool": "finish", "answer": "第二个镜头又缩短了一点。" }
+        }
       ],
+      "assistantReply": "第二个镜头又缩短了一点。",
       "expected": {
-        "goal": "timeline",
         "mustChangeOnlyShotIndexes": [2],
         "mustProduce": ["timeline_version", "operation_log"],
         "mustNotModifyOlderVersion": true
@@ -128,11 +115,10 @@
         "scopedTimelines": []
       },
       "providerScript": [
-        { "tool": "generate_storyboard", "brief": "产品短视频" },
-        { "tool": "ask_user", "question": "当前没有已完成分析的素材。请先导入素材并等待分析完成后再生成 storyboard。" }
+        { "tool": "generate_storyboard", "brief": "产品短视频" }
       ],
+      "assistantReply": "当前没有已完成分析的素材。请先导入素材并等待分析完成后再生成 storyboard。",
       "expected": {
-        "goal": "storyboard",
         "firstSkillResult": "failure",
         "terminalKind": "clarification",
         "mustProduce": [],
@@ -156,7 +142,6 @@
         "{\"tool\":\"render_preview\",\"timelineVersionId\":"
       ],
       "expected": {
-        "goal": "preview",
         "terminalKind": "failed_honestly",
         "mustInvoke": [],
         "mustProduce": [],
@@ -185,9 +170,9 @@
           "adjustments": [
             { "shotIndex": 1, "newDurationMs": 1000 }
           ]
-        },
-        { "tool": "ask_user", "question": "该时间线不属于当前剪辑任务。请在对应项目中重新发起请求。" }
+        }
       ],
+      "assistantReply": "该时间线不属于当前剪辑任务。请在对应项目中重新发起请求。",
       "expected": {
         "firstSkillResult": "failure",
         "terminalKind": "clarification",
@@ -198,9 +183,9 @@
       "automation": "fixture_only"
     },
     {
-      "id": "preview-premature-finish-is-corrected",
-      "categories": ["premature_finish"],
-      "description": "A model claim of completion cannot satisfy a preview goal until a real PreviewResult exists.",
+      "id": "preview-text-claim-has-no-receipt",
+      "categories": ["unverified_completion_claim"],
+      "description": "A natural-language completion claim cannot create a completed receipt or PreviewResult.",
       "turns": [
         { "role": "user", "content": "生成预览" }
       ],
@@ -210,17 +195,13 @@
         "scopedTimelines": ["timeline-current"],
         "previewExists": false
       },
-      "providerScript": [
-        { "tool": "finish", "answer": "预览已经生成好了。" },
-        { "tool": "render_preview", "timelineVersionId": "timeline-current" },
-        { "tool": "finish", "answer": "预览已生成。" }
-      ],
+      "providerScript": [],
+      "assistantReply": "预览已经生成好了。",
       "expected": {
-        "goal": "preview",
-        "firstFinish": "rejected_with_corrective_message",
-        "mustInvoke": ["render_preview"],
-        "mustProduce": ["local_preview"],
-        "terminalKind": "completed_with_real_artifact"
+        "mustInvoke": [],
+        "mustProduce": [],
+        "mustNotClaimCompletion": true,
+        "terminalKind": "failed_honestly"
       },
       "automation": "fixture_only"
     },
@@ -254,9 +235,9 @@
               "sourceEndMs": 12000
             }
           ]
-        },
-        { "tool": "ask_user", "question": "素材二的所选范围超出已验证时长，请选择 0 到 10 秒内且长度为 4 秒的范围。" }
+        }
       ],
+      "assistantReply": "素材二的所选范围超出已验证时长，请选择 0 到 10 秒内且长度为 4 秒的范围。",
       "expected": {
         "firstSkillResult": "failure",
         "terminalKind": "clarification",
@@ -278,13 +259,11 @@
         "shotIndexes": [1, 2, 3],
         "resolvableReference": false
       },
-      "providerScript": [
-        { "tool": "ask_user", "question": "你指的是时间线中的第几个镜头？请告诉我镜头序号。" }
-      ],
+      "providerScript": [],
+      "assistantReply": "你指的是时间线中的第几个镜头？请告诉我镜头序号。",
       "expected": {
-        "goal": "timeline",
         "terminalKind": "clarification",
-        "mustInvoke": ["ask_user"],
+        "mustInvoke": [],
         "mustProduce": [],
         "mustNotModifyShotIndexes": [1, 2, 3]
       },
@@ -302,11 +281,10 @@
         "scopedTimelines": ["timeline-current"]
       },
       "providerScript": [
-        { "tool": "get_storyboard" },
-        { "tool": "finish", "answer": "镜头选择依据已分析素材中的场景证据、源时间范围和当前创作目标。" }
+        { "tool": "get_storyboard" }
       ],
+      "assistantReply": "镜头选择依据已分析素材中的场景证据、源时间范围和当前创作目标。",
       "expected": {
-        "goal": "question",
         "mustNotProduce": ["storyboard_version", "timeline_version", "local_preview", "jianying_draft"],
         "terminalKind": "answered_without_artifact"
       },

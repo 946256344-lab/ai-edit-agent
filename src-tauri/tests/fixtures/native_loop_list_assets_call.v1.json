@@ -1,0 +1,19 @@
+{
+  "id": "resp_fixture_list_call",
+  "output": [
+    {
+      "id": "msg_fixture_list_call",
+      "type": "message",
+      "role": "assistant",
+      "content": []
+    },
+    {
+      "id": "fc_fixture_list_assets",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_list_assets",
+      "name": "list_assets",
+      "arguments": "{}"
+    }
+  ]
+}

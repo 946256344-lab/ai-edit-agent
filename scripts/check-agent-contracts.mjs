@@ -1,7 +1,7 @@
 // 校验 Agent 上下文入口、IPC/进程/网络所有权、工具目录与文档结构没有漂移。
 import { execFileSync } from 'node:child_process'
 import { extname, resolve } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import process from 'node:process'
 
 const root = process.cwd()
@@ -41,7 +41,9 @@ function loadRepository(staged) {
     if (!relevantExtensions.has(extname(filePath)) && !filePath.startsWith('docs/codebase/') && filePath !== '.githooks/pre-commit') {
       continue
     }
-    const content = staged ? stagedFileContent(filePath) : readFileSync(resolve(root, filePath), 'utf8')
+    const content = staged
+      ? stagedFileContent(filePath)
+      : (existsSync(resolve(root, filePath)) ? readFileSync(resolve(root, filePath), 'utf8') : undefined)
     if (content !== undefined) {
       contents.set(filePath, content)
     }
@@ -104,12 +106,6 @@ function registeredCommands(content) {
 
 function invokedCommands(content) {
   return [...content.matchAll(/\binvoke(?:<[^>\n]+>)?\s*\(\s*['"]([^'"]+)['"]/g)].map((item) => item[1])
-}
-
-function runtimeControlNames(content) {
-  const bodies = [...content.matchAll(/matches!\s*\(\s*tool\.as_str\(\)\s*,([\s\S]*?)\)/g)].map((match) => match[1])
-  const controlBody = bodies.find((body) => body.includes('"ask_user"')) ?? ''
-  return sortedUnique([...controlBody.matchAll(/"([^"]+)"/g)].map((item) => item[1]))
 }
 
 function checkBoundary(contents, boundary, pattern, label, errors) {
@@ -241,10 +237,8 @@ export function evaluateAgentContracts(contents, config) {
     errors.push(`公开 Tauri 命令未写入 docs/api.md：${command}`)
   }
 
-  // 工具授权事实必须留在纯策略模块；父循环仍负责解析 canonical control 及兼容别名。
+  // 工具授权事实必须留在纯策略模块；Native loop 只接受真实 Function Tool 名称。
   const rustPolicy = contents.get('src-tauri/src/agentloop/policy.rs') ?? ''
-  const rustLoop = contents.get('src-tauri/src/agentloop.rs') ?? ''
-  const rustRuntime = contents.get('src-tauri/src/agentloop/runtime.rs') ?? ''
   const typeScriptTools = contents.get('src/lib/agent-tools.ts') ?? ''
   let fixture
   try {
@@ -254,22 +248,30 @@ export function evaluateAgentContracts(contents, config) {
     fixture = {}
   }
   const fixtureTools = Array.isArray(fixture.tools) ? fixture.tools : []
-  const fixtureControls = Array.isArray(fixture.controlActions) ? fixture.controlActions : []
   const checks = [
     ['观察工具', rustArray(rustPolicy, 'OBSERVATION_TOOLS'), literalValues(typeScriptTools, 'AgentObservationToolName'), fixtureTools.filter((tool) => tool.kind === 'observation').map((tool) => tool.name)],
     ['编辑/交付工具', rustArray(rustPolicy, 'EDIT_TOOLS'), literalValues(typeScriptTools, 'AgentSideEffectToolName'), fixtureTools.filter((tool) => tool.kind !== 'observation').map((tool) => tool.name)],
-    ['控制动作', fixtureControls.map((tool) => tool.name), literalValues(typeScriptTools, 'AgentControlToolName'), fixtureControls.map((tool) => tool.name)],
-    ['控制动作别名', fixtureControls.flatMap((tool) => tool.aliases ?? []).filter((name) => name !== 'empty tool'), literalValues(typeScriptTools, 'AgentControlToolAlias'), fixtureControls.flatMap((tool) => tool.aliases ?? []).filter((name) => name !== 'empty tool')],
   ]
   for (const [label, runtime, mirror, contract] of checks) {
     if (!sameValues(runtime, mirror) || !sameValues(runtime, contract)) {
       errors.push(`${label}在 Rust、TypeScript 与版本化 fixture 之间发生漂移。`)
     }
   }
-  const runtimeControls = runtimeControlNames(`${rustPolicy}\n${rustLoop}\n${rustRuntime}`)
-  const contractControls = fixtureControls.flatMap((tool) => [tool.name, ...(tool.aliases ?? [])]).filter((name) => name !== 'empty tool')
-  if (!sameValues(runtimeControls, contractControls)) {
-    errors.push('Rust 接受的控制动作与 TypeScript/版本化 fixture 发生漂移。')
+  const nativeProductionFiles = [...contents.keys()].filter((filePath) =>
+    filePath === 'src-tauri/src/agent.rs'
+      || filePath === 'src-tauri/src/agentloop.rs'
+      || (filePath.startsWith('src-tauri/src/agentloop/') && filePath.endsWith('.rs')),
+  )
+  const forbiddenConversationRouter = /\b(?:decide_conversation_route|ConversationRouteDecision|ConversationRouteResponse|InitialAgentSkill|run_agent_loop_with_initial_skill)\b|\bgoalReasoning\b|\bgoal_reasoning\b|\bisQuestion\b|\bis_question\b|\binformationScope\b|\binformation_scope\b/
+  const forbiddenFixedLoopGoal = /\b(?:LoopGoal|goal_locked|fast_goal|parse_declared_goal|satisfied_by)\b|Once declared[^\n]*goal[^\n]*fixed|['"](?:finish|done|no_action)['"]/
+  for (const filePath of nativeProductionFiles) {
+    const content = contents.get(filePath) ?? ''
+    if (forbiddenConversationRouter.test(content)) {
+      errors.push(`NativeToolLoop 单入口不得恢复前置对话 Router 或首工具协议：${filePath}`)
+    }
+    if (forbiddenFixedLoopGoal.test(content)) {
+      errors.push(`NativeToolLoop 不得恢复固定 LoopGoal 或伪控制动作：${filePath}`)
+    }
   }
 
   return { errors }

@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_timeline",
+  "output": [{"type":"function_call","call_id":"call_composite_timeline","name":"create_timeline_draft","arguments":"{}"}]
+}

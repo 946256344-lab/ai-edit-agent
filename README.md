@@ -12,6 +12,10 @@
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。
 - 已人工验证的 Jianying Pro 8.0 仅视频草稿创建、注册和打开。
 - 非显式自然语言请求由模型在受控工具中逐步决策；模型可请求分析项目内已导入但未分析的素材，但不能直接执行文件、SQLite 或 FFmpeg 操作。storyboard 的镜头数和时长由模型提案，应用只保留本地处理安全上限。
+- 对话请求统一按 SQLite 时间顺序发送真实 user/assistant 会话消息进入 NativeToolLoop；只读请求使用观察工具，非只读请求按 RequestToolPolicy 暴露获授权的原生工具，Legacy JSON decision/Router 路径已移除。
+- NativeToolLoop 不声明固定单一目标：有原生工具调用就执行并继续，没有调用且有自然语言就结束；任务完成状态仍只来自真实工具收据和持久化产物。
+- 工具结果进入下一次模型总结请求后，瞬时 Provider 传输失败会在原单步/总预算内重试；重试只重发模型请求，不会重复执行已经完成的本地工具。
+- 开发构建可用显式 `NATIVE_PROVIDER_FULL_TRACE=1` 把 NativeToolLoop 每次 HTTP 的完整请求 JSON 和原始响应写入 `src-tauri/target/native-provider-full-trace.jsonl`；不进前端，release 构建不可用。
 
 这不是生产就绪的 Agent 编排系统。自定义模型适配器、生产安装包中的媒体运行时、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
 
@@ -21,6 +25,8 @@
 npm install
 npm run tauri:dev
 ```
+
+`npm run tauri:dev` 会在 debug 进程中开启 Native Provider JSONL 转储。完整请求/响应写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进入界面；release 构建即使设置同名变量也保持关闭。
 
 `npm run dev` 仅用于浏览器 UI 检查，不能访问本地项目、媒体工具或模型凭据，不能作为剪辑模式使用。
 
@@ -84,3 +90,9 @@ npm run harness:check
 维护记录（2026-08-15）：agentloop 与 taskrouter 路由验证新增 validate-then-correct 重试；fast_goal 降级为提示；Agent run 超时从 90 s 提升至 300 s。
 维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback，错误路径改为输出真实原因；见 ADR-065 与 docs/changes/2026-08-16-remove-silent-fallbacks.md。
 维护记录（2026-08-17）：agentloop.rs 分层重构完成；路由/执行/提示/纯类型分入 agentloop/{runtime,skills,prompt,schema}.rs；check-agent-contracts.mjs 扩展扫描 runtime.rs。
+维护记录（2026-08-19）：Provider 原生工具调用统一为 ModelTurn/ModelOutputItem/FunctionCall，并由 NativeToolLoop 消费；非 Native 的 storyboard/视觉请求仍保留旧 JSON 提取接口。
+维护记录（2026-08-19）：NativeToolLoop 已移除前置对话 Router，统一处理普通聊天、澄清、项目事实和工具执行；原生 loop 提供观察、主链、文本、音乐与 Jianying 工具，RequestToolPolicy、确认门、作用域、超时和审计边界保持不变。
+维护记录（2026-08-19）：NativeToolLoop 已移除固定 LoopGoal 与 finish/done/no_action 控制动作；复合请求可跨多个授权工具，超时和步骤上限按真实 RunReceipt 保留部分产物。
+维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭），防止跨会话数据泄漏；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
+维护记录（2026-08-20）：NativeToolLoop 为工具后的 Provider 总结请求增加安全失败分类与有界重试，每次 HTTP 只用剩余单步预算的一份，且不会重放本地工具；见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
+维护记录（2026-08-20）：debug 构建可用 `NATIVE_PROVIDER_FULL_TRACE=1` 开启进程内完整 Provider INPUT/OUTPUT 检查器；见 docs/changes/2026-08-20-native-provider-full-trace.md。

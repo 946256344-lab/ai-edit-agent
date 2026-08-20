@@ -1,0 +1,4 @@
+{
+  "id": "resp_composite_observe",
+  "output": [{"type":"function_call","call_id":"call_composite_observe","name":"list_assets","arguments":"{}"}]
+}

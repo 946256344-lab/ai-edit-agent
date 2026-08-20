@@ -1,0 +1,19 @@
+{
+  "id": "resp_fixture_render_preview_call",
+  "output": [
+    {
+      "id": "msg_fixture_render_preview_call",
+      "type": "message",
+      "role": "assistant",
+      "content": []
+    },
+    {
+      "id": "fc_fixture_render_preview",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_render_preview",
+      "name": "render_preview",
+      "arguments": "{\"timelineVersionId\":null}"
+    }
+  ]
+}

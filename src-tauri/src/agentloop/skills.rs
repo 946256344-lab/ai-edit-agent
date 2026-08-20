@@ -27,6 +27,7 @@ use super::schema::LoopState;
 // 工具产物映射
 // ──────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
     match tool {
         "generate_storyboard" => Some("storyboard"),
@@ -35,7 +36,8 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
-        | "replace_music_tracks" => Some("timeline"),
+        | "replace_music_tracks"
+        | "use_online_music" => Some("timeline"),
         "render_preview" => Some("preview"),
         "create_jianying_draft" => Some("jianying_draft"),
         _ => None,
@@ -57,7 +59,8 @@ pub(super) fn persisted_artifact_for_tool(
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
-        | "replace_music_tracks" => result
+        | "replace_music_tracks"
+        | "use_online_music" => result
             .timeline
             .as_ref()
             .map(|artifact| ("timeline_version", artifact.id.clone())),
@@ -159,6 +162,7 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn safe_failure_explanation(explanation: &str) -> bool {
     let explanation = explanation.trim().to_lowercase();
     !explanation.is_empty()
@@ -174,14 +178,6 @@ pub(super) fn safe_failure_explanation(explanation: &str) -> bool {
         ]
         .iter()
         .any(|claim| explanation.contains(claim))
-}
-
-pub(super) fn should_redirect_storyboard_after_failed_generation(
-    goal: super::policy::LoopGoal,
-    last_failed_tool_error_code: Option<&str>,
-) -> bool {
-    goal == super::policy::LoopGoal::Storyboard
-        && matches!(last_failed_tool_error_code, Some("skill_execution_failed"))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -320,13 +316,17 @@ pub(super) fn select_timeline_for_tool(
     args: &Value,
 ) -> Result<TimelineVersion, String> {
     let timeline_id = args.get("timelineVersionId").and_then(Value::as_str);
-    select_timeline_candidate(&state.timelines, timeline_id, None).ok_or_else(|| {
+    let timeline = select_timeline_candidate(&state.timelines, timeline_id, None).ok_or_else(|| {
         if state.timelines.is_empty() {
             "no_timeline: 当前剪辑任务还没有时间线，请先调用 create_timeline_draft 创建时间线，再生成预览或草稿。".to_owned()
         } else {
             "Agent must select a timeline that belongs to the current storyboard.".to_owned()
         }
-    })
+    })?;
+    if timeline.project_id != state.project_id {
+        return Err("timeline_scope_mismatch: 时间线不属于当前项目。".to_owned());
+    }
+    Ok(timeline)
 }
 
 #[rustfmt::skip]
@@ -860,6 +860,7 @@ pub(super) fn apply_skill(
             let version_number = timeline.version_number;
             let timeline_for_render = timeline.clone();
             let preview = render_preview(state.app.clone(), timeline_for_render.id.clone())?;
+            let quality_check_count = preview.quality_report.checks.len();
             upsert(&mut state.timelines, timeline_for_render.clone());
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
@@ -872,8 +873,12 @@ pub(super) fn apply_skill(
             Ok(json!({
                 "tool": "render_preview",
                 "status": "ok",
-                "timelineVersionId": timeline_version_id,
-                "versionNumber": version_number
+                "artifact": {
+                    "type": "preview",
+                    "timelineVersionId": timeline_version_id,
+                    "versionNumber": version_number,
+                    "qualityCheckCount": quality_check_count
+                }
             }))
         }
         "create_jianying_draft" => {

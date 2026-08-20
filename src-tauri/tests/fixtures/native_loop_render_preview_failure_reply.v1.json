@@ -1,0 +1,16 @@
+{
+  "id": "resp_fixture_render_preview_failure_reply",
+  "output": [
+    {
+      "id": "msg_fixture_render_preview_failure_reply",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "当前没有时间线，所以还不能生成预览。"
+        }
+      ]
+    }
+  ]
+}

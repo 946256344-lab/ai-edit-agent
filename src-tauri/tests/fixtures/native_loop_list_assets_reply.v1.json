@@ -1,0 +1,16 @@
+{
+  "id": "resp_fixture_list_reply",
+  "output": [
+    {
+      "id": "msg_fixture_list_reply",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "项目中有 1 个素材。"
+        }
+      ]
+    }
+  ]
+}

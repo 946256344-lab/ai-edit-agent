@@ -6,8 +6,8 @@
 
 - React 只提交意图；Rust 校验 project、editing task、conversation、storyboard、timeline、asset 和路径作用域，并决定真实副作用与完成状态。
 - 用户消息进入 conversation 或产生副作用前，必须先由 Task Resolver 确定归属并签发一次性 route receipt；Resolver 只选任务，不选工具。
-- Conversation Router 的执行型首轮决定必须复用为 Agent loop step 1。Agent loop 封闭、有界，工具参数在 JSON 顶层，完成门由真实产物验证。
-- 只读请求禁用编辑和交付工具；用户明确排除的 preview、Jianying draft 或素材分析必须同时从路由、目标与技能策略中排除。
+- 对话请求必须直接进入 NativeToolLoop；不得新增前置模型 Router、首工具选择或 route/goal JSON 协议。Agent loop 封闭、有界，工具参数在 JSON 顶层，完成门由真实产物验证。
+- 只读请求禁用编辑和交付工具；用户明确排除的 preview、Jianying draft 或素材分析必须同时从请求工具集合和执行权限中排除。
 - 观察工具不得暗中触发分析；编辑与交付必须是具名、作用域化、可审计的工具调用。未知中断不得自动重放副作用。
 
 ## 持久化与恢复
@@ -28,7 +28,7 @@
 ## 模块演进
 
 - `lib.rs` 是模块索引和 Tauri 命令注册事实来源；公开命令必须同步 `src/lib/local-store.ts`（如有 UI 调用）和 `docs/api.md`。
-- `agentloop.rs` 与 `assets.rs` 是受预算保护的热点。Agent 的纯请求策略、工具白名单和真实产物完成门已进入 `agentloop/policy.rs`；继续拆分前按 `docs/codebase/CONCERNS.md` 的顺序迁移 router/state/executor，素材侧先抽 library，不得提高预算掩盖增长。
+- `agentloop.rs` 与 `assets.rs` 是受预算保护的热点。Agent 的请求策略和工具白名单位于 `agentloop/policy.rs`，Native 循环与 RunReceipt 位于 `agentloop/native.rs`；继续拆分时保持权限、确认和持久化事实边界，不得提高预算掩盖增长。
 - Agent 工具白名单、`src/lib/agent-tools.ts` 和 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json` 必须保持一致。
 - 注释优先说明作用域、事务顺序、幂等性、恢复和隐私理由。
 
