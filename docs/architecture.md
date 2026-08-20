@@ -227,7 +227,8 @@ NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序
   -> 追加原始 function_call + 结构化 function_call_output
   -> 下一逻辑模型步骤请求 Provider
        -> 瞬时 429/408/425/部分 5xx、超时、网络中断或空响应：
-          在同一 120 秒单步和 300 秒总预算内最多三次尝试
+          在同一 120 秒单步和 300 秒总预算内最多三次尝试；
+          每次 HTTP 只用剩余预算的一份，避免一次挂起占满 120 秒
        -> 永久 4xx/未知错误：不重试
   -> Provider 返回自然语言
   -> RunReceipt + 持久化事实裁决终态，assistant 回复写入 SQLite

@@ -3,7 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后第二次 Provider 瞬时失败有界重试且不重放工具。429/空响应可恢复，永久 400 不重试，取消后停，诊断仅安全码。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
+- [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
 - [ ] 待办（chore/native-provider-trace）：debug 完整 Provider INPUT/OUTPUT 检查器，见 worktree `D:\worktrees\native-provider-trace`；等重试合入后再做。
 - [ ] 待办（codex/session-isolation-mismatch-test）：会话隔离负向测试与变更记录路径收尾，见 `D:\worktrees\session-isolation-mismatch-test`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。

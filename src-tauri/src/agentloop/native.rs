@@ -394,9 +394,10 @@ fn request_native_model_with_retry(
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
         }
-        let Some(attempt_timeout) = remaining_timeout(deadline) else {
+        let Some(remaining) = remaining_timeout(deadline) else {
             return Err("native_tool_loop_deadline_exceeded".to_owned());
         };
+        let attempt_timeout = native_model_attempt_timeout(remaining, attempt);
         let response = match respond_once(payload, attempt_timeout) {
             Ok(body) if body.trim().is_empty() => Err("Provider response was empty.".to_owned()),
             other => other,
@@ -426,7 +427,7 @@ fn request_native_model_with_retry(
                 }
                 last_failure_code = Some(failure.code.clone());
                 observe(&NativeModelRequestObservation::RetryScheduled {
-                    code: failure.code,
+                    code: failure.code.clone(),
                     attempt,
                 });
                 wait_for_native_model_retry(delay, deadline, cancelled)?;
@@ -434,6 +435,18 @@ fn request_native_model_with_retry(
         }
     }
     Err("provider_unknown".to_owned())
+}
+
+fn native_model_attempt_timeout(remaining: Duration, attempt: usize) -> Duration {
+    let attempts_left = NATIVE_MODEL_MAX_ATTEMPTS
+        .saturating_sub(attempt)
+        .saturating_add(1);
+    let share = remaining / u32::try_from(attempts_left).unwrap_or(1);
+    if share.is_zero() {
+        remaining
+    } else {
+        share
+    }
 }
 
 fn wait_for_native_model_retry(
@@ -2747,6 +2760,54 @@ mod tests {
             [NativeModelRequestObservation::RetryScheduled { code, attempt: 1 }]
                 if code == "provider_http_429"
         ));
+    }
+
+    #[test]
+    fn retryable_network_failure_splits_step_budget_so_later_attempts_can_run() {
+        let mut attempt_timeouts = Vec::new();
+        let mut observations = Vec::new();
+        let step_budget = Duration::from_secs(120);
+        let mut respond_once = |_payload: &Value, timeout: Duration| {
+            attempt_timeouts.push(timeout);
+            Err::<String, _>(
+                "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 connection reset"
+                    .to_owned(),
+            )
+        };
+
+        let error = request_native_model_with_retry(
+            &json!({"input": []}),
+            step_budget,
+            Duration::ZERO,
+            &mut respond_once,
+            &mut || false,
+            &mut |observation| observations.push(observation.clone()),
+        )
+        .expect_err("exhausted retries still fail");
+
+        assert!(error.contains("网络错误"));
+        assert_eq!(attempt_timeouts.len(), 3);
+        assert!(
+            attempt_timeouts
+                .iter()
+                .all(|timeout| *timeout < step_budget && *timeout >= Duration::from_secs(30)),
+            "each hung HTTP attempt must leave time for later retries: {attempt_timeouts:?}"
+        );
+        assert!(matches!(
+            observations.last(),
+            Some(NativeModelRequestObservation::Failed { code, attempts: 3 })
+                if code == "provider_network"
+        ));
+    }
+
+    #[test]
+    fn native_model_attempt_timeout_keeps_two_thirds_of_a_fresh_step_for_later_tries() {
+        let first = native_model_attempt_timeout(Duration::from_secs(120), 1);
+        let second = native_model_attempt_timeout(Duration::from_secs(80), 2);
+        let last = native_model_attempt_timeout(Duration::from_secs(40), 3);
+        assert_eq!(first, Duration::from_secs(40));
+        assert_eq!(second, Duration::from_secs(40));
+        assert_eq!(last, Duration::from_secs(40));
     }
 
     #[test]

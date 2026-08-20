@@ -65,4 +65,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 <!-- 维护记录（2026-08-19）：Native 工具目录扩展至文本、音乐下载/编辑和 Jianying draft；工具 schema/参数只适配 Provider，执行仍复用 apply_skill，许可证、文字矩阵、剪映兼容性和确认门由既有 Rust 领域边界裁决。 -->
 <!-- 维护记录（2026-08-19）：NativeToolLoop 不再声明或锁定单一 LoopGoal；function_call 驱动继续，自然语言驱动结束，RunReceipt 与持久化事实独立裁决完成、部分完成和失败。 -->
 <!-- 维护记录（2026-08-20）：agentloop/prompt.rs::load_native_message_history 查询新增 editing_task_id 过滤（通过 JOIN conversations 表），错误任务 ID 失败封闭返回空历史，负向回归覆盖跨任务泄漏。修改仅影响 Rust 内部 API，不改变产品规则或文档原则。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
-<!-- 维护记录（2026-08-20）：NativeToolLoop 的每个逻辑 Provider 步骤对 429/部分 5xx、超时、网络中断和空响应做最多三次有界重试；重试共享原单步/总预算、每次尝试及退避期间检查取消且不重放工具，只持久化安全错误码与尝试次数。详见 docs/changes/2026-08-20-native-provider-followup-recovery.md。 -->
+<!-- 维护记录（2026-08-20）：NativeToolLoop 的每个逻辑 Provider 步骤对 429/部分 5xx、超时、网络中断和空响应做最多三次有界重试；重试共享原单步/总预算、每次 HTTP 只用剩余预算的一份，每次尝试及退避期间检查取消且不重放工具，只持久化安全错误码与尝试次数。详见 docs/changes/2026-08-20-native-provider-followup-recovery.md。 -->

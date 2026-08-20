@@ -37,7 +37,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 
 ## 4）可靠性与失败行为
 
-- NativeToolLoop 最多 10 步、300 秒总预算，每个模型步骤最多 120 秒；瞬时 Provider 传输失败的最多三次尝试共享同一模型步骤剩余预算，不扩大总预算。
+- NativeToolLoop 最多 10 步、300 秒总预算，每个模型步骤最多 120 秒；瞬时 Provider 传输失败的最多三次尝试共享同一模型步骤剩余预算，每次 HTTP 只用剩余预算除以剩余次数的份额，不扩大总预算。
 - 粗视觉连续三次失败后熔断 60 秒；交互请求优先于未开始的视觉请求。
 - 素材分析中的 FFprobe/FFmpeg/Tesseract 使用硬超时和 Windows 子进程树终止请求；preview 与 Jianying 的部分同步交付进程仍无超时，见 `CONCERNS.md`。
 - Agent 工具失败不无限自动重试；Provider 瞬时传输重试只重发当前模型 payload，不重放本地工具；中断 run 转 `needs_review`。
