@@ -552,4 +552,11 @@
 - 原因：固定单一目标会把”检查素材，做 30 秒剪辑，加字幕并生成预览”压成一个 deliverable，并在模型已给出自然语言时用目标纠偏强制继续；它也让步骤上限只保留某一种产物。原生函数调用本身已经提供足够的循环信号，安全与完成事实应由后端收据而不是模型控制动作承担。
 - 后果：RunReceipt 只记录实际执行的工具状态：按名称去重的成功 `status=ok` 写工具、仍在排队的操作和未恢复失败；同一工具修正后成功会清除其旧失败，但不会抹掉其他工具的失败。自然语言只结束模型循环，不能创建 completed 状态或 artifact；needs_confirmation、持久化产物和已验证中间结果仍由 Rust 裁决。达到总超时或步骤上限时，任意真实中间产物均保留为 partially_completed，没有成功工具则 failed。storyboard 返回 needs_confirmation 后仍停止后续非观察写工具，确认边界没有放宽。契约检查器禁止固定目标标识和 finish/done/no_action 字符串重新进入 Native 生产路径；历史 ADR 中的旧架构描述保留为当时事实。
 
-<!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
+## ADR-077：Native Provider 后续模型步骤采用不重放工具的有界重试
+
+- 状态：已采用（2026-08-20），待真实桌面 Provider 验证
+- 决策：NativeToolLoop 的每个逻辑模型步骤最多尝试三次 Provider 请求。仅 HTTP 408/425/429/500/502/503/504、超时、网络传输中断和空响应可重试；永久 4xx 与未知错误立即失败。尝试共享当前 120 秒单步剩余时间和 300 秒总运行预算，每次尝试前及退避期间重新检查任务取消。重试位于 Provider 请求闭包内部，只重发同一 payload，不重新进入 function_call 解析、`execute_native_tool` 或 `apply_skill`。持久化诊断复用既有 `pipeline_error` 类型，只记录安全失败码、尝试次数和恢复/终止阶段，不扩大 SQLite schema。
+- 原因：真实桌面运行中，观察工具已经成功且 `function_call_output` 已加入上下文，但下一次模型总结请求在响应体到达前失败，旧实现直接落入固定恢复文案。对整个循环或工具步骤重试会重复本地副作用；完全不重试则把短暂限流或传输中断暴露为无模型回复。
+- 后果：瞬时 Provider 故障可在不重复工具和不扩大超时边界的前提下恢复自然语言回复。URL、模型名、凭据、原始响应和底层传输详情不进入 Agent 诊断；连续三次失败或永久错误仍封闭失败，并按 RunReceipt 保留已经验证的真实产物。历史运行在该诊断投影加入前只能定位到 Provider 传输阶段，不能追溯具体 HTTP/网络错误码。
+
+<!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->

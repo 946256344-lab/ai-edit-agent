@@ -9,8 +9,8 @@ use crate::audit::{
 };
 use crate::models::{AgentEditResult, StoryboardVersion, TimelineVersion};
 use crate::provider::{
-    model_turn_from_chat_completions, model_turn_from_responses, post_model_payload, FunctionCall,
-    ModelAccess, ModelOutputItem,
+    classify_model_request_failure, model_turn_from_chat_completions, model_turn_from_responses,
+    post_model_payload, FunctionCall, ModelAccess, ModelOutputItem,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -103,8 +103,34 @@ pub(crate) fn run_native_tool_loop(
         successful_observation: false,
     };
     let is_custom = access.custom_config().is_some();
-    let mut respond =
-        |payload: &Value, timeout: Duration| post_model_payload(access, payload, Some(timeout));
+    let mut model_step_number = 0usize;
+    let mut respond = |payload: &Value, timeout: Duration| {
+        model_step_number += 1;
+        let mut respond_once = |payload: &Value, attempt_timeout: Duration| {
+            post_model_payload(access, payload, Some(attempt_timeout))
+        };
+        let mut request_cancelled = || native_task_cancelled(connection, agent_task_id);
+        request_native_model_with_retry(
+            payload,
+            timeout,
+            NATIVE_MODEL_RETRY_DELAY,
+            &mut respond_once,
+            &mut request_cancelled,
+            &mut |observation| {
+                let (kind, content) = native_model_request_diagnostic(observation);
+                let _ = record_agent_diagnostic(
+                    connection,
+                    project_id,
+                    editing_task_id,
+                    conversation_id,
+                    agent_task_id,
+                    Some(model_step_number as i64),
+                    kind,
+                    &content,
+                );
+            },
+        )
+    };
     let mut execute = |call: &FunctionCall, step_number: usize| {
         execute_native_tool(
             &mut state,
@@ -342,6 +368,112 @@ fn merge_native_outcomes(
 
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
+
+const NATIVE_MODEL_MAX_ATTEMPTS: usize = 3;
+const NATIVE_MODEL_RETRY_DELAY: Duration = Duration::from_millis(350);
+const NATIVE_MODEL_RETRY_CANCEL_POLL: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeModelRequestObservation {
+    RetryScheduled { code: String, attempt: usize },
+    Recovered { code: String, attempts: usize },
+    Failed { code: String, attempts: usize },
+}
+
+fn request_native_model_with_retry(
+    payload: &Value,
+    timeout: Duration,
+    retry_delay: Duration,
+    respond_once: &mut NativeRespond<'_>,
+    cancelled: &mut dyn FnMut() -> bool,
+    observe: &mut dyn FnMut(&NativeModelRequestObservation),
+) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let mut last_failure_code = None;
+    for attempt in 1..=NATIVE_MODEL_MAX_ATTEMPTS {
+        if cancelled() {
+            return Err("native_tool_loop_cancelled".to_owned());
+        }
+        let Some(attempt_timeout) = remaining_timeout(deadline) else {
+            return Err("native_tool_loop_deadline_exceeded".to_owned());
+        };
+        let response = match respond_once(payload, attempt_timeout) {
+            Ok(body) if body.trim().is_empty() => Err("Provider response was empty.".to_owned()),
+            other => other,
+        };
+        match response {
+            Ok(body) => {
+                if let Some(code) = last_failure_code {
+                    observe(&NativeModelRequestObservation::Recovered {
+                        code,
+                        attempts: attempt,
+                    });
+                }
+                return Ok(body);
+            }
+            Err(error) => {
+                let failure = classify_model_request_failure(&error);
+                let delay = retry_delay.saturating_mul(attempt as u32);
+                let can_retry = failure.retryable
+                    && attempt < NATIVE_MODEL_MAX_ATTEMPTS
+                    && remaining_timeout(deadline).is_some_and(|remaining| remaining > delay);
+                if !can_retry {
+                    observe(&NativeModelRequestObservation::Failed {
+                        code: failure.code,
+                        attempts: attempt,
+                    });
+                    return Err(error);
+                }
+                last_failure_code = Some(failure.code.clone());
+                observe(&NativeModelRequestObservation::RetryScheduled {
+                    code: failure.code,
+                    attempt,
+                });
+                wait_for_native_model_retry(delay, deadline, cancelled)?;
+            }
+        }
+    }
+    Err("provider_unknown".to_owned())
+}
+
+fn wait_for_native_model_retry(
+    delay: Duration,
+    deadline: Instant,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Result<(), String> {
+    let retry_at = (Instant::now() + delay).min(deadline);
+    loop {
+        if cancelled() {
+            return Err("native_tool_loop_cancelled".to_owned());
+        }
+        let Some(remaining) = retry_at.checked_duration_since(Instant::now()) else {
+            return Ok(());
+        };
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(NATIVE_MODEL_RETRY_CANCEL_POLL.min(remaining));
+    }
+}
+
+fn native_model_request_diagnostic(
+    observation: &NativeModelRequestObservation,
+) -> (&'static str, String) {
+    match observation {
+        NativeModelRequestObservation::RetryScheduled { code, attempt } => (
+            "pipeline_error",
+            format!("provider_retry_code={code}_attempt={attempt}"),
+        ),
+        NativeModelRequestObservation::Recovered { code, attempts } => (
+            "pipeline_error",
+            format!("provider_recovery_code={code}_attempts={attempts}"),
+        ),
+        NativeModelRequestObservation::Failed { code, attempts } => (
+            "pipeline_error",
+            format!("provider_failure_code={code}_attempts={attempts}"),
+        ),
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct NativeRunReceipt {
@@ -2374,6 +2506,247 @@ mod tests {
             .unwrap()
             .contains("unavailable_media"));
         assert!(!output["output"].as_str().unwrap().contains("C:\\"));
+    }
+
+    #[test]
+    fn transient_provider_failure_after_tool_output_retries_without_reexecuting_tool() {
+        let mut response_attempts = 0;
+        let mut calls = Vec::new();
+        let mut observations = Vec::new();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond_once = |_payload: &Value, _timeout: Duration| {
+            response_attempts += 1;
+            match response_attempts {
+                1 => Ok::<_, String>(LIST_CALL.to_owned()),
+                2 => Err(
+                    "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 429"
+                        .to_owned(),
+                ),
+                3 => Ok(LIST_REPLY.to_owned()),
+                _ => panic!("unexpected provider attempt"),
+            }
+        };
+        let mut respond = |payload: &Value, timeout: Duration| {
+            let mut not_cancelled = || false;
+            request_native_model_with_retry(
+                payload,
+                timeout,
+                Duration::ZERO,
+                &mut respond_once,
+                &mut not_cancelled,
+                &mut |observation| observations.push(observation.clone()),
+            )
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.push(call.name.clone());
+            Ok::<_, String>(json!({
+                "tool": "list_assets",
+                "status": "ok",
+                "result": {"total": 1, "items": []}
+            }))
+        };
+
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut NativeRunReceipt::default(),
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("transient provider failure should recover");
+        drop(execute);
+        drop(respond);
+
+        assert_eq!(message, "项目中有 1 个素材。");
+        assert_eq!(response_attempts, 3);
+        assert_eq!(calls, ["list_assets"]);
+        assert!(matches!(
+            observations.as_slice(),
+            [
+                NativeModelRequestObservation::RetryScheduled { code, attempt: 1 },
+                NativeModelRequestObservation::Recovered { code: recovered, attempts: 2 }
+            ] if code == "provider_http_429" && recovered == "provider_http_429"
+        ));
+    }
+
+    #[test]
+    fn empty_provider_response_after_tool_output_retries_without_reexecuting_tool() {
+        let mut response_attempts = 0;
+        let mut calls = Vec::new();
+        let mut observations = Vec::new();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond_once = |_payload: &Value, _timeout: Duration| {
+            response_attempts += 1;
+            match response_attempts {
+                1 => Ok::<_, String>(LIST_CALL.to_owned()),
+                2 => Ok(String::new()),
+                3 => Ok(LIST_REPLY.to_owned()),
+                _ => panic!("unexpected provider attempt"),
+            }
+        };
+        let mut respond = |payload: &Value, timeout: Duration| {
+            let mut not_cancelled = || false;
+            request_native_model_with_retry(
+                payload,
+                timeout,
+                Duration::ZERO,
+                &mut respond_once,
+                &mut not_cancelled,
+                &mut |observation| observations.push(observation.clone()),
+            )
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.push(call.name.clone());
+            Ok::<_, String>(json!({
+                "tool": "list_assets",
+                "status": "ok",
+                "result": {"total": 1, "items": []}
+            }))
+        };
+
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut NativeRunReceipt::default(),
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("empty provider response should recover");
+        drop(execute);
+        drop(respond);
+
+        assert_eq!(message, "项目中有 1 个素材。");
+        assert_eq!(response_attempts, 3);
+        assert_eq!(calls, ["list_assets"]);
+        assert!(matches!(
+            observations.as_slice(),
+            [
+                NativeModelRequestObservation::RetryScheduled { code, attempt: 1 },
+                NativeModelRequestObservation::Recovered { code: recovered, attempts: 2 }
+            ] if code == "provider_empty_response" && recovered == "provider_empty_response"
+        ));
+    }
+
+    #[test]
+    fn permanent_provider_failure_after_tool_output_is_not_retried_or_reexecuted() {
+        let mut response_attempts = 0;
+        let mut calls = Vec::new();
+        let mut observations = Vec::new();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond_once = |_payload: &Value, _timeout: Duration| {
+            response_attempts += 1;
+            match response_attempts {
+                1 => Ok::<_, String>(LIST_CALL.to_owned()),
+                2 => Err(
+                    "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 400"
+                        .to_owned(),
+                ),
+                _ => panic!("permanent provider failure must not be retried"),
+            }
+        };
+        let mut respond = |payload: &Value, timeout: Duration| {
+            let mut not_cancelled = || false;
+            request_native_model_with_retry(
+                payload,
+                timeout,
+                Duration::ZERO,
+                &mut respond_once,
+                &mut not_cancelled,
+                &mut |observation| observations.push(observation.clone()),
+            )
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.push(call.name.clone());
+            Ok::<_, String>(json!({
+                "tool": "list_assets",
+                "status": "ok",
+                "result": {"total": 1, "items": []}
+            }))
+        };
+
+        let error = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut NativeRunReceipt::default(),
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect_err("HTTP 400 should fail without retrying");
+        drop(execute);
+        drop(respond);
+
+        assert!(error.contains("HTTP 400"));
+        assert_eq!(response_attempts, 2);
+        assert_eq!(calls, ["list_assets"]);
+        assert!(matches!(
+            observations.as_slice(),
+            [NativeModelRequestObservation::Failed { code, attempts: 1 }]
+                if code == "provider_http_400"
+        ));
+        let (_, diagnostic) = native_model_request_diagnostic(&observations[0]);
+        assert!(!diagnostic.contains("sensitive"));
+        assert!(!diagnostic.contains("private-model"));
+    }
+
+    #[test]
+    fn cancellation_during_retry_backoff_stops_before_the_next_provider_attempt() {
+        let mut response_attempts = 0;
+        let mut cancellation_checks = 0;
+        let mut observations = Vec::new();
+        let mut respond_once = |_payload: &Value, _timeout: Duration| {
+            response_attempts += 1;
+            Err::<String, _>("实验性 OAuth 请求失败:HTTP 429".to_owned())
+        };
+        let mut cancelled = || {
+            cancellation_checks += 1;
+            cancellation_checks > 1
+        };
+
+        let error = request_native_model_with_retry(
+            &json!({"input": []}),
+            Duration::from_secs(5),
+            Duration::from_millis(100),
+            &mut respond_once,
+            &mut cancelled,
+            &mut |observation| observations.push(observation.clone()),
+        )
+        .expect_err("cancellation must stop retry backoff");
+
+        assert_eq!(error, "native_tool_loop_cancelled");
+        assert_eq!(response_attempts, 1);
+        assert!(cancellation_checks >= 2);
+        assert!(matches!(
+            observations.as_slice(),
+            [NativeModelRequestObservation::RetryScheduled { code, attempt: 1 }]
+                if code == "provider_http_429"
+        ));
     }
 
     #[test]

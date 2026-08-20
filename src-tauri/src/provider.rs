@@ -65,6 +65,65 @@ pub(crate) struct FunctionCall {
     pub(crate) raw: Value,
 }
 
+/// Provider 传输错误只投影为稳定安全码和是否可重试；不得把 URL、模型名、
+/// 响应正文或底层传输细节写入 Agent 诊断。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelRequestFailureClass {
+    pub(crate) code: String,
+    pub(crate) retryable: bool,
+}
+
+pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailureClass {
+    if let Some(status) = provider_http_status(error) {
+        return ModelRequestFailureClass {
+            code: format!("provider_http_{status}"),
+            retryable: matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504),
+        };
+    }
+    let normalized = error.to_ascii_lowercase();
+    if normalized.contains("timed out") || normalized.contains("timeout") || error.contains("超时")
+    {
+        return ModelRequestFailureClass {
+            code: "provider_timeout".to_owned(),
+            retryable: true,
+        };
+    }
+    if normalized.contains("network")
+        || normalized.contains("transport")
+        || error.contains("网络错误")
+    {
+        return ModelRequestFailureClass {
+            code: "provider_network".to_owned(),
+            retryable: true,
+        };
+    }
+    if normalized.contains("empty response")
+        || normalized.contains("response was empty")
+        || normalized.contains("response is empty")
+        || error.contains("响应为空")
+    {
+        return ModelRequestFailureClass {
+            code: "provider_empty_response".to_owned(),
+            retryable: true,
+        };
+    }
+    ModelRequestFailureClass {
+        code: "provider_unknown".to_owned(),
+        retryable: false,
+    }
+}
+
+fn provider_http_status(error: &str) -> Option<u16> {
+    // 只认错误后缀 `:HTTP {status}`，避免 Base URL 里的 HTTP/HTTPS 被当成状态码。
+    let marker = ":HTTP ";
+    let offset = error.rfind(marker)? + marker.len();
+    let digits = error[offset..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    digits.parse().ok()
+}
+
 #[derive(Default)]
 struct RequestPriorityState {
     interactive_active: usize,
@@ -1047,6 +1106,39 @@ mod tests {
     #[test]
     fn model_requests_share_one_process_wide_http_agent() {
         assert!(std::ptr::eq(http_agent(), http_agent()));
+    }
+
+    #[test]
+    fn model_request_failure_classification_is_safe_and_retryable_only_when_transient() {
+        let rate_limited = classify_model_request_failure(
+            "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 429",
+        );
+        assert_eq!(rate_limited.code, "provider_http_429");
+        assert!(rate_limited.retryable);
+
+        let invalid_request = classify_model_request_failure(
+            "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 400",
+        );
+        assert_eq!(invalid_request.code, "provider_http_400");
+        assert!(!invalid_request.retryable);
+
+        let timed_out = classify_model_request_failure(
+            "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 timed out",
+        );
+        assert_eq!(timed_out.code, "provider_timeout");
+        assert!(timed_out.retryable);
+        assert!(!timed_out.code.contains("sensitive"));
+        assert!(!timed_out.code.contains("private-model"));
+
+        let timed_out_uppercase_url = classify_model_request_failure(
+            "自定义 API 不可用（HTTP://192.168.0.1:8080，模型 private-model）:网络错误 timed out",
+        );
+        assert_eq!(timed_out_uppercase_url.code, "provider_timeout");
+        assert!(timed_out_uppercase_url.retryable);
+
+        let empty = classify_model_request_failure("Provider response was empty.");
+        assert_eq!(empty.code, "provider_empty_response");
+        assert!(empty.retryable);
     }
 
     #[test]

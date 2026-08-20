@@ -3,14 +3,18 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-08-20，codex/cleanup-legacy-runtime）：修复会话隔离漏洞，防止跨会话数据泄漏。根本原因：`agentloop/prompt.rs::load_native_message_history` 查询只按 `conversation_id` 过滤消息，没有验证消息所属的 `editing_task_id`。修复方案：在查询中添加 JOIN `conversations` 表并同时验证 `conversation_id` 和 `editing_task_id`，确保严格的会话边界。范围：Rust 内部 API 变更（`load_native_message_history` 新增 `editing_task_id` 参数），不改变 Tauri 命令签名或前端接口。完成门：163 个 Rust 库测试、前端 lint/build、harness:test/check 通过，变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
-- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除一轮请求的固定 LoopGoal/finish/done/no_action 终止假设；NativeToolLoop 以原生 function_call 持续执行、以自然语言结束，并由真实 RunReceipt 处理超时、步骤上限和复合”观察 → storyboard → timeline → text → preview”任务。范围测试、契约测试和完整完成门见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
-- [x] 完成（2026-08-19，remove-conversation-router）：删除 NativeToolLoop 前置对话 Router 与其首工具选择协议；保留 Task Resolver 的作用域 receipt、请求工具策略、确认门、观察完成门、超时、步骤上限及审计，使普通聊天、澄清、项目问答和工具执行统一进入 NativeToolLoop。Native 代表性测试、契约检查和既有桌面验收前提均通过；变更记录见 `docs/changes/2026-08-19-remove-conversation-router.md`。
-- [x] 完成（2026-08-19，native-observation-tools）：将剩余只读/观察工具迁移到原生 Function Tool 目录；仅包含 `get_edit_status`、`search_assets`、`search_asset_segments`、`search_music`、`get_storyboard`、`get_text_capabilities`，不迁移任何写操作。9 个 Native 工具均有 strict schema、完整 required 和安全结果包络；149 个 Rust 测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查通过；变更记录见 `docs/changes/2026-08-19-native-observation-tools.md`。
-- [x] 完成（2026-08-19，native-preview）：在 NativeToolLoop 安全接入 render_preview；仅明确预览生成意图且未被只读/拒绝策略禁止时注册，Rust 执行前复核权限、严格参数与当前项目时间线，真实收据或安全错误继续交给模型总结。模型总结失败时保留已验证 preview 并标记部分完成。145 个 Rust 单元测试 + 2 个契约测试、前端 lint/build、14 个 Python 测试、agent/harness 检查和独立审查闭环通过；变更记录见 `docs/changes/2026-08-19-native-render-preview.md`。
+- [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后第二次 Provider 瞬时失败有界重试且不重放工具。429/空响应可恢复，永久 400 不重试，取消后停，诊断仅安全码。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
+- [ ] 待办（chore/native-provider-trace）：debug 完整 Provider INPUT/OUTPUT 检查器，见 worktree `D:\worktrees\native-provider-trace`；等重试合入后再做。
+- [ ] 待办（codex/session-isolation-mismatch-test）：会话隔离负向测试与变更记录路径收尾，见 `D:\worktrees\session-isolation-mismatch-test`。
+- [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
+- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
+- [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
+- [x] 完成（2026-08-19，native-observation-tools）：迁移剩余只读观察工具到 Native Function Tool 目录。见 `docs/changes/2026-08-19-native-observation-tools.md`。
+- [x] 完成（2026-08-19，native-preview）：Native 安全接入 render_preview。见 `docs/changes/2026-08-19-native-render-preview.md`。
+<!-- ACTIVE_TASKS_END -->
+
 - [x] 完成（2026-08-19，native-memory）：NativeToolLoop 从 SQLite 按时间读取真实 user/assistant 消息，以原生 function_call/function_call_output 维持观察上下文；保留 Legacy 默认路径。133 个 Rust 库测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-session-messages.md`。
 - [x] 完成（2026-08-19，native-loop）：在显式 `NativeToolLoop` 开关下接入只读原生 Agent Loop；仅允许 `get_asset_health_summary`、`list_assets`、`get_timeline`，保留 Legacy 默认路径、最大步骤数、总超时和取消边界；使用固定 fixture 覆盖普通回答、项目事实观察、get_timeline 和安全工具错误恢复。128 个 Rust 库测试 + 2 个契约测试、前端 lint/build、Python unittest、agent/harness 检查和 diff 检查通过；变更记录见 `docs/changes/2026-08-19-native-readonly-agent-loop.md`。
-<!-- ACTIVE_TASKS_END -->
 
 - [x] 完成（2026-08-19，native-delivery-tools）：将 `get_text_capabilities`、`replace_text_tracks`、`search_music`、`download_music`、`use_online_music`、`replace_music_tracks`、`render_preview`、`create_jianying_draft` 迁移到 Native Function Tool 目录与受限执行入口；strict 嵌套 Schema、参数边界、工具选择及执行前授权测试通过，保留许可证、下载、文字能力矩阵、剪映兼容性、确认边界和领域算法，不迁移其他工具或改变领域实现。变更记录见 `docs/changes/2026-08-19-native-delivery-tools.md`。
 

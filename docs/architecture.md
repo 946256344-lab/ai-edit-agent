@@ -70,7 +70,7 @@ Project (项目)
 
 **会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。
 
-**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。
+**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。
 
 Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话并签发一次性 receipt；receipt 消费后，所有对话类型都直接进入同一个 NativeToolLoop。
 
@@ -219,6 +219,21 @@ Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 tas
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
 NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，最新调用与结果成对保留。默认注册 9 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
+
+```text
+真实会话 input
+  -> Provider 返回 message 或 function_call
+  -> 有 function_call：Rust 校验并执行 apply_skill（一次）
+  -> 追加原始 function_call + 结构化 function_call_output
+  -> 下一逻辑模型步骤请求 Provider
+       -> 瞬时 429/408/425/部分 5xx、超时、网络中断或空响应：
+          在同一 120 秒单步和 300 秒总预算内最多三次尝试
+       -> 永久 4xx/未知错误：不重试
+  -> Provider 返回自然语言
+  -> RunReceipt + 持久化事实裁决终态，assistant 回复写入 SQLite
+```
+
+Provider 重试位于工具执行之后的独立模型请求边界，只重发同一 payload，不重新进入 `execute_native_tool`，因此不能重复本地副作用。每次尝试前及退避等待期间都会重新查询任务取消状态；取消后不再发下一次 Provider 请求。诊断仅保存 `provider_http_<status>`、`provider_timeout`、`provider_network`、`provider_empty_response` 或 `provider_unknown` 及尝试次数；Base URL、模型名、凭据、响应正文和传输详情不得进入 Agent 诊断。若重试仍失败，已有真实产物按 RunReceipt 保留，UI 才使用确定性诚实恢复文案。
 
 Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
 
