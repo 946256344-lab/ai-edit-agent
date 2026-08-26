@@ -168,14 +168,28 @@ pub(crate) fn run_native_tool_loop(
             },
         )
     };
-    let mut execute = |call: &FunctionCall, step_number: usize| {
-        execute_native_tool(
-            &mut state,
-            call,
-            step_number,
-            native_render_preview_allowed(request, &tool_policy),
-        )
-    };
+    let mut invalid_call_guard = InvalidCallGuard::default();
+    let mut execute =
+        |call: &FunctionCall, step_number: usize| match invalid_call_guard.before_call(call) {
+            InvalidCallDecision::Execute => {
+                let result = execute_native_tool(
+                    &mut state,
+                    call,
+                    step_number,
+                    native_render_preview_allowed(request, &tool_policy),
+                )?;
+                invalid_call_guard.record_result(call, &result);
+                Ok(result)
+            }
+            InvalidCallDecision::Reject => {
+                record_repeated_invalid_call(&state, call, step_number)?;
+                Ok(repeated_invalid_arguments(&call.name))
+            }
+            InvalidCallDecision::Stop => {
+                record_repeated_invalid_call(&state, call, step_number)?;
+                Err("native_tool_loop_repeated_invalid_call".to_owned())
+            }
+        };
     let mut refresh_snapshot = || {
         build_state_snapshot(connection, project_id, editing_task_id)
             .map(|snapshot| Some(render_snapshot_message(&snapshot)))
@@ -312,6 +326,9 @@ fn interrupted_native_result(
     let bounded_reason = match error {
         "native_tool_loop_deadline_exceeded" => Some("本轮达到总超时"),
         "native_tool_loop_max_steps" => Some("本轮达到步骤上限"),
+        "native_tool_loop_repeated_invalid_call" => {
+            Some("模型连续重复了相同的无效工具参数，循环已停止")
+        }
         _ => None,
     };
     let Some(reason) = bounded_reason else {
@@ -442,6 +459,63 @@ fn merge_native_outcomes(
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
 type NativeRefreshSnapshot<'a> = dyn FnMut() -> Result<Option<Value>, String> + 'a;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InvalidCallDecision {
+    Execute,
+    Reject,
+    Stop,
+}
+
+#[derive(Debug, Default)]
+struct InvalidCallGuard {
+    attempts: std::collections::BTreeMap<String, usize>,
+}
+
+impl InvalidCallGuard {
+    fn before_call(&mut self, call: &FunctionCall) -> InvalidCallDecision {
+        let signature = native_call_signature(call);
+        let Some(attempts) = self.attempts.get_mut(&signature) else {
+            return InvalidCallDecision::Execute;
+        };
+        *attempts = attempts.saturating_add(1);
+        if *attempts >= 3 {
+            InvalidCallDecision::Stop
+        } else {
+            InvalidCallDecision::Reject
+        }
+    }
+
+    fn record_result(&mut self, call: &FunctionCall, result: &Value) {
+        if result["code"].as_str() == Some("invalid_arguments") {
+            self.attempts.insert(native_call_signature(call), 1);
+        }
+    }
+}
+
+fn native_call_signature(call: &FunctionCall) -> String {
+    let arguments = serde_json::from_str::<Value>(&call.arguments)
+        .map(canonical_json_value)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| call.arguments.clone());
+    format!("{}\0{arguments}", call.name)
+}
+
+fn canonical_json_value(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.into_iter().map(canonical_json_value).collect()),
+        Value::Object(object) => {
+            let mut entries = object.into_iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            let mut canonical = serde_json::Map::new();
+            for (key, value) in entries {
+                canonical.insert(key, canonical_json_value(value));
+            }
+            Value::Object(canonical)
+        }
+        other => other,
+    }
+}
 
 const NATIVE_MODEL_MAX_ATTEMPTS: usize = 3;
 const NATIVE_MODEL_RETRY_DELAY: Duration = Duration::from_millis(350);
@@ -636,7 +710,7 @@ fn record_successful_write(
         if !preview_still_current {
             receipt.preview_timeline_version_id = None;
             receipt.successful_write_tools.remove("render_preview");
-            if tool_policy.native_write_authorized("render_preview") {
+            if tool_policy.native_write_requested("render_preview") {
                 receipt
                     .unverified_requested_write_tools
                     .insert("render_preview".to_owned());
@@ -664,7 +738,7 @@ fn drive_native_loop(
     receipt.requires_project_observation = requires_observation;
     receipt.unverified_requested_write_tools.extend(
         tool_policy
-            .authorized_native_write_tools()
+            .requested_native_write_tools()
             .map(str::to_owned),
     );
     let mut storyboard_confirmation_pending = false;
@@ -832,11 +906,14 @@ fn continue_after_natural_language(
 
 fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
     let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. The system state snapshot is authoritative for current high-level project facts; use observation functions only when more detail is needed. For exact edit or delivery readiness decisions, such as whether export is possible, still call get_edit_status. Treat the state snapshot and function outputs as the only project and artifact facts. Use artifact-producing functions only when they match the user's request and are present in tools. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a write function returns a retryable failure, call another allowed function to recover before answering; do not claim the artifact exists. If a write function succeeds with qualityWarnings, adjust with allowed functions; do not treat warnings as a finished edit. If another function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
-    if tool_policy.native_write_authorized("generate_storyboard")
-        || tool_policy.native_write_authorized("synthesize_voiceover")
-    {
+    if tool_policy.native_write_authorized("generate_storyboard") {
         prompt.push_str(
-            " If the user asked for a video or voiceover, call generate_storyboard. If they supplied spoken copy, pass it as brief; if they did not, still generate the storyboard and let it write narrationText per shot. Do not assemble shots with list_assets or search_assets. After the user confirms, call synthesize_voiceover with text null so it uses storyboard narrationText. Never speak onScreenText. voiceId and timelineVersionId may be null.",
+            " If the user asked for a video, call generate_storyboard. If they supplied copy, pass it as brief; otherwise use the current task brief. Do not assemble shots with list_assets or search_assets.",
+        );
+    }
+    if tool_policy.native_write_authorized("synthesize_voiceover") {
+        prompt.push_str(
+            " If the user explicitly asked for voiceover, generate a storyboard that writes narrationText per shot. After the user confirms, call synthesize_voiceover with text null so it uses storyboard narrationText. Never speak onScreenText. voiceId and timelineVersionId may be null.",
         );
     }
     prompt
@@ -855,10 +932,7 @@ fn replace_state_snapshot(input: &mut [Value], replacement: Value) -> Result<(),
     Ok(())
 }
 
-fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy) -> bool {
-    if tool_policy.forbids("render_preview") || request.contains(['?', '？']) {
-        return false;
-    }
+fn native_render_preview_allowed(_request: &str, tool_policy: &RequestToolPolicy) -> bool {
     tool_policy.native_write_authorized("render_preview")
 }
 
@@ -1166,6 +1240,37 @@ fn execute_native_tool(
             Ok(safe_tool_failure_context(&call.name, &error))
         }
     }
+}
+
+fn record_repeated_invalid_call(
+    state: &LoopState<'_>,
+    call: &FunctionCall,
+    step_number: usize,
+) -> Result<(), String> {
+    let persisted_name = if NATIVE_TOOL_NAMES.contains(&call.name.as_str()) {
+        call.name.as_str()
+    } else {
+        "tool_not_allowed"
+    };
+    let step_id = begin_agent_run_step(
+        state.connection,
+        state.project_id,
+        state.editing_task_id,
+        state.agent_task_id,
+        step_number as i64,
+        persisted_name,
+    )?;
+    finish_agent_run_step(
+        state.connection,
+        state.project_id,
+        state.editing_task_id,
+        state.agent_task_id,
+        &step_id,
+        "failed",
+        None,
+        None,
+        Some("repeated_invalid_arguments"),
+    )
 }
 
 fn native_tool_call_allowed(
@@ -1906,6 +2011,17 @@ fn invalid_arguments() -> Value {
     })
 }
 
+fn repeated_invalid_arguments(tool: &str) -> Value {
+    json!({
+        "status": "failed",
+        "operation": tool,
+        "stage": "argument_validation",
+        "code": "repeated_invalid_arguments",
+        "retryable": false,
+        "responseInstruction": "The same function and arguments already failed validation. Do not repeat them. Use the documented bounds, choose another allowed function, or stop with an honest explanation."
+    })
+}
+
 fn storyboard_confirmation_required(tool: &str) -> Value {
     json!({
         "status": "failed",
@@ -2021,7 +2137,7 @@ mod tests {
         assert!(calls.is_empty());
         assert_eq!(requests[0]["parallel_tool_calls"], false);
         assert_eq!(requests[0]["store"], false);
-        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(10));
+        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(19));
     }
 
     #[test]
@@ -2080,7 +2196,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_chat_does_not_expose_native_write_tools() {
+    fn ordinary_chat_exposes_reversible_local_tools_but_not_sensitive_tools() {
         let (_message, requests, _calls) = fixture_driver_with_policy(
             "你好",
             vec![HELLO],
@@ -2101,16 +2217,32 @@ mod tests {
             "replace_clips",
             "change_clip_duration",
             "reorder_clips",
+            "replace_text_tracks",
+            "replace_music_tracks",
+            "render_preview",
         ] {
-            assert!(!names.contains(name), "ordinary chat exposed {name}");
+            assert!(names.contains(name), "ordinary chat omitted {name}");
+        }
+        for name in [
+            "download_music",
+            "use_online_music",
+            "synthesize_voiceover",
+            "create_jianying_draft",
+        ] {
+            assert!(
+                !names.contains(name),
+                "ordinary chat exposed sensitive {name}"
+            );
         }
     }
 
     #[test]
-    fn advice_and_inspection_requests_only_expose_observation_tools() {
+    fn explicit_read_only_request_exposes_only_observation_tools() {
         for request in [
-            "这些素材适合怎么剪？",
             "Please inspect these assets and do not modify anything.",
+            "Please inspect these assets only.",
+            "Only inspect these assets.",
+            "Please only inspect these assets.",
         ] {
             let (_message, requests, _calls) = fixture_driver_with_policy(
                 request,
@@ -2131,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_analysis_storyboard_request_only_exposes_required_capabilities() {
+    fn local_edit_requests_expose_the_full_reversible_toolset() {
         for request in [
             "分析这些素材并生成 storyboard",
             "Analyze these assets and generate a storyboard",
@@ -2159,26 +2291,36 @@ mod tests {
                 "replace_clips",
                 "change_clip_duration",
                 "reorder_clips",
+                "replace_text_tracks",
+                "replace_music_tracks",
+                "render_preview",
             ] {
-                assert!(!names.contains(name), "request exposed unrelated {name}");
+                assert!(names.contains(name), "request omitted reversible {name}");
             }
         }
     }
 
     #[test]
-    fn forged_native_write_call_is_rejected_without_explicit_authorization() {
-        for request in ["你好", "Please inspect the assets only."] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(!native_tool_call_allowed(
-                "generate_storyboard",
-                &policy,
-                false
-            ));
-            assert!(!native_tool_call_allowed("replace_clips", &policy, false));
-        }
+    fn local_write_calls_need_no_keyword_but_explicit_denials_are_rechecked() {
+        let policy = RequestToolPolicy::from_request("你好");
+        assert!(native_tool_call_allowed(
+            "generate_storyboard",
+            &policy,
+            false
+        ));
+        assert!(native_tool_call_allowed("replace_clips", &policy, false));
+
+        let policy = RequestToolPolicy::from_request("Don't only inspect; edit the clips.");
+        assert!(!policy.read_only);
+        assert!(native_tool_call_allowed("replace_clips", &policy, false));
+
         for (request, tool) in [
             ("不要做 30 秒剪辑", "create_timeline_draft"),
             ("Do not add subtitles", "replace_text_tracks"),
+            ("不要替换片段", "replace_clips"),
+            ("不要调整片段时长", "change_clip_duration"),
+            ("不要重排片段", "reorder_clips"),
+            ("不要替换背景音乐", "replace_music_tracks"),
         ] {
             let policy = RequestToolPolicy::from_request(request);
             assert!(!native_tool_call_allowed(tool, &policy, false));
@@ -2808,17 +2950,61 @@ mod tests {
     }
 
     #[test]
+    fn identical_invalid_arguments_are_canonicalized_then_rejected_and_stopped() {
+        let first = FunctionCall {
+            call_id: "call-1".to_owned(),
+            name: "search_asset_segments".to_owned(),
+            arguments: "{\"query\":\"供应链\",\"assetId\":null,\"offset\":0,\"limit\":30}"
+                .to_owned(),
+            raw: json!({}),
+        };
+        let reordered = FunctionCall {
+            call_id: "call-2".to_owned(),
+            name: first.name.clone(),
+            arguments: "{ \"limit\": 30, \"offset\": 0, \"assetId\": null, \"query\": \"供应链\" }"
+                .to_owned(),
+            raw: json!({}),
+        };
+        let corrected = FunctionCall {
+            call_id: "call-3".to_owned(),
+            name: first.name.clone(),
+            arguments: "{\"query\":\"供应链\",\"assetId\":null,\"offset\":0,\"limit\":20}"
+                .to_owned(),
+            raw: json!({}),
+        };
+        let mut guard = InvalidCallGuard::default();
+        assert_eq!(guard.before_call(&first), InvalidCallDecision::Execute);
+        guard.record_result(&first, &invalid_arguments());
+        assert_eq!(
+            native_call_signature(&first),
+            native_call_signature(&reordered)
+        );
+        assert_eq!(guard.before_call(&reordered), InvalidCallDecision::Reject);
+        assert_eq!(guard.before_call(&first), InvalidCallDecision::Stop);
+        assert_eq!(guard.before_call(&corrected), InvalidCallDecision::Execute);
+    }
+
+    #[test]
     fn recovered_tool_failure_does_not_force_partial_completion() {
         let request = "生成预览";
         let policy = RequestToolPolicy::from_request(request);
-        let mut responses = vec![RENDER_CALL, RENDER_CALL, RENDER_REPLY].into_iter();
+        let adjusted_render_call = RENDER_CALL.replace(
+            "{\\\"timelineVersionId\\\":null}",
+            "{\\\"timelineVersionId\\\":\\\"timeline-1\\\"}",
+        );
+        let mut responses = vec![
+            RENDER_CALL.to_owned(),
+            adjusted_render_call,
+            RENDER_REPLY.to_owned(),
+        ]
+        .into_iter();
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": request}]
         })];
         let mut attempts = 0;
         let mut respond = |_payload: &Value, _timeout: Duration| {
-            Ok::<_, String>(responses.next().expect("recovery response").to_owned())
+            Ok::<_, String>(responses.next().expect("recovery response"))
         };
         let mut execute = |_call: &FunctionCall, _step: usize| {
             attempts += 1;
@@ -3707,19 +3893,27 @@ mod tests {
     }
 
     #[test]
-    fn delivery_execution_rechecks_explicit_authorization() {
+    fn delivery_execution_rechecks_risk_classification() {
         let denied = RequestToolPolicy::from_request("Explain music options");
         let authorized =
             RequestToolPolicy::from_request("Download music and create a Jianying draft");
         for tool in [
             "download_music",
             "use_online_music",
-            "replace_music_tracks",
-            "replace_text_tracks",
             "create_jianying_draft",
         ] {
             assert!(!native_tool_call_allowed(tool, &denied, false), "{tool}");
         }
+        assert!(native_tool_call_allowed(
+            "replace_music_tracks",
+            &denied,
+            false
+        ));
+        assert!(native_tool_call_allowed(
+            "replace_text_tracks",
+            &denied,
+            false
+        ));
         assert!(native_tool_call_allowed(
             "download_music",
             &authorized,
@@ -3733,7 +3927,7 @@ mod tests {
     }
 
     #[test]
-    fn delivery_requests_expose_only_their_authorized_native_tools() {
+    fn delivery_requests_keep_sensitive_tools_closed_without_explicit_request() {
         let policy = RequestToolPolicy::from_request("添加字幕并替换背景音乐");
         let tools = filtered_native_tools(
             native_function_tools_for_request(false, policy.has_native_write_authorization()),
@@ -3746,13 +3940,13 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
         assert!(names.contains("replace_text_tracks"));
         assert!(names.contains("replace_music_tracks"));
+        assert!(names.contains("request_asset_analysis"));
+        assert!(names.contains("generate_storyboard"));
         for unauthorized in [
             "download_music",
             "use_online_music",
             "synthesize_voiceover",
             "create_jianying_draft",
-            "request_asset_analysis",
-            "generate_storyboard",
         ] {
             assert!(!names.contains(unauthorized), "{unauthorized}");
         }
@@ -3928,19 +4122,19 @@ mod tests {
     }
 
     #[test]
-    fn preview_tool_requires_positive_intent_and_request_policy_permission() {
-        assert!(native_render_preview_allowed(
-            "生成预览",
-            &RequestToolPolicy::from_request("生成预览")
-        ));
+    fn preview_tool_is_broadly_available_unless_request_policy_denies_it() {
         for request in [
+            "生成预览",
             "你好",
-            "只查看",
-            "只检查，不要生成",
-            "不要生成预览",
             "怎么生成预览？",
             "解释生成预览是什么意思",
         ] {
+            assert!(native_render_preview_allowed(
+                request,
+                &RequestToolPolicy::from_request(request)
+            ));
+        }
+        for request in ["只查看", "只检查，不要生成", "不要生成预览"] {
             assert!(!native_render_preview_allowed(
                 request,
                 &RequestToolPolicy::from_request(request)
@@ -3949,14 +4143,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_execution_rechecks_positive_authorization() {
+    fn preview_execution_rechecks_request_policy_permission() {
         let policy = RequestToolPolicy::from_request("你好");
         assert!(!native_tool_call_allowed("render_preview", &policy, false));
-        assert!(native_tool_call_allowed(
-            "render_preview",
-            &RequestToolPolicy::from_request("生成预览"),
-            true
-        ));
+        assert!(native_tool_call_allowed("render_preview", &policy, true));
+        let denied = RequestToolPolicy::from_request("不要生成预览");
+        assert!(!native_tool_call_allowed("render_preview", &denied, true));
     }
 
     #[test]
@@ -4249,7 +4441,7 @@ mod tests {
     }
 
     #[test]
-    fn generating_a_video_exposes_storyboard_timeline_and_voiceover_tools() {
+    fn editing_a_video_exposes_local_pipeline_without_implying_paid_voiceover() {
         let policy = RequestToolPolicy::from_request("用这个文案生成视频");
         let tools = filtered_native_tools(
             native_function_tools_for_request(false, policy.has_native_write_authorization()),
@@ -4260,12 +4452,9 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect::<std::collections::HashSet<_>>();
-        for name in [
-            "generate_storyboard",
-            "create_timeline_draft",
-            "synthesize_voiceover",
-        ] {
+        for name in ["generate_storyboard", "create_timeline_draft"] {
             assert!(names.contains(name), "{name}");
         }
+        assert!(!names.contains("synthesize_voiceover"));
     }
 }
