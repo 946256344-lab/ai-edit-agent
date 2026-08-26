@@ -183,8 +183,12 @@ pub(super) fn explicitly_requested_native_tools(request: &str) -> Vec<&'static s
             "替换文本轨",
             "编辑字幕",
             "replacetexttracks",
+            "replacetexttrack",
+            "addtexttrack",
             "addcaptions",
             "addsubtitles",
+            "replacecaptions",
+            "editcaptions",
             "editsubtitles",
         ]
         .iter()
@@ -405,6 +409,32 @@ mod tests {
             explicitly_requested_native_tools("Use online music"),
             ["use_online_music"]
         );
+    }
+
+    #[test]
+    fn text_track_nouns_without_edit_intent_remain_read_only() {
+        for request in [
+            "当前字幕是什么？",
+            "字幕轨状态",
+            "What are the current subtitles?",
+            "Show the caption text track",
+        ] {
+            assert!(
+                !explicitly_requested_native_tools(request).contains(&"replace_text_tracks"),
+                "read request authorized replace_text_tracks: {request}"
+            );
+        }
+        for request in [
+            "替换字幕",
+            "Add subtitles",
+            "Replace captions",
+            "Add text track",
+        ] {
+            assert!(
+                explicitly_requested_native_tools(request).contains(&"replace_text_tracks"),
+                "edit request did not authorize replace_text_tracks: {request}"
+            );
+        }
     }
 
     #[test]

@@ -994,6 +994,18 @@ pub(super) fn apply_skill(
             let timeline_for_render = timeline.clone();
             let preview = render_preview(state.app.clone(), timeline_for_render.id.clone())?;
             let quality_check_count = preview.quality_report.checks.len();
+            let quality_warnings: Vec<Value> = preview
+                .quality_report
+                .checks
+                .iter()
+                .filter(|check| check.severity == "warning")
+                .map(|check| {
+                    json!({
+                        "category": check.category,
+                        "severity": check.severity,
+                    })
+                })
+                .collect();
             upsert(&mut state.timelines, timeline_for_render.clone());
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
@@ -1011,7 +1023,8 @@ pub(super) fn apply_skill(
                     "timelineVersionId": timeline_version_id,
                     "versionNumber": version_number,
                     "qualityCheckCount": quality_check_count
-                }
+                },
+                "qualityWarnings": quality_warnings
             }))
         }
         "create_jianying_draft" => {

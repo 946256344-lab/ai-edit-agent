@@ -219,6 +219,8 @@ Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 tas
 
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
+NativeToolLoop 在可重试写失败后最多两次拦截模型的提前自然语言收工，要求调整参数、补齐前置条件或改用另一项已授权工具；质量警告同样最多触发两次精炼续步。观察或无关前置工具成功不会清除原失败，编辑工具成功也不会清除另一产物的质量警告，只有原工具的新结果才能闭合对应事实。字幕、文本轨等主题词本身不授权写工具，仍需添加、替换、编辑等明确动作。preview 成功收据绑定其 timeline 版本；后续时间线写入产生新版本或未返回可验证版本时，旧 preview 立即失效，终态不得把它计为最新产物已完成。
+
 NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，最新调用与结果成对保留。默认注册 9 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
 
 ```text

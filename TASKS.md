@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] 进行中（2026-08-26，codex/fix-agent-continuation-review）：NativeToolLoop 新增有界失败恢复与质量精炼续步；Bugbot 的字幕主题词误授权、旧 preview 收据及续步事实误清除问题已修复并覆盖回归，待与最新 master 集成并完成全量验证。见 `docs/changes/2026-08-26-native-recovery-refinement-continuations.md`。
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：「生成视频/配音」步骤耗尽修复。授权 storyboard+时间线+配音；有界 list_assets；空串当 null；Chat 工具消息合并；配音失败码。198 个库测试通过。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：ElevenLabs 文案转配音。配音是时钟、字幕跟 alignment、失败封闭、密钥进 Credential Manager。191 个 Rust 库测试、lint/build、agent/harness 通过；真机合成未跑。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
@@ -10,8 +11,9 @@
 - [x] 完成（2026-08-20，fix/isolate-resolver-from-sibling-tasks）：Task Resolver 只看见当前激活任务；兄弟任务 title/brief/active_subgoal 不再进入路由模型。见 `docs/changes/2026-08-20-isolate-resolver-from-sibling-tasks.md`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
 - [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
-- [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
 
 - [x] 完成（2026-08-19，native-observation-tools）：迁移剩余只读观察工具到 Native Function Tool 目录。见 `docs/changes/2026-08-19-native-observation-tools.md`。
 

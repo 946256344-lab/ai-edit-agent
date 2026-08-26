@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
+use super::continuation::ContinuationState;
 use super::policy::{request_requires_project_observation, RequestToolPolicy, OBSERVATION_TOOLS};
 use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
@@ -541,6 +542,77 @@ struct NativeRunReceipt {
     unverified_requested_write_tools: std::collections::BTreeSet<String>,
     failed_tools: std::collections::BTreeSet<String>,
     pending_tools: std::collections::BTreeSet<String>,
+    latest_timeline_version_id: Option<String>,
+    preview_timeline_version_id: Option<String>,
+}
+
+const TIMELINE_VERSION_WRITE_TOOLS: &[&str] = &[
+    "create_timeline_draft",
+    "replace_clips",
+    "change_clip_duration",
+    "reorder_clips",
+    "replace_text_tracks",
+    "download_music",
+    "use_online_music",
+    "replace_music_tracks",
+    "synthesize_voiceover",
+];
+
+fn result_timeline_version_id(result: &Value) -> Option<&str> {
+    result["timelineVersionId"].as_str().or_else(|| {
+        result
+            .pointer("/artifact/timelineVersionId")
+            .and_then(Value::as_str)
+    })
+}
+
+fn record_successful_write(
+    receipt: &mut NativeRunReceipt,
+    tool: &str,
+    result: &Value,
+    tool_policy: &RequestToolPolicy,
+) {
+    let timeline_version_id = result_timeline_version_id(result).map(str::to_owned);
+    if tool == "render_preview" {
+        let preview_is_current = timeline_version_id.as_ref().is_some_and(|version| {
+            receipt
+                .latest_timeline_version_id
+                .as_ref()
+                .is_none_or(|latest| latest == version)
+        });
+        if preview_is_current {
+            if receipt.latest_timeline_version_id.is_none() {
+                receipt.latest_timeline_version_id = timeline_version_id.clone();
+            }
+            receipt.preview_timeline_version_id = timeline_version_id;
+            receipt.successful_write_tools.insert(tool.to_owned());
+            receipt.unverified_requested_write_tools.remove(tool);
+        }
+        return;
+    }
+
+    if TIMELINE_VERSION_WRITE_TOOLS.contains(&tool) {
+        let preview_still_current = match (
+            receipt.preview_timeline_version_id.as_ref(),
+            timeline_version_id.as_ref(),
+        ) {
+            (Some(preview), Some(updated)) => preview == updated,
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        receipt.latest_timeline_version_id = timeline_version_id;
+        if !preview_still_current {
+            receipt.preview_timeline_version_id = None;
+            receipt.successful_write_tools.remove("render_preview");
+            if tool_policy.native_write_authorized("render_preview") {
+                receipt
+                    .unverified_requested_write_tools
+                    .insert("render_preview".to_owned());
+            }
+        }
+    }
+    receipt.successful_write_tools.insert(tool.to_owned());
+    receipt.unverified_requested_write_tools.remove(tool);
 }
 
 fn drive_native_loop(
@@ -564,6 +636,7 @@ fn drive_native_loop(
     );
     let mut storyboard_confirmation_pending = false;
     let mut tool_step_number = 0usize;
+    let mut continuation = ContinuationState::default();
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
@@ -602,23 +675,19 @@ fn drive_native_loop(
         .ok_or_else(|| "native_tool_loop_response_unparseable".to_owned())?;
         let calls = turn.function_calls().cloned().collect::<Vec<_>>();
         if calls.is_empty() {
-            if let Some(message) = model_message_text(&turn) {
-                if requires_observation
-                    && !receipt.successful_observation_this_turn
-                    && receipt.failed_tools.is_empty()
-                {
-                    input.push(json!({
-                        "role": "system",
-                        "content": [{
-                            "type": "input_text",
-                            "text": "This request asks about current project facts. Call one allowed read-only observation function before answering."
-                        }]
-                    }));
-                    continue;
-                }
-                return Ok(message);
+            let Some(message) = model_message_text(&turn) else {
+                return Err("native_tool_loop_response_missing_message".to_owned());
+            };
+            if continue_after_natural_language(
+                input,
+                requires_observation,
+                receipt,
+                &mut continuation,
+                step_number,
+            ) {
+                continue;
             }
-            return Err("native_tool_loop_response_missing_message".to_owned());
+            return Ok(message);
         }
         receipt.tool_called = true;
 
@@ -627,14 +696,14 @@ fn drive_native_loop(
                 input.push(value);
             }
         }
+        let mut step_results = Vec::new();
         for call in calls {
             if cancelled() {
                 return Err("native_tool_loop_cancelled".to_owned());
             }
             tool_step_number += 1;
-            let result = if storyboard_confirmation_pending
-                && !OBSERVATION_TOOLS.contains(&call.name.as_str())
-            {
+            let is_observation = OBSERVATION_TOOLS.contains(&call.name.as_str());
+            let result = if storyboard_confirmation_pending && !is_observation {
                 storyboard_confirmation_required(&call.name)
             } else {
                 execute(&call, tool_step_number)?
@@ -644,7 +713,7 @@ fn drive_native_loop(
                 storyboard_confirmation_pending = true;
                 receipt.needs_confirmation = true;
             }
-            if OBSERVATION_TOOLS.contains(&call.name.as_str()) && result_status == Some("ok") {
+            if is_observation && result_status == Some("ok") {
                 receipt.successful_observation_this_turn = true;
             }
             if matches!(
@@ -659,27 +728,64 @@ fn drive_native_loop(
                     receipt.pending_tools.remove(&call.name);
                 }
                 if result_status == Some("ok")
-                    && !OBSERVATION_TOOLS.contains(&call.name.as_str())
+                    && !is_observation
                     && tool_policy.native_write_authorized(&call.name)
                 {
-                    receipt.successful_write_tools.insert(call.name.clone());
-                    receipt.unverified_requested_write_tools.remove(&call.name);
+                    record_successful_write(receipt, &call.name, &result, tool_policy);
                 }
             } else {
                 receipt.failed_tools.insert(call.name.clone());
             }
+            step_results.push((call.name.clone(), result.clone(), is_observation));
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": call.call_id,
                 "output": result.to_string(),
             }));
         }
+        continuation.record_step(&step_results);
     }
     Err("native_tool_loop_max_steps".to_owned())
 }
 
+/// 自然语言可以结束循环，但两套续步可以拦截提前收工：写工具可重试失败走修复，
+/// 产物已落地但仍带质量缺口走精炼。项目事实观察门仍然优先。返回 true 表示继续循环。
+fn continue_after_natural_language(
+    input: &mut Vec<Value>,
+    requires_observation: bool,
+    receipt: &NativeRunReceipt,
+    continuation: &mut ContinuationState,
+    step_number: usize,
+) -> bool {
+    if requires_observation
+        && !receipt.successful_observation_this_turn
+        && receipt.failed_tools.is_empty()
+    {
+        input.push(json!({
+            "role": "system",
+            "content": [{
+                "type": "input_text",
+                "text": "This request asks about current project facts. Call one allowed read-only observation function before answering."
+            }]
+        }));
+        return true;
+    }
+    let Some(kind) = continuation.decide(step_number, receipt.needs_confirmation) else {
+        return false;
+    };
+    let text = continuation.take_message(kind);
+    input.push(json!({
+        "role": "system",
+        "content": [{
+            "type": "input_text",
+            "text": text
+        }]
+    }));
+    true
+}
+
 fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
-    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
+    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a write function returns a retryable failure, call another allowed function to recover before answering; do not claim the artifact exists. If a write function succeeds with qualityWarnings, adjust with allowed functions; do not treat warnings as a finished edit.".to_owned();
     if tool_policy.native_write_authorized("generate_storyboard")
         || tool_policy.native_write_authorized("synthesize_voiceover")
     {
@@ -2475,6 +2581,83 @@ mod tests {
         assert!(confirmed_receipt
             .successful_write_tools
             .contains("render_preview"));
+    }
+
+    #[test]
+    fn timeline_edit_after_preview_invalidates_preview_completion_receipt() {
+        let request = "生成预览并替换字幕";
+        let policy = RequestToolPolicy::from_request(request);
+        let preview_call = json!({
+            "id": "resp_preview_first",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_preview_first",
+                "name": "render_preview",
+                "arguments": "{\"timelineVersionId\":null}"
+            }]
+        })
+        .to_string();
+        let edit_call = json!({
+            "id": "resp_edit_after_preview",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_edit_after_preview",
+                "name": "replace_text_tracks",
+                "arguments": "{}"
+            }]
+        })
+        .to_string();
+        let mut responses = vec![preview_call, edit_call, HELLO.to_owned()].into_iter();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": request}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(responses.next().expect("preview invalidation response"))
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(match call.name.as_str() {
+                "render_preview" => json!({
+                    "tool":"render_preview",
+                    "status":"ok",
+                    "artifact":{"type":"preview","timelineVersionId":"timeline-1"}
+                }),
+                "replace_text_tracks" => json!({
+                    "tool":"replace_text_tracks",
+                    "status":"ok",
+                    "timelineVersionId":"timeline-2",
+                    "qualityWarnings":[]
+                }),
+                _ => unreachable!("unexpected preview invalidation tool"),
+            })
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("preview invalidation loop");
+
+        assert_eq!(message, "你好！有什么我可以帮你查看的吗？");
+        assert!(!receipt.successful_write_tools.contains("render_preview"));
+        assert!(receipt
+            .successful_write_tools
+            .contains("replace_text_tracks"));
+        assert!(receipt
+            .unverified_requested_write_tools
+            .contains("render_preview"));
+        let (_, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+            .expect("finish preview invalidation result");
+        assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
     }
 
     #[test]
