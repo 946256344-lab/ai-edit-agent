@@ -22,6 +22,8 @@ NativeToolLoop 在写工具返回可重试失败或产物质量警告时，不�
 
 - Bugbot 初审发现字幕名词误授权、preview 收据未绑定版本及续步事实被无关步骤清除，三项均已修复。
 - 回归覆盖无关观察/前置成功后的恢复保持、调整后警告保持、同工具验证后关闭、preview 后新时间线版本使完成收据失效，以及字幕主题查询保持只读。
+- 与权威状态快照分支集成后，写工具结果会同时更新版本化收据、续步事实并在下一次 Provider 请求前刷新唯一快照；相关 AgentLoop 测试共同通过。
+- `cargo fmt --check`、`cargo check`、235 个 Rust 库测试、2 个契约测试、14 个 Python 测试、`npm run lint`、`npm run build`、`npm run agent:check`、`npm run harness:test`、`npm run harness:check`、分支检查及 `git diff --check` 全部通过。
 
 ## 同步文档
 

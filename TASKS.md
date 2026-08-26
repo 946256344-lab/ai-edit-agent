@@ -3,15 +3,17 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-08-26，codex/fix-agent-continuation-review）：NativeToolLoop 新增有界失败恢复与质量精炼续步；Bugbot 的字幕主题词误授权、旧 preview 收据及续步事实误清除问题已修复并覆盖回归，待与最新 master 集成并完成全量验证。见 `docs/changes/2026-08-26-native-recovery-refinement-continuations.md`。
+- [x] 完成（2026-08-26，codex/fix-agent-continuation-review）：NativeToolLoop 新增有界失败恢复与质量精炼续步；Bugbot 的字幕主题词误授权、旧 preview 收据及续步事实误清除问题已修复，且与权威状态快照完成集成。235 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 lint/build/agent/harness 全绿。见 `docs/changes/2026-08-26-native-recovery-refinement-continuations.md`。
+- [x] 完成（2026-08-25，codex/native-state-snapshot）：NativeToolLoop 每轮注入本地权威状态快照，写工具成功后刷新并受上下文裁剪保护；隐私/长度、preview 磁盘事实与观察门回归已覆盖，不改公开命令、工具目录或 SQLite schema。219 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 lint/build/agent/harness 全绿，独立审查无剩余阻塞。见 `docs/changes/2026-08-24-native-state-snapshot.md`。
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：「生成视频/配音」步骤耗尽修复。授权 storyboard+时间线+配音；有界 list_assets；空串当 null；Chat 工具消息合并；配音失败码。198 个库测试通过。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：ElevenLabs 文案转配音。配音是时钟、字幕跟 alignment、失败封闭、密钥进 Credential Manager。191 个 Rust 库测试、lint/build、agent/harness 通过；真机合成未跑。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
 - [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
 - [x] 完成（2026-08-20，fix/isolate-resolver-from-sibling-tasks）：Task Resolver 只看见当前激活任务；兄弟任务 title/brief/active_subgoal 不再进入路由模型。见 `docs/changes/2026-08-20-isolate-resolver-from-sibling-tasks.md`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
-- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
 <!-- ACTIVE_TASKS_END -->
+
+- [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。
 
 - [x] 完成（2026-08-19，remove-conversation-router）：删除前置对话 Router；普通聊天与工具执行统一进 NativeToolLoop。见 `docs/changes/2026-08-19-remove-conversation-router.md`。
 

@@ -575,3 +575,10 @@
 - 后果：本机调试可以按步骤阅读完整 INPUT/OUTPUT；该文件不是任务真实性或审计事实来源，不随安装包分发，也不进入会话恢复。该能力仅覆盖 NativeToolLoop，不改变 storyboard/视觉等非对话模型调用。工具目录整理不在本决策范围内。
 
 <!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
+
+## ADR-079：NativeToolLoop 每轮推送有界权威状态快照
+
+- 状态：已采用（2026-08-25）
+- 决策：在每次 NativeToolLoop 的静态系统提示之后、会话历史之前注入由 Rust 从当前 project/editing task 作用域重建的状态快照。快照固定字段顺序、最多 1200 字符，只投影任务 brief/最近终态、素材与分析/健康计数、storyboard/timeline 版本和数量、磁盘 preview、Jianying 状态及外部能力配置布尔值；身份只用版本号，禁止路径、文件名、UUID、素材备注、OCR/视觉证据、会话原文、Base URL、模型名和凭据值。非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，下一次 Provider 请求前重读并原位替换唯一快照；16k 裁剪保护该块。初始构建、写后刷新或凭据状态读取失败均失败封闭。
+- 原因：纯拉式项目观察依赖关键词门和模型主动选工具；漏检时会凭旧历史回答，命中时又需丢弃第一次自然语言并 nudge。高层状态由 Rust 主动提供后，模型可直接回答计数、版本和存在性，观察工具保留为详细镜头、候选和证据的按需读取。
+- 后果：成功快照在 RunReceipt 中作为来源 `state_snapshot` 的本轮成功观察，`request_requires_project_observation` 与 nudge 逻辑保留但生产路径不再为已有快照的直接事实回答重问。模型文本仍不能创建产物或满足具名写工具完成门，`get_edit_status` 工具及其决策级硬门不变。不新增工具、Tauri 命令、依赖、缓存或 SQLite schema。

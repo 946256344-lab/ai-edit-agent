@@ -10,6 +10,7 @@ mod policy;
 mod prompt;
 mod schema;
 mod skills;
+mod snapshot;
 mod tools;
 mod trace;
 
