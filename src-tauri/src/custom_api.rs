@@ -58,6 +58,11 @@ pub(crate) fn custom_config() -> Result<Option<CustomApiConfig>, String> {
         .map_err(|_| "已保存的自定义 API 凭据无效。".to_owned())
 }
 
+/// 状态快照只需要配置布尔值，完整 Base URL、模型名和 API Key 不离开凭据所有者。
+pub(crate) fn custom_api_configured_for_snapshot() -> Result<bool, String> {
+    custom_config().map(|config| config.is_some())
+}
+
 fn status_for(config: Option<&CustomApiConfig>) -> CustomApiStatus {
     match config {
         Some(config) => CustomApiStatus {

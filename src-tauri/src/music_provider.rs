@@ -47,6 +47,15 @@ fn client_id() -> Result<String, String> {
         .map_err(|_| "Jamendo music Provider is not configured.".to_owned())
 }
 
+/// 快照只投影连接布尔值；读取异常与明确未配置必须分开，避免把凭据故障伪装成空配置。
+pub(crate) fn jamendo_configured_for_snapshot() -> Result<bool, String> {
+    match entry()?.get_password() {
+        Ok(value) => Ok(!value.trim().is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(_) => Err("Windows Credential Manager could not read Jamendo credentials.".to_owned()),
+    }
+}
+
 fn allowed(track: &JamendoTrack) -> bool {
     let license = track
         .license_ccurl
@@ -246,6 +255,17 @@ fn elevenlabs_stored_key() -> Result<String, String> {
                 Ok(trimmed.to_owned())
             }
         })
+}
+
+/// 快照不探活、不发网络请求，只在凭据所有者边界内确认本机密钥是否存在。
+pub(crate) fn elevenlabs_configured_for_snapshot() -> Result<bool, String> {
+    match elevenlabs_entry()?.get_password() {
+        Ok(value) => Ok(!value.trim().is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(_) => {
+            Err("Windows Credential Manager could not read ElevenLabs credentials.".to_owned())
+        }
+    }
 }
 
 fn elevenlabs_environment_key() -> Option<String> {

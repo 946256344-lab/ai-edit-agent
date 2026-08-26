@@ -127,6 +127,11 @@ fn persisted_credential_status() -> Result<bool, String> {
     }
 }
 
+/// 状态快照只读取“是否已配置”，不让 token 或账户标识跨出凭据所有者边界。
+pub(crate) fn experimental_oauth_configured_for_snapshot() -> Result<bool, String> {
+    persisted_credential_status()
+}
+
 fn load_credentials() -> Result<OAuthCredentials, String> {
     let raw = credential_entry()?
         .get_secret()

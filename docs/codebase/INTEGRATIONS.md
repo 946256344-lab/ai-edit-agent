@@ -31,6 +31,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 ## 3）凭据与数据边界
 
 - 凭据不进入 SQLite、localStorage、日志、Agent 工具结果或文档示例。ElevenLabs 密钥与 Jamendo/自定义 API 一样只进 Credential Manager。
+- Native 状态快照只从凭据所有者读取模型、ElevenLabs 与 Jamendo 的配置布尔值，不读取或返回凭据内容、Base URL 或模型名；凭据读取异常使快照和本轮请求失败封闭。
 - 自定义 API 配置整体保存到 Credential Manager；读取错误不会静默回退 OAuth。
 - 模型只接收精简 prompt、证据文本和低分辨率派生帧，不接收原始媒体或本机路径。
 - Jamendo 工具只接受 API 明示允许下载且为 CC0/CC-BY 的曲目，并保留 CC-BY attribution。
@@ -39,6 +40,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 ## 4）可靠性与失败行为
 
 - NativeToolLoop 最多 10 步、300 秒总预算，每个模型步骤最多 120 秒；瞬时 Provider 传输失败的最多三次尝试共享同一模型步骤剩余预算，每次 HTTP 只用剩余预算除以剩余次数的份额，不扩大总预算。
+- NativeToolLoop 每轮 Provider input 都携带最多 1200 字符的 SQLite 权威状态快照；非观察写工具成功后在下一次请求前重读并替换，16k 上下文裁剪不移除该块。
 - 粗视觉连续三次失败后熔断 60 秒；交互请求优先于未开始的视觉请求。
 - 素材分析中的 FFprobe/FFmpeg/Tesseract 使用硬超时和 Windows 子进程树终止请求；preview 与 Jianying 的部分同步交付进程仍无超时，见 `CONCERNS.md`。
 - Agent 工具失败不无限自动重试；Provider 瞬时传输重试只重发当前模型 payload，不重放本地工具；中断 run 转 `needs_review`。

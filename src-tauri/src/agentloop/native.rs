@@ -26,6 +26,7 @@ use super::schema::{
 use super::skills::{
     apply_skill, persisted_artifact_for_tool, safe_step_error_code, safe_tool_failure_context,
 };
+use super::snapshot::{build_state_snapshot, is_snapshot_message, render_snapshot_message};
 use super::tools::native_function_tools_for_request;
 
 const NATIVE_TOOL_NAMES: &[&str] = &[
@@ -77,18 +78,12 @@ pub(crate) fn run_native_tool_loop(
         request,
     );
     let tool_policy = RequestToolPolicy::from_request(request);
-    let mut input = vec![json!({
-        "role": "system",
-        "content": [{
-            "type": "input_text",
-            "text": native_system_prompt(&tool_policy)
-        }]
-    })];
-    input.extend(history);
-    input.push(json!({
-        "role": "user",
-        "content": [{"type": "input_text", "text": request}]
-    }));
+    let mut input = initial_native_input(
+        history,
+        request,
+        &tool_policy,
+        build_state_snapshot(connection, project_id, editing_task_id),
+    )?;
 
     let mut state = LoopState {
         app,
@@ -180,11 +175,20 @@ pub(crate) fn run_native_tool_loop(
             native_render_preview_allowed(request, &tool_policy),
         )
     };
+    let mut refresh_snapshot = || {
+        build_state_snapshot(connection, project_id, editing_task_id)
+            .map(|snapshot| Some(render_snapshot_message(&snapshot)))
+            .map_err(|_| "native_state_snapshot_refresh_failed".to_owned())
+    };
     let cancelled = || native_task_cancelled(connection, agent_task_id);
     let mut receipt = NativeRunReceipt {
         requires_project_observation: request_requires_project_observation(request),
+        successful_observation_this_turn: true,
         ..NativeRunReceipt::default()
     };
+    receipt
+        .observation_sources
+        .insert("state_snapshot".to_owned());
     let loop_result = drive_native_loop(
         &mut input,
         is_custom,
@@ -195,6 +199,7 @@ pub(crate) fn run_native_tool_loop(
         run_deadline,
         &mut respond,
         &mut execute,
+        &mut refresh_snapshot,
         cancelled,
         |body, step_number| {
             let _ = record_agent_diagnostic(
@@ -231,6 +236,31 @@ pub(crate) fn run_native_tool_loop(
         status,
         clarification_goal: receipt.needs_confirmation.then_some("storyboard"),
     })
+}
+
+fn initial_native_input(
+    history: Vec<Value>,
+    request: &str,
+    tool_policy: &RequestToolPolicy,
+    snapshot: Result<String, String>,
+) -> Result<Vec<Value>, String> {
+    let snapshot = snapshot.map_err(|_| "native_state_snapshot_unavailable".to_owned())?;
+    let mut input = vec![
+        json!({
+            "role": "system",
+            "content": [{
+                "type": "input_text",
+                "text": native_system_prompt(tool_policy)
+            }]
+        }),
+        render_snapshot_message(&snapshot),
+    ];
+    input.extend(history);
+    input.push(json!({
+        "role": "user",
+        "content": [{"type": "input_text", "text": request}]
+    }));
+    Ok(input)
 }
 
 fn finish_native_result(
@@ -410,6 +440,7 @@ fn merge_native_outcomes(
 
 type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> + 'a;
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
+type NativeRefreshSnapshot<'a> = dyn FnMut() -> Result<Option<Value>, String> + 'a;
 
 const NATIVE_MODEL_MAX_ATTEMPTS: usize = 3;
 const NATIVE_MODEL_RETRY_DELAY: Duration = Duration::from_millis(350);
@@ -541,6 +572,7 @@ struct NativeRunReceipt {
     unverified_requested_write_tools: std::collections::BTreeSet<String>,
     failed_tools: std::collections::BTreeSet<String>,
     pending_tools: std::collections::BTreeSet<String>,
+    observation_sources: std::collections::BTreeSet<String>,
 }
 
 fn drive_native_loop(
@@ -553,6 +585,7 @@ fn drive_native_loop(
     run_deadline: Instant,
     respond: &mut NativeRespond<'_>,
     execute: &mut NativeExecute<'_>,
+    refresh_snapshot: &mut NativeRefreshSnapshot<'_>,
     mut cancelled: impl FnMut() -> bool,
     mut observed: impl FnMut(&str, usize),
 ) -> Result<String, String> {
@@ -632,9 +665,9 @@ fn drive_native_loop(
                 return Err("native_tool_loop_cancelled".to_owned());
             }
             tool_step_number += 1;
-            let result = if storyboard_confirmation_pending
-                && !OBSERVATION_TOOLS.contains(&call.name.as_str())
-            {
+            let is_observation = OBSERVATION_TOOLS.contains(&call.name.as_str());
+            let executed = !(storyboard_confirmation_pending && !is_observation);
+            let result = if !executed {
                 storyboard_confirmation_required(&call.name)
             } else {
                 execute(&call, tool_step_number)?
@@ -644,8 +677,9 @@ fn drive_native_loop(
                 storyboard_confirmation_pending = true;
                 receipt.needs_confirmation = true;
             }
-            if OBSERVATION_TOOLS.contains(&call.name.as_str()) && result_status == Some("ok") {
+            if is_observation && result_status == Some("ok") {
                 receipt.successful_observation_this_turn = true;
+                receipt.observation_sources.insert(call.name.clone());
             }
             if matches!(
                 result_status,
@@ -659,7 +693,7 @@ fn drive_native_loop(
                     receipt.pending_tools.remove(&call.name);
                 }
                 if result_status == Some("ok")
-                    && !OBSERVATION_TOOLS.contains(&call.name.as_str())
+                    && !is_observation
                     && tool_policy.native_write_authorized(&call.name)
                 {
                     receipt.successful_write_tools.insert(call.name.clone());
@@ -667,6 +701,17 @@ fn drive_native_loop(
                 }
             } else {
                 receipt.failed_tools.insert(call.name.clone());
+            }
+            if executed
+                && !is_observation
+                && matches!(
+                    result_status,
+                    Some("ok") | Some("queued") | Some("needs_confirmation")
+                )
+            {
+                if let Some(snapshot) = refresh_snapshot()? {
+                    replace_state_snapshot(input, snapshot)?;
+                }
             }
             input.push(json!({
                 "type": "function_call_output",
@@ -679,7 +724,7 @@ fn drive_native_loop(
 }
 
 fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
-    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. For current project facts, use only the provided observation functions before answering. Use artifact-producing functions only when they match the user's request and are present in tools. Treat function outputs as the only project and artifact facts. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
+    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. The system state snapshot is authoritative for current high-level project facts; use observation functions only when more detail is needed. For exact edit or delivery readiness decisions, such as whether export is possible, still call get_edit_status. Treat the state snapshot and function outputs as the only project and artifact facts. Use artifact-producing functions only when they match the user's request and are present in tools. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
     if tool_policy.native_write_authorized("generate_storyboard")
         || tool_policy.native_write_authorized("synthesize_voiceover")
     {
@@ -688,6 +733,19 @@ fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
         );
     }
     prompt
+}
+
+fn replace_state_snapshot(input: &mut [Value], replacement: Value) -> Result<(), String> {
+    let indexes = input
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| is_snapshot_message(item).then_some(index))
+        .collect::<Vec<_>>();
+    if indexes.len() != 1 || !is_snapshot_message(&replacement) {
+        return Err("native_state_snapshot_invariant_failed".to_owned());
+    }
+    input[indexes[0]] = replacement;
+    Ok(())
 }
 
 fn native_render_preview_allowed(request: &str, tool_policy: &RequestToolPolicy) -> bool {
@@ -800,6 +858,7 @@ fn trim_native_input_to_budget(input: &mut Vec<Value>, request: &str, max_chars:
             .rposition(|item| is_current_user_item(item, request));
         let Some(remove_index) = (1..input.len()).find(|index| {
             Some(*index) != current_index
+                && !is_snapshot_message(&input[*index])
                 && !protected_call_id.as_ref().is_some_and(|call_id| {
                     input[*index]["call_id"].as_str() == Some(call_id.as_str())
                         && matches!(
@@ -1839,6 +1898,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -1902,6 +1962,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2069,6 +2130,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2114,6 +2176,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         );
@@ -2157,6 +2220,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         );
@@ -2195,6 +2259,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         );
@@ -2258,6 +2323,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2309,6 +2375,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond_after_confirmation,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2372,6 +2439,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2454,6 +2522,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond_confirmed,
             &mut execute_confirmed,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2500,6 +2569,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         );
@@ -2542,6 +2612,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2583,6 +2654,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         );
@@ -2749,6 +2821,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2816,6 +2889,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -2885,6 +2959,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -3061,6 +3136,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -3556,6 +3632,7 @@ mod tests {
                 Instant::now() + Duration::from_secs(5),
                 &mut respond,
                 &mut execute,
+                &mut || Ok(None),
                 || false,
                 |_body, _step| {},
             )
@@ -3748,6 +3825,7 @@ mod tests {
             Instant::now() + Duration::from_secs(5),
             &mut respond,
             &mut execute,
+            &mut || Ok(None),
             || false,
             |_body, _step| {},
         )
@@ -3757,9 +3835,167 @@ mod tests {
     }
 
     #[test]
+    fn initial_input_injects_exactly_one_snapshot_between_system_and_history() {
+        let policy = RequestToolPolicy::default();
+        let snapshot = format!(
+            "{}\nstoryboard: v3",
+            crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+        );
+        let history = vec![json!({
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "旧回答"}]
+        })];
+
+        let input = initial_native_input(history, "当前问题", &policy, Ok(snapshot))
+            .expect("build initial Native input");
+
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| is_snapshot_message(item))
+                .count(),
+            1
+        );
+        assert_eq!(input.iter().position(is_snapshot_message), Some(1));
+        assert_eq!(input[2]["role"], "assistant");
+        assert_eq!(input.last().expect("current user item")["role"], "user");
+    }
+
+    #[test]
+    fn initial_input_fails_closed_when_snapshot_build_fails() {
+        let error = initial_native_input(
+            Vec::new(),
+            "当前问题",
+            &RequestToolPolicy::default(),
+            Err("fixture contains a private path".to_owned()),
+        )
+        .expect_err("missing snapshot must stop the Native loop");
+        assert_eq!(error, "native_state_snapshot_unavailable");
+        assert!(!error.contains("private path"));
+    }
+
+    #[test]
+    fn successful_write_refreshes_the_only_snapshot_before_the_next_request() {
+        let request = "生成 storyboard";
+        let policy = RequestToolPolicy::from_request(request);
+        let initial_snapshot = format!(
+            "{}\nstoryboard: v3",
+            crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+        );
+        let mut input = initial_native_input(Vec::new(), request, &policy, Ok(initial_snapshot))
+            .expect("build snapshot fixture input");
+        let mut responses = [MAIN_CHAIN_STORYBOARD_CALL, MAIN_CHAIN_CONFIRMATION_REPLY].into_iter();
+        let mut requests = Vec::new();
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(
+                responses
+                    .next()
+                    .expect("snapshot refresh response")
+                    .to_owned(),
+            )
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            Ok::<_, String>(json!({
+                "tool": "generate_storyboard",
+                "status": "needs_confirmation",
+                "versionNumber": 4
+            }))
+        };
+        let mut refresh = || {
+            Ok(Some(render_snapshot_message(&format!(
+                "{}\nstoryboard: v4",
+                crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+            ))))
+        };
+
+        drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &policy,
+            &mut NativeRunReceipt::default(),
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut refresh,
+            || false,
+            |_body, _step| {},
+        )
+        .expect("write followed by refreshed summary");
+        drop(respond);
+
+        assert_eq!(requests.len(), 2);
+        for request_payload in &requests {
+            let items = request_payload["input"].as_array().expect("Provider input");
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| is_snapshot_message(item))
+                    .count(),
+                1
+            );
+        }
+        assert!(requests[0].to_string().contains("storyboard: v3"));
+        assert!(!requests[1].to_string().contains("storyboard: v3"));
+        assert!(requests[1].to_string().contains("storyboard: v4"));
+    }
+
+    #[test]
+    fn snapshot_observation_allows_a_direct_fact_answer_without_nudge() {
+        let request = "当前项目有多少素材？";
+        let policy = RequestToolPolicy::from_request(request);
+        let snapshot = format!(
+            "{}\n素材: total=2",
+            crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+        );
+        let mut input = initial_native_input(Vec::new(), request, &policy, Ok(snapshot))
+            .expect("build observed input");
+        let mut request_count = 0;
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            request_count += 1;
+            Ok::<_, String>(HELLO.to_owned())
+        };
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            panic!("snapshot-backed direct answer must not call a tool")
+        };
+        let mut receipt = NativeRunReceipt {
+            successful_observation_this_turn: true,
+            ..NativeRunReceipt::default()
+        };
+        receipt
+            .observation_sources
+            .insert("state_snapshot".to_owned());
+
+        drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &policy,
+            &mut receipt,
+            request,
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut || Ok(None),
+            || false,
+            |_body, _step| {},
+        )
+        .expect("snapshot opens project fact gate");
+
+        assert_eq!(request_count, 1);
+        assert!(receipt.observation_sources.contains("state_snapshot"));
+    }
+
+    #[test]
     fn input_budget_drops_old_history_but_keeps_function_call_pair() {
         let mut input = vec![
             json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
+            render_snapshot_message(&format!(
+                "{}\n素材: total=2",
+                crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+            )),
             json!({"role": "user", "content": [{"type": "input_text", "text": "很长的旧问题"}]}),
             json!({"role": "assistant", "content": [{"type": "output_text", "text": "很长的旧回答"}]}),
             json!({"role": "user", "content": [{"type": "input_text", "text": "当前问题"}]}),
@@ -3776,6 +4012,13 @@ mod tests {
         assert!(input
             .iter()
             .any(|item| item["role"] == "user" && item["content"][0]["text"] == "当前问题"));
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| is_snapshot_message(item))
+                .count(),
+            1
+        );
         assert!(!input
             .iter()
             .any(|item| item.to_string().contains("很长的旧问题")));
@@ -3785,6 +4028,10 @@ mod tests {
     fn input_budget_truncates_huge_tool_output_before_dropping_current_turn() {
         let mut input = vec![
             json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
+            render_snapshot_message(&format!(
+                "{}\n素材: total=2",
+                crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
+            )),
             json!({"role": "user", "content": [{"type": "input_text", "text": "用这个文案生成视频"}]}),
             json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
             json!({"type": "function_call_output", "call_id": "call_1", "output": "x".repeat(20_000)}),
@@ -3801,6 +4048,13 @@ mod tests {
         assert!(input.iter().any(
             |item| item["role"] == "user" && item["content"][0]["text"] == "用这个文案生成视频"
         ));
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| is_snapshot_message(item))
+                .count(),
+            1
+        );
     }
 
     #[test]
