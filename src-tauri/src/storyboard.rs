@@ -44,7 +44,9 @@ pub(crate) fn storyboard_sources(
     project_id: &str,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
-        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
+        // Top-5 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
+        // 可访问视频中判断语义与画面优先级。
+        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -190,7 +192,7 @@ pub(crate) fn request_storyboard(
             Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
             Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
             The candidates below have been pre-ranked by quality, duration match, and relevance. Each candidate includes a keyframe grid showing 4-8 representative frames from the video. Judge semantic match by directly inspecting these frames, not by relying solely on text descriptions.\n\
-            For each candidate, you will see: (1) a keyframe grid image, (2) metadata (assetId, duration, sceneSegments). Use ONLY the supplied candidates. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.{}"
+            For each candidate, you will see: (1) a keyframe grid image, (2) metadata (assetId, duration, sceneSegments). Every candidate is a verified video. Use ONLY the supplied candidates. Source times must be inside the provided duration and preferably align with sceneSegments. Do not use file names, unknown asset IDs, or unverified claims.{}"
         , if let Some(fb) = feedback {
             format!("\n\nPrevious attempt failed local validation: {fb}\nPrevious storyboard JSON (revise it when useful): {}", previous_json)
         } else {
@@ -212,7 +214,7 @@ pub(crate) fn request_storyboard(
             Prefer the clearest, most specific, and least repetitive evidence. Do not default to the first source, the longest source, or a generic clip if a more relevant one exists. Avoid padding a beat with weak footage when a better shot is available.\n\
             Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
             Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
-            Use ONLY the supplied media evidence JSON below. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.\n\
+            Use ONLY the supplied video evidence JSON below. Source times must be inside the provided duration and preferably align with sceneSegments. Do not use file names, unknown asset IDs, or unverified claims.\n\
             The evidence below has been pre-ranked by quality, duration match, and relevance — prioritize the top candidates.\n\
             Evidence: {evidence}{revision_context}"
         )
@@ -847,8 +849,14 @@ fn choose_storyboard_video_range(
 
 #[cfg(test)]
 mod tests {
-    use super::{minimum_storyboard_duration, normalize_storyboard_candidate, validate_storyboard};
+    use super::{
+        minimum_storyboard_duration, normalize_storyboard_candidate, storyboard_sources,
+        validate_storyboard,
+    };
     use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
+    use rusqlite::{params, Connection};
+    use std::fs;
+    use uuid::Uuid;
 
     fn source() -> StoryboardSource {
         StoryboardSource {
@@ -899,6 +907,74 @@ mod tests {
                 match_level: match_level.to_owned(),
             }],
         }
+    }
+
+    #[test]
+    fn storyboard_sources_only_returns_ready_accessible_videos() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory = std::env::temp_dir().join(format!(
+            "assembly-storyboard-source-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let missing = directory.join("missing.bin").to_string_lossy().into_owned();
+        let ready_metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","keyframeGridPath":null}"#;
+
+        for (id, kind, status, source) in [
+            ("ready-video", "video", "ready", available.as_str()),
+            ("queued-video", "video", "queued", available.as_str()),
+            ("ready-image", "image", "ready", available.as_str()),
+            ("ready-audio", "audio", "ready", available.as_str()),
+            ("missing-video", "video", "ready", missing.as_str()),
+            ("excluded-video", "video", "ready", available.as_str()),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES (?1, 'project-1', ?2, ?3, ?4, ?5)",
+                    params![id, kind, ready_metadata, source, status],
+                )
+                .expect("insert source fixture");
+        }
+        connection
+            .execute(
+                "INSERT INTO asset_user_metadata (asset_id, excluded) VALUES ('excluded-video', 1)",
+                [],
+            )
+            .expect("exclude source fixture");
+
+        let (sources, visual_ready_count) =
+            storyboard_sources(&connection, "project-1").expect("load storyboard sources");
+
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.asset_id.as_str())
+                .collect::<Vec<_>>(),
+            ["ready-video"]
+        );
+        // 诊断计数在文件可访问性过滤前计算，因此还包含 missing-video。
+        assert_eq!(visual_ready_count, 2);
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
     }
 
     #[test]

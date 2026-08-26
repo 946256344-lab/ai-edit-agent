@@ -193,7 +193,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 只使用视觉状态为 `ready` 且有视觉证据的素材；brief 会优先推进并有界等待最高相关视觉批次。候选多帧精检仍为 TODO。
+当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次，候选多帧精检仍为 TODO。
 
 ### Provider 认证
 
@@ -267,7 +267,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 ## 配音（ElevenLabs，2026-08-20）
 
-有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从全库取出 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空。可空字符串参数把空串当成 null。
+有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从技术 `ready` 的可访问视频池中取出最多 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空；图片、音频和其他类型不用于补足候选数量。可空字符串参数把空串当成 null。
 
 ## 本地音乐轨（2026-08-12）
 
@@ -279,7 +279,7 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 三阶段生成流程**（2026-08-18）：为解决原有"全局 TOP-5 候选导致整条时间线只能从同一组 5 个素材中反复选择"的根本缺陷，重构为三阶段架构。**Phase 1（叙事结构生成）**：模型根据 brief 和内容的自然节奏、节奏要求和叙事复杂度拆分为合适数量的 beats（简单消息可能 3-4 个，故事驱动内容可能 8-12 个或更多，由内容引导而非人为限制），每个 beat 包含 `id`（唯一标识）、`purpose`（叙事作用）、`requiredVisual`（该 beat 需要的视觉证据要求），不涉及素材选择，输出 `NarrativeStructure`。**Phase 2（逐 beat 粗选镜）**：对每个 beat 单独使用 `scoring::rank_segment_candidates` 对整个素材池排序，提供该 beat **专属的 TOP-5 候选素材**（带关键帧网格），模型为该 beat 选择 1 个素材 + 时间范围，输出 `RoughStoryboard`（每个 beat 一个 shot，可能时长不精确）。日志记录每个 beat 的专属 TOP-5 清单（asset_id + kind），便于诊断选择偏差。**Phase 3（精剪与节奏优化）**：模型调整精确时间范围（对齐场景边界 `scene_segments`、避免重叠）、节奏控制（调整每个 shot 时长以匹配整体节奏）、镜头组合（某些 beat 可能需要拆分成多个 shots）、过渡优化（确保相邻 shots 的视觉连贯性），输出最终可执行的 `StoryboardContent`。重试循环只在 Phase 3：验证失败时带反馈重新精剪，最多 3 次；Phase 1/2 结果保持稳定。架构优势：素材多样性提升（每个 beat 独立 TOP-5，不再受全局 5 个素材限制）、语义匹配精度提升（排序针对每个 beat 的 `requiredVisual` 计算）、重试效率提升（Phase 3 验证失败时只重新精剪）、调试透明度提升（日志清晰展示每个 beat 的专属候选清单）、模型负载分散（三次小请求替代一次大请求，降低超时风险）。实现位于 `src-tauri/src/storyboard/phases.rs`（231 行），主流程 `storyboard.rs::generate_storyboard_internal` 重构为三阶段顺序调用。
+**Storyboard 三阶段生成流程**（2026-08-18）：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把素材池硬过滤为技术分析 `ready`、`kind = video`、未排除且源文件可访问，再针对每个 beat 独立预排序并提供最多 5 个候选。预排序的语义分当前是 `requiredVisual + purpose` 与视觉标签/OCR 的词面重合（英文词元、中文相邻双字），同时叠加质量、时长、连续复用和仍为固定值的新鲜度分；它不是 embedding 语义检索。模型随后读取候选卡、场景段和可用关键帧网格，返回 1 个视频、源时间范围、理由及 `matchLevel`，或诚实留空。Phase 3 由模型调整精确时间范围、节奏和镜头组合，Rust 再验证素材、范围和多样性；验证失败最多反馈重试 3 次，Phase 1/2 结果保持稳定。实现位于 `src-tauri/src/storyboard/phases.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他分类计数）、素材样本（前 10 个的 ID/类型/时长）、Phase 1 完成（beats 数量、target_duration）、Phase 2 每个 beat 的专属 TOP-5 清单（asset_id + kind）、Phase 2 完成（shots 数量、uncovered beats）、Phase 3 每次尝试进度、多模态内容构建、模型请求/响应、候选接收情况（shots/beats/时长/未覆盖 beats）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结，所有日志使用 Rust `log` crate 的 info/warn/error 级别。素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断数据库分类与文件系统不一致等异常情况。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
 

@@ -44,7 +44,7 @@
 | `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs` 和独立 `visualAnalysisStatus`；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
-| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 仅以证据作为实验性模型输入，在本地校验后创建任务内版本。 |
+| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；仅以这些素材的证据作为实验性模型输入，在本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
 | `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
@@ -110,7 +110,7 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 可重试写失败和成功产物的 `qualityWarnings` 会分别触发最多两次恢复/精炼续步；无关观察或前置调用不能清除仍未闭合的失败/警告。默认工具可见性不等于完成清单；请求中明确要求的最低产物集合只用于 RunReceipt 终态验真，不参与工具暴露或路径选择。`render_preview` 的成功收据绑定返回的 `timelineVersionId`；任何后续时间线写工具若返回不同版本或缺少可验证版本，旧 preview 收据即失效，必须重新渲染才能满足 preview 完成门。
 
-内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：首次视频分析最多扫描前 30 秒、生成 4 张关键帧，并只对前两张关键帧进行 OCR；完成后素材成为技术 `ready`。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 以最多 6 条技术就绪素材为一批，发送每条素材一张低分辨率中间代表帧及素材 ID/源时间标签；模型响应只能回填同一批次内的 ID 和精确时间。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或响应无效不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 只使用 `ready` 且实际具有视觉证据的素材，并已按 brief 对 queued 视觉批次设置本地优先级。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
+内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：首次视频分析最多扫描前 30 秒、生成 4 张关键帧，并只对前两张关键帧进行 OCR；完成后素材成为技术 `ready`。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 以最多 6 条技术就绪素材为一批，发送每条素材一张低分辨率中间代表帧及素材 ID/源时间标签；模型响应只能回填同一批次内的 ID 和精确时间。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或响应无效不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
 
 首次场景检测的滤镜顺序为 `fps=4 -> scale=320:-2:flags=fast_bilinear -> select(scene) -> showinfo`；它先降低比较成本，再以 `pts_time` 保存源时间。前 30 秒和最多 4 张关键帧仍是本地安全上限。
 
@@ -118,13 +118,13 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
 
-**Storyboard 三阶段生成流程**（2026-08-18）：为解决原有"全局 TOP-5 候选导致整条时间线只能从同一组 5 个素材中反复选择"的根本缺陷，`storyboard.rs::generate_storyboard_internal` 重构为三阶段架构（实现位于 `storyboard/phases.rs`）。**Phase 1（叙事结构生成）**：`phase1_generate_narrative` 调用模型根据 brief 和内容的自然节奏、节奏要求和叙事复杂度拆分为合适数量的 beats（简单消息可能 3-4 个，故事驱动内容可能 8-12 个或更多，由内容引导而非人为限制），每个 beat 包含 `id`（唯一标识）、`purpose`（叙事作用）、`requiredVisual`（该 beat 需要的视觉证据要求），不涉及素材选择，输出 `NarrativeStructure`。**Phase 2（逐 beat 粗选镜）**：`phase2_rough_shot_selection` 对每个 beat 单独调用 `scoring::rank_segment_candidates` 对整个素材池排序，提供该 beat **专属的 TOP-5 候选素材**（带关键帧网格），模型为该 beat 选择 1 个素材 + 时间范围，输出 `RoughStoryboard`（每个 beat 一个 shot，可能时长不精确）。日志记录每个 beat 的专属 TOP-5 清单（asset_id + kind）。**Phase 3（精剪与节奏优化）**：`phase3_fine_edit` 调用模型调整精确时间范围（对齐场景边界 `scene_segments`、避免重叠）、节奏控制、镜头组合（某些 beat 可能需要拆分成多个 shots）、过渡优化，输出最终可执行的 `StoryboardContent`。重试循环只在 Phase 3：验证失败时带反馈重新精剪，最多 3 次；Phase 1/2 结果保持稳定，不重试。架构优势：素材多样性提升（每个 beat 独立 TOP-5，不再受全局 5 个素材限制）、语义匹配精度提升（排序针对每个 beat 的 `requiredVisual` 计算）、重试效率提升（Phase 3 验证失败时只重新精剪）。
+**Storyboard 三阶段生成流程**（2026-08-18）：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把候选硬过滤为技术分析 `ready`、`kind = video`、未被排除且源文件可访问的素材，再针对每个 beat 独立预排序并提供最多 5 个候选。Rust 预排序以 `requiredVisual + purpose` 对视觉标签/OCR 的词面命中为主要语义分，叠加当前质量、时长与连续复用分；随后模型读取候选卡、场景段和可用的关键帧网格，返回 1 个 `assetId`、源时间范围、理由与 `matchLevel`，或诚实标记 uncovered。Phase 3 由模型精调时间范围、节奏与组合，Rust 验证失败时最多反馈重试 3 次；Phase 1/2 结果保持稳定。
 
-`storyboard/scoring.rs` 评分模块对候选素材进行综合评分（语义相关性 0-50 分、画面质量 0-25 分、时长匹配 0-15 分、多样性惩罚 -10 分、新鲜度 0-10 分），Phase 2 在逐 beat 排序时使用。`validate_storyboard` 新增多样性硬门：连续镜头禁止使用同一素材，单一素材占比不得超过 40%。`models.rs` 的 `StoryboardSource` 和 `SceneSegment` 新增 `visual_quality_score` 和 `scene_duration_ms` 字段（Option 类型向后兼容）。`storyboard/multimodal.rs` 实现多模态选镜：固定时间采样（第 1 秒、1/3、2/3、最后 1 秒）提取 4 帧关键帧并拼接为 2×2 网格（640×360 JPEG），`build_multimodal_content` 构建包含关键帧网格图的多模态内容块供 Phase 2 使用。`storyboard/semantic.rs` 和 `storyboard/validation.rs` 定义了语义匹配层与对抗验证框架的接口和类型，实现体保留 TODO 供后续集成 CLIP 编码器和独立验证模型。
+`storyboard/scoring.rs` 的 0–50 语义分当前是词面匹配：英文按连续字母数字词元、中文按相邻双字切分，再检查这些词元是否出现在视觉 evidence 的 subjects/actions/products/scene 或 OCR 中；另加画面质量 0–25、时长匹配 0–15、连续复用惩罚 -10 和新鲜度 0–10。当前素材加载没有独立质量分时统一按 0.5，新鲜度仍固定为 10，因此主要有效差异来自词面命中、时长和连续复用。模型复选不是关键词规则：它获得最多 5 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 返回选择。`storyboard/semantic.rs` 的 embedding 接口仍为 TODO，当前没有 CLIP/向量相似度参与 Rust 预排序。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
-生成 storyboard 必须提交非空的用户 brief。模型输入仅有紧凑的持久化证据：素材 ID、媒体类型、已验证时长、场景片段、OCR 与视觉标签。生成镜头必须含素材 ID 和源范围；视频范围必须在已验证时长内，图片的源范围必须为零。校验失败不会保存版本。
+生成 storyboard 必须提交非空的用户 brief。候选必须是技术分析 `ready` 的可访问视频；模型输入仅有紧凑的持久化证据：素材 ID、已验证时长、场景片段、视觉标签和可用关键帧网格。生成镜头必须含素材 ID 和源范围，范围必须在已验证视频时长内。校验失败不会保存版本。
 
 ## Agent 内部技能契约
 

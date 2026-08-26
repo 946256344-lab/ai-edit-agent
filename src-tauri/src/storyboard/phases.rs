@@ -211,7 +211,7 @@ fn pick_shot_for_beat(
         {{\"uncovered\": true}} or {{\"uncovered\": false, \"shot\": {{...}}}}.\n\
         shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
         narrationText is spoken voiceover. If the beat already has narration, keep it. If the brief has no copy, write a short spoken line. Never copy onScreenText into narrationText.\n\
-        Use ONLY these candidate assetIds. matchLevel is direct or contextual. Images use sourceStartMs=0 and sourceEndMs=0.",
+        Every candidate is a verified video. Use ONLY these candidate assetIds. matchLevel is direct or contextual. sourceStartMs and sourceEndMs must stay inside the candidate duration.",
         beat.id,
         beat.purpose,
         beat.required_visual,
