@@ -4,8 +4,8 @@
 //! 目标产物是什么、当前结果是否满足完成门。它不得持有数据库、文件系统、Tauri、
 //! Provider 或外部进程句柄，因此这里的判断本身不能产生任何副作用。
 
-use super::native_policy::explicitly_requested_native_tools;
 pub(super) use super::native_policy::request_requires_project_observation;
+use super::native_policy::{expected_native_write_tools, explicitly_requested_sensitive_tools};
 
 /// 不创建/修改本地产物的观察技能；`search_music` 是受控外部查询，其余只读本地状态。
 pub(super) const OBSERVATION_TOOLS: &[&str] = &[
@@ -38,55 +38,18 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "create_jianying_draft",
 ];
 
-/// 本地权限判断所需的显式动作词；它们只扩大本轮可用工具，不选择首个工具。
-pub(super) const EDIT_VERBS: &[&str] = &[
-    "替换",
-    "换成",
-    "换掉",
-    "缩短",
-    "加长",
-    "重排",
-    "排序",
-    "去掉",
-    "删除",
-    "删掉",
-    "不要",
-    "精简",
-    "调整",
-    "剪掉",
-    "裁剪",
-    "放慢",
-    "加快",
-    "增加",
-    "减掉",
-    "adjust",
-    "shorten",
-    "lengthen",
-    "replace",
-    "reorder",
-    "remove",
-    "delete",
-    "trim",
-    "edit",
-    "cut",
-    "slow down",
-    "speed up",
-];
-
-pub(super) const CREATE_VERBS: &[&str] = &[
-    "生成",
-    "创建",
-    "渲染",
-    "制作",
-    "做一个",
-    "做个",
-    "做一段",
-    "导入",
-    "generate",
-    "create",
-    "render",
-    "make",
-    "import",
+/// 可逆、留有版本或只创建内部产物的本地写工具。模型默认看见这些能力并自行决定
+/// 是否调用；Rust 仍在执行前校验作用域、参数、前置条件和真实结果。
+pub(super) const DEFAULT_LOCAL_WRITE_TOOLS: &[&str] = &[
+    "request_asset_analysis",
+    "generate_storyboard",
+    "create_timeline_draft",
+    "replace_clips",
+    "change_clip_duration",
+    "reorder_clips",
+    "replace_text_tracks",
+    "replace_music_tracks",
+    "render_preview",
 ];
 
 /// 用户本轮明确声明的负向边界，只能缩小工具集合，不能替模型选择工具。
@@ -94,7 +57,8 @@ pub(super) const CREATE_VERBS: &[&str] = &[
 pub(super) struct RequestToolPolicy {
     denied_tools: Vec<&'static str>,
     pub(super) read_only: bool,
-    authorized_native_tools: Vec<&'static str>,
+    explicitly_requested_sensitive_tools: Vec<&'static str>,
+    expected_native_write_tools: Vec<&'static str>,
 }
 
 impl RequestToolPolicy {
@@ -218,13 +182,45 @@ impl RequestToolPolicy {
         ) {
             denied_tools.push("replace_text_tracks");
         }
+        if explicitly_denies_target(
+            request,
+            &["片段", "clip", "clips"],
+            &["替换", "换掉", "replace", "swap"],
+        ) {
+            denied_tools.push("replace_clips");
+        }
+        if explicitly_denies_target(
+            request,
+            &["片段时长", "clipduration", "duration"],
+            &[
+                "调整", "改变", "缩短", "加长", "change", "adjust", "shorten", "extend",
+            ],
+        ) {
+            denied_tools.push("change_clip_duration");
+        }
+        if explicitly_denies_target(
+            request,
+            &["片段", "clip", "clips"],
+            &["重排", "排序", "reorder", "sort"],
+        ) {
+            denied_tools.push("reorder_clips");
+        }
+        if explicitly_denies_target(
+            request,
+            &["音乐", "背景音乐", "music", "backgroundmusic"],
+            &["替换", "编辑", "replace", "edit"],
+        ) {
+            denied_tools.push("replace_music_tracks");
+        }
         denied_tools.sort_unstable();
         denied_tools.dedup();
-        let authorized_native_tools = explicitly_requested_native_tools(request);
+        let explicitly_requested_sensitive_tools = explicitly_requested_sensitive_tools(request);
+        let expected_native_write_tools = expected_native_write_tools(request);
         Self {
             denied_tools,
             read_only,
-            authorized_native_tools,
+            explicitly_requested_sensitive_tools,
+            expected_native_write_tools,
         }
     }
 
@@ -232,25 +228,36 @@ impl RequestToolPolicy {
         self.denied_tools.contains(&tool)
     }
 
-    /// Native 主链写工具必须由用户明确请求；没有授权时默认只暴露观察目录。
+    /// 模型默认获得可逆本地能力；明确只读/禁止项和敏感能力门只会收缩集合。
     pub(super) fn native_tool_exposed(&self, tool: &str) -> bool {
         !self.forbids(tool)
             && (OBSERVATION_TOOLS.contains(&tool) || self.native_write_authorized(tool))
     }
 
     pub(super) fn native_write_authorized(&self, tool: &str) -> bool {
-        !self.forbids(tool) && self.authorized_native_tools.contains(&tool)
+        !self.forbids(tool)
+            && (DEFAULT_LOCAL_WRITE_TOOLS.contains(&tool)
+                || self.explicitly_requested_sensitive_tools.contains(&tool))
     }
 
     pub(super) fn has_native_write_authorization(&self) -> bool {
-        self.authorized_native_write_tools().next().is_some()
+        EDIT_TOOLS
+            .iter()
+            .copied()
+            .any(|tool| self.native_write_authorized(tool))
     }
 
-    pub(super) fn authorized_native_write_tools(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.authorized_native_tools
+    /// 可用工具目录不等于强制目标清单；只有请求文本明确要求的最低产物进入完成收据。
+    pub(super) fn requested_native_write_tools(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.expected_native_write_tools
             .iter()
             .copied()
             .filter(|tool| !self.forbids(tool))
+    }
+
+    pub(super) fn native_write_requested(&self, tool: &str) -> bool {
+        self.requested_native_write_tools()
+            .any(|requested| requested == tool)
     }
 }
 
@@ -328,8 +335,15 @@ fn request_clause_requests_read_only(clause: &str) -> bool {
             ],
             &["只读", "readonly"],
         );
+    let rejects_inspection_only = ["dontonlyinspect", "donotonlyinspect", "notonlyinspect"]
+        .iter()
+        .any(|phrase| compact.contains(phrase));
+    let inspection_only = !rejects_inspection_only
+        && (compact.contains("onlyinspect")
+            || (compact.contains("inspect") && compact.ends_with("only")));
     let explicitly_requests_read_only = compact == "只读"
         || compact == "readonly"
+        || inspection_only
         || [
             "只读检查",
             "只读查看",
@@ -354,6 +368,13 @@ fn request_clause_requests_read_only(clause: &str) -> bool {
             "stayreadonly",
             "readonlyonly",
             "readonlyrequest",
+            "不要修改任何内容",
+            "不要做任何修改",
+            "不做任何修改",
+            "donotmodifyanything",
+            "dontmodifyanything",
+            "withoutanychanges",
+            "nomodifications",
         ]
         .iter()
         .any(|phrase| compact.contains(phrase))

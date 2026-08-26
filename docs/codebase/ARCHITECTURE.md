@@ -102,7 +102,7 @@ flowchart TD
 | React controllers | 领域投影、轮询、用户动作编排 | SQL、模型 prompt | `src/hooks/` |
 | `taskrouter` | task 归属和 receipt | 具体工具选择 | `src-tauri/src/taskrouter.rs` |
 | `agent` | conversation run 生命周期、原子终态 | 媒体实现、工具选择 | `src-tauri/src/agent.rs` |
-| `agentloop/policy` | 工具授权、请求负向约束与真实性辅助 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
+| `agentloop/policy` | 工具风险分层、请求负向约束与真实性辅助 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
 | `agentloop` | Native 循环、状态、prompt、技能派发 | 前置 Router、固定 LoopGoal、绕过 policy | `src-tauri/src/agentloop.rs`、`src-tauri/src/agentloop/native.rs` |
 | 领域模块 | 作用域校验后的领域读写 | 用户意图分类 | `assets.rs`、`timeline.rs` 等 |
 | `provider` | 可替换模型传输和调度 | 产物完成事实 | `src-tauri/src/provider.rs` |
@@ -127,8 +127,8 @@ flowchart TD
 ```text
 agentloop.rs
   -> agentloop/native.rs       原生工具循环、RunReceipt 与有界终止
-  -> agentloop/native_policy.rs 请求级具名写工具授权识别
-  -> agentloop/policy.rs       负向约束与工具集合
+  -> agentloop/native_policy.rs 敏感能力显式授权与终态产物期望
+  -> agentloop/policy.rs       风险分层、负向约束与工具集合
   -> agentloop/prompt.rs       会话历史与安全上下文
   -> agentloop/skills.rs       apply_skill 与领域状态桥接
   -> agentloop/mod.rs          crate API 入口

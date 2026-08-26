@@ -223,9 +223,9 @@ Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 tas
 
 Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
 
-NativeToolLoop 在可重试写失败后最多两次拦截模型的提前自然语言收工，要求调整参数、补齐前置条件或改用另一项已授权工具；质量警告同样最多触发两次精炼续步。观察或无关前置工具成功不会清除原失败，编辑工具成功也不会清除另一产物的质量警告，只有原工具的新结果才能闭合对应事实。字幕、文本轨等主题词本身不授权写工具，仍需添加、替换、编辑等明确动作。preview 成功收据绑定其 timeline 版本；后续时间线写入产生新版本或未返回可验证版本时，旧 preview 立即失效，终态不得把它计为最新产物已完成。
+NativeToolLoop 在可重试写失败后最多两次拦截模型的提前自然语言收工，要求调整参数、补齐前置条件或改用另一项可用工具；质量警告同样最多触发两次精炼续步。观察或无关前置工具成功不会清除原失败，编辑工具成功也不会清除另一产物的质量警告，只有原工具的新结果才能闭合对应事实。相同工具与语义相同的 JSON 参数首次返回 `invalid_arguments` 后，后端不再重复执行；参数会先规范化，不能靠空白或键顺序绕过。第二次返回不可重试的重复参数诊断，第三次原样调用有界终止；两次拦截仍各自写入 payload-free 的失败步骤审计。preview 成功收据绑定其 timeline 版本；后续时间线写入产生新版本或未返回可验证版本时，旧 preview 立即失效，终态不得把它计为最新产物已完成。
 
-NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，在静态系统提示后注入本轮权威状态快照，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，权威快照、当前用户消息及最新调用/结果对始终保留。默认注册 10 个只读观察工具，非只读请求只按 RequestToolPolicy 的明确授权提供主链、文本、音乐下载/编辑或 Jianying 工具；`render_preview` 仍仅在用户明确要求且未被只读限制时出现。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
+NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，在静态系统提示后注入本轮权威状态快照，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output；上下文预算只删除旧消息，权威快照、当前用户消息及最新调用/结果对始终保留。非只读请求默认注册 10 个观察工具，以及分析、storyboard、内部时间线版本化编辑、文本/本地音乐编辑和低清 preview 等可逆本地工具，由模型以 `tool_choice:auto` 自主选择；明确只读/禁止项会缩小集合，外部音乐下载、付费配音和 Jianying 交付草稿仍需明确请求。请求文本的最低产物期望只用于 RunReceipt 终态验真，不参与工具暴露或首工具选择。所有工具复用 `apply_skill` 与既有领域校验。循环不使用 `finish`、`done`、`no_action` 等伪工具，也不因某个预先锁定的单一目标强制继续；最终消息以 assistant 角色保存。模型文本只结束调用循环，不能自证任务完成；RunReceipt 按具名成功工具去重，并结合持久化产物决定终态。达到超时或步骤上限时保留已验证中间产物并标记部分完成，未确认的步骤不记为成功。
 
 ```text
 真实会话 input
@@ -267,7 +267,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 ## 配音（ElevenLabs，2026-08-20）
 
-有明确旁白文案时默认合成配音。用户只说配音、没给文案时，`generate_storyboard` 仍为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。「生成视频」或「生成配音」会授权 storyboard、内部时间线和 `synthesize_voiceover`；没有时间线时必须先走分镜确认，不能靠观察工具耗尽步骤。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从全库取出 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空。可空字符串参数把空串当成 null。
+有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从全库取出 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空。可空字符串参数把空串当成 null。
 
 ## 本地音乐轨（2026-08-12）
 
