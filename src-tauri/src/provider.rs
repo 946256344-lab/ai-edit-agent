@@ -572,15 +572,6 @@ pub(crate) fn response_json_text(body: &str) -> Option<String> {
         .and_then(|value| find_json_text(&value).or(Some(delta)))
 }
 
-/// Posts a JSON payload to the experimental Responses endpoint and returns the raw body.
-pub(crate) fn post_responses_json(
-    access: &AuthorizedOAuth,
-    payload: &Value,
-    timeout: Option<Duration>,
-) -> Result<String, String> {
-    post_responses_json_with_wire_observer(access, payload, timeout, &mut |_, _| {})
-}
-
 fn post_responses_json_with_wire_observer(
     access: &AuthorizedOAuth,
     payload: &Value,

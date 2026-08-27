@@ -26,6 +26,7 @@ use std::path::PathBuf;
 /// # 返回
 ///
 /// 成功返回网格图路径，失败返回错误信息。
+#[allow(dead_code)] // 预留：旧 FFmpeg 场景段采样接口，生产路径已用 multimodal::generate_keyframe_grid
 pub fn extract_keyframe_grid(
     _asset_path: &str,
     _scene_segments: &[SceneSegment],

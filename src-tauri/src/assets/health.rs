@@ -6,7 +6,7 @@ use crate::models::{AssetHealthScanStart, AssetHealthScanSummary};
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::{fs, path::Path, thread};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 pub(crate) fn modified_millis(metadata: &fs::Metadata) -> Option<i64> {
@@ -196,13 +196,6 @@ pub fn get_asset_health_scan_summary(
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let last_checked_at: Option<i64> = connection
-        .query_row(
-            "SELECT MAX(checked_at) FROM asset_source_health WHERE project_id = ?1",
-            params![project_id],
-            |row| row.get(0),
-        )
-        .ok();
     let active_scan: Option<(String, String)> = connection
         .query_row(
             "SELECT id, status FROM agent_tasks WHERE project_id = ?1 AND tool_name = 'scan_asset_health' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",

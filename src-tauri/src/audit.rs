@@ -31,6 +31,7 @@ pub(crate) fn record_agent_diagnostic(
 }
 
 pub(crate) enum AgentTimingMetric {
+    #[allow(dead_code)] // 预留：Native 逐步接入 model_request 耗时诊断
     ModelRequest,
     SkillExecution,
     RunTotal,

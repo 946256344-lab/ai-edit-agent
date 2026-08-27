@@ -19,7 +19,7 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);

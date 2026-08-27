@@ -102,6 +102,7 @@ pub fn generate_keyframe_grid(
 /// 每个候选的内容块顺序：
 /// 1. 如果有 keyframe_grid_path，读取图像并 base64 编码为 image block
 /// 2. 文本 block 包含 assetId、duration、sceneSegments 元数据
+#[allow(dead_code)] // 预留：统一多模态候选内容块构建，三阶段链路当前走 phases::candidate_grid_image
 pub fn build_multimodal_content(
     candidates: &[StoryboardSource],
 ) -> Result<Vec<serde_json::Value>, String> {

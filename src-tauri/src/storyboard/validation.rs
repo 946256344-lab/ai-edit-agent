@@ -7,6 +7,7 @@ use crate::models::StoryboardContent;
 use crate::provider::ModelAccess;
 
 /// 验证结果：通过或需要修订。
+#[allow(dead_code)] // 预留：对抗验证框架类型，实现体待接入 Phase 3 修订循环
 #[derive(Debug, Clone)]
 pub enum ValidationResult {
     /// 所有镜头通过验证，可以继续。
@@ -16,6 +17,7 @@ pub enum ValidationResult {
 }
 
 /// 被拒绝的 beat，包含拒绝原因。
+#[allow(dead_code)] // 预留：对抗验证框架类型
 #[derive(Debug, Clone)]
 pub struct RejectedBeat {
     pub beat_id: String,
@@ -33,6 +35,7 @@ pub struct RejectedBeat {
 /// 5. 返回 ValidationResult
 ///
 /// 当前返回 Approved 作为占位。
+#[allow(dead_code)] // 预留：对抗验证入口，当前 Phase 3 仍用本地 validate_storyboard
 pub fn verify_storyboard_selections(
     _access: &ModelAccess,
     _candidate: &StoryboardContent,

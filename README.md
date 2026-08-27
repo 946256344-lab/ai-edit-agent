@@ -99,3 +99,4 @@ npm run harness:check
 维护记录（2026-08-20）：NativeToolLoop 为工具后的 Provider 总结请求增加安全失败分类与有界重试，每次 HTTP 只用剩余单步预算的一份，且不会重放本地工具；见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
 维护记录（2026-08-20）：debug 构建可用 `NATIVE_PROVIDER_FULL_TRACE=1` 开启进程内完整 Provider INPUT/OUTPUT 检查器；见 docs/changes/2026-08-20-native-provider-full-trace.md。
 维护记录（2026-08-25）：NativeToolLoop 每轮注入并在写后刷新本地权威状态快照；快照成功作为本轮观察收据，观察工具退为细节补充。见 docs/changes/2026-08-24-native-state-snapshot.md。
+维护记录（2026-08-27）：Rust 后端 dead-code 警告清理；无命令、schema、工具白名单或 Provider 协议变化。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。

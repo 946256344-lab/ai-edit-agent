@@ -19,14 +19,12 @@ use std::{
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-const KEYFRAME_COUNT: usize = 4;
 pub(crate) const MAX_INITIAL_OCR_FRAMES: usize = 2;
 pub(crate) const MAX_TECHNICAL_ANALYSIS_WORKERS: usize = 2;
 pub(crate) const STARTUP_ANALYSIS_BATCH: usize = 4;
 pub(crate) const DRAIN_ANALYSIS_BATCH: usize = 4;
 const FFPROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const THUMBNAIL_FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
-const SCENE_SCAN_FFMPEG_TIMEOUT: Duration = Duration::from_secs(45);
 const FALLBACK_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 const TESSERACT_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -239,15 +237,6 @@ fn generate_thumbnail(
     )?;
     Ok((output.status.success() && destination.is_file())
         .then(|| destination.to_string_lossy().into_owned()))
-}
-
-fn extract_scene_times(output: &[u8]) -> Vec<f64> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .filter_map(|line| line.split("pts_time:").nth(1))
-        .filter_map(|value| value.split_whitespace().next())
-        .filter_map(|value| value.parse::<f64>().ok())
-        .collect()
 }
 
 fn generate_video_keyframes(
@@ -1184,13 +1173,6 @@ mod tests {
         assert!(reserve_technical_analysis_worker().is_some());
         drop(second);
         release_all_technical_analysis_workers();
-    }
-
-    #[test]
-    fn keyframe_extraction_uses_fixed_sampling() {
-        // 验证固定采样策略：不再依赖场景检测，改为固定时间点采样
-        // 该测试验证关键帧提取不使用 scene detection filter
-        assert_eq!(KEYFRAME_COUNT, 4);
     }
 
     #[test]

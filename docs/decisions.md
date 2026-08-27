@@ -575,6 +575,7 @@
 - 后果：本机调试可以按步骤阅读完整 INPUT/OUTPUT；该文件不是任务真实性或审计事实来源，不随安装包分发，也不进入会话恢复。该能力仅覆盖 NativeToolLoop，不改变 storyboard/视觉等非对话模型调用。工具目录整理不在本决策范围内。
 
 <!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
+<!-- 维护记录（2026-08-27）：本文件审查确认无需新增 ADR。Rust dead-code 警告清理属于实现卫生，不改变架构取舍、依赖或公开契约。详见 docs/changes/2026-08-27-cleanup-rust-warnings.md。 -->
 
 ## ADR-079：NativeToolLoop 每轮推送有界权威状态快照
 

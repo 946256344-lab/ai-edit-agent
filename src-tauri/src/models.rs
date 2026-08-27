@@ -81,17 +81,6 @@ pub struct Message {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PendingClarificationSnapshot {
-    pub id: String,
-    pub source_kind: String,
-    pub source_agent_task_id: Option<String>,
-    pub goal: Option<String>,
-    pub question: String,
-    pub created_at: i64,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
@@ -677,10 +666,8 @@ pub struct AgentTask {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationTurnResult {
-    Immediate {
-        status: String,
-        message: String,
-    },
+    #[allow(dead_code)] // 前端 local-store 仍声明 immediate 变体契约
+    Immediate { status: String, message: String },
     Run {
         #[serde(rename = "agentTaskId")]
         agent_task_id: String,

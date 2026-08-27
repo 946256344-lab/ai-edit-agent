@@ -10,8 +10,7 @@ pub mod visual;
 // ---- 外部模块需要的 pub(crate) re-exports ----
 // library：目录投影与 Agent 列表查询
 pub(crate) use library::{
-    asset_directory_nodes, asset_public_folder_metadata, asset_safe_directory,
-    legacy_asset_directories, list_assets_for_agent, ASSET_PAGE_FILTER_SQL,
+    asset_public_folder_metadata, asset_safe_directory, list_assets_for_agent,
 };
 // analysis：分析队列与恢复
 pub(crate) use analysis::{
@@ -34,7 +33,7 @@ use crate::models::{
     Asset, AssetRelinkMatch, AssetRelinkPreview, AssetRelinkResult, CollectProjectMediaPreview,
     CollectProjectMediaResult, SceneSegment, TechnicalMetadata,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
