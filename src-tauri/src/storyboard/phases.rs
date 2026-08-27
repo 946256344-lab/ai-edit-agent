@@ -108,7 +108,6 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut uncovered_beat_ids = Vec::new();
     let mut prior_selections = Vec::new();
     let mut semantic_fallback_logged = false;
-    let max_asset_uses = super::max_asset_uses_for_shot_count(narrative.beats.len());
 
     for (index, beat) in narrative.beats.iter().enumerate() {
         let beat_text = format!("{} {}", beat.required_visual, beat.purpose);
@@ -126,7 +125,7 @@ pub(crate) fn phase2_rough_shot_selection(
                 }
             };
         let ranked = scoring::rank_segment_candidates(
-            candidates_within_diversity_limit(sources, &prior_selections, max_asset_uses),
+            candidates_within_diversity_limit(sources, &prior_selections),
             beat,
             target_each,
             &prior_selections,
@@ -197,16 +196,18 @@ pub(crate) fn phase2_rough_shot_selection(
 fn candidates_within_diversity_limit(
     sources: &[StoryboardSource],
     prior_selections: &[String],
-    max_asset_uses: usize,
 ) -> Vec<StoryboardSource> {
+    let max_asset_uses = super::max_asset_uses_for_shot_count(prior_selections.len() + 1);
+    let last_asset = prior_selections.last();
     sources
         .iter()
         .filter(|source| {
-            prior_selections
-                .iter()
-                .filter(|asset_id| *asset_id == &source.asset_id)
-                .count()
-                < max_asset_uses
+            last_asset != Some(&source.asset_id)
+                && prior_selections
+                    .iter()
+                    .filter(|asset_id| *asset_id == &source.asset_id)
+                    .count()
+                    < max_asset_uses
         })
         .cloned()
         .collect()
@@ -490,7 +491,34 @@ mod tests {
             "repeated".to_owned(),
         ];
 
-        let candidates = candidates_within_diversity_limit(&sources, &prior, 2);
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
+    }
+
+    #[test]
+    fn phase2_uses_the_actual_selected_shot_count_for_the_diversity_limit() {
+        let sources = vec![source("repeated"), source("available")];
+        let prior = vec!["repeated".to_owned(), "other".to_owned()];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
+    }
+
+    #[test]
+    fn phase2_never_offers_the_immediately_previous_asset() {
+        let sources = vec![source("previous"), source("available")];
+        let prior = vec![
+            "first".to_owned(),
+            "second".to_owned(),
+            "third".to_owned(),
+            "previous".to_owned(),
+        ];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].asset_id, "available");
@@ -542,6 +570,32 @@ mod tests {
 
         assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
     }
+
+    #[test]
+    fn phase3_cannot_split_a_beat_into_repeated_asset_shots() {
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot.clone(), rough_shot],
+        };
+
+        assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
+    }
 }
 
 /// Phase 3: 精剪与节奏优化
@@ -586,7 +640,7 @@ pub(crate) fn phase3_fine_edit(
         1. Adjust source time ranges to align with scene boundaries where possible\n\
         2. Ensure no overlapping time ranges from the same video asset\n\
         3. Optimize shot durations for pacing (total should match targetDurationMs)\n\
-        4. You may split a beat only when every split keeps that beat's selected asset; do not merge beats\n\
+        4. Return exactly one shot for each rough beat, in the same order; do not split, merge, add, drop, or reorder beats\n\
         5. Ensure visual transitions between consecutive shots are smooth\n\n\
         Return the complete final JSON with: title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots.\n\
         Each shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
@@ -631,6 +685,17 @@ fn enforce_phase3_scope(
     final_content: &mut StoryboardContent,
     rough: &RoughStoryboard,
 ) -> Result<(), String> {
+    if final_content.shots.len() != rough.shots.len()
+        || final_content
+            .shots
+            .iter()
+            .zip(&rough.shots)
+            .any(|(final_shot, rough_shot)| final_shot.beat_id != rough_shot.beat_id)
+    {
+        return Err(
+            "Phase 3 must keep exactly one shot per Phase 2 beat in the selected order.".to_owned(),
+        );
+    }
     let selected_by_beat = rough
         .shots
         .iter()
