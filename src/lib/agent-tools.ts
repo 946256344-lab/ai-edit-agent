@@ -3,7 +3,6 @@
  * 白名单变化时必须同步版本化 fixture。这些是模型内部技能，不是 React 可直接调用的命令。
  */
 export type AgentObservationToolName =
-  | 'load_tools'
   | 'read_logs'
   | 'get_edit_status'
   | 'get_asset_health_summary'

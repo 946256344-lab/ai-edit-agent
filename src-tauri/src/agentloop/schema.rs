@@ -5,7 +5,6 @@
 
 use crate::models::{AgentEditResult, StoryboardVersion, TimelineVersion};
 use rusqlite::Connection;
-use std::collections::BTreeSet;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -30,7 +29,6 @@ pub(super) struct LoopState<'a> {
     pub(super) conversation_id: &'a str,
     pub(super) task_brief: String,
     pub(super) tool_policy: RequestToolPolicy,
-    pub(super) loaded_tools: BTreeSet<String>,
     pub(super) storyboard: Option<StoryboardVersion>,
     pub(super) timelines: Vec<TimelineVersion>,
     pub(super) last_outcome: Option<AgentEditResult>,

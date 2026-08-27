@@ -12,7 +12,6 @@ const ACTIVE_TASK_STATUSES = new Set<StoredAgentTask['status']>(['queued', 'runn
 
 const TOOL_LABELS: Record<string, string> = {
   agent_loop: '执行剪辑任务',
-  load_tools: '加载当前所需工具',
   read_logs: '读取应用运行日志',
   list_assets: '检查可用素材',
   search_assets: '检索素材候选',

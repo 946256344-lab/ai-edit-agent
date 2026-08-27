@@ -17,34 +17,6 @@
   },
   "tools": [
     {
-      "name": "load_tools",
-      "version": 1,
-      "kind": "observation",
-      "inputShape": {
-        "type": "object",
-        "properties": {
-          "toolNames": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 5,
-            "uniqueItems": true,
-            "items": { "type": "string" }
-          }
-        },
-        "required": ["toolNames"]
-      },
-      "scope": {
-        "boundary": "current_native_loop_request",
-        "resolution": "replaces the ephemeral loaded set using only names allowed by the current request policy"
-      },
-      "sideEffect": false,
-      "idempotency": "same ordered name set produces the same ephemeral selection",
-      "retryPolicy": "safe to invoke again; every success replaces the previous loaded set",
-      "preconditions": ["one through five unique names are present in the filtered tool directory"],
-      "produces": [],
-      "returns": ["loaded_tool_names"]
-    },
-    {
       "name": "read_logs",
       "version": 1,
       "kind": "observation",

@@ -4,8 +4,6 @@
 
 桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 仅镜像当前内部 Agent 技能名称，前端通过 `src/lib/local-store.ts` 调用公开 Tauri 命令。
 
-2026-08-27 起 NativeToolLoop 不再自动重试 Provider 请求：每个模型步骤只做一次尝试，失败立即透传稳定错误码（`provider_http_429`、`provider_timeout`、`provider_network` 等）并写入 Agent 诊断；重复无效工具参数不再被守卫熔断，由模型按 `invalid_arguments` 反馈自行调整。公开 Tauri 命令、工具名称与参数不变。
-
 素材库查询命令（`list_assets`、`list_asset_page`、`update_asset_user_metadata_batch`、`add_asset_tag_batch`、`remove_asset_tag_batch`、`create_asset_collection`、`list_asset_collections`、`add_assets_to_collection`、`get_asset_evidence`）已于 2026-08-17 从 `assets.rs` 迁移至 `assets/library.rs` 子模块，命令名称、参数和返回值完全不变。同批提取 `assets/analysis.rs`（技术与视觉分析）、`assets/health.rs`（源文件健康）、`assets/visual.rs`（视觉批次）三个子模块；`assets.rs` 收缩为薄协调层。
 
 2026-08-14 的恢复基线没有新增、删除或修改 Tauri 命令及工具输入/输出；相关 Rust 改动仅为 `rustfmt` 标准格式化。
@@ -192,11 +190,11 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 
 以下规则覆盖本文中保留的历史“6 步”表述：当前 NativeToolLoop 最多 10 步，模型在最后一步可对真实产物或部分完成项作总结；成功产物仍由后端验证，`AgentEditResult.message` 中的完成事实不能只靠模型文本成立。可用技能还包括 `request_asset_analysis`，用于对当前项目内已导入、`queued` 或 `failed` 的素材排队本地分析；项目事实问答必须先完成成功只读观察。工具调用失败时模型可基于安全结构化结果解释或调整，但终态仍由后端事实决定。
 
-### `load_tools` / `read_logs`
+### 原生工具目录与 `read_logs`
 
-NativeToolLoop 首轮只向 Provider 注册 `load_tools({ toolNames })`。系统提示始终包含完整、无状态标记的工具名称和一句话说明；`toolNames` 必须是其中 1–5 个不重复名称。每次成功调用整体替换本轮已加载业务工具，且只从下一次 Provider 请求开始生效；下一次请求只包含常驻 `load_tools` 与这些工具的完整 strict schema。即使 Provider 违背 `parallel_tool_calls:false` 在同一响应附带未暴露调用，Rust 也按该请求实际暴露集合拒绝执行。选择不跨用户请求持久化，执行前仍复核全局白名单与请求策略。`load_tools` 不创建领域产物，也不满足项目事实观察门。
+NativeToolLoop 每轮直接向 Provider 注册全部 24 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 仍复核全局白名单与请求只读策略，目录可见性不等于执行授权。
 
-`read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主加载；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`，模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
+`read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`，模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
 
 开发诊断阶段可通过 `list_agent_diagnostics({ projectId, editingTaskId, agentTaskId })` 读取本地诊断记录。它只包含同一作用域内的受控阶段标记、响应长度和安全错误码，用于定位模型请求、响应解析、工具或管线在哪一步失败；绝不保存模型原文、会话内容、媒体证据、凭据或本机路径。
 
