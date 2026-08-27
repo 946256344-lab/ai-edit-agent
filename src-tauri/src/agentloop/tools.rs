@@ -5,7 +5,6 @@
 
 use serde_json::{json, Value};
 
-pub(crate) const LOAD_TOOLS: &str = "load_tools";
 pub(crate) const READ_LOGS: &str = "read_logs";
 
 const GET_EDIT_STATUS: &str = "get_edit_status";
@@ -206,28 +205,7 @@ pub(crate) fn native_function_tools_for_request(
     tools
 }
 
-/// `load_tools` 常驻，从完整注册目录中选择最多五个业务工具；执行权限仍由 Rust 裁决。
-pub(crate) fn load_tools_function_tool(available_names: &[String]) -> Value {
-    function_tool(
-        LOAD_TOOLS,
-        "Replace the currently loaded business tools with 1 to 5 names selected from the available tool directory.",
-        json!({
-            "toolNames": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 5,
-                "uniqueItems": true,
-                "items": {
-                    "type": "string",
-                    "enum": available_names
-                }
-            }
-        }),
-        vec!["toolNames"],
-    )
-}
-
-/// 目录只提供名称和简短用途；完整参数 schema 仅在模型主动加载后发送。
+/// 目录只提供名称和简短用途；完整参数 schema 直接随每次请求发送。
 pub(crate) fn compact_tool_directory(tools: &[Value]) -> String {
     tools
         .iter()
@@ -615,11 +593,10 @@ mod tests {
             .map(|tool| tool["name"].as_str().expect("tool name"))
             .collect();
 
-        assert_eq!(tools.len(), OBSERVATION_TOOLS.len() - 1);
+        assert_eq!(tools.len(), OBSERVATION_TOOLS.len());
         assert_eq!(names.len(), tools.len());
         assert!(OBSERVATION_TOOLS
             .iter()
-            .filter(|name| **name != LOAD_TOOLS)
             .all(|name| names.contains(name)));
         assert!(EDIT_TOOLS.iter().all(|name| !names.contains(name)));
     }
@@ -752,23 +729,11 @@ mod tests {
 
     #[test]
     fn render_preview_is_only_added_when_policy_allows_it() {
+        assert_eq!(native_function_tools(false).len(), OBSERVATION_TOOLS.len());
         assert_eq!(
-            native_function_tools(false).len(),
-            OBSERVATION_TOOLS.len() - 1
+            native_function_tools(true).len(),
+            OBSERVATION_TOOLS.len() + 1
         );
-        assert_eq!(native_function_tools(true).len(), OBSERVATION_TOOLS.len());
-    }
-
-    #[test]
-    fn dynamic_loader_schema_is_strict_unique_and_bounded_to_five_names() {
-        let tool = load_tools_function_tool(&["read_logs".to_owned(), "list_assets".to_owned()]);
-        let names = &tool["parameters"]["properties"]["toolNames"];
-        assert_eq!(tool["name"], LOAD_TOOLS);
-        assert_eq!(tool["strict"], true);
-        assert_eq!(names["minItems"], 1);
-        assert_eq!(names["maxItems"], 5);
-        assert_eq!(names["uniqueItems"], true);
-        assert_eq!(names["items"]["enum"], json!(["read_logs", "list_assets"]));
     }
 
     #[test]
