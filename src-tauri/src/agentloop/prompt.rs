@@ -6,9 +6,6 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
-const MAX_HISTORY_MESSAGES: usize = 12;
-const MAX_HISTORY_CHARS: usize = 8_000;
-
 pub(super) fn load_native_message_history(
     connection: &Connection,
     conversation_id: &str,
@@ -21,53 +18,44 @@ pub(super) fn load_native_message_history(
          WHERE messages.conversation_id = ?1
            AND conversations.editing_task_id = ?2
            AND messages.role IN ('user', 'assistant', 'agent')
-         ORDER BY messages.created_at DESC, messages.id DESC LIMIT ?3",
+         ORDER BY messages.created_at ASC, messages.id ASC",
     ) {
         Ok(statement) => statement,
         Err(_) => return Vec::new(),
     };
-    let rows = match statement.query_map(
-        params![
-            conversation_id,
-            editing_task_id,
-            MAX_HISTORY_MESSAGES as i64 + 1
-        ],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    ) {
+    let rows = match statement.query_map(params![conversation_id, editing_task_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
         Ok(rows) => rows,
         Err(_) => return Vec::new(),
     };
-    let mut newest_first = Vec::new();
-    let mut skipped_current = false;
-    let mut total_chars = 0;
+    let mut history = Vec::new();
     for row in rows.filter_map(Result::ok) {
         let (role, content) = row;
-        if !skipped_current && role == "user" && content.trim() == exclude_request.trim() {
-            skipped_current = true;
-            continue;
-        }
         let role = match role.as_str() {
             "user" => "user",
             "assistant" | "agent" => "assistant",
             _ => continue,
         };
-        let chars = content.chars().count();
-        if total_chars + chars > MAX_HISTORY_CHARS {
-            continue;
-        }
-        total_chars += chars;
         let content_type = if role == "assistant" {
             "output_text"
         } else {
             "input_text"
         };
-        newest_first.push(json!({
+        history.push(json!({
             "role": role,
             "content": [{"type": content_type, "text": content}],
         }));
     }
-    newest_first.reverse();
-    newest_first
+    if let Some(index) = history.iter().rposition(|item| {
+        item["role"] == "user"
+            && item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.trim() == exclude_request.trim())
+    }) {
+        history.remove(index);
+    }
+    history
 }
 
 #[cfg(test)]
@@ -100,5 +88,30 @@ mod tests {
         assert!(!history.iter().any(|item| {
             item.to_string().contains("用户：") || item.to_string().contains("助手：")
         }));
+    }
+
+    #[test]
+    fn native_history_has_no_fixed_message_or_character_window() {
+        let connection = Connection::open_in_memory().expect("open history database");
+        crate::db::migrate(&connection).expect("migrate history database");
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p', 'Project', 1, 1);
+                 INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at) VALUES ('t', 'p', 'Task', '', 1, 1);
+                 INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at) VALUES ('c', 'p', 't', 'Conversation', 'ready', 1, 1);",
+            )
+            .expect("seed scope");
+        for index in 0..20 {
+            connection
+                .execute(
+                    "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?1, 'c', 'user', ?2, ?3)",
+                    params![format!("u{index:02}"), "x".repeat(1_000), index + 2],
+                )
+                .expect("seed history message");
+        }
+
+        let history = load_native_message_history(&connection, "c", "t", "different request");
+
+        assert_eq!(history.len(), 20);
     }
 }

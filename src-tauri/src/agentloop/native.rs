@@ -18,6 +18,11 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
+use super::context::{
+    compact_tool_outputs, compression_plan, memory_item, provider_payload_tokens, summary_batches,
+    truncate_text_to_tokens, COMPRESSION_TARGET_TOKENS, COMPRESSION_TRIGGER_TOKENS,
+    MAX_CONTEXT_TOKENS,
+};
 use super::continuation::ContinuationState;
 use super::policy::{request_requires_project_observation, RequestToolPolicy, OBSERVATION_TOOLS};
 use super::schema::{
@@ -28,9 +33,14 @@ use super::skills::{
     apply_skill, persisted_artifact_for_tool, safe_step_error_code, safe_tool_failure_context,
 };
 use super::snapshot::{build_state_snapshot, is_snapshot_message, render_snapshot_message};
-use super::tools::native_function_tools_for_request;
+use super::tools::{
+    compact_tool_directory, load_tools_function_tool, native_function_tools_for_request,
+    LOAD_TOOLS, READ_LOGS,
+};
 
 const NATIVE_TOOL_NAMES: &[&str] = &[
+    "load_tools",
+    "read_logs",
     "get_edit_status",
     "get_asset_health_summary",
     "list_assets",
@@ -79,10 +89,13 @@ pub(crate) fn run_native_tool_loop(
         request,
     );
     let tool_policy = RequestToolPolicy::from_request(request);
+    let initial_catalog = full_native_tool_catalog();
+    let tool_directory = compact_tool_directory(&initial_catalog);
     let mut input = initial_native_input(
         history,
         request,
         &tool_policy,
+        &tool_directory,
         build_state_snapshot(connection, project_id, editing_task_id),
     )?;
 
@@ -95,6 +108,7 @@ pub(crate) fn run_native_tool_loop(
         conversation_id,
         task_brief: task_brief.to_owned(),
         tool_policy: tool_policy.clone(),
+        loaded_tools: std::collections::BTreeSet::new(),
         storyboard: storyboard.cloned(),
         timelines: timelines.to_vec(),
         last_outcome: None,
@@ -169,8 +183,8 @@ pub(crate) fn run_native_tool_loop(
         )
     };
     let mut invalid_call_guard = InvalidCallGuard::default();
-    let mut execute =
-        |call: &FunctionCall, step_number: usize| match invalid_call_guard.before_call(call) {
+    let mut execute = |call: &FunctionCall, step_number: usize| -> Result<Value, String> {
+        match invalid_call_guard.before_call(call) {
             InvalidCallDecision::Execute => {
                 let result = execute_native_tool(
                     &mut state,
@@ -189,7 +203,8 @@ pub(crate) fn run_native_tool_loop(
                 record_repeated_invalid_call(&state, call, step_number)?;
                 Err("native_tool_loop_repeated_invalid_call".to_owned())
             }
-        };
+        }
+    };
     let mut refresh_snapshot = || {
         build_state_snapshot(connection, project_id, editing_task_id)
             .map(|snapshot| Some(render_snapshot_message(&snapshot)))
@@ -257,6 +272,7 @@ fn initial_native_input(
     history: Vec<Value>,
     request: &str,
     tool_policy: &RequestToolPolicy,
+    tool_directory: &str,
     snapshot: Result<String, String>,
 ) -> Result<Vec<Value>, String> {
     let snapshot = snapshot.map_err(|_| "native_state_snapshot_unavailable".to_owned())?;
@@ -265,7 +281,7 @@ fn initial_native_input(
             "role": "system",
             "content": [{
                 "type": "input_text",
-                "text": native_system_prompt(tool_policy)
+                "text": native_system_prompt(tool_policy, tool_directory)
             }]
         }),
         render_snapshot_message(&snapshot),
@@ -744,29 +760,40 @@ fn drive_native_loop(
     let mut storyboard_confirmation_pending = false;
     let mut tool_step_number = 0usize;
     let mut continuation = ContinuationState::default();
+    let mut loaded_tools = std::collections::BTreeSet::<String>::new();
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
         }
+        let available_tools = full_native_tool_catalog();
+        let available_names = available_tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        let mut exposed_tools = vec![load_tools_function_tool(&available_names)];
+        exposed_tools.extend(available_tools.into_iter().filter(|tool| {
+            tool["name"]
+                .as_str()
+                .is_some_and(|name| loaded_tools.contains(name))
+        }));
+        compact_native_context(
+            input,
+            &exposed_tools,
+            is_custom,
+            request,
+            run_deadline,
+            respond,
+        )?;
         let Some(timeout) = remaining_timeout(run_deadline) else {
             return Err("native_tool_loop_deadline_exceeded".to_owned());
         };
-        trim_native_input(input, request);
         let payload = json!({
             "model": "gpt-5.4",
             "store": false,
             "stream": false,
             "parallel_tool_calls": false,
             "tool_choice": "auto",
-            "tools": filtered_native_tools(
-                native_function_tools_for_request(
-                    !storyboard_confirmation_pending
-                        && native_render_preview_allowed(request, tool_policy),
-                    tool_policy.has_native_write_authorization() && !storyboard_confirmation_pending,
-                ),
-                tool_policy,
-                !storyboard_confirmation_pending && native_render_preview_allowed(request, tool_policy),
-            ),
+            "tools": exposed_tools,
             "input": input,
         });
         let body = respond(&payload, timeout)?;
@@ -797,6 +824,7 @@ fn drive_native_loop(
             return Ok(message);
         }
         receipt.tool_called = true;
+        let response_loads_tools = calls.iter().any(|call| call.name == LOAD_TOOLS);
 
         for item in &turn.output {
             if let Some(value) = output_item_for_input(item, is_custom) {
@@ -804,15 +832,25 @@ fn drive_native_loop(
             }
         }
         let mut step_results = Vec::new();
+        let mut next_loaded_tools = None;
         for call in calls {
             if cancelled() {
                 return Err("native_tool_loop_cancelled".to_owned());
             }
             tool_step_number += 1;
             let is_observation = OBSERVATION_TOOLS.contains(&call.name.as_str());
+            let is_project_observation =
+                is_observation && !matches!(call.name.as_str(), LOAD_TOOLS | READ_LOGS);
             let executed = !(storyboard_confirmation_pending && !is_observation);
-            let result = if !executed {
+            let result = if response_loads_tools && !dynamic_tool_loaded(&call.name, &loaded_tools)
+            {
+                tool_not_loaded(&call.name)
+            } else if !executed {
                 storyboard_confirmation_required(&call.name)
+            } else if call.name == LOAD_TOOLS
+                && !load_request_uses_available_names(&call, &available_names)
+            {
+                invalid_arguments()
             } else {
                 execute(&call, tool_step_number)?
             };
@@ -821,7 +859,18 @@ fn drive_native_loop(
                 storyboard_confirmation_pending = true;
                 receipt.needs_confirmation = true;
             }
-            if is_observation && result_status == Some("ok") {
+            if call.name == LOAD_TOOLS && result_status == Some("ok") {
+                next_loaded_tools = Some(
+                    result["loadedTools"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+            if is_project_observation && result_status == Some("ok") {
                 receipt.successful_observation_this_turn = true;
                 receipt.observation_sources.insert(call.name.clone());
             }
@@ -862,6 +911,9 @@ fn drive_native_loop(
                 "call_id": call.call_id,
                 "output": result.to_string(),
             }));
+        }
+        if let Some(next_loaded_tools) = next_loaded_tools {
+            loaded_tools = next_loaded_tools;
         }
         continuation.record_step(&step_results);
     }
@@ -904,8 +956,8 @@ fn continue_after_natural_language(
     true
 }
 
-fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
-    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. The system state snapshot is authoritative for current high-level project facts; use observation functions only when more detail is needed. For exact edit or delivery readiness decisions, such as whether export is possible, still call get_edit_status. Treat the state snapshot and function outputs as the only project and artifact facts. Use artifact-producing functions only when they match the user's request and are present in tools. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a write function returns a retryable failure, call another allowed function to recover before answering; do not claim the artifact exists. If a write function succeeds with qualityWarnings, adjust with allowed functions; do not treat warnings as a finished edit. If another function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
+fn native_system_prompt(tool_policy: &RequestToolPolicy, tool_directory: &str) -> String {
+    let mut prompt = "You are a local video project assistant. Answer ordinary questions directly. The system state snapshot is authoritative for current high-level project facts; use observation functions only when more detail is needed. For exact edit or delivery readiness decisions, such as whether export is possible, still call get_edit_status. Treat the state snapshot and function outputs as the only project and artifact facts. Before calling a business function, call load_tools with 1 to 5 names from the directory below. Each load_tools call replaces the current loaded set. Keep load_tools plus all functions needed for the immediate next steps, and reload when needs change. Use artifact-producing functions only when they match the user's request and are present in tools. A generated storyboard with status needs_confirmation must be summarized for user review; do not create or edit a timeline until the user confirms it in a later turn. Claim an artifact was created only when its function output confirms success. If a write function returns a retryable failure, call another allowed function to recover before answering; do not claim the artifact exists. If a write function succeeds with qualityWarnings, adjust with allowed functions; do not treat warnings as a finished edit. If another function returns a structured failure, explain it safely or adjust with another allowed function.".to_owned();
     if tool_policy.native_write_authorized("generate_storyboard") {
         prompt.push_str(
             " If the user asked for a video, call generate_storyboard. If they supplied copy, pass it as brief; otherwise use the current task brief. Do not assemble shots with list_assets or search_assets.",
@@ -916,7 +968,13 @@ fn native_system_prompt(tool_policy: &RequestToolPolicy) -> String {
             " If the user explicitly asked for voiceover, generate a storyboard that writes narrationText per shot. After the user confirms, call synthesize_voiceover with text null so it uses storyboard narrationText. Never speak onScreenText. voiceId and timelineVersionId may be null.",
         );
     }
+    prompt.push_str(" Available tool directory:\n");
+    prompt.push_str(tool_directory);
     prompt
+}
+
+fn full_native_tool_catalog() -> Vec<Value> {
+    native_function_tools_for_request(true, true)
 }
 
 fn replace_state_snapshot(input: &mut [Value], replacement: Value) -> Result<(), String> {
@@ -934,23 +992,6 @@ fn replace_state_snapshot(input: &mut [Value], replacement: Value) -> Result<(),
 
 fn native_render_preview_allowed(_request: &str, tool_policy: &RequestToolPolicy) -> bool {
     tool_policy.native_write_authorized("render_preview")
-}
-
-fn filtered_native_tools(
-    tools: Vec<Value>,
-    policy: &RequestToolPolicy,
-    render_preview_included: bool,
-) -> Vec<Value> {
-    tools
-        .into_iter()
-        .filter(|tool| {
-            let Some(name) = tool["name"].as_str() else {
-                return false;
-            };
-            policy.native_tool_exposed(name)
-                || (name == "render_preview" && render_preview_included)
-        })
-        .collect()
 }
 
 fn remaining_timeout(deadline: Instant) -> Option<Duration> {
@@ -1003,90 +1044,89 @@ fn output_item_for_input(item: &ModelOutputItem, is_custom: bool) -> Option<Valu
     }
 }
 
-const MAX_NATIVE_INPUT_CHARS: usize = 16_000;
-const MAX_NATIVE_TOOL_OUTPUT_CHARS: usize = 4_000;
-
-fn compact_oversized_tool_outputs(input: &mut [Value], max_output_chars: usize) {
-    for item in input.iter_mut() {
-        if item["type"] != "function_call_output" {
-            continue;
-        }
-        let Some(output) = item["output"].as_str() else {
-            continue;
-        };
-        if output.chars().count() <= max_output_chars {
-            continue;
-        }
-        let truncated: String = output.chars().take(max_output_chars).collect();
-        item["output"] = Value::String(format!("{truncated}…[truncated]"));
+fn compact_native_context(
+    input: &mut Vec<Value>,
+    tools: &[Value],
+    is_custom: bool,
+    request: &str,
+    run_deadline: Instant,
+    respond: &mut NativeRespond<'_>,
+) -> Result<(), String> {
+    compact_tool_outputs(input);
+    if provider_payload_tokens(input, tools) <= COMPRESSION_TRIGGER_TOKENS {
+        return Ok(());
     }
-}
 
-fn trim_native_input(input: &mut Vec<Value>, request: &str) {
-    trim_native_input_to_budget(input, request, MAX_NATIVE_INPUT_CHARS);
-}
-
-fn trim_native_input_to_budget(input: &mut Vec<Value>, request: &str, max_chars: usize) {
-    compact_oversized_tool_outputs(input, MAX_NATIVE_TOOL_OUTPUT_CHARS);
-    let protected_call_id = input.iter().rev().find_map(|item| {
-        (item["type"] == "function_call")
-            .then(|| item["call_id"].as_str().map(str::to_owned))
-            .flatten()
-    });
-    while input_char_count(input) > max_chars {
-        let current_index = input
-            .iter()
-            .rposition(|item| is_current_user_item(item, request));
-        let Some(remove_index) = (1..input.len()).find(|index| {
-            Some(*index) != current_index
-                && !is_snapshot_message(&input[*index])
-                && !protected_call_id.as_ref().is_some_and(|call_id| {
-                    input[*index]["call_id"].as_str() == Some(call_id.as_str())
-                        && matches!(
-                            input[*index]["type"].as_str(),
-                            Some("function_call") | Some("function_call_output")
-                        )
-                })
-        }) else {
-            break;
+    let plan = compression_plan(input, request);
+    let mut summary = String::new();
+    for batch in summary_batches(plan.older) {
+        let Some(timeout) = remaining_timeout(run_deadline) else {
+            return Err("native_tool_loop_deadline_exceeded".to_owned());
         };
-        if input[remove_index]["type"] == "function_call" {
-            let call_id = input[remove_index]["call_id"].clone();
-            input.remove(remove_index);
-            if let Some(output_index) = input.iter().position(|item| {
-                item["type"] == "function_call_output" && item["call_id"] == call_id
-            }) {
-                input.remove(output_index);
-            }
-        } else if input[remove_index]["type"] == "function_call_output" {
-            let call_id = input[remove_index]["call_id"].clone();
-            input.remove(remove_index);
-            if let Some(call_index) = input
-                .iter()
-                .position(|item| item["type"] == "function_call" && item["call_id"] == call_id)
-            {
-                input.remove(call_index);
-            }
-        } else {
-            input.remove(remove_index);
+        let payload = compression_payload(&summary, &batch);
+        if provider_payload_tokens(
+            payload["input"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            &[],
+        ) > MAX_CONTEXT_TOKENS
+        {
+            return Err("native_context_compression_request_too_large".to_owned());
         }
+        summary = respond(&payload, timeout)
+            .ok()
+            .and_then(|body| {
+                let turn = if is_custom {
+                    model_turn_from_chat_completions(&body)
+                } else {
+                    model_turn_from_responses(&body)
+                }?;
+                model_message_text(&turn)
+            })
+            .map(|next| truncate_text_to_tokens(&next, 6_000))
+            .ok_or_else(|| "native_context_compression_failed".to_owned())?;
     }
-}
 
-fn is_current_user_item(item: &Value, request: &str) -> bool {
-    item["role"] == "user"
-        && item["content"]
-            .as_array()
-            .and_then(|content| content.first())
-            .and_then(|content| content["text"].as_str())
-            .is_some_and(|text| text == request)
-}
-
-fn input_char_count(input: &[Value]) -> usize {
-    input
+    if summary.trim().is_empty() {
+        return Err("native_context_compression_failed".to_owned());
+    }
+    let mut compacted = plan.retained;
+    let insert_at = compacted
         .iter()
-        .map(|item| item.to_string().chars().count())
-        .sum()
+        .position(is_snapshot_message)
+        .map_or(1, |index| index + 1);
+    compacted.insert(insert_at, memory_item(&summary));
+    if provider_payload_tokens(&compacted, tools) > COMPRESSION_TARGET_TOKENS {
+        return Err("native_context_compression_target_not_reached".to_owned());
+    }
+    *input = compacted;
+    Ok(())
+}
+
+fn compression_payload(previous_summary: &str, history_batch: &str) -> Value {
+    json!({
+        "model": "gpt-5.4",
+        "store": false,
+        "stream": false,
+        "max_output_tokens": 5_000,
+        "input": [
+            {
+                "role": "system",
+                "content": [{
+                    "type": "input_text",
+                    "text": "自主压缩会话记忆。必须完整保留：用户目标、用户明确约束、用户偏好、已作决定及原因、未解决问题。其他有助于继续任务的信息由你自行判断、合并和压缩。删除重复讨论、过时过程、冗长工具输出和已解决的中间问题。不得添加原历史中不存在的事实。只输出压缩后的记忆，不要解释压缩过程。"
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("已有压缩记忆：\n{previous_summary}\n\n待合并历史（JSONL）：\n{history_batch}")
+                }]
+            }
+        ]
+    })
 }
 
 fn execute_native_tool(
@@ -1130,6 +1170,20 @@ fn execute_native_tool(
             "responseInstruction": "Explain that only the allowed read-only observation or preview function tools are available, then answer from available facts or ask the user to rephrase."
         }));
     }
+    if !dynamic_tool_loaded(&call.name, &state.loaded_tools) {
+        finish_agent_run_step(
+            state.connection,
+            state.project_id,
+            state.editing_task_id,
+            state.agent_task_id,
+            &step_id,
+            "failed",
+            None,
+            None,
+            Some("tool_not_loaded"),
+        )?;
+        return Ok(tool_not_loaded(&call.name));
+    }
     if !native_tool_call_allowed(&call.name, &state.tool_policy, render_preview_authorized) {
         finish_agent_run_step(
             state.connection,
@@ -1168,6 +1222,49 @@ fn execute_native_tool(
             return Ok(error);
         }
     };
+    if call.name == LOAD_TOOLS {
+        let requested = args["toolNames"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        if !requested
+            .iter()
+            .all(|name| NATIVE_TOOL_NAMES.contains(name) && *name != LOAD_TOOLS)
+        {
+            finish_agent_run_step(
+                state.connection,
+                state.project_id,
+                state.editing_task_id,
+                state.agent_task_id,
+                &step_id,
+                "failed",
+                None,
+                None,
+                Some("invalid_arguments"),
+            )?;
+            return Ok(invalid_arguments());
+        }
+        state.loaded_tools = requested.iter().map(|name| (*name).to_owned()).collect();
+        let result = json!({
+            "tool": LOAD_TOOLS,
+            "status": "ok",
+            "loadedTools": requested
+        });
+        finish_agent_run_step(
+            state.connection,
+            state.project_id,
+            state.editing_task_id,
+            state.agent_task_id,
+            &step_id,
+            "completed",
+            None,
+            None,
+            None,
+        )?;
+        return Ok(result);
+    }
     let started_at = Instant::now();
     let previous_outcome = state.last_outcome.take();
     let result = apply_skill(state, &call.name, &args);
@@ -1206,7 +1303,10 @@ fn execute_native_tool(
                     return Ok(error);
                 }
             };
-            if OBSERVATION_TOOLS.contains(&call.name.as_str()) && value["status"] == "ok" {
+            if OBSERVATION_TOOLS.contains(&call.name.as_str())
+                && !matches!(call.name.as_str(), LOAD_TOOLS | READ_LOGS)
+                && value["status"] == "ok"
+            {
                 state.successful_observation = true;
             }
             let artifact = persisted_artifact_for_tool(state, &call.name);
@@ -1306,6 +1406,45 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         return Err(invalid_arguments());
     };
     match tool {
+        "load_tools" => {
+            if object.len() != 1 || !object.contains_key("toolNames") {
+                return Err(invalid_arguments());
+            }
+            let Some(names) = object["toolNames"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            let unique = names
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if names.is_empty()
+                || names.len() > 5
+                || unique.len() != names.len()
+                || !names.iter().all(|name| bounded_required_string(name, 64))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "read_logs" => {
+            if object.len() != 2
+                || !object.contains_key("startLine")
+                || !object.contains_key("endLine")
+            {
+                return Err(invalid_arguments());
+            }
+            match (object["startLine"].as_u64(), object["endLine"].as_u64()) {
+                (None, None) if object["startLine"].is_null() && object["endLine"].is_null() => {
+                    Ok(value)
+                }
+                (Some(start), Some(end))
+                    if start >= 1 && start <= end && end <= 1_000_000 && end - start + 1 <= 100 =>
+                {
+                    Ok(value)
+                }
+                _ => Err(invalid_arguments()),
+            }
+        }
         "get_edit_status"
         | "get_asset_health_summary"
         | "list_assets"
@@ -2000,6 +2139,33 @@ fn unsafe_tool_result() -> Value {
     })
 }
 
+fn load_request_uses_available_names(call: &FunctionCall, available_names: &[String]) -> bool {
+    serde_json::from_str::<Value>(&call.arguments)
+        .ok()
+        .and_then(|arguments| arguments["toolNames"].as_array().cloned())
+        .is_some_and(|names| {
+            names.iter().all(|name| {
+                name.as_str()
+                    .is_some_and(|name| available_names.iter().any(|available| available == name))
+            })
+        })
+}
+
+fn dynamic_tool_loaded(tool: &str, loaded_tools: &std::collections::BTreeSet<String>) -> bool {
+    tool == LOAD_TOOLS || loaded_tools.contains(tool)
+}
+
+fn tool_not_loaded(tool: &str) -> Value {
+    json!({
+        "status": "failed",
+        "operation": tool,
+        "stage": "dynamic_tool_selection",
+        "code": "tool_not_loaded",
+        "retryable": true,
+        "responseInstruction": "Call load_tools with this tool name, keeping any other tools needed for the immediate next steps, then retry."
+    })
+}
+
 fn invalid_arguments() -> Value {
     json!({
         "status": "failed",
@@ -2130,6 +2296,20 @@ mod tests {
         (message, requests, calls)
     }
 
+    fn loadable_names(payload: &Value) -> std::collections::HashSet<&str> {
+        payload["tools"]
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["name"] == LOAD_TOOLS))
+            .and_then(|tool| {
+                tool.pointer("/parameters/properties/toolNames/items/enum")
+                    .and_then(Value::as_array)
+            })
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
+    }
+
     #[test]
     fn ordinary_question_returns_message_without_tool_call() {
         let (message, requests, calls) = fixture_driver(vec![HELLO], json!({}));
@@ -2137,7 +2317,162 @@ mod tests {
         assert!(calls.is_empty());
         assert_eq!(requests[0]["parallel_tool_calls"], false);
         assert_eq!(requests[0]["store"], false);
-        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(19));
+        assert_eq!(requests[0]["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(requests[0]["tools"][0]["name"], LOAD_TOOLS);
+    }
+
+    #[test]
+    fn load_tools_replaces_the_visible_business_tool_set() {
+        let function_call = |call_id: &str, name: &str, arguments: &str| {
+            json!({
+                "id": format!("response-{call_id}"),
+                "output": [{
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments
+                }]
+            })
+            .to_string()
+        };
+        let mut responses = vec![
+            function_call(
+                "load-one",
+                LOAD_TOOLS,
+                r#"{"toolNames":["list_assets","read_logs"]}"#,
+            ),
+            function_call("list", "list_assets", "{}"),
+            function_call("load-two", LOAD_TOOLS, r#"{"toolNames":["get_timeline"]}"#),
+            HELLO.to_owned(),
+        ]
+        .into_iter();
+        let mut requests = Vec::new();
+        let mut input = vec![
+            json!({"role":"user","content":[{"type":"input_text","text":"读取日志并检查素材"}]}),
+        ];
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            requests.push(payload.clone());
+            Ok::<_, String>(responses.next().expect("dynamic response"))
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            if call.name == LOAD_TOOLS {
+                let arguments: Value = serde_json::from_str(&call.arguments).expect("load args");
+                Ok::<_, String>(json!({
+                    "tool": LOAD_TOOLS,
+                    "status": "ok",
+                    "loadedTools": arguments["toolNames"]
+                }))
+            } else {
+                Ok(json!({"tool":call.name,"status":"ok"}))
+            }
+        };
+        drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("读取日志并检查素材"),
+            &mut NativeRunReceipt::default(),
+            "读取日志并检查素材",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut || Ok(None),
+            || false,
+            |_body, _step| {},
+        )
+        .expect("dynamic tool loop");
+
+        let visible = |payload: &Value| {
+            payload["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect::<std::collections::HashSet<String>>()
+        };
+        assert_eq!(
+            visible(&requests[0]),
+            [LOAD_TOOLS.to_owned()].into_iter().collect()
+        );
+        assert_eq!(
+            visible(&requests[1]),
+            [
+                LOAD_TOOLS.to_owned(),
+                "list_assets".to_owned(),
+                READ_LOGS.to_owned(),
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(visible(&requests[2]), visible(&requests[1]));
+        assert_eq!(
+            visible(&requests[3]),
+            [LOAD_TOOLS.to_owned(), "get_timeline".to_owned()]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn newly_loaded_tools_cannot_execute_in_the_same_provider_response() {
+        let response = json!({
+            "id": "response-multi-call",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "load-call",
+                    "name": LOAD_TOOLS,
+                    "arguments": r#"{"toolNames":["list_assets"]}"#
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "hidden-call",
+                    "name": "list_assets",
+                    "arguments": "{}"
+                }
+            ]
+        })
+        .to_string();
+        let mut responses = vec![response.as_str(), HELLO].into_iter();
+        let mut input =
+            vec![json!({"role":"user","content":[{"type":"input_text","text":"检查素材"}]})];
+        let mut executed = Vec::new();
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(responses.next().expect("provider response").to_owned())
+        };
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            executed.push(call.name.clone());
+            Ok::<_, String>(json!({
+                "tool": LOAD_TOOLS,
+                "status": "ok",
+                "loadedTools": ["list_assets"]
+            }))
+        };
+
+        drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &RequestToolPolicy::from_request("检查素材"),
+            &mut NativeRunReceipt::default(),
+            "检查素材",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut || Ok(None),
+            || false,
+            |_body, _step| {},
+        )
+        .expect("reject hidden call and continue");
+        drop(execute);
+
+        assert_eq!(executed, [LOAD_TOOLS]);
+        assert!(input.iter().any(|item| {
+            item["call_id"] == "hidden-call"
+                && item["output"]
+                    .as_str()
+                    .is_some_and(|output| output.contains("tool_not_loaded"))
+        }));
     }
 
     #[test]
@@ -2196,19 +2531,14 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_chat_exposes_reversible_local_tools_but_not_sensitive_tools() {
+    fn ordinary_chat_receives_the_complete_tool_directory() {
         let (_message, requests, _calls) = fixture_driver_with_policy(
             "你好",
             vec![HELLO],
             json!({}),
             RequestToolPolicy::from_request("你好"),
         );
-        let names = requests[0]["tools"]
-            .as_array()
-            .expect("tools")
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect::<std::collections::HashSet<_>>();
+        let names = loadable_names(&requests[0]);
         assert!(names.contains("list_assets"));
         for name in [
             "request_asset_analysis",
@@ -2229,15 +2559,12 @@ mod tests {
             "synthesize_voiceover",
             "create_jianying_draft",
         ] {
-            assert!(
-                !names.contains(name),
-                "ordinary chat exposed sensitive {name}"
-            );
+            assert!(names.contains(name), "ordinary chat omitted {name}");
         }
     }
 
     #[test]
-    fn explicit_read_only_request_exposes_only_observation_tools() {
+    fn explicit_read_only_request_keeps_directory_complete_but_execution_closed() {
         for request in [
             "Please inspect these assets and do not modify anything.",
             "Please inspect these assets only.",
@@ -2250,15 +2577,13 @@ mod tests {
                 json!({}),
                 RequestToolPolicy::from_request(request),
             );
-            let names = requests[0]["tools"]
-                .as_array()
-                .expect("tools")
-                .iter()
-                .filter_map(|tool| tool["name"].as_str())
-                .collect::<std::collections::HashSet<_>>();
-            assert!(names
-                .iter()
-                .all(|name| { super::super::policy::OBSERVATION_TOOLS.contains(name) }));
+            let names = loadable_names(&requests[0]);
+            assert!(names.contains("generate_storyboard"));
+            assert!(!native_tool_call_allowed(
+                "generate_storyboard",
+                &RequestToolPolicy::from_request(request),
+                false
+            ));
         }
     }
 
@@ -2278,12 +2603,7 @@ mod tests {
                 }),
                 RequestToolPolicy::from_request(request),
             );
-            let names = requests[0]["tools"]
-                .as_array()
-                .expect("tools")
-                .iter()
-                .filter_map(|tool| tool["name"].as_str())
-                .collect::<std::collections::HashSet<_>>();
+            let names = loadable_names(&requests[0]);
             assert!(names.contains("request_asset_analysis"));
             assert!(names.contains("generate_storyboard"));
             for name in [
@@ -2325,6 +2645,18 @@ mod tests {
             let policy = RequestToolPolicy::from_request(request);
             assert!(!native_tool_call_allowed(tool, &policy, false));
         }
+    }
+
+    #[test]
+    fn diagnostic_logs_are_normally_available_but_respect_explicit_denial() {
+        let ordinary = RequestToolPolicy::from_request("检查当前项目");
+        assert!(native_tool_call_allowed(READ_LOGS, &ordinary, false));
+
+        let authorized = RequestToolPolicy::from_request("读取运行日志");
+        assert!(native_tool_call_allowed(READ_LOGS, &authorized, false));
+
+        let denied = RequestToolPolicy::from_request("不要读取日志");
+        assert!(!native_tool_call_allowed(READ_LOGS, &denied, false));
     }
 
     #[test]
@@ -2388,6 +2720,63 @@ mod tests {
         assert!(receipt.requires_project_observation);
         assert!(receipt.successful_observation_this_turn);
         assert!(receipt.successful_tool_call);
+    }
+
+    #[test]
+    fn diagnostic_log_read_does_not_open_the_project_fact_gate() {
+        let read_logs_call = json!({
+            "id":"read-logs-response",
+            "output":[{
+                "type":"function_call",
+                "call_id":"read-logs-call",
+                "name":READ_LOGS,
+                "arguments":"{\"startLine\":null,\"endLine\":null}"
+            }]
+        })
+        .to_string();
+        let mut responses = vec![read_logs_call.as_str(), HELLO, LIST_CALL, LIST_REPLY].into_iter();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
+        })];
+        let mut respond = |_payload: &Value, _timeout: Duration| {
+            Ok::<_, String>(
+                responses
+                    .next()
+                    .expect("diagnostic observation response")
+                    .to_owned(),
+            )
+        };
+        let mut calls = Vec::new();
+        let mut execute = |call: &FunctionCall, _step: usize| {
+            calls.push(call.name.clone());
+            Ok::<_, String>(if call.name == READ_LOGS {
+                json!({"tool":READ_LOGS,"status":"ok","lines":[]})
+            } else {
+                json!({"tool":"list_assets","status":"ok","assets":[]})
+            })
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let message = drive_native_loop(
+            &mut input,
+            false,
+            true,
+            &RequestToolPolicy::from_request("当前项目有多少素材？"),
+            &mut receipt,
+            "当前项目有多少素材？",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut || Ok(None),
+            || false,
+            |_body, _step| {},
+        )
+        .expect("project fact loop");
+        assert_eq!(message, "项目中有 1 个素材。");
+        assert_eq!(calls, [READ_LOGS, "list_assets"]);
+        assert!(receipt.successful_observation_this_turn);
+        assert!(!receipt.observation_sources.contains(READ_LOGS));
+        assert!(receipt.observation_sources.contains("list_assets"));
     }
 
     #[test]
@@ -2703,12 +3092,7 @@ mod tests {
         );
         assert_eq!(requests.len(), 3);
         for payload in requests.iter().take(2) {
-            let names = payload["tools"]
-                .as_array()
-                .expect("composite tools")
-                .iter()
-                .filter_map(|tool| tool["name"].as_str())
-                .collect::<std::collections::HashSet<_>>();
+            let names = loadable_names(payload);
             for required in [
                 "generate_storyboard",
                 "create_timeline_draft",
@@ -3474,11 +3858,7 @@ mod tests {
         assert_eq!(message, "预览已生成，可以检查节奏和字幕。");
         assert_eq!(calls, ["render_preview"]);
         assert_eq!(requests.len(), 2);
-        assert!(requests[0]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tool| tool["name"] == "render_preview"));
+        assert!(loadable_names(&requests[0]).contains("render_preview"));
         assert!(requests[1]["input"].as_array().unwrap().iter().any(|item| {
             item["type"] == "function_call_output" && item["call_id"] == "call_render_preview"
         }));
@@ -3893,6 +4273,52 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_loader_and_log_range_arguments_are_strictly_bounded() {
+        assert!(
+            parse_native_arguments(LOAD_TOOLS, r#"{"toolNames":["read_logs","list_assets"]}"#)
+                .is_ok()
+        );
+        for arguments in [
+            r#"{"toolNames":[]}"#,
+            r#"{"toolNames":["read_logs","read_logs"]}"#,
+            r#"{"toolNames":["a","b","c","d","e","f"]}"#,
+        ] {
+            assert!(parse_native_arguments(LOAD_TOOLS, arguments).is_err());
+        }
+
+        assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":null,"endLine":null}"#).is_ok());
+        assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":1,"endLine":100}"#).is_ok());
+        for arguments in [
+            r#"{"startLine":1,"endLine":null}"#,
+            r#"{"startLine":2,"endLine":1}"#,
+            r#"{"startLine":1,"endLine":101}"#,
+        ] {
+            assert!(parse_native_arguments(READ_LOGS, arguments).is_err());
+        }
+
+        let available = [READ_LOGS.to_owned(), "list_assets".to_owned()];
+        let allowed_call = FunctionCall {
+            call_id: "allowed".to_owned(),
+            name: LOAD_TOOLS.to_owned(),
+            arguments: r#"{"toolNames":["read_logs"]}"#.to_owned(),
+            raw: Value::Null,
+        };
+        let denied_call = FunctionCall {
+            call_id: "denied".to_owned(),
+            name: LOAD_TOOLS.to_owned(),
+            arguments: r#"{"toolNames":["create_jianying_draft"]}"#.to_owned(),
+            raw: Value::Null,
+        };
+        assert!(load_request_uses_available_names(&allowed_call, &available));
+        assert!(!load_request_uses_available_names(&denied_call, &available));
+
+        let loaded = [READ_LOGS.to_owned()].into_iter().collect();
+        assert!(dynamic_tool_loaded(LOAD_TOOLS, &loaded));
+        assert!(dynamic_tool_loaded(READ_LOGS, &loaded));
+        assert!(!dynamic_tool_loaded("list_assets", &loaded));
+    }
+
+    #[test]
     fn delivery_execution_rechecks_risk_classification() {
         let denied = RequestToolPolicy::from_request("Explain music options");
         let authorized =
@@ -3927,13 +4353,9 @@ mod tests {
     }
 
     #[test]
-    fn delivery_requests_keep_sensitive_tools_closed_without_explicit_request() {
+    fn complete_directory_does_not_hide_sensitive_tools() {
         let policy = RequestToolPolicy::from_request("添加字幕并替换背景音乐");
-        let tools = filtered_native_tools(
-            native_function_tools_for_request(false, policy.has_native_write_authorization()),
-            &policy,
-            false,
-        );
+        let tools = full_native_tool_catalog();
         let names = tools
             .iter()
             .map(|tool| tool["name"].as_str().expect("tool name"))
@@ -3942,13 +4364,21 @@ mod tests {
         assert!(names.contains("replace_music_tracks"));
         assert!(names.contains("request_asset_analysis"));
         assert!(names.contains("generate_storyboard"));
-        for unauthorized in [
+        for visible_but_execution_gated in [
             "download_music",
             "use_online_music",
             "synthesize_voiceover",
             "create_jianying_draft",
         ] {
-            assert!(!names.contains(unauthorized), "{unauthorized}");
+            assert!(
+                names.contains(visible_but_execution_gated),
+                "{visible_but_execution_gated}"
+            );
+            assert!(!native_tool_call_allowed(
+                visible_but_execution_gated,
+                &policy,
+                false
+            ));
         }
     }
 
@@ -4229,7 +4659,7 @@ mod tests {
             "content": [{"type": "output_text", "text": "旧回答"}]
         })];
 
-        let input = initial_native_input(history, "当前问题", &policy, Ok(snapshot))
+        let input = initial_native_input(history, "当前问题", &policy, "", Ok(snapshot))
             .expect("build initial Native input");
 
         assert_eq!(
@@ -4250,6 +4680,7 @@ mod tests {
             Vec::new(),
             "当前问题",
             &RequestToolPolicy::default(),
+            "",
             Err("fixture contains a private path".to_owned()),
         )
         .expect_err("missing snapshot must stop the Native loop");
@@ -4265,8 +4696,9 @@ mod tests {
             "{}\nstoryboard: v3",
             crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
         );
-        let mut input = initial_native_input(Vec::new(), request, &policy, Ok(initial_snapshot))
-            .expect("build snapshot fixture input");
+        let mut input =
+            initial_native_input(Vec::new(), request, &policy, "", Ok(initial_snapshot))
+                .expect("build snapshot fixture input");
         let mut responses = [MAIN_CHAIN_STORYBOARD_CALL, MAIN_CHAIN_CONFIRMATION_REPLY].into_iter();
         let mut requests = Vec::new();
         let mut respond = |payload: &Value, _timeout: Duration| {
@@ -4333,7 +4765,7 @@ mod tests {
             "{}\n素材: total=2",
             crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
         );
-        let mut input = initial_native_input(Vec::new(), request, &policy, Ok(snapshot))
+        let mut input = initial_native_input(Vec::new(), request, &policy, "", Ok(snapshot))
             .expect("build observed input");
         let mut request_count = 0;
         let mut respond = |_payload: &Value, _timeout: Duration| {
@@ -4372,21 +4804,22 @@ mod tests {
     }
 
     #[test]
-    fn input_budget_drops_old_history_but_keeps_function_call_pair() {
+    fn compression_plan_moves_old_history_but_keeps_function_call_pair() {
         let mut input = vec![
             json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
             render_snapshot_message(&format!(
                 "{}\n素材: total=2",
                 crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
             )),
-            json!({"role": "user", "content": [{"type": "input_text", "text": "很长的旧问题"}]}),
-            json!({"role": "assistant", "content": [{"type": "output_text", "text": "很长的旧回答"}]}),
+            json!({"role": "user", "content": [{"type": "input_text", "text": "old question ".repeat(5_000)}]}),
+            json!({"role": "assistant", "content": [{"type": "output_text", "text": "old answer ".repeat(5_000)}]}),
             json!({"role": "user", "content": [{"type": "input_text", "text": "当前问题"}]}),
             json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
             json!({"type": "function_call_output", "call_id": "call_1", "output": "x".repeat(1000)}),
         ];
 
-        trim_native_input_to_budget(&mut input, "当前问题", 400);
+        let plan = compression_plan(&input, "当前问题");
+        input = plan.retained;
 
         assert!(input.iter().any(|item| item["type"] == "function_call"));
         assert!(input
@@ -4404,11 +4837,11 @@ mod tests {
         );
         assert!(!input
             .iter()
-            .any(|item| item.to_string().contains("很长的旧问题")));
+            .any(|item| item.to_string().contains("old question")));
     }
 
     #[test]
-    fn input_budget_truncates_huge_tool_output_before_dropping_current_turn() {
+    fn token_budget_truncates_huge_tool_output_before_dropping_current_turn() {
         let mut input = vec![
             json!({"role": "system", "content": [{"type": "input_text", "text": "身份"}]}),
             render_snapshot_message(&format!(
@@ -4417,16 +4850,16 @@ mod tests {
             )),
             json!({"role": "user", "content": [{"type": "input_text", "text": "用这个文案生成视频"}]}),
             json!({"type": "function_call", "call_id": "call_1", "name": "list_assets", "arguments": "{}"}),
-            json!({"type": "function_call_output", "call_id": "call_1", "output": "x".repeat(20_000)}),
+            json!({"type": "function_call_output", "call_id": "call_1", "output": "log entry ".repeat(6_000)}),
         ];
-        trim_native_input_to_budget(&mut input, "用这个文案生成视频", 8_000);
+        compact_tool_outputs(&mut input);
         let output = input
             .iter()
             .find(|item| item["type"] == "function_call_output")
             .expect("kept tool output")["output"]
             .as_str()
             .expect("output text");
-        assert!(output.chars().count() <= MAX_NATIVE_TOOL_OUTPUT_CHARS + 20);
+        assert!(super::super::context::token_count_text(output) <= 4_020);
         assert!(output.contains("[truncated]"));
         assert!(input.iter().any(
             |item| item["role"] == "user" && item["content"][0]["text"] == "用这个文案生成视频"
@@ -4441,13 +4874,95 @@ mod tests {
     }
 
     #[test]
-    fn editing_a_video_exposes_local_pipeline_without_implying_paid_voiceover() {
-        let policy = RequestToolPolicy::from_request("用这个文案生成视频");
-        let tools = filtered_native_tools(
-            native_function_tools_for_request(false, policy.has_native_write_authorization()),
-            &policy,
+    fn oversized_context_uses_model_memory_and_reaches_the_token_target() {
+        let request = "current request";
+        let mut input = vec![
+            json!({"role":"system","content":[{"type":"input_text","text":"system"}]}),
+            render_snapshot_message(crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX),
+            json!({"role":"user","content":[{"type":"input_text","text":"old history ".repeat(25_000)}]}),
+            json!({"role":"user","content":[{"type":"input_text","text":request}]}),
+        ];
+        let tools = vec![load_tools_function_tool(&["read_logs".to_owned()])];
+        assert!(provider_payload_tokens(&input, &tools) > COMPRESSION_TRIGGER_TOKENS);
+        let mut calls = 0usize;
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            calls += 1;
+            let instruction = payload["input"][0]["content"][0]["text"]
+                .as_str()
+                .expect("compression instruction");
+            for required in [
+                "用户目标",
+                "用户明确约束",
+                "用户偏好",
+                "已作决定",
+                "未解决问题",
+            ] {
+                assert!(instruction.contains(required), "{required}");
+            }
+            Ok(json!({
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "用户目标：继续当前任务。约束：无新增事实。偏好：简洁。已作决定：保留当前方案。未解决问题：继续验证。"
+                    }]
+                }]
+            })
+            .to_string())
+        };
+
+        compact_native_context(
+            &mut input,
+            &tools,
             false,
+            request,
+            Instant::now() + Duration::from_secs(10),
+            &mut respond,
+        )
+        .expect("compact context");
+
+        assert!(calls > 0);
+        assert!(provider_payload_tokens(&input, &tools) <= COMPRESSION_TARGET_TOKENS);
+        assert!(input
+            .iter()
+            .any(|item| item.to_string().contains("Compressed conversation memory")));
+        assert!(input
+            .iter()
+            .any(|item| { item["role"] == "user" && item["content"][0]["text"] == request }));
+    }
+
+    #[test]
+    fn compression_failure_stops_without_deleting_history() {
+        let request = "current request";
+        let mut input = vec![
+            json!({"role":"system","content":[{"type":"input_text","text":"system"}]}),
+            render_snapshot_message(crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX),
+            json!({"role":"assistant","content":[{"type":"output_text","text":"old history ".repeat(25_000)}]}),
+            json!({"role":"user","content":[{"type":"input_text","text":request}]}),
+        ];
+        let tools = vec![load_tools_function_tool(&["read_logs".to_owned()])];
+        let mut respond =
+            |_payload: &Value, _timeout: Duration| Err("provider unavailable".to_owned());
+
+        let original = input.clone();
+        let result = compact_native_context(
+            &mut input,
+            &tools,
+            false,
+            request,
+            Instant::now() + Duration::from_secs(10),
+            &mut respond,
         );
+
+        assert_eq!(result, Err("native_context_compression_failed".to_owned()));
+        assert_eq!(input, original);
+    }
+
+    #[test]
+    fn full_catalog_is_stable_across_request_wording() {
+        let policy = RequestToolPolicy::from_request("用这个文案生成视频");
+        let tools = full_native_tool_catalog();
         let names = tools
             .iter()
             .filter_map(|tool| tool["name"].as_str())
@@ -4455,6 +4970,11 @@ mod tests {
         for name in ["generate_storyboard", "create_timeline_draft"] {
             assert!(names.contains(name), "{name}");
         }
-        assert!(!names.contains("synthesize_voiceover"));
+        assert!(names.contains("synthesize_voiceover"));
+        assert!(!native_tool_call_allowed(
+            "synthesize_voiceover",
+            &policy,
+            false
+        ));
     }
 }

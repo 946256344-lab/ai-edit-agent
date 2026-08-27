@@ -404,7 +404,7 @@
 - 原因：升维抽象（封闭枚举 + Unknown 升级）让“换一种说法就容易掉进升级循环”；把任意自然语言请求统一进同一份有界技能循环，让产物目标和完成门成为唯一判定标准，更贴合“构建 Agent”的产品定位，也避免在固定枚举里打转。
 - 后果：删除 `AgentEditDecision`/`AgentEditCommon`/`ToolDecisionProvider`/`ModelToolDecisionProvider`/`request_agent_edit_decision`/`retarget_decision_for_draft`/`verified_action_message`/`safe_follow_up_reply`；`AgentEditResult` 保持不变，仍是循环与显式命令的通用产物载体；`agent.rs` 只保留显式命令匹配与流水线落地/审计，`agentloop.rs` 承担全部技能执行与目标判定；新增 6 项 `agentloop.rs` 单测（`derive_goal_pins_the_deliverable`/`goal_satisfied_only_with_a_real_artifact`/`terminal_without_artifact_is_honest_for_deliverable_goals`/`step_args_removes_meta_keys`/`step_args_survives_non_object_decisions`/`finalize_result_keeps_the_last_concrete_outcome`），`cargo build --lib` 与 `cargo test --lib`（19 通过）均验证通过。
 
-## ADR-033：多轮对话记忆与模型意图分类
+## ADR-033：多轮对话记忆与模型意图分类（历史方案；记忆窗口由 ADR-082 取代）
 
 - 状态：已实现，真实模型响应待桌面手工验证
 - 决策：让 Agent 能像自然语言对话一样连续交流。`run_agent_loop` 先用 `load_message_history` 从 `messages` 表按 `conversation_id` 读取最近消息（最多 12 条、总字符预算 8000，排除当前请求本身，按时间正序）作为多轮记忆拼进循环提示与分类提示。目标派生从 ADR-032 的“纯关键词规则”改为两级：先用确定性快路径 `fast_goal`（强编辑/创建动词 `EDIT_VERBS`/`CREATE_VERBS` 与清晰疑问句式 `QUESTION_PHRASES`——明确产物命令、明确编辑、清晰提问各自直接判定；疑问且无动作词归问答，疑问且带动词留给模型），只有快速路径无法确定的请求才用一次轻量模型调用分类（`classify_goal_with_model`：携带对话历史输出 `goal` + `isQuestion`，`isQuestion` 为真时一律归为问答目标，避免把“告诉我选择每个镜头的逻辑”这类提问逼进产物门；分类失败默认问答，无产物不落地）。`EDIT_VERBS` 不再包含固有的“镜头”等名词，避免把真实问题误判为时间线编辑。
@@ -579,7 +579,7 @@
 ## ADR-079：NativeToolLoop 每轮推送有界权威状态快照
 
 - 状态：已采用（2026-08-25）
-- 决策：在每次 NativeToolLoop 的静态系统提示之后、会话历史之前注入由 Rust 从当前 project/editing task 作用域重建的状态快照。快照固定字段顺序、最多 1200 字符，只投影任务 brief/最近终态、素材与分析/健康计数、storyboard/timeline 版本和数量、磁盘 preview、Jianying 状态及外部能力配置布尔值；身份只用版本号，禁止路径、文件名、UUID、素材备注、OCR/视觉证据、会话原文、Base URL、模型名和凭据值。非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，下一次 Provider 请求前重读并原位替换唯一快照；16k 裁剪保护该块。初始构建、写后刷新或凭据状态读取失败均失败封闭。
+- 决策：在每次 NativeToolLoop 的静态系统提示之后、会话历史之前注入由 Rust 从当前 project/editing task 作用域重建的状态快照。快照固定字段顺序、最多 1200 字符，只投影任务 brief/最近终态、素材与分析/健康计数、storyboard/timeline 版本和数量、磁盘 preview、Jianying 状态及外部能力配置布尔值；身份只用版本号，禁止路径、文件名、UUID、素材备注、OCR/视觉证据、会话原文、Base URL、模型名和凭据值。非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，下一次 Provider 请求前重读并原位替换唯一快照；当前由 ADR-082 的 token 压缩边界保护该块。初始构建、写后刷新或凭据状态读取失败均失败封闭。
 - 原因：纯拉式项目观察依赖关键词门和模型主动选工具；漏检时会凭旧历史回答，命中时又需丢弃第一次自然语言并 nudge。高层状态由 Rust 主动提供后，模型可直接回答计数、版本和存在性，观察工具保留为详细镜头、候选和证据的按需读取。
 - 后果：成功快照在 RunReceipt 中作为来源 `state_snapshot` 的本轮成功观察，`request_requires_project_observation` 与 nudge 逻辑保留但生产路径不再为已有快照的直接事实回答重问。模型文本仍不能创建产物或满足具名写工具完成门，`get_edit_status` 工具及其决策级硬门不变。不新增工具、Tauri 命令、依赖、缓存或 SQLite schema。
 
@@ -589,3 +589,17 @@
 - 决策：Phase 2 每个 beat 的候选由 5 个扩大为 12 个，模型仍查看关键帧后只选择 1 个。Rust 使用随安装包分发的 `bge-small-zh-v1.5` ONNX 模型，将 `requiredVisual + purpose` 与素材 subjects/actions/products/scene/OCR 文本编码为 512 维向量并按余弦相似度评分；不启用 Hugging Face 运行时下载。语义分权重由 50 降为 30，模型或向量不可用时回退既有词面匹配。向量带模型名、维度、版本和证据文本 SHA-256，旧素材在首次 storyboard 前批量回填。
 - 原因：中文相邻双字只能识别词面重合，“汽车”与“车辆”等同义表达会在 Top-5 截断前被淘汰。让远端模型读取整个素材库会增加调用次数、图片输入、延迟和费用；本地文本向量可在 Rust 侧扩大召回，同时把远端模型限制在 12 个关键帧网格内。
 - 后果：`fastembed` 固定为 4.9.1，ONNX 文件、tokenizer、许可说明和运行时进入 MSI/NSIS，运行时不访问模型仓库。仓库声明的 Rust 1.77.2 与当前锁文件已有依赖的实际最低版本不一致，本决策不声称恢复该旧版本兼容性。`metadata_json` 新增向后兼容的质量与向量字段，不改变 SQLite schema 或 Tauri 命令。关键帧质量分采用归一化拉普拉斯方差中位数；新鲜度只统计每个剪辑任务最新时间线并在任务内按素材去重。模型资源或推理失败不会阻止 storyboard，而是保留词面排序和中性质量降级。
+
+## ADR-081：NativeToolLoop 动态加载最多五个业务工具
+
+- 状态：已采用（2026-08-27）
+- 决策：Provider 初始 payload 只注册常驻 `load_tools`，系统提示提供完整、无状态标记的名称与简短用途目录。模型每次选择 1–5 个不重复业务工具并整体替换本轮加载集合；选择从下一次 Provider 请求生效，后续 payload 仅携带 loader 与当前集合的完整 strict schema。Rust 执行门独立验证全局白名单、请求权限与该请求实际暴露集合；同一响应中刚加载但未暴露的业务调用会被拒绝。`read_logs` 是模型可按需加载的普通只读诊断工具，明确禁止仍由执行门拒绝。
+- 原因：一次发送全部观察、编辑和交付 schema 会持续消耗模型上下文，并让当前步骤无关的参数面干扰工具选择。只缩减 Provider schema 又不能替代 Rust 权限校验，`parallel_tool_calls:false` 也不能替代逐调用授权。模型需要读取与终端同源的真实运行错误和阶段信息，才能根据故障表现选择后续代码修改，而 payload-free 审计摘要不足以支持这一判断。
+- 后果：复杂工作流可能多消耗一次或数次模型步骤用于切换工具，但每步业务 schema 上限固定为 5，原 10 步/120 秒单步/300 秒总预算保持不变。只读、敏感能力、确认、作用域、事务、产物验真和不重放副作用规则不变。不新增 Tauri 命令、SQLite schema 或日志持久化；日志读取固定路径、有界，凭据、URL 和完整本机路径所在行被遮蔽，Provider full trace 不可读。
+
+## ADR-082：会话上下文按完整 payload token 自主压缩
+
+- 状态：已采用（2026-08-27）
+- 决策：SQLite 加载当前 conversation/editing task 的全部 user/assistant 历史，不设固定条数或字符窗口。使用 `tiktoken-rs` 的 `o200k_base` 计量完整 Provider payload，包括系统提示、完整工具目录、状态快照、消息、函数调用/结果和当前工具 schema；超过 40K token 时由同一 Provider 分批压缩旧历史，目标低于 30K，任何业务请求不得超过 60K。
+- 压缩契约：必须保留用户目标、明确约束、偏好、已作决定及原因、未解决问题；其他有助于继续任务的信息由模型自主合并。当前请求、权威状态快照、近期原文和最新函数调用/结果对保持原样。压缩记忆明确声明不是权威项目状态；Provider 压缩失败或未达到 30K 目标时本轮明确失败，不删除历史，也不发送超预算请求。
+- 原因与后果：固定 12 条/8000 字符会在长消息中浪费预算，也会在多轮任务中丢失关键决定。token 计量更接近实际请求成本，自主摘要比机械截断更能保持任务连续性；代价是在长会话跨过阈值时增加一到数次工具为空的 Provider 调用，并新增纯本地 tokenizer 依赖，不改变 SQLite schema。

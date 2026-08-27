@@ -55,8 +55,10 @@ src/main.tsx
 | `agent.rs` | conversation 异步 run 与原子终态提交 |
 | `agentloop.rs` | Agent 模块入口与 Native 技能派发 |
 | `agentloop/native.rs` | 统一原生 Function Tool 循环；function_call 继续、自然语言结束，RunReceipt 裁决真实终态 |
+| `agentloop/context.rs` | 完整 Provider payload 的 o200k token 计量、40K/30K/60K 压缩边界与保护项选择 |
 | `agentloop/policy.rs` | 工具白名单、请求权限、负向约束与真实性辅助 |
-| `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema；观察工具默认注册，`render_preview` 按请求策略注册 |
+| `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema 与动态目录；Provider 常驻 `load_tools` 并最多加载 5 个业务工具 |
+| `agentloop/logs.rs` | 固定读取当前应用日志文件，提供有界行范围、分页及凭据/路径遮蔽 |
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |
 | `storyboard.rs` | 证据候选、模型提案、校验和版本 |
 | `timeline.rs` | 时间线版本、镜头/文本/音乐编辑和查询 |
