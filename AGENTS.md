@@ -34,23 +34,6 @@
 - 全部手写源码模块顶部保留中文职责导航；注释解释“为什么存在边界、谁拥有事实、失败如何恢复”，不逐行翻译代码。
 - 架构、公开契约、持久化或任务状态变化时，同步长期文档和 `docs/changes/`。`.harness/doc-sync-policy.json` 是最低同步要求。
 
-## 完成门
-
-先运行 `npm run agent:check`，再按范围运行：
-
-```powershell
-npm run lint
-npm run build
-npm run harness:test
-npm run harness:check
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-python -m unittest discover -s src-tauri/scripts -p "test_*.py"
-```
-
-高风险路径变化后必须重新执行受影响的端到端验收；绿色静态基线不能冒充产品验收。`harness:check` 触发架构规则时，按 `docs/harness.md` 完成独立 Agent 审查闭环。
-
 ## 给其他 AI Agent 的兼容说明
 
 支持分层 `AGENTS.md` 的 Agent 会自动获得就近规则；不支持时，必须手动读取本文件、`TASKS.md` 当前窗口及目标目录的 `AGENTS.md`。机器检查只能证明可验证边界没有漂移，不能证明模型理解了全部产品语义。

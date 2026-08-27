@@ -9,6 +9,8 @@ use super::native_policy::{expected_native_write_tools, explicitly_requested_sen
 
 /// 不创建/修改本地产物的观察技能；`search_music` 是受控外部查询，其余只读本地状态。
 pub(super) const OBSERVATION_TOOLS: &[&str] = &[
+    "load_tools",
+    "read_logs",
     "get_edit_status",
     "get_asset_health_summary",
     "list_assets",
@@ -52,7 +54,7 @@ pub(super) const DEFAULT_LOCAL_WRITE_TOOLS: &[&str] = &[
     "render_preview",
 ];
 
-/// 用户本轮明确声明的负向边界，只能缩小工具集合，不能替模型选择工具。
+/// 用户本轮明确声明的负向边界和敏感能力授权，只能缩小工具集合，不能替模型选择工具。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct RequestToolPolicy {
     denied_tools: Vec<&'static str>,
@@ -212,6 +214,13 @@ impl RequestToolPolicy {
         ) {
             denied_tools.push("replace_music_tracks");
         }
+        if explicitly_denies_target(
+            request,
+            &["日志", "应用日志", "运行日志", "logs", "applicationlogs"],
+            &["读取", "查看", "检查", "read", "show", "inspect"],
+        ) {
+            denied_tools.push("read_logs");
+        }
         denied_tools.sort_unstable();
         denied_tools.dedup();
         let explicitly_requested_sensitive_tools = explicitly_requested_sensitive_tools(request);
@@ -238,13 +247,6 @@ impl RequestToolPolicy {
         !self.forbids(tool)
             && (DEFAULT_LOCAL_WRITE_TOOLS.contains(&tool)
                 || self.explicitly_requested_sensitive_tools.contains(&tool))
-    }
-
-    pub(super) fn has_native_write_authorization(&self) -> bool {
-        EDIT_TOOLS
-            .iter()
-            .copied()
-            .any(|tool| self.native_write_authorized(tool))
     }
 
     /// 可用工具目录不等于强制目标清单；只有请求文本明确要求的最低产物进入完成收据。

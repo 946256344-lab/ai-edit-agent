@@ -285,6 +285,9 @@ mod tests {
             "这些素材适合怎么剪？",
             "给我剪辑一个视频，体现专业、负责、供应链强大。",
             "生成 storyboard 并创建时间线、字幕和预览",
+            "这个应用支持运行日志吗？",
+            "Does this application have logs?",
+            "运行日志不用读取",
         ] {
             assert!(explicitly_requested_sensitive_tools(request).is_empty());
         }
@@ -306,6 +309,7 @@ mod tests {
             explicitly_requested_sensitive_tools("Use online music"),
             ["use_online_music"]
         );
+        assert!(explicitly_requested_sensitive_tools("读取运行日志第 10 到 20 行").is_empty());
     }
 
     #[test]
@@ -325,6 +329,8 @@ mod tests {
             ("不要配音", "synthesize_voiceover"),
             ("不要创建剪映草稿", "create_jianying_draft"),
             ("Do not download music", "download_music"),
+            ("不要读取日志", "read_logs"),
+            ("运行日志不用读取", "read_logs"),
         ] {
             assert!(!explicitly_requested_sensitive_tools(request).contains(&tool));
         }

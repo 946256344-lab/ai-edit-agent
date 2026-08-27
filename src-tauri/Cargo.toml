@@ -34,5 +34,6 @@ url = "2.5"
 uuid = { version = "1.18", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 fastembed = { version = "4.9.1", default-features = false }
+tiktoken-rs = "=0.11.0"
 # fastembed 关闭联网功能；这里只让构建期取得并随桌面程序复制 ONNX Runtime。
 ort = { version = "=2.0.0-rc.9", default-features = false, features = ["copy-dylibs", "download-binaries"] }

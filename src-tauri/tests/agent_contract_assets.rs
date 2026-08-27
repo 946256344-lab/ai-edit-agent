@@ -58,8 +58,8 @@ fn tool_contract_catalog_matches_the_agent_loop_whitelist() {
         .expect("tool contract fixture must contain a tools array");
     assert_eq!(
         tools.len(),
-        23,
-        "the current loop exposes exactly 23 skills"
+        25,
+        "the current loop exposes exactly 25 skills"
     );
 
     let mut fixture_names = BTreeSet::new();

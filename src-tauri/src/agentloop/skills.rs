@@ -427,6 +427,17 @@ pub(super) fn apply_skill(
 ) -> Result<Value, String> {
     let agent_task_id = state.agent_task_id().to_owned();
     match tool {
+        "read_logs" => {
+            let start_line = args
+                .get("startLine")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize);
+            let end_line = args
+                .get("endLine")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize);
+            super::logs::read_application_logs(state.app, start_line, end_line)
+        }
         "get_edit_status" => {
             let message = read_scoped_edit_status(
                 state.app,
