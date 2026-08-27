@@ -596,6 +596,65 @@ mod tests {
 
         assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
     }
+
+    #[test]
+    fn phase3_keeps_covered_shots_without_filling_uncovered_beats() {
+        let mut uncovered_beat = beat();
+        uncovered_beat.id = "beat-2".to_owned();
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat(), uncovered_beat],
+            uncovered_beat_ids: vec!["beat-2".to_owned()],
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot],
+        };
+
+        enforce_phase3_scope(&mut final_content, &rough).expect("covered shot should remain valid");
+        assert_eq!(final_content.uncovered_beat_ids, vec!["beat-2"]);
+    }
+
+    #[test]
+    fn phase3_cannot_add_a_shot_for_an_uncovered_beat() {
+        let mut uncovered_beat = beat();
+        uncovered_beat.id = "beat-2".to_owned();
+        let mut added_shot = shot("selected");
+        added_shot.beat_id = "beat-2".to_owned();
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat(), uncovered_beat],
+            uncovered_beat_ids: vec!["beat-2".to_owned()],
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot, added_shot],
+        };
+
+        assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
+    }
 }
 
 /// Phase 3: 精剪与节奏优化
@@ -640,7 +699,7 @@ pub(crate) fn phase3_fine_edit(
         1. Adjust source time ranges to align with scene boundaries where possible\n\
         2. Ensure no overlapping time ranges from the same video asset\n\
         3. Optimize shot durations for pacing (total should match targetDurationMs)\n\
-        4. Return exactly one shot for each rough beat, in the same order; do not split, merge, add, drop, or reorder beats\n\
+        4. Return exactly one shot for each existing rough shot (covered beat), in the same order; keep uncoveredBeatIds unchanged and never create shots for uncovered beats; do not split, merge, add, drop, or reorder rough shots\n\
         5. Ensure visual transitions between consecutive shots are smooth\n\n\
         Return the complete final JSON with: title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots.\n\
         Each shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
@@ -692,9 +751,7 @@ fn enforce_phase3_scope(
             .zip(&rough.shots)
             .any(|(final_shot, rough_shot)| final_shot.beat_id != rough_shot.beat_id)
     {
-        return Err(
-            "Phase 3 must keep exactly one shot per Phase 2 beat in the selected order.".to_owned(),
-        );
+        return Err("Phase 3 must keep exactly one shot per existing Phase 2 rough shot in the selected order and must not fill uncovered beats.".to_owned());
     }
     let selected_by_beat = rough
         .shots
