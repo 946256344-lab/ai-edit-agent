@@ -131,79 +131,57 @@ pub(crate) fn run_native_tool_loop(
                 |config| chat_completions_request(config, payload).to_string(),
             )
         });
-        let mut attempt_number = 0usize;
-        let mut respond_once = |payload: &Value, attempt_timeout: Duration| {
-            attempt_number += 1;
-            let current_attempt = attempt_number;
-            if let Some(trace_request) = &trace_request {
-                super::trace::emit_native_provider_request(
-                    model_step_number,
-                    current_attempt,
-                    trace_adapter,
-                    trace_request,
-                );
-            }
-            post_model_payload_with_wire_observer(
-                access,
-                payload,
-                Some(attempt_timeout),
-                &mut |status, body| {
-                    if trace_enabled {
-                        super::trace::emit_native_provider_response(
-                            model_step_number,
-                            current_attempt,
-                            trace_adapter,
-                            status,
-                            body,
-                        );
-                    }
-                },
-            )
-        };
-        let mut request_cancelled = || native_task_cancelled(connection, agent_task_id);
-        request_native_model_with_retry(
-            payload,
-            timeout,
-            NATIVE_MODEL_RETRY_DELAY,
-            &mut respond_once,
-            &mut request_cancelled,
-            &mut |observation| {
-                let (kind, content) = native_model_request_diagnostic(observation);
-                let _ = record_agent_diagnostic(
-                    connection,
-                    project_id,
-                    editing_task_id,
-                    conversation_id,
-                    agent_task_id,
-                    Some(model_step_number as i64),
-                    kind,
-                    &content,
-                );
-            },
-        )
-    };
-    let mut invalid_call_guard = InvalidCallGuard::default();
-    let mut execute = |call: &FunctionCall, step_number: usize| -> Result<Value, String> {
-        match invalid_call_guard.before_call(call) {
-            InvalidCallDecision::Execute => {
-                let result = execute_native_tool(
-                    &mut state,
-                    call,
-                    step_number,
-                    native_render_preview_allowed(request, &tool_policy),
-                )?;
-                invalid_call_guard.record_result(call, &result);
-                Ok(result)
-            }
-            InvalidCallDecision::Reject => {
-                record_repeated_invalid_call(&state, call, step_number)?;
-                Ok(repeated_invalid_arguments(&call.name))
-            }
-            InvalidCallDecision::Stop => {
-                record_repeated_invalid_call(&state, call, step_number)?;
-                Err("native_tool_loop_repeated_invalid_call".to_owned())
-            }
+        if let Some(trace_request) = &trace_request {
+            super::trace::emit_native_provider_request(
+                model_step_number,
+                1,
+                trace_adapter,
+                trace_request,
+            );
         }
+        // 单次尝试：失败直接透传，不静默重试。诊断仍记录分类码，便于排障时看到真因。
+        let result = post_model_payload_with_wire_observer(
+            access,
+            payload,
+            Some(timeout),
+            &mut |status, body| {
+                if trace_enabled {
+                    super::trace::emit_native_provider_response(
+                        model_step_number,
+                        1,
+                        trace_adapter,
+                        status,
+                        body,
+                    );
+                }
+            },
+        );
+        let result = match result {
+            Ok(body) if body.trim().is_empty() => Err("Provider response was empty.".to_owned()),
+            other => other,
+        };
+        if let Err(error) = &result {
+            let failure = classify_model_request_failure(error);
+            let _ = record_agent_diagnostic(
+                connection,
+                project_id,
+                editing_task_id,
+                conversation_id,
+                agent_task_id,
+                Some(model_step_number as i64),
+                "pipeline_error",
+                &format!("provider_failure_code={}_attempts=1", failure.code),
+            );
+        }
+        result
+    };
+    let mut execute = |call: &FunctionCall, step_number: usize| -> Result<Value, String> {
+        execute_native_tool(
+            &mut state,
+            call,
+            step_number,
+            native_render_preview_allowed(request, &tool_policy),
+        )
     };
     let mut refresh_snapshot = || {
         build_state_snapshot(connection, project_id, editing_task_id)
@@ -342,9 +320,6 @@ fn interrupted_native_result(
     let bounded_reason = match error {
         "native_tool_loop_deadline_exceeded" => Some("本轮达到总超时"),
         "native_tool_loop_max_steps" => Some("本轮达到步骤上限"),
-        "native_tool_loop_repeated_invalid_call" => {
-            Some("模型连续重复了相同的无效工具参数，循环已停止")
-        }
         _ => None,
     };
     let Some(reason) = bounded_reason else {
@@ -476,181 +451,7 @@ type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> +
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
 type NativeRefreshSnapshot<'a> = dyn FnMut() -> Result<Option<Value>, String> + 'a;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InvalidCallDecision {
-    Execute,
-    Reject,
-    Stop,
-}
 
-#[derive(Debug, Default)]
-struct InvalidCallGuard {
-    attempts: std::collections::BTreeMap<String, usize>,
-}
-
-impl InvalidCallGuard {
-    fn before_call(&mut self, call: &FunctionCall) -> InvalidCallDecision {
-        let signature = native_call_signature(call);
-        let Some(attempts) = self.attempts.get_mut(&signature) else {
-            return InvalidCallDecision::Execute;
-        };
-        *attempts = attempts.saturating_add(1);
-        if *attempts >= 3 {
-            InvalidCallDecision::Stop
-        } else {
-            InvalidCallDecision::Reject
-        }
-    }
-
-    fn record_result(&mut self, call: &FunctionCall, result: &Value) {
-        if result["code"].as_str() == Some("invalid_arguments") {
-            self.attempts.insert(native_call_signature(call), 1);
-        }
-    }
-}
-
-fn native_call_signature(call: &FunctionCall) -> String {
-    let arguments = serde_json::from_str::<Value>(&call.arguments)
-        .map(canonical_json_value)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| call.arguments.clone());
-    format!("{}\0{arguments}", call.name)
-}
-
-fn canonical_json_value(value: Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(canonical_json_value).collect()),
-        Value::Object(object) => {
-            let mut entries = object.into_iter().collect::<Vec<_>>();
-            entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-            let mut canonical = serde_json::Map::new();
-            for (key, value) in entries {
-                canonical.insert(key, canonical_json_value(value));
-            }
-            Value::Object(canonical)
-        }
-        other => other,
-    }
-}
-
-const NATIVE_MODEL_MAX_ATTEMPTS: usize = 3;
-const NATIVE_MODEL_RETRY_DELAY: Duration = Duration::from_millis(350);
-const NATIVE_MODEL_RETRY_CANCEL_POLL: Duration = Duration::from_millis(50);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum NativeModelRequestObservation {
-    RetryScheduled { code: String, attempt: usize },
-    Recovered { code: String, attempts: usize },
-    Failed { code: String, attempts: usize },
-}
-
-fn request_native_model_with_retry(
-    payload: &Value,
-    timeout: Duration,
-    retry_delay: Duration,
-    respond_once: &mut NativeRespond<'_>,
-    cancelled: &mut dyn FnMut() -> bool,
-    observe: &mut dyn FnMut(&NativeModelRequestObservation),
-) -> Result<String, String> {
-    let deadline = Instant::now() + timeout;
-    let mut last_failure_code = None;
-    for attempt in 1..=NATIVE_MODEL_MAX_ATTEMPTS {
-        if cancelled() {
-            return Err("native_tool_loop_cancelled".to_owned());
-        }
-        let Some(remaining) = remaining_timeout(deadline) else {
-            return Err("native_tool_loop_deadline_exceeded".to_owned());
-        };
-        let attempt_timeout = native_model_attempt_timeout(remaining, attempt);
-        let response = match respond_once(payload, attempt_timeout) {
-            Ok(body) if body.trim().is_empty() => Err("Provider response was empty.".to_owned()),
-            other => other,
-        };
-        match response {
-            Ok(body) => {
-                if let Some(code) = last_failure_code {
-                    observe(&NativeModelRequestObservation::Recovered {
-                        code,
-                        attempts: attempt,
-                    });
-                }
-                return Ok(body);
-            }
-            Err(error) => {
-                let failure = classify_model_request_failure(&error);
-                let delay = retry_delay.saturating_mul(attempt as u32);
-                let can_retry = failure.retryable
-                    && attempt < NATIVE_MODEL_MAX_ATTEMPTS
-                    && remaining_timeout(deadline).is_some_and(|remaining| remaining > delay);
-                if !can_retry {
-                    observe(&NativeModelRequestObservation::Failed {
-                        code: failure.code,
-                        attempts: attempt,
-                    });
-                    return Err(error);
-                }
-                last_failure_code = Some(failure.code.clone());
-                observe(&NativeModelRequestObservation::RetryScheduled {
-                    code: failure.code.clone(),
-                    attempt,
-                });
-                wait_for_native_model_retry(delay, deadline, cancelled)?;
-            }
-        }
-    }
-    Err("provider_unknown".to_owned())
-}
-
-fn native_model_attempt_timeout(remaining: Duration, attempt: usize) -> Duration {
-    let attempts_left = NATIVE_MODEL_MAX_ATTEMPTS
-        .saturating_sub(attempt)
-        .saturating_add(1);
-    let share = remaining / u32::try_from(attempts_left).unwrap_or(1);
-    if share.is_zero() {
-        remaining
-    } else {
-        share
-    }
-}
-
-fn wait_for_native_model_retry(
-    delay: Duration,
-    deadline: Instant,
-    cancelled: &mut dyn FnMut() -> bool,
-) -> Result<(), String> {
-    let retry_at = (Instant::now() + delay).min(deadline);
-    loop {
-        if cancelled() {
-            return Err("native_tool_loop_cancelled".to_owned());
-        }
-        let Some(remaining) = retry_at.checked_duration_since(Instant::now()) else {
-            return Ok(());
-        };
-        if remaining.is_zero() {
-            return Ok(());
-        }
-        std::thread::sleep(NATIVE_MODEL_RETRY_CANCEL_POLL.min(remaining));
-    }
-}
-
-fn native_model_request_diagnostic(
-    observation: &NativeModelRequestObservation,
-) -> (&'static str, String) {
-    match observation {
-        NativeModelRequestObservation::RetryScheduled { code, attempt } => (
-            "pipeline_error",
-            format!("provider_retry_code={code}_attempt={attempt}"),
-        ),
-        NativeModelRequestObservation::Recovered { code, attempts } => (
-            "pipeline_error",
-            format!("provider_recovery_code={code}_attempts={attempts}"),
-        ),
-        NativeModelRequestObservation::Failed { code, attempts } => (
-            "pipeline_error",
-            format!("provider_failure_code={code}_attempts={attempts}"),
-        ),
-    }
-}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct NativeRunReceipt {
@@ -1340,37 +1141,6 @@ fn execute_native_tool(
             Ok(safe_tool_failure_context(&call.name, &error))
         }
     }
-}
-
-fn record_repeated_invalid_call(
-    state: &LoopState<'_>,
-    call: &FunctionCall,
-    step_number: usize,
-) -> Result<(), String> {
-    let persisted_name = if NATIVE_TOOL_NAMES.contains(&call.name.as_str()) {
-        call.name.as_str()
-    } else {
-        "tool_not_allowed"
-    };
-    let step_id = begin_agent_run_step(
-        state.connection,
-        state.project_id,
-        state.editing_task_id,
-        state.agent_task_id,
-        step_number as i64,
-        persisted_name,
-    )?;
-    finish_agent_run_step(
-        state.connection,
-        state.project_id,
-        state.editing_task_id,
-        state.agent_task_id,
-        &step_id,
-        "failed",
-        None,
-        None,
-        Some("repeated_invalid_arguments"),
-    )
 }
 
 fn native_tool_call_allowed(
@@ -2174,17 +1944,6 @@ fn invalid_arguments() -> Value {
         "code": "invalid_arguments",
         "retryable": true,
         "responseInstruction": "Explain that the function tool request had invalid arguments, then retry with the documented schema or answer without a tool."
-    })
-}
-
-fn repeated_invalid_arguments(tool: &str) -> Value {
-    json!({
-        "status": "failed",
-        "operation": tool,
-        "stage": "argument_validation",
-        "code": "repeated_invalid_arguments",
-        "retryable": false,
-        "responseInstruction": "The same function and arguments already failed validation. Do not repeat them. Use the documented bounds, choose another allowed function, or stop with an honest explanation."
     })
 }
 
@@ -3334,41 +3093,6 @@ mod tests {
     }
 
     #[test]
-    fn identical_invalid_arguments_are_canonicalized_then_rejected_and_stopped() {
-        let first = FunctionCall {
-            call_id: "call-1".to_owned(),
-            name: "search_asset_segments".to_owned(),
-            arguments: "{\"query\":\"供应链\",\"assetId\":null,\"offset\":0,\"limit\":30}"
-                .to_owned(),
-            raw: json!({}),
-        };
-        let reordered = FunctionCall {
-            call_id: "call-2".to_owned(),
-            name: first.name.clone(),
-            arguments: "{ \"limit\": 30, \"offset\": 0, \"assetId\": null, \"query\": \"供应链\" }"
-                .to_owned(),
-            raw: json!({}),
-        };
-        let corrected = FunctionCall {
-            call_id: "call-3".to_owned(),
-            name: first.name.clone(),
-            arguments: "{\"query\":\"供应链\",\"assetId\":null,\"offset\":0,\"limit\":20}"
-                .to_owned(),
-            raw: json!({}),
-        };
-        let mut guard = InvalidCallGuard::default();
-        assert_eq!(guard.before_call(&first), InvalidCallDecision::Execute);
-        guard.record_result(&first, &invalid_arguments());
-        assert_eq!(
-            native_call_signature(&first),
-            native_call_signature(&reordered)
-        );
-        assert_eq!(guard.before_call(&reordered), InvalidCallDecision::Reject);
-        assert_eq!(guard.before_call(&first), InvalidCallDecision::Stop);
-        assert_eq!(guard.before_call(&corrected), InvalidCallDecision::Execute);
-    }
-
-    #[test]
     fn recovered_tool_failure_does_not_force_partial_completion() {
         let request = "生成预览";
         let policy = RequestToolPolicy::from_request(request);
@@ -3526,15 +3250,14 @@ mod tests {
     }
 
     #[test]
-    fn transient_provider_failure_after_tool_output_retries_without_reexecuting_tool() {
+    fn provider_failure_after_tool_output_fails_loudly_without_retry() {
         let mut response_attempts = 0;
         let mut calls = Vec::new();
-        let mut observations = Vec::new();
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
         })];
-        let mut respond_once = |_payload: &Value, _timeout: Duration| {
+        let mut respond = |_payload: &Value, _timeout: Duration| {
             response_attempts += 1;
             match response_attempts {
                 1 => Ok::<_, String>(LIST_CALL.to_owned()),
@@ -3542,158 +3265,8 @@ mod tests {
                     "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 429"
                         .to_owned(),
                 ),
-                3 => Ok(LIST_REPLY.to_owned()),
-                _ => panic!("unexpected provider attempt"),
+                _ => panic!("provider failure must not be retried"),
             }
-        };
-        let mut respond = |payload: &Value, timeout: Duration| {
-            let mut not_cancelled = || false;
-            request_native_model_with_retry(
-                payload,
-                timeout,
-                Duration::ZERO,
-                &mut respond_once,
-                &mut not_cancelled,
-                &mut |observation| observations.push(observation.clone()),
-            )
-        };
-        let mut execute = |call: &FunctionCall, _step: usize| {
-            calls.push(call.name.clone());
-            Ok::<_, String>(json!({
-                "tool": "list_assets",
-                "status": "ok",
-                "result": {"total": 1, "items": []}
-            }))
-        };
-
-        let message = drive_native_loop(
-            &mut input,
-            false,
-            true,
-            &RequestToolPolicy::from_request("当前项目有多少素材？"),
-            &mut NativeRunReceipt::default(),
-            "当前项目有多少素材？",
-            Instant::now() + Duration::from_secs(5),
-            &mut respond,
-            &mut execute,
-            &mut || Ok(None),
-            || false,
-            |_body, _step| {},
-        )
-        .expect("transient provider failure should recover");
-        drop(execute);
-        drop(respond);
-
-        assert_eq!(message, "项目中有 1 个素材。");
-        assert_eq!(response_attempts, 3);
-        assert_eq!(calls, ["list_assets"]);
-        assert!(matches!(
-            observations.as_slice(),
-            [
-                NativeModelRequestObservation::RetryScheduled { code, attempt: 1 },
-                NativeModelRequestObservation::Recovered { code: recovered, attempts: 2 }
-            ] if code == "provider_http_429" && recovered == "provider_http_429"
-        ));
-    }
-
-    #[test]
-    fn empty_provider_response_after_tool_output_retries_without_reexecuting_tool() {
-        let mut response_attempts = 0;
-        let mut calls = Vec::new();
-        let mut observations = Vec::new();
-        let mut input = vec![json!({
-            "role": "user",
-            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
-        })];
-        let mut respond_once = |_payload: &Value, _timeout: Duration| {
-            response_attempts += 1;
-            match response_attempts {
-                1 => Ok::<_, String>(LIST_CALL.to_owned()),
-                2 => Ok(String::new()),
-                3 => Ok(LIST_REPLY.to_owned()),
-                _ => panic!("unexpected provider attempt"),
-            }
-        };
-        let mut respond = |payload: &Value, timeout: Duration| {
-            let mut not_cancelled = || false;
-            request_native_model_with_retry(
-                payload,
-                timeout,
-                Duration::ZERO,
-                &mut respond_once,
-                &mut not_cancelled,
-                &mut |observation| observations.push(observation.clone()),
-            )
-        };
-        let mut execute = |call: &FunctionCall, _step: usize| {
-            calls.push(call.name.clone());
-            Ok::<_, String>(json!({
-                "tool": "list_assets",
-                "status": "ok",
-                "result": {"total": 1, "items": []}
-            }))
-        };
-
-        let message = drive_native_loop(
-            &mut input,
-            false,
-            true,
-            &RequestToolPolicy::from_request("当前项目有多少素材？"),
-            &mut NativeRunReceipt::default(),
-            "当前项目有多少素材？",
-            Instant::now() + Duration::from_secs(5),
-            &mut respond,
-            &mut execute,
-            &mut || Ok(None),
-            || false,
-            |_body, _step| {},
-        )
-        .expect("empty provider response should recover");
-        drop(execute);
-        drop(respond);
-
-        assert_eq!(message, "项目中有 1 个素材。");
-        assert_eq!(response_attempts, 3);
-        assert_eq!(calls, ["list_assets"]);
-        assert!(matches!(
-            observations.as_slice(),
-            [
-                NativeModelRequestObservation::RetryScheduled { code, attempt: 1 },
-                NativeModelRequestObservation::Recovered { code: recovered, attempts: 2 }
-            ] if code == "provider_empty_response" && recovered == "provider_empty_response"
-        ));
-    }
-
-    #[test]
-    fn permanent_provider_failure_after_tool_output_is_not_retried_or_reexecuted() {
-        let mut response_attempts = 0;
-        let mut calls = Vec::new();
-        let mut observations = Vec::new();
-        let mut input = vec![json!({
-            "role": "user",
-            "content": [{"type": "input_text", "text": "当前项目有多少素材？"}]
-        })];
-        let mut respond_once = |_payload: &Value, _timeout: Duration| {
-            response_attempts += 1;
-            match response_attempts {
-                1 => Ok::<_, String>(LIST_CALL.to_owned()),
-                2 => Err(
-                    "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:HTTP 400"
-                        .to_owned(),
-                ),
-                _ => panic!("permanent provider failure must not be retried"),
-            }
-        };
-        let mut respond = |payload: &Value, timeout: Duration| {
-            let mut not_cancelled = || false;
-            request_native_model_with_retry(
-                payload,
-                timeout,
-                Duration::ZERO,
-                &mut respond_once,
-                &mut not_cancelled,
-                &mut |observation| observations.push(observation.clone()),
-            )
         };
         let mut execute = |call: &FunctionCall, _step: usize| {
             calls.push(call.name.clone());
@@ -3718,103 +3291,17 @@ mod tests {
             || false,
             |_body, _step| {},
         )
-        .expect_err("HTTP 400 should fail without retrying");
+        .expect_err("provider failure must surface immediately, not after retries");
         drop(execute);
         drop(respond);
 
-        assert!(error.contains("HTTP 400"));
-        assert_eq!(response_attempts, 2);
-        assert_eq!(calls, ["list_assets"]);
-        assert!(matches!(
-            observations.as_slice(),
-            [NativeModelRequestObservation::Failed { code, attempts: 1 }]
-                if code == "provider_http_400"
-        ));
-        let (_, diagnostic) = native_model_request_diagnostic(&observations[0]);
-        assert!(!diagnostic.contains("sensitive"));
-        assert!(!diagnostic.contains("private-model"));
-    }
-
-    #[test]
-    fn cancellation_during_retry_backoff_stops_before_the_next_provider_attempt() {
-        let mut response_attempts = 0;
-        let mut cancellation_checks = 0;
-        let mut observations = Vec::new();
-        let mut respond_once = |_payload: &Value, _timeout: Duration| {
-            response_attempts += 1;
-            Err::<String, _>("实验性 OAuth 请求失败:HTTP 429".to_owned())
-        };
-        let mut cancelled = || {
-            cancellation_checks += 1;
-            cancellation_checks > 1
-        };
-
-        let error = request_native_model_with_retry(
-            &json!({"input": []}),
-            Duration::from_secs(5),
-            Duration::from_millis(100),
-            &mut respond_once,
-            &mut cancelled,
-            &mut |observation| observations.push(observation.clone()),
-        )
-        .expect_err("cancellation must stop retry backoff");
-
-        assert_eq!(error, "native_tool_loop_cancelled");
-        assert_eq!(response_attempts, 1);
-        assert!(cancellation_checks >= 2);
-        assert!(matches!(
-            observations.as_slice(),
-            [NativeModelRequestObservation::RetryScheduled { code, attempt: 1 }]
-                if code == "provider_http_429"
-        ));
-    }
-
-    #[test]
-    fn retryable_network_failure_splits_step_budget_so_later_attempts_can_run() {
-        let mut attempt_timeouts = Vec::new();
-        let mut observations = Vec::new();
-        let step_budget = Duration::from_secs(120);
-        let mut respond_once = |_payload: &Value, timeout: Duration| {
-            attempt_timeouts.push(timeout);
-            Err::<String, _>(
-                "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 connection reset"
-                    .to_owned(),
-            )
-        };
-
-        let error = request_native_model_with_retry(
-            &json!({"input": []}),
-            step_budget,
-            Duration::ZERO,
-            &mut respond_once,
-            &mut || false,
-            &mut |observation| observations.push(observation.clone()),
-        )
-        .expect_err("exhausted retries still fail");
-
-        assert!(error.contains("网络错误"));
-        assert_eq!(attempt_timeouts.len(), 3);
-        assert!(
-            attempt_timeouts
-                .iter()
-                .all(|timeout| *timeout < step_budget && *timeout >= Duration::from_secs(30)),
-            "each hung HTTP attempt must leave time for later retries: {attempt_timeouts:?}"
+        assert!(error.contains("HTTP 429"));
+        assert_eq!(response_attempts, 2, "there must be no automatic provider retry");
+        assert_eq!(
+            calls,
+            ["list_assets"],
+            "a tool output must not be re-executed after a provider failure"
         );
-        assert!(matches!(
-            observations.last(),
-            Some(NativeModelRequestObservation::Failed { code, attempts: 3 })
-                if code == "provider_network"
-        ));
-    }
-
-    #[test]
-    fn native_model_attempt_timeout_keeps_two_thirds_of_a_fresh_step_for_later_tries() {
-        let first = native_model_attempt_timeout(Duration::from_secs(120), 1);
-        let second = native_model_attempt_timeout(Duration::from_secs(80), 2);
-        let last = native_model_attempt_timeout(Duration::from_secs(40), 3);
-        assert_eq!(first, Duration::from_secs(40));
-        assert_eq!(second, Duration::from_secs(40));
-        assert_eq!(last, Duration::from_secs(40));
     }
 
     #[test]
