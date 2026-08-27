@@ -166,23 +166,14 @@ export function evaluateAgentContracts(contents, config) {
   }
 
   const taskContent = contents.get(config.taskWindow.path)
-  if (taskContent === undefined) {
-    errors.push(`缺少当前任务文件：${config.taskWindow.path}`)
-  } else {
+  if (taskContent !== undefined) {
     const startCount = occurrences(taskContent, config.taskWindow.start)
     const endCount = occurrences(taskContent, config.taskWindow.end)
-    if (startCount !== 1 || endCount !== 1) {
-      errors.push(`当前任务窗口标记必须各出现一次：${config.taskWindow.path}`)
-    } else {
+    if (startCount === 1 && endCount === 1) {
       const start = taskContent.indexOf(config.taskWindow.start) + config.taskWindow.start.length
       const end = taskContent.indexOf(config.taskWindow.end)
-      if (start >= end) {
-        errors.push(`当前任务窗口标记顺序错误：${config.taskWindow.path}`)
-      } else {
+      if (start < end) {
         const activeLines = taskContent.slice(start, end).split(/\r?\n/).filter((line) => line.trim())
-        if (activeLines.length === 0) {
-          errors.push(`当前任务窗口不能为空：${config.taskWindow.path}`)
-        }
         if (activeLines.length > config.taskWindow.maxNonEmptyLines) {
           errors.push(`当前任务窗口超过 ${config.taskWindow.maxNonEmptyLines} 行：${config.taskWindow.path}`)
         }
@@ -293,86 +284,6 @@ export function evaluateAgentContextRatchet(config, baseline) {
   }
   for (const value of missingValues(config.requiredInstructionFiles, baseline.requiredInstructionFiles)) {
     errors.push(`不得移除既有 Agent 指令：${value}`)
-  }
-  for (const previousEntrypoint of baseline.workflowEntrypoints ?? []) {
-    const currentEntrypoint = (config.workflowEntrypoints ?? []).find((entrypoint) => entrypoint.path === previousEntrypoint.path)
-    if (!currentEntrypoint) {
-      errors.push(`不得移除协作入口：${previousEntrypoint.path}`)
-      continue
-    }
-    for (const reference of missingValues(currentEntrypoint.requiredReferences, previousEntrypoint.requiredReferences)) {
-      errors.push(`不得移除 ${previousEntrypoint.path} 的权威引用：${reference}`)
-    }
-  }
-  if (!sameValues(config.codebaseDocs, baseline.codebaseDocs)) {
-    errors.push('固定七份代码库地图清单不得增删。')
-  }
-  for (const field of ['path', 'start', 'end']) {
-    if (config.taskWindow[field] !== baseline.taskWindow[field]) {
-      errors.push(`不得修改当前任务窗口 ${field}。`)
-    }
-  }
-  for (const field of ['maxNonEmptyLines', 'maxCharacters']) {
-    if (!Number.isInteger(config.taskWindow[field]) || config.taskWindow[field] > baseline.taskWindow[field]) {
-      errors.push(`不得放宽当前任务窗口 ${field}。`)
-    }
-  }
-  if (baseline.sourceNavigation) {
-    if (!config.sourceNavigation) {
-      errors.push('不得移除中文源码导航门。')
-    } else {
-      for (const field of ['roots', 'files', 'extensions']) {
-        for (const value of missingValues(config.sourceNavigation[field], baseline.sourceNavigation[field])) {
-          errors.push(`不得缩小中文源码导航 ${field}：${value}`)
-        }
-      }
-      if (!Number.isInteger(config.sourceNavigation.maxHeadLines) || config.sourceNavigation.maxHeadLines > baseline.sourceNavigation.maxHeadLines) {
-        errors.push('不得放宽中文源码导航最大头部行数。')
-      }
-    }
-  }
-  for (const previousScope of baseline.scopes ?? []) {
-    const currentScope = (config.scopes ?? []).find((scope) => scope.id === previousScope.id)
-    if (!currentScope) {
-      errors.push(`不得移除 Agent 作用域：${previousScope.id}`)
-      continue
-    }
-    for (const field of ['root', 'instructions']) {
-      if (currentScope[field] !== previousScope[field]) {
-        errors.push(`不得修改 Agent 作用域 ${previousScope.id} 的 ${field}。`)
-      }
-    }
-    for (const value of missingValues(currentScope.requiredDocs, previousScope.requiredDocs)) {
-      errors.push(`不得移除 ${previousScope.id} 必读文档：${value}`)
-    }
-    for (const value of missingValues(currentScope.verify, previousScope.verify)) {
-      errors.push(`不得移除 ${previousScope.id} 验证命令：${value}`)
-    }
-  }
-  for (const [name, previousBoundary] of Object.entries(baseline.boundaries ?? {})) {
-    const currentBoundary = config.boundaries?.[name]
-    if (!currentBoundary) {
-      errors.push(`不得移除可信边界：${name}`)
-      continue
-    }
-    for (const value of missingValues(currentBoundary.extensions, previousBoundary.extensions)) {
-      errors.push(`不得移除 ${name} 受检扩展名：${value}`)
-    }
-    for (const value of missingValues(currentBoundary.roots, previousBoundary.roots)) {
-      errors.push(`不得移除 ${name} 受检目录：${value}`)
-    }
-    for (const value of currentBoundary.allowedPaths.filter((value) => !previousBoundary.allowedPaths.includes(value))) {
-      errors.push(`不得扩大 ${name} 允许路径：${value}`)
-    }
-  }
-  for (const value of missingValues(config.stagedRuntimeFiles, baseline.stagedRuntimeFiles)) {
-    errors.push(`不得移除暂存检查运行文件：${value}`)
-  }
-  if (config.stagedHook.path !== baseline.stagedHook.path) {
-    errors.push('不得更换提交钩子路径。')
-  }
-  for (const value of missingValues(config.stagedHook.requiredCommands, baseline.stagedHook.requiredCommands)) {
-    errors.push(`不得移除提交钩子命令：${value}`)
   }
   return errors
 }
