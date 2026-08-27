@@ -79,25 +79,6 @@ Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话
 
 Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许作用域内的本地派生媒体协议。
 
-## Agent 编程上下文架构
-
-仓库把“给编码 Agent 的说明”分成三层，避免一份巨大 Markdown 同时承担所有领域细节：
-
-```text
-AGENTS.md                         全局产品、安全规则与读取路由
-├─ src/AGENTS.md                 React 状态、IPC 与恢复边界
-└─ src-tauri/src/AGENTS.md       Rust 可信执行、事务与外部集成边界
-
-TASKS.md / ACTIVE_TASKS          当前任务、完成门与下一个已授权动作
-docs/codebase/                   七份可验证的当前源码地图
-docs/{architecture,api,...}.md   按需读取的长期事实和历史决策
-.harness/agent-context.json      机器可读清单、作用域与允许列表
-```
-
-支持分层 `AGENTS.md` 的编码 Agent 会按目标路径获得就近约束；其他 Agent 必须手动读取根入口、当前任务窗口和目标目录指令。`scripts/check-agent-contracts.mjs` 在工作区和暂存区验证：上下文文件及七份代码地图完整、当前任务窗口有界、全部受控手写源码顶部存在中文职责导航；React 只能经 `local-store.ts` 调用 Tauri，公开命令在 bridge/`lib.rs`/`docs/api.md` 间可对账；外部进程、Credential Manager、HTTP/网络传输与 Agent 工具目录不能跨越既定所有者。它不尝试用正则证明注释或业务语义正确，语义仍由类型、Rust 校验、测试、真实桌面验收和独立审查负责。
-
-这套结构把接手成本收敛为“先定位，再按风险加载”。清单与 Git `HEAD` 比较，只允许缩小任务窗口和可信允许范围；pre-commit 直接运行并要求 staged 检查器/配置与 working tree 一致。它仍不承诺仅阅读文档即可无状态地续写任何未提交工作；可靠交接还要求工作区干净、当前任务窗口准确、变更记录和测试结果可复现。
-
 ## 系统边界
 
 ```text
@@ -194,6 +175,25 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 ### 视觉分析
 
 当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次，候选多帧精检仍为 TODO。
+
+### Agent 编程上下文架构
+
+仓库把“给编码 Agent 的说明”分成三层，避免一份巨大 Markdown 同时承担所有领域细节：
+
+```text
+AGENTS.md                         全局产品、安全规则与读取路由
+├─ src/AGENTS.md                 React 状态、IPC 与恢复边界
+└─ src-tauri/src/AGENTS.md       Rust 可信执行、事务与外部集成边界
+
+TASKS.md / ACTIVE_TASKS          当前任务、完成门与下一个已授权动作
+docs/codebase/                   七份可验证的当前源码地图
+docs/{architecture,api,...}.md   按需读取的长期事实和历史决策
+.harness/agent-context.json      机器可读清单、作用域与允许列表
+```
+
+支持分层 `AGENTS.md` 的编码 Agent 会按目标路径获得就近约束；其他 Agent 必须手动读取根入口、当前任务窗口和目标目录指令。`scripts/check-agent-contracts.mjs` 在工作区和暂存区验证：上下文文件及七份代码地图完整、当前任务窗口有界、全部受控手写源码顶部存在中文职责导航；React 只能经 `local-store.ts` 调用 Tauri，公开命令在 bridge/`lib.rs`/`docs/api.md` 间可对账；外部进程、Credential Manager、HTTP/网络传输与 Agent 工具目录不能跨越既定所有者。它不尝试用正则证明注释或业务语义正确，语义仍由类型、Rust 校验、测试、真实桌面验收和独立审查负责。
+
+这套结构把接手成本收敛为“先定位，再按风险加载”。清单与 Git `HEAD` 比较，只允许缩小任务窗口和可信允许范围；pre-commit 直接运行并要求 staged 检查器/配置与 working tree 一致。它仍不承诺仅阅读文档即可无状态地续写任何未提交工作；可靠交接还要求工作区干净、当前任务窗口准确、变更记录和测试结果可复现。
 
 ### Provider 认证
 

@@ -52,17 +52,17 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 - `CONTRIBUTING.md`：所有人类与编码 Agent 共用的分支、验证、提交和 PR 流程。
 - `docs/architecture.md`：现有架构、数据流和技术约束。
-- `docs/decisions.md`：架构决策记录（ADR）。
+- `docs/decisions.md`：当前仍有效的少量架构决策。
 - `docs/api.md`：已实现的 Tauri 命令和 Agent 工具契约。
 - `docs/roadmap.md`：里程碑和未实现能力。
 - `TASKS.md`：当前可执行任务与待决问题。
-- `docs/harness.md`：架构改动与文档同步的检查规则和 Agent 审查 loop。
+- `docs/harness.md`：架构改动与文档同步的检查规则和简化后的检查说明。
 - `docs/audits/`：只读媒体事实审计报告（timeline、素材范围和 preview 渲染校验）。
 - `docs/codebase/`：面向 IDE 阅读和新成员上手的七份源码地图；建议从 `STRUCTURE.md` 和 `ARCHITECTURE.md` 开始。
 
 ### AI Agent 接手顺序
 
-1. 读根 `AGENTS.md`、`CONTRIBUTING.md` 与 `TASKS.md` 的 `ACTIVE_TASKS` 当前窗口。
+1. 读根 `AGENTS.md`、`CONTRIBUTING.md` 与 `TASKS.md` 的当前任务窗口。
 2. 修改前端时读 `src/AGENTS.md`；修改 Rust 时读 `src-tauri/src/AGENTS.md`。
 3. 从 `docs/codebase/STRUCTURE.md` 定位代码，再按根指令的路由只加载相关长期文档。
 4. 修改前运行 `npm run agent:check` 确认基线，修改后运行范围测试和 `npm run harness:check`。
