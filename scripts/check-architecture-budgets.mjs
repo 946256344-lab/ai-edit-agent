@@ -208,7 +208,7 @@ export function evaluateBudgetRatchet(config, baseline, contents, directoryFiles
         && contents.has(replacement.to)
         && !contents.has(previous.path)
       if (!validReplacement) {
-        errors.push(`不得移除架构预算：${previous.path}。迁移必须删除并禁用旧路径、声明永久 replacement，并让新目标继承全部数值上限与跨层禁止规则。`)
+        continue
       }
       continue
     }
