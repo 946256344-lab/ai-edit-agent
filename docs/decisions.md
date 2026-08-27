@@ -7,12 +7,12 @@
 - 原因：批处理编辑器已验证 `with-timestamps` 链路，也曾因旧 manifest 短于新配音而截断尾句。配音必须成为时钟，字幕必须跟 alignment，失败不得显示成功。
 - 后果：新增 `voice_provider.rs` 与 `preview_audio.rs`；时间线 JSON 加性 `voiceoverTracks`、`narrationText`、字幕 `origin`、freeze-frame 派生段。不把旁白映射进 Jianying。不把 `onScreenText` 当旁白朗读。
 
-## ADR-074：Native 主链授权、观察完成门与确认收据
+## ADR-074：Native 工具风险分层、观察完成门与确认收据
 
-- 状态：已实现（2026-08-19）
-- 决策：NativeToolLoop 默认只暴露观察工具；主链写工具必须由 `RequestToolPolicy` 根据本轮明确的创建、分析或修改意图逐项授权。loop 使用结构化 `NativeRunReceipt` 记录是否要求项目观察、是否成功观察、工具失败和确认状态；项目事实请求没有成功只读观察时不能以事实回答完成，工具失败允许模型基于安全错误自然解释但终态保持失败或部分完成。`needs_confirmation` 只创建 storyboard 待确认状态；确认命令必须匹配项目、任务、会话、待确认 storyboard、来源 task 和有效期，并在同一 SQLite 事务内消费 pending、写入确认消息和排队唯一任务，通过一次性状态防止重放或半消费。
-- 原因：模型文本不是副作用或项目事实证据；把所有写工具放入普通请求会扩大权限，把“调用过工具”当作观察会允许失败或写操作满足事实门，确认不绑定持久化 pending 会允许跨作用域或重复执行。
-- 后果：Legacy Runtime、Router、LoopGoal 默认路径和既有 `apply_skill`、SQLite 事务、版本与审计保持不变；Native 主链仅迁移六项工具。安全 fixture 覆盖中文/英文授权、伪造调用、成功/失败观察、虚假完成、确认过期和作用域重放。「生成视频」或「生成配音」视为制作请求，授权 storyboard、内部时间线和配音，避免只有观察工具时把步骤预算耗尽。
+- 状态：已实现（2026-08-19；2026-08-26 修订）
+- 决策：NativeToolLoop 对非只读请求默认提供观察工具，以及分析、storyboard、内部时间线版本化编辑、文本/本地音乐编辑和低清 preview 等可逆本地能力；模型根据请求和状态自主选择路径。`RequestToolPolicy` 只因明确只读/禁止项收缩这些能力。下载外部音乐、调用付费语音 Provider 和创建 Jianying 交付草稿仍需用户明确请求。请求文本的最低产物期望只进入 `NativeRunReceipt` 终态验真，不参与工具暴露或首工具选择。Rust 执行前继续校验参数、项目/任务作用域、前置条件和事务副作用，持久化事实继续裁决完成状态。相同工具与参数首次返回 `invalid_arguments` 后不再重复执行；第三次原样调用会有界终止。
+- 原因：模型比固定中英文动作词表更适合理解“剪辑一个视频”等开放表达；用正向关键词决定工具可见性会把模型限制为只读搜索，并产生无法自救的步骤耗尽。Rust 的优势在可信执行与事实验证，而不是抢在模型前做自然语言语义路由。外部下载、付费调用和交付草稿仍有成本或外部副作用，需要更窄授权。
+- 后果：普通聊天也会携带可逆本地工具定义，但 `tool_choice:auto` 允许模型直接回答；工具目录不等于完成清单。“剪辑一个视频”无需关键词授权即可看到 storyboard、时间线和 preview，同时其明确产物期望仍要求真实收据。模型文本不能创建 artifact；只读、明确排除、确认、作用域、许可证、版本、SQLite 事务与磁盘验真边界不变。
 
 ## ADR-065：故事板选镜采用固定时间采样替代场景检测
 
@@ -525,9 +525,9 @@
 - 原因：把历史渲染成“用户：/助手：/工具：”文本会丢失协议 role，导致追问“其中视频有几个？”无法可靠承接上一轮，也会把工具事实混入非结构化 Prompt。原生 item 让模型通过真实会话和观察工具获得项目事实。
 - 后果：SQLite schema v15 允许 assistant 消息并保留旧 agent 数据；不新增模型 transcript 或原始工具响应持久化。system 只保留身份、只读安全边界和“项目事实必须观察”的约束，项目状态仍由三项观察工具提供。
 
-## ADR-072：NativeToolLoop 仅按请求授权原生 preview
+## ADR-072：NativeToolLoop 仅按请求授权原生 preview（已被修订）
 
-- 状态：已采用（2026-08-19）
+- 状态：已被 2026-08-26 的 ADR-074 风险分层修订取代
 - 决策：NativeToolLoop 只在用户明确提出预览生成动作且 RequestToolPolicy 未识别“只查看/只检查/不要生成预览”时注册 `render_preview`。模型 schema 不包含作用域、路径或 FFmpeg 参数；Rust 在 `apply_skill` 前再次校验权限、参数和当前项目时间线，成功返回脱敏产物收据，失败返回安全错误。工具结果必须进入下一轮模型请求；只有带 `status=ok` 且 `artifact.type=preview` 的结果才通过预览完成门。
 - 原因：preview 是本地产物副作用，不能像观察工具一样默认暴露，也不能只依赖模型服从提示；同时最终回复需要根据真实收据自然生成，而不是由 Legacy 的 `last_outcome` 固定文案覆盖。
 - 后果：最终任务结果保留 `apply_skill` 验证过的 preview 引用与步骤产物审计，但正常完成时显示消息替换为模型对真实工具结果的总结。preview 已生成而后续模型总结失败时，真实产物仍以 `partially_completed` 保存，并显示诚实恢复文案；无时间线或越权调用不会产生成功收据，模型不得声称成功。Router、LoopGoal、其他编辑工具和 Legacy 默认路径不变。
@@ -542,7 +542,7 @@
 ## ADR-074：NativeToolLoop 迁移文本、音乐与 Jianying 工具适配层
 
 - 状态：已采用（2026-08-19）
-- 决策：在 `agentloop/tools.rs` 的集中原生目录加入 `replace_text_tracks`、`download_music`、`use_online_music`、`replace_music_tracks` 和 `create_jianying_draft`；既有 `get_text_capabilities`、`search_music` 与 `render_preview` 继续作为同一原生目录的观察或交付工具。嵌套文本和音乐参数均使用 strict 闭合 schema，语义可选值以 nullable 表示；模型不能传入 project、conversation、路径、许可证或 Jianying 兼容性。`native_policy.rs` 仅把用户明确的中文/英文写入、下载或交付表达授权给对应工具，`native.rs` 在 `apply_skill` 前再做同一策略和参数复核。
+- 决策：在 `agentloop/tools.rs` 的集中原生目录加入 `replace_text_tracks`、`download_music`、`use_online_music`、`replace_music_tracks` 和 `create_jianying_draft`；既有 `get_text_capabilities`、`search_music` 与 `render_preview` 继续作为同一原生目录的观察或交付工具。嵌套文本和音乐参数均使用 strict 闭合 schema，语义可选值以 nullable 表示；模型不能传入 project、conversation、路径、许可证或 Jianying 兼容性。执行仍在 `apply_skill` 前复核策略和参数；2026-08-26 起，可逆的文本/本地音乐/preview 默认可见，外部下载、付费配音与 Jianying 交付仍由 `native_policy.rs` 识别明确请求。
 - 原因：原生 Provider 工具调用需要覆盖现有的文本、音乐和交付能力，但这些能力已有许可证限制、下载流程、文字能力矩阵、Jianying 单向兼容性和 storyboard 确认边界。复制或重写领域逻辑会引入行为漂移和权限旁路。
 - 后果：Native loop 继续复用 `skills::apply_skill`、现有版本写入、事务、审计与作用域校验；`use_online_music` 的新时间线版本也进入持久化产物审计。文本风格和动画仍由后端矩阵验证，音乐许可仍由 Provider 确定，Jianying 继续只创建新草稿；`needs_confirmation` 后的所有非观察写工具仍被阻止。Router、LoopGoal、领域算法和 Legacy 默认路径不变。
 
@@ -556,7 +556,7 @@
 ## ADR-076：NativeToolLoop 以原生输出结束，不锁定单一目标
 
 - 状态：已采用（2026-08-19）
-- 决策：删除 Native 对话路径中残留的固定目标终止假设。循环每步解析完整 `ModelTurn`：存在 function_call 时执行所有调用、追加 function_call_output 并继续；不存在调用但存在自然语言时结束本轮。不注册或解析 `finish`、`done`、`no_action` 控制动作，也不要求模型声明一次后不可改变的 LoopGoal。RequestToolPolicy 可为一条明确复合请求同时授权多个具名能力，但不选择顺序或首工具。
+- 决策：删除 Native 对话路径中残留的固定目标终止假设。循环每步解析完整 `ModelTurn`：存在 function_call 时执行所有调用、追加 function_call_output 并继续；不存在调用但存在自然语言时结束本轮。不注册或解析 `finish`、`done`、`no_action` 控制动作，也不要求模型声明一次后不可改变的 LoopGoal。RequestToolPolicy 提供风险分层后的可用集合但不选择顺序或首工具；请求的最低产物期望只参与最终收据验真。
 - 原因：固定单一目标会把”检查素材，做 30 秒剪辑，加字幕并生成预览”压成一个 deliverable，并在模型已给出自然语言时用目标纠偏强制继续；它也让步骤上限只保留某一种产物。原生函数调用本身已经提供足够的循环信号，安全与完成事实应由后端收据而不是模型控制动作承担。
 - 后果：RunReceipt 只记录实际执行的工具状态：按名称去重的成功 `status=ok` 写工具、仍在排队的操作和未恢复失败；同一工具修正后成功会清除其旧失败，但不会抹掉其他工具的失败。自然语言只结束模型循环，不能创建 completed 状态或 artifact；needs_confirmation、持久化产物和已验证中间结果仍由 Rust 裁决。达到总超时或步骤上限时，任意真实中间产物均保留为 partially_completed，没有成功工具则 failed。storyboard 返回 needs_confirmation 后仍停止后续非观察写工具，确认边界没有放宽。契约检查器禁止固定目标标识和 finish/done/no_action 字符串重新进入 Native 生产路径；历史 ADR 中的旧架构描述保留为当时事实。
 
@@ -575,3 +575,17 @@
 - 后果：本机调试可以按步骤阅读完整 INPUT/OUTPUT；该文件不是任务真实性或审计事实来源，不随安装包分发，也不进入会话恢复。该能力仅覆盖 NativeToolLoop，不改变 storyboard/视觉等非对话模型调用。工具目录整理不在本决策范围内。
 
 <!-- 维护记录（2026-08-20）：本文件审查确认无需新增 ADR。会话隔离 bug 修复（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭）属于既有架构的实现修正，不引入新的架构决策、依赖变化或取舍；会话隔离架构已在 docs/architecture.md 中明确说明。详见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。 -->
+
+## ADR-079：NativeToolLoop 每轮推送有界权威状态快照
+
+- 状态：已采用（2026-08-25）
+- 决策：在每次 NativeToolLoop 的静态系统提示之后、会话历史之前注入由 Rust 从当前 project/editing task 作用域重建的状态快照。快照固定字段顺序、最多 1200 字符，只投影任务 brief/最近终态、素材与分析/健康计数、storyboard/timeline 版本和数量、磁盘 preview、Jianying 状态及外部能力配置布尔值；身份只用版本号，禁止路径、文件名、UUID、素材备注、OCR/视觉证据、会话原文、Base URL、模型名和凭据值。非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，下一次 Provider 请求前重读并原位替换唯一快照；16k 裁剪保护该块。初始构建、写后刷新或凭据状态读取失败均失败封闭。
+- 原因：纯拉式项目观察依赖关键词门和模型主动选工具；漏检时会凭旧历史回答，命中时又需丢弃第一次自然语言并 nudge。高层状态由 Rust 主动提供后，模型可直接回答计数、版本和存在性，观察工具保留为详细镜头、候选和证据的按需读取。
+- 后果：成功快照在 RunReceipt 中作为来源 `state_snapshot` 的本轮成功观察，`request_requires_project_observation` 与 nudge 逻辑保留但生产路径不再为已有快照的直接事实回答重问。模型文本仍不能创建产物或满足具名写工具完成门，`get_edit_status` 工具及其决策级硬门不变。不新增工具、Tauri 命令、依赖、缓存或 SQLite schema。
+
+## ADR-080：Storyboard 使用内置中文向量模型做本地语义召回
+
+- 状态：已采用（2026-08-27）
+- 决策：Phase 2 每个 beat 的候选由 5 个扩大为 12 个，模型仍查看关键帧后只选择 1 个。Rust 使用随安装包分发的 `bge-small-zh-v1.5` ONNX 模型，将 `requiredVisual + purpose` 与素材 subjects/actions/products/scene/OCR 文本编码为 512 维向量并按余弦相似度评分；不启用 Hugging Face 运行时下载。语义分权重由 50 降为 30，模型或向量不可用时回退既有词面匹配。向量带模型名、维度、版本和证据文本 SHA-256，旧素材在首次 storyboard 前批量回填。
+- 原因：中文相邻双字只能识别词面重合，“汽车”与“车辆”等同义表达会在 Top-5 截断前被淘汰。让远端模型读取整个素材库会增加调用次数、图片输入、延迟和费用；本地文本向量可在 Rust 侧扩大召回，同时把远端模型限制在 12 个关键帧网格内。
+- 后果：`fastembed` 固定为 4.9.1，ONNX 文件、tokenizer、许可说明和运行时进入 MSI/NSIS，运行时不访问模型仓库。仓库声明的 Rust 1.77.2 与当前锁文件已有依赖的实际最低版本不一致，本决策不声称恢复该旧版本兼容性。`metadata_json` 新增向后兼容的质量与向量字段，不改变 SQLite schema 或 Tauri 命令。关键帧质量分采用归一化拉普拉斯方差中位数；新鲜度只统计每个剪辑任务最新时间线并在任务内按素材去重。模型资源或推理失败不会阻止 storyboard，而是保留词面排序和中性质量降级。

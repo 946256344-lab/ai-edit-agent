@@ -1,7 +1,7 @@
 // storyboard/phases.rs - 三阶段 storyboard 生成流程
 //
 // Phase 1: 叙事结构生成 - 模型根据 brief 拆分 beats，不涉及素材
-// Phase 2: 逐 beat 粗选镜 - 对每个 beat 单独排序素材，提供专属 TOP-5 候选
+// Phase 2: 逐 beat 粗选镜 - 对每个 beat 单独排序素材，提供专属 TOP-12 候选
 // Phase 3: 精剪与节奏优化 - 调整时间范围、节奏控制、镜头组合和过渡
 
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
@@ -12,10 +12,12 @@ use crate::storyboard::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+use tauri::AppHandle;
 
 const PHASE2_BEAT_TIMEOUT: Duration = Duration::from_secs(60);
-const PHASE2_TOP_CANDIDATES: usize = 5;
+const PHASE2_TOP_CANDIDATES: usize = 12;
 
 /// Phase 1 输出：纯叙事结构
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,19 +85,20 @@ pub(crate) fn phase1_generate_narrative(
         .map_err(|_| "Phase 1 JSON did not match NarrativeStructure schema.".to_owned())
 }
 
-/// Phase 2: 逐 beat 粗选镜。每个 beat 从全库取出 5 个匹配预选，读关键帧后再选 1 个。
+/// Phase 2: 逐 beat 粗选镜。每个 beat 从全库取出 12 个匹配预选，读关键帧后再选 1 个。
 pub(crate) fn phase2_rough_shot_selection(
+    app: &AppHandle,
     access: &ModelAccess,
     brief: &str,
     narrative: &NarrativeStructure,
     sources: &[StoryboardSource],
+    usage_counts: &HashMap<String, i32>,
 ) -> Result<RoughStoryboard, String> {
     log::info!(
         "Phase 2: Rough shot selection for {} beats",
         narrative.beats.len()
     );
 
-    let usage_counts = std::collections::HashMap::new();
     let target_each = if narrative.beats.is_empty() {
         narrative.target_duration_ms
     } else {
@@ -104,16 +107,32 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut shots = Vec::new();
     let mut uncovered_beat_ids = Vec::new();
     let mut prior_selections = Vec::new();
+    let mut semantic_fallback_logged = false;
 
     for (index, beat) in narrative.beats.iter().enumerate() {
+        let beat_text = format!("{} {}", beat.required_visual, beat.purpose);
+        let beat_embedding =
+            match crate::storyboard::semantic::encode_beat_semantics(app, &beat_text) {
+                Ok(embedding) => Some(embedding),
+                Err(_) => {
+                    if !semantic_fallback_logged {
+                        log::warn!(
+                            "Local semantic ranking unavailable; using lexical storyboard ranking."
+                        );
+                        semantic_fallback_logged = true;
+                    }
+                    None
+                }
+            };
         let ranked = scoring::rank_segment_candidates(
-            sources.to_vec(),
+            candidates_within_diversity_limit(sources, &prior_selections),
             beat,
             target_each,
             &prior_selections,
-            &usage_counts,
+            usage_counts,
+            beat_embedding.as_deref(),
         );
-        let top5: Vec<StoryboardSource> = ranked
+        let top_candidates: Vec<StoryboardSource> = ranked
             .into_iter()
             .take(PHASE2_TOP_CANDIDATES)
             .map(|item| item.source)
@@ -121,13 +140,21 @@ pub(crate) fn phase2_rough_shot_selection(
         log::info!(
             "Beat '{}': top {}: {}",
             beat.id,
-            top5.len(),
-            top5.iter()
+            top_candidates.len(),
+            top_candidates
+                .iter()
                 .map(|candidate| format!("{}({})", candidate.asset_id, candidate.kind))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        match pick_shot_for_beat(access, brief, beat, index as i64 + 1, target_each, &top5) {
+        match pick_shot_for_beat(
+            access,
+            brief,
+            beat,
+            index as i64 + 1,
+            target_each,
+            &top_candidates,
+        ) {
             Ok(Some(shot)) => {
                 prior_selections.push(shot.asset_id.clone());
                 shots.push(shot);
@@ -166,6 +193,26 @@ pub(crate) fn phase2_rough_shot_selection(
     })
 }
 
+fn candidates_within_diversity_limit(
+    sources: &[StoryboardSource],
+    prior_selections: &[String],
+) -> Vec<StoryboardSource> {
+    let max_asset_uses = super::max_asset_uses_for_shot_count(prior_selections.len() + 1);
+    let last_asset = prior_selections.last();
+    sources
+        .iter()
+        .filter(|source| {
+            last_asset != Some(&source.asset_id)
+                && prior_selections
+                    .iter()
+                    .filter(|asset_id| *asset_id == &source.asset_id)
+                    .count()
+                    < max_asset_uses
+        })
+        .cloned()
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LooseShot {
@@ -193,12 +240,12 @@ fn pick_shot_for_beat(
     beat: &StoryboardBeat,
     order_index: i64,
     target_duration_ms: i64,
-    top5: &[StoryboardSource],
+    top_candidates: &[StoryboardSource],
 ) -> Result<Option<StoryboardShot>, String> {
-    if top5.is_empty() {
+    if top_candidates.is_empty() {
         return Ok(None);
     }
-    let cards: Vec<Value> = top5
+    let cards: Vec<Value> = top_candidates
         .iter()
         .enumerate()
         .map(|(index, source)| compact_candidate_card(index, source))
@@ -211,14 +258,14 @@ fn pick_shot_for_beat(
         {{\"uncovered\": true}} or {{\"uncovered\": false, \"shot\": {{...}}}}.\n\
         shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
         narrationText is spoken voiceover. If the beat already has narration, keep it. If the brief has no copy, write a short spoken line. Never copy onScreenText into narrationText.\n\
-        Use ONLY these candidate assetIds. matchLevel is direct or contextual. Images use sourceStartMs=0 and sourceEndMs=0.",
+        Every candidate is a verified video. Use ONLY these candidate assetIds. matchLevel is direct or contextual. sourceStartMs and sourceEndMs must stay inside the candidate duration.",
         beat.id,
         beat.purpose,
         beat.required_visual,
         serde_json::to_string_pretty(&cards).unwrap_or_else(|_| "[]".to_owned())
     );
     let mut content = vec![json!({"type": "input_text", "text": prompt})];
-    for (index, source) in top5.iter().enumerate() {
+    for (index, source) in top_candidates.iter().enumerate() {
         if let Some(image) = candidate_grid_image(source) {
             content.push(image);
             content.push(json!({
@@ -243,7 +290,10 @@ fn pick_shot_for_beat(
     let Some(loose) = parse_beat_pick(&text)? else {
         return Ok(None);
     };
-    let allowed: Vec<&str> = top5.iter().map(|source| source.asset_id.as_str()).collect();
+    let allowed: Vec<&str> = top_candidates
+        .iter()
+        .map(|source| source.asset_id.as_str())
+        .collect();
     if !allowed.contains(&loose.asset_id.as_str()) {
         log::warn!(
             "Phase 2 beat '{}' picked an asset outside the top {} candidates; leaving uncovered.",
@@ -252,10 +302,10 @@ fn pick_shot_for_beat(
         );
         return Ok(None);
     }
-    let source = top5
+    let source = top_candidates
         .iter()
         .find(|candidate| candidate.asset_id == loose.asset_id)
-        .expect("allowed asset exists in top5");
+        .expect("allowed asset exists in top candidates");
     Ok(Some(shot_from_loose(
         loose,
         beat,
@@ -382,7 +432,97 @@ fn candidate_grid_image(source: &StoryboardSource) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_beat_pick;
+    use super::{
+        candidates_within_diversity_limit, enforce_phase3_scope, parse_beat_pick, RoughStoryboard,
+        PHASE2_TOP_CANDIDATES,
+    };
+    use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
+
+    fn shot(asset_id: &str) -> StoryboardShot {
+        StoryboardShot {
+            order_index: 1,
+            duration_ms: 1_000,
+            purpose: "purpose".to_owned(),
+            on_screen_text: String::new(),
+            narration_text: "narration".to_owned(),
+            asset_id: asset_id.to_owned(),
+            source_start_ms: 0,
+            source_end_ms: 1_000,
+            reason: "reason".to_owned(),
+            beat_id: "beat-1".to_owned(),
+            match_level: "direct".to_owned(),
+        }
+    }
+
+    fn beat() -> StoryboardBeat {
+        StoryboardBeat {
+            id: "beat-1".to_owned(),
+            purpose: "purpose".to_owned(),
+            required_visual: "vehicle".to_owned(),
+            narration: "narration".to_owned(),
+        }
+    }
+
+    fn source(asset_id: &str) -> StoryboardSource {
+        StoryboardSource {
+            asset_id: asset_id.to_owned(),
+            kind: "video".to_owned(),
+            duration_ms: Some(10_000),
+            scene_segments: Vec::new(),
+            ocr_evidence: Vec::new(),
+            visual_evidence: Vec::new(),
+            visual_quality_score: Some(0.5),
+            evidence_embedding: None,
+            keyframe_grid_path: None,
+        }
+    }
+
+    #[test]
+    fn phase2_sends_twelve_candidates_to_the_model() {
+        assert_eq!(PHASE2_TOP_CANDIDATES, 12);
+    }
+
+    #[test]
+    fn phase2_excludes_an_asset_after_it_reaches_the_diversity_limit() {
+        let sources = vec![source("repeated"), source("available")];
+        let prior = vec![
+            "repeated".to_owned(),
+            "other".to_owned(),
+            "repeated".to_owned(),
+        ];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
+    }
+
+    #[test]
+    fn phase2_uses_the_actual_selected_shot_count_for_the_diversity_limit() {
+        let sources = vec![source("repeated"), source("available")];
+        let prior = vec!["repeated".to_owned(), "other".to_owned()];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
+    }
+
+    #[test]
+    fn phase2_never_offers_the_immediately_previous_asset() {
+        let sources = vec![source("previous"), source("available")];
+        let prior = vec![
+            "first".to_owned(),
+            "second".to_owned(),
+            "third".to_owned(),
+            "previous".to_owned(),
+        ];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
+    }
 
     #[test]
     fn wrapped_shot_json_is_accepted() {
@@ -405,6 +545,116 @@ mod tests {
         let text = r#"{"uncovered":true}"#;
         assert!(parse_beat_pick(text).expect("parse").is_none());
     }
+
+    #[test]
+    fn phase3_cannot_replace_the_asset_selected_for_a_beat() {
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot("selected")],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "changed".to_owned(),
+            summary: "changed".to_owned(),
+            target_duration_ms: 2_000,
+            script_mode: "full_script".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot("outside")],
+        };
+
+        assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
+    }
+
+    #[test]
+    fn phase3_cannot_split_a_beat_into_repeated_asset_shots() {
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot.clone(), rough_shot],
+        };
+
+        assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
+    }
+
+    #[test]
+    fn phase3_keeps_covered_shots_without_filling_uncovered_beats() {
+        let mut uncovered_beat = beat();
+        uncovered_beat.id = "beat-2".to_owned();
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat(), uncovered_beat],
+            uncovered_beat_ids: vec!["beat-2".to_owned()],
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot],
+        };
+
+        enforce_phase3_scope(&mut final_content, &rough).expect("covered shot should remain valid");
+        assert_eq!(final_content.uncovered_beat_ids, vec!["beat-2"]);
+    }
+
+    #[test]
+    fn phase3_cannot_add_a_shot_for_an_uncovered_beat() {
+        let mut uncovered_beat = beat();
+        uncovered_beat.id = "beat-2".to_owned();
+        let mut added_shot = shot("selected");
+        added_shot.beat_id = "beat-2".to_owned();
+        let rough_shot = shot("selected");
+        let rough = RoughStoryboard {
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat(), uncovered_beat],
+            uncovered_beat_ids: vec!["beat-2".to_owned()],
+            shots: vec![rough_shot.clone()],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 1_000,
+            script_mode: "key_message".to_owned(),
+            beats: Vec::new(),
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![rough_shot, added_shot],
+        };
+
+        assert!(enforce_phase3_scope(&mut final_content, &rough).is_err());
+    }
 }
 
 /// Phase 3: 精剪与节奏优化
@@ -420,8 +670,21 @@ pub(crate) fn phase3_fine_edit(
         rough.shots.len()
     );
 
-    let source_map_json =
-        serde_json::to_string(sources).map_err(|_| "Could not serialize source map.".to_owned())?;
+    let selected_asset_ids = rough
+        .shots
+        .iter()
+        .map(|shot| shot.asset_id.as_str())
+        .collect::<HashSet<_>>();
+    let selected_sources = sources
+        .iter()
+        .filter(|source| selected_asset_ids.contains(source.asset_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected_sources.len() != selected_asset_ids.len() {
+        return Err("Phase 3 source scope was unavailable.".to_owned());
+    }
+    let source_map_json = serde_json::to_string(&selected_sources)
+        .map_err(|_| "Could not serialize source map.".to_owned())?;
 
     let feedback_context = feedback.map_or(String::new(), |fb| {
         format!("\n\nPrevious attempt failed validation: {fb}\nRevise the timing and shot structure to pass validation.")
@@ -436,7 +699,7 @@ pub(crate) fn phase3_fine_edit(
         1. Adjust source time ranges to align with scene boundaries where possible\n\
         2. Ensure no overlapping time ranges from the same video asset\n\
         3. Optimize shot durations for pacing (total should match targetDurationMs)\n\
-        4. Consider splitting or merging shots if it improves the narrative flow\n\
+        4. Return exactly one shot for each existing rough shot (covered beat), in the same order; keep uncoveredBeatIds unchanged and never create shots for uncovered beats; do not split, merge, add, drop, or reorder rough shots\n\
         5. Ensure visual transitions between consecutive shots are smooth\n\n\
         Return the complete final JSON with: title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots.\n\
         Each shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel.\n\
@@ -470,8 +733,41 @@ pub(crate) fn phase3_fine_edit(
     let mut final_content: StoryboardContent = serde_json::from_str(&text)
         .map_err(|_| "Phase 3 JSON did not match StoryboardContent schema.".to_owned())?;
 
-    // 填充 brief 字段（model 不返回，由 Rust 补全）
+    enforce_phase3_scope(&mut final_content, rough)?;
+    // brief 及叙事结构由前两阶段拥有，模型只精调已选镜头的时间和节奏。
     final_content.brief = brief.to_owned();
 
     Ok(final_content)
+}
+
+fn enforce_phase3_scope(
+    final_content: &mut StoryboardContent,
+    rough: &RoughStoryboard,
+) -> Result<(), String> {
+    if final_content.shots.len() != rough.shots.len()
+        || final_content
+            .shots
+            .iter()
+            .zip(&rough.shots)
+            .any(|(final_shot, rough_shot)| final_shot.beat_id != rough_shot.beat_id)
+    {
+        return Err("Phase 3 must keep exactly one shot per existing Phase 2 rough shot in the selected order and must not fill uncovered beats.".to_owned());
+    }
+    let selected_by_beat = rough
+        .shots
+        .iter()
+        .map(|shot| (shot.beat_id.as_str(), shot.asset_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    if final_content.shots.iter().any(|shot| {
+        selected_by_beat.get(shot.beat_id.as_str()).copied() != Some(shot.asset_id.as_str())
+    }) {
+        return Err("Phase 3 referenced an asset outside the Phase 2 selection.".to_owned());
+    }
+    final_content.title = rough.title.clone();
+    final_content.summary = rough.summary.clone();
+    final_content.target_duration_ms = rough.target_duration_ms;
+    final_content.script_mode = rough.script_mode.clone();
+    final_content.beats = rough.beats.clone();
+    final_content.uncovered_beat_ids = rough.uncovered_beat_ids.clone();
+    Ok(())
 }

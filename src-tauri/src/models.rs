@@ -806,9 +806,12 @@ pub struct StoryboardSource {
     /// 旧记录读取为 None，视为中等质量 0.5。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) visual_quality_score: Option<f64>,
+    /// 与视觉证据文本对应的本地语义向量。只在模型、维度、版本和来源指纹有效时进入排序。
+    #[serde(default, skip_serializing)]
+    pub(crate) evidence_embedding: Option<Vec<f32>>,
     /// 关键帧网格图路径（4-8 帧拼图），用于多模态选镜。
     /// 旧记录读取为 None，模型回退到文本证据。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub(crate) keyframe_grid_path: Option<String>,
 }
 
@@ -833,6 +836,20 @@ pub struct TechnicalMetadata {
     pub(crate) visual_analysis_note: Option<String>,
     #[serde(default = "default_visual_analysis_status")]
     pub(crate) visual_analysis_status: String,
+    /// 由本地关键帧清晰度计算得到的素材整体质量分，范围为 0.0-1.0。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) visual_quality_score: Option<f64>,
+    /// 视觉证据文本的本地语义向量；模型文件随安装包分发，不在运行时下载。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) evidence_embedding: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_dimensions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_source_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_version: Option<u32>,
     /// 关键帧网格图路径（4-8 帧拼图），用于多模态选镜。
     /// 旧记录读取为 None，表示尚未生成网格图。
     #[serde(default, skip_serializing_if = "Option::is_none")]

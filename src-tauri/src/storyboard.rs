@@ -5,14 +5,17 @@ mod keyframes;
 pub(crate) mod multimodal;
 pub(crate) mod phases;
 mod scoring;
-mod semantic;
+pub(crate) mod semantic;
 mod validation;
 
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
-use crate::models::{StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata};
+use crate::models::{
+    StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata, TimelineContent,
+};
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -44,7 +47,9 @@ pub(crate) fn storyboard_sources(
     project_id: &str,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
-        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
+        // Top-12 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
+        // 可访问视频中判断语义与画面优先级。
+        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -54,9 +59,17 @@ pub(crate) fn storyboard_sources(
                 metadata.visual_analysis_status == "ready" && !metadata.visual_evidence.is_empty();
             let source_available = Path::new(&row.get::<_, String>(3)?).is_file();
 
-            // 从元数据中提取视觉质量分数（如果可用）
-            // 当前视觉证据尚未包含数值质量分数，使用 None
-            let visual_quality_score = None;
+            let visual_quality_score = metadata.visual_quality_score.or_else(|| {
+                let scores = metadata
+                    .scene_segments
+                    .iter()
+                    .filter_map(|segment| segment.visual_quality_score)
+                    .collect::<Vec<_>>();
+                (!scores.is_empty()).then(|| scores.iter().sum::<f64>() / scores.len() as f64)
+            });
+            let evidence_embedding = semantic::embedding_is_current(&metadata)
+                .then(|| metadata.evidence_embedding.clone())
+                .flatten();
 
             // 从元数据中提取关键帧网格图路径
             let keyframe_grid_path = metadata.keyframe_grid_path.clone();
@@ -78,6 +91,7 @@ pub(crate) fn storyboard_sources(
                     ocr_evidence: metadata.ocr_evidence,
                     visual_evidence: metadata.visual_evidence,
                     visual_quality_score,
+                    evidence_embedding,
                     keyframe_grid_path,
                 },
                 visual_ready,
@@ -99,6 +113,50 @@ pub(crate) fn storyboard_sources(
             .collect(),
         visual_ready_count,
     ))
+}
+
+fn storyboard_usage_counts(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<HashMap<String, i32>, String> {
+    let mut statement = connection
+        .prepare(
+            "WITH ranked AS (
+                SELECT timeline.content_json,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY storyboard.editing_task_id
+                           ORDER BY timeline.created_at DESC, timeline.version_number DESC
+                       ) AS row_number
+                FROM timeline_versions timeline
+                JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id
+                WHERE timeline.project_id = ?1 AND storyboard.editing_task_id IS NOT NULL
+             )
+             SELECT content_json FROM ranked WHERE row_number = 1",
+        )
+        .map_err(|_| "Storyboard usage history could not be read.".to_owned())?;
+    let rows = statement
+        .query_map(params![project_id], |row| row.get::<_, String>(0))
+        .map_err(|_| "Storyboard usage history could not be read.".to_owned())?;
+    let mut usage_counts = HashMap::new();
+    for content_json in rows {
+        let Ok(content_json) = content_json else {
+            log::warn!("Skipped unreadable storyboard usage history row.");
+            continue;
+        };
+        let Ok(content) = serde_json::from_str::<TimelineContent>(&content_json) else {
+            log::warn!("Skipped invalid storyboard usage history JSON.");
+            continue;
+        };
+        let unique_assets = content
+            .clips
+            .into_iter()
+            .map(|clip| clip.asset_id)
+            .collect::<HashSet<_>>();
+        for asset_id in unique_assets {
+            *usage_counts.entry(asset_id).or_insert(0) += 1;
+        }
+    }
+    Ok(usage_counts)
 }
 
 pub(crate) fn request_storyboard(
@@ -133,6 +191,7 @@ pub(crate) fn request_storyboard(
         target_duration_ms,
         &prior_selections,
         &usage_counts,
+        None,
     );
 
     log::info!(
@@ -142,7 +201,7 @@ pub(crate) fn request_storyboard(
         prior_selections.len()
     );
 
-    // 只取评分最高的前 5 个候选提供给模型
+    // 兼容旧入口仍保持其既有有界候选；生产三阶段链路在 Phase 2 使用 Top-12。
     let top_candidates: Vec<StoryboardSource> = ranked
         .into_iter()
         .take(5)
@@ -190,7 +249,7 @@ pub(crate) fn request_storyboard(
             Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
             Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
             The candidates below have been pre-ranked by quality, duration match, and relevance. Each candidate includes a keyframe grid showing 4-8 representative frames from the video. Judge semantic match by directly inspecting these frames, not by relying solely on text descriptions.\n\
-            For each candidate, you will see: (1) a keyframe grid image, (2) metadata (assetId, duration, sceneSegments). Use ONLY the supplied candidates. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.{}"
+            For each candidate, you will see: (1) a keyframe grid image, (2) metadata (assetId, duration, sceneSegments). Every candidate is a verified video. Use ONLY the supplied candidates. Source times must be inside the provided duration and preferably align with sceneSegments. Do not use file names, unknown asset IDs, or unverified claims.{}"
         , if let Some(fb) = feedback {
             format!("\n\nPrevious attempt failed local validation: {fb}\nPrevious storyboard JSON (revise it when useful): {}", previous_json)
         } else {
@@ -212,7 +271,7 @@ pub(crate) fn request_storyboard(
             Prefer the clearest, most specific, and least repetitive evidence. Do not default to the first source, the longest source, or a generic clip if a more relevant one exists. Avoid padding a beat with weak footage when a better shot is available.\n\
             Never output an insufficient shot. If no supplied media can honestly support a beat, put its id in uncoveredBeatIds and do not create a standalone shot for it.\n\
             Every beat must be covered by at least one shot or appear exactly once in uncoveredBeatIds. Avoid overlapping or repeated source ranges from the same asset unless the brief explicitly requires a repeat.\n\
-            Use ONLY the supplied media evidence JSON below. For video, source times must be inside the provided duration and preferably align with sceneSegments. For images, sourceStartMs and sourceEndMs must both be 0. Do not use file names, unknown asset IDs, or unverified claims.\n\
+            Use ONLY the supplied video evidence JSON below. Source times must be inside the provided duration and preferably align with sceneSegments. Do not use file names, unknown asset IDs, or unverified claims.\n\
             The evidence below has been pre-ranked by quality, duration match, and relevance — prioritize the top candidates.\n\
             Evidence: {evidence}{revision_context}"
         )
@@ -494,7 +553,7 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
         *asset_usage.entry(&shot.asset_id).or_insert(0) += 1;
     }
 
-    let max_allowed = (shots.len() * 2 / 5).max(1); // 40% 向上取整
+    let max_allowed = max_asset_uses_for_shot_count(shots.len());
     for (asset_id, count) in asset_usage {
         if count > max_allowed {
             let percentage = count * 100 / shots.len();
@@ -518,6 +577,10 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
     }
 
     Ok(())
+}
+
+fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
+    (shot_count * 2 / 5).max(1)
 }
 
 fn minimum_storyboard_duration(brief: &str) -> i64 {
@@ -847,8 +910,17 @@ fn choose_storyboard_video_range(
 
 #[cfg(test)]
 mod tests {
-    use super::{minimum_storyboard_duration, normalize_storyboard_candidate, validate_storyboard};
-    use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
+    use super::{
+        minimum_storyboard_duration, normalize_storyboard_candidate, storyboard_sources,
+        storyboard_usage_counts, validate_storyboard,
+    };
+    use crate::models::{
+        StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, TimelineClip,
+        TimelineContent,
+    };
+    use rusqlite::{params, Connection};
+    use std::fs;
+    use uuid::Uuid;
 
     fn source() -> StoryboardSource {
         StoryboardSource {
@@ -859,6 +931,7 @@ mod tests {
             ocr_evidence: Vec::new(),
             visual_evidence: Vec::new(),
             visual_quality_score: None,
+            evidence_embedding: None,
             keyframe_grid_path: None,
         }
     }
@@ -899,6 +972,163 @@ mod tests {
                 match_level: match_level.to_owned(),
             }],
         }
+    }
+
+    fn timeline_content(asset_ids: &[&str]) -> String {
+        let clips = asset_ids
+            .iter()
+            .enumerate()
+            .map(|(index, asset_id)| TimelineClip {
+                shot_index: index as i64 + 1,
+                asset_id: (*asset_id).to_owned(),
+                source_start_ms: 0,
+                source_end_ms: 1_000,
+                timeline_start_ms: index as i64 * 1_000,
+                timeline_end_ms: (index as i64 + 1) * 1_000,
+                on_screen_text: String::new(),
+                ..Default::default()
+            })
+            .collect();
+        serde_json::to_string(&TimelineContent {
+            clips,
+            text_tracks: Vec::new(),
+            music_tracks: Vec::new(),
+            voiceover_tracks: Vec::new(),
+            quality_report: None,
+        })
+        .expect("serialize timeline fixture")
+    }
+
+    #[test]
+    fn storyboard_sources_only_returns_ready_accessible_videos() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory = std::env::temp_dir().join(format!(
+            "assembly-storyboard-source-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let missing = directory.join("missing.bin").to_string_lossy().into_owned();
+        let ready_metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","visualQualityScore":0.82,"keyframeGridPath":null}"#;
+
+        for (id, kind, status, source) in [
+            ("ready-video", "video", "ready", available.as_str()),
+            ("queued-video", "video", "queued", available.as_str()),
+            ("ready-image", "image", "ready", available.as_str()),
+            ("ready-audio", "audio", "ready", available.as_str()),
+            ("missing-video", "video", "ready", missing.as_str()),
+            ("excluded-video", "video", "ready", available.as_str()),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES (?1, 'project-1', ?2, ?3, ?4, ?5)",
+                    params![id, kind, ready_metadata, source, status],
+                )
+                .expect("insert source fixture");
+        }
+        connection
+            .execute(
+                "INSERT INTO asset_user_metadata (asset_id, excluded) VALUES ('excluded-video', 1)",
+                [],
+            )
+            .expect("exclude source fixture");
+
+        let (sources, visual_ready_count) =
+            storyboard_sources(&connection, "project-1").expect("load storyboard sources");
+
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.asset_id.as_str())
+                .collect::<Vec<_>>(),
+            ["ready-video"]
+        );
+        // 诊断计数在文件可访问性过滤前计算，因此还包含 missing-video。
+        assert_eq!(visual_ready_count, 2);
+        assert_eq!(sources[0].visual_quality_score, Some(0.82));
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
+    }
+
+    #[test]
+    fn usage_counts_only_the_latest_timeline_once_per_editing_task() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE storyboard_versions (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    editing_task_id TEXT
+                );
+                CREATE TABLE timeline_versions (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    storyboard_version_id TEXT NOT NULL,
+                    version_number INTEGER NOT NULL,
+                    content_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );",
+            )
+            .expect("create usage fixture tables");
+        for (storyboard_id, task_id) in [
+            ("story-1", "task-1"),
+            ("story-2", "task-2"),
+            ("story-3", "task-3"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO storyboard_versions VALUES (?1, 'project-1', ?2)",
+                    params![storyboard_id, task_id],
+                )
+                .expect("insert storyboard fixture");
+        }
+        for (id, storyboard_id, version, created_at, assets) in [
+            ("old", "story-1", 1, 1, timeline_content(&["asset-a"])),
+            (
+                "latest",
+                "story-1",
+                2,
+                2,
+                timeline_content(&["asset-a", "asset-a", "asset-b"]),
+            ),
+            (
+                "other-task",
+                "story-2",
+                3,
+                3,
+                timeline_content(&["asset-a"]),
+            ),
+            ("invalid", "story-3", 1, 4, "not-json".to_owned()),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO timeline_versions VALUES (?1, 'project-1', ?2, ?3, ?4, ?5)",
+                    params![id, storyboard_id, version, assets, created_at],
+                )
+                .expect("insert timeline fixture");
+        }
+
+        let counts = storyboard_usage_counts(&connection, "project-1").expect("count usage");
+        assert_eq!(counts.get("asset-a"), Some(&2));
+        assert_eq!(counts.get("asset-b"), Some(&1));
     }
 
     #[test]
@@ -1086,7 +1316,27 @@ fn generate_storyboard_internal(
         let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
         wait_for_visual_batch(&app, priority_batch.as_deref())?;
     }
+    match crate::assets::analysis::backfill_project_visual_quality(&connection, &project_id) {
+        Ok(updated) if updated > 0 => {
+            log::info!("Backfilled visual quality for {updated} storyboard assets.");
+        }
+        Ok(_) => {}
+        Err(_) => {
+            log::warn!("Visual quality backfill unavailable; neutral quality remains active for affected assets.");
+        }
+    }
+
+    match semantic::backfill_project_embeddings(&app, &connection, &project_id) {
+        Ok(updated) if updated > 0 => {
+            log::info!("Backfilled local semantic embeddings for {updated} storyboard assets.");
+        }
+        Ok(_) => {}
+        Err(_) => {
+            log::warn!("Local semantic embedding backfill unavailable; lexical storyboard ranking remains active.");
+        }
+    }
     let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id)?;
+    let usage_counts = storyboard_usage_counts(&connection, &project_id)?;
     let video_count = sources.iter().filter(|s| s.kind == "video").count();
     let image_count = sources.iter().filter(|s| s.kind == "image").count();
     let audio_count = sources.iter().filter(|s| s.kind == "audio").count();
@@ -1145,7 +1395,14 @@ fn generate_storyboard_internal(
     );
 
     // Phase 2: 逐 beat 粗选镜
-    let rough = phases::phase2_rough_shot_selection(&access, brief, &narrative, &sources)?;
+    let rough = phases::phase2_rough_shot_selection(
+        &app,
+        &access,
+        brief,
+        &narrative,
+        &sources,
+        &usage_counts,
+    )?;
     log::info!(
         "Phase 2 complete: rough storyboard with {} shots, {} uncovered beats",
         rough.shots.len(),

@@ -7,6 +7,7 @@
 - Tauri 2 桌面应用，使用 SQLite 持久化本地项目、剪辑任务、会话、消息、素材、storyboard 和时间线版本。
 - 原生文件和文件夹导入；保存源媒体引用，不复制或修改原文件。
 - 基于 FFprobe、FFmpeg 和 Tesseract 的本地技术分析、缩略图、关键帧拼接网格、OCR 证据。关键帧提取使用固定时间采样（第 1 秒、1/3、2/3、最后 1 秒），覆盖整个视频，拼接为 2×2 网格图供多模态选镜使用。
+- 关键帧本地计算清晰度质量分；安装包内置 `bge-small-zh-v1.5`，以视觉证据文本做离线语义召回，每个 beat 向模型提供最多 12 个候选并由模型选择 1 个。向量不可用时回退词面排序。
 - 实验性 Provider 最小帧视觉分析、证据校验后的 storyboard 生成，以及受限的自然语言编辑工具选择。
 - 源时间绑定的内部时间线、540 x 960 本地 FFmpeg preview 和质量检查。明确旁白文案可通过 ElevenLabs 合成配音；密钥只进 Windows Credential Manager。
 - 实验性的 OpenCode 兼容 OAuth PKCE 登录；凭据仅存储于 Windows Credential Manager。
@@ -14,6 +15,7 @@
 - 非显式自然语言请求由模型在受控工具中逐步决策；模型可请求分析项目内已导入但未分析的素材，但不能直接执行文件、SQLite 或 FFmpeg 操作。storyboard 的镜头数和时长由模型提案，应用只保留本地处理安全上限。
 - 对话请求统一按 SQLite 时间顺序发送真实 user/assistant 会话消息进入 NativeToolLoop；只读请求使用观察工具，非只读请求按 RequestToolPolicy 暴露获授权的原生工具，Legacy JSON decision/Router 路径已移除。
 - NativeToolLoop 不声明固定单一目标：有原生工具调用就执行并继续，没有调用且有自然语言就结束；任务完成状态仍只来自真实工具收据和持久化产物。
+- 每轮 NativeToolLoop 在系统提示后注入不含路径、ID、证据正文或凭据值的本地权威状态快照；写工具成功后刷新，长上下文裁剪始终保护该块。
 - 工具结果进入下一次模型总结请求后，瞬时 Provider 传输失败会在原单步/总预算内重试；重试只重发模型请求，不会重复执行已经完成的本地工具。
 - 开发构建可用显式 `NATIVE_PROVIDER_FULL_TRACE=1` 把 NativeToolLoop 每次 HTTP 的完整请求 JSON 和原始响应写入 `src-tauri/target/native-provider-full-trace.jsonl`；不进前端，release 构建不可用。
 
@@ -34,7 +36,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 桌面环境依赖
 
-开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe、Tesseract（含英文 `eng` 语言数据）、Python 和 `pyJianYingDraft`。当前安装包不会捆绑 FFmpeg、Tesseract、Python 或 Jianying 适配器依赖；生产安装、发现与报错策略仍待实现。
+开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe、Tesseract（含英文 `eng` 语言数据）、Python 和 `pyJianYingDraft`。安装包已捆绑中文语义模型与 ONNX Runtime，不会在运行时下载；FFmpeg、Tesseract、Python 或 Jianying 适配器依赖仍未随包提供，生产安装、发现与报错策略仍待实现。
 
 `pyJianYingDraft` 适配器要求通过本地 `py` Python launcher 可调用。更新 Jianying 的首页草稿注册表时，Jianying Pro 必须保持关闭。
 
@@ -96,3 +98,4 @@ npm run harness:check
 维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭），防止跨会话数据泄漏；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
 维护记录（2026-08-20）：NativeToolLoop 为工具后的 Provider 总结请求增加安全失败分类与有界重试，每次 HTTP 只用剩余单步预算的一份，且不会重放本地工具；见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
 维护记录（2026-08-20）：debug 构建可用 `NATIVE_PROVIDER_FULL_TRACE=1` 开启进程内完整 Provider INPUT/OUTPUT 检查器；见 docs/changes/2026-08-20-native-provider-full-trace.md。
+维护记录（2026-08-25）：NativeToolLoop 每轮注入并在写后刷新本地权威状态快照；快照成功作为本轮观察收据，观察工具退为细节补充。见 docs/changes/2026-08-24-native-state-snapshot.md。

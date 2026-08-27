@@ -69,3 +69,4 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 <!-- 维护记录（2026-08-20）：完整 Native Provider 输入/输出只允许在 debug 构建且 NATIVE_PROVIDER_FULL_TRACE=1 时写入 src-tauri/target/native-provider-full-trace.jsonl；不写 SQLite/浏览器存储/普通产品日志，不进前端，不含 Authorization/API Key，release 构建强制关闭。 -->
 <!-- 维护记录（2026-08-20）：ElevenLabs 配音接入。密钥与 HTTP 属于 music_provider.rs；合成、指纹缓存、alignment 字幕属于 voice_provider.rs。配音是时钟，不得截断口播，不得朗读 onScreenText。 -->
 <!-- 维护记录（2026-08-20）：「生成视频/配音」授权 storyboard、时间线和 synthesize_voiceover；Chat 适配器把 assistant 文本与 function_call 合成一条消息；list_assets 有界；可空参数空串当 null。 -->
+<!-- 维护记录（2026-08-25）：NativeToolLoop 每轮在系统提示后注入最多 1200 字符的本地权威状态快照；写后刷新且裁剪保护，凭据所有者只提供配置布尔值，任何读取异常失败封闭。见 docs/changes/2026-08-24-native-state-snapshot.md。 -->

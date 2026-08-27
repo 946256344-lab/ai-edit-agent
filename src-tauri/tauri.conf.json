@@ -40,7 +40,14 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "scripts/create_jianying_draft.py"
+      "scripts/create_jianying_draft.py",
+      "resources/models/bge-small-zh-v1.5/config.json",
+      "resources/models/bge-small-zh-v1.5/special_tokens_map.json",
+      "resources/models/bge-small-zh-v1.5/tokenizer_config.json",
+      "resources/models/bge-small-zh-v1.5/tokenizer.json",
+      "resources/models/bge-small-zh-v1.5/onnx/model.onnx",
+      "resources/models/bge-small-zh-v1.5/LICENSE",
+      "resources/models/bge-small-zh-v1.5/NOTICE.md"
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
