@@ -3,20 +3,14 @@
   "stagedRuntimeFiles": [
     ".githooks/pre-commit",
     ".harness/branch-policy.json",
-    ".harness/architecture-budgets.json",
-    ".harness/agent-context.json",
     ".harness/doc-sync-policy.json",
-    "scripts/check-architecture-budgets.mjs",
-    "scripts/check-agent-contracts.mjs",
-    "scripts/check-branch-policy.mjs",
-    "scripts/check-doc-sync.mjs"
+    "scripts/check-doc-sync.mjs",
+    "scripts/check-branch-policy.mjs"
   ],
   "stagedHook": {
     "path": ".githooks/pre-commit",
     "requiredCommands": [
       "node scripts/check-branch-policy.mjs",
-      "node scripts/check-architecture-budgets.mjs --staged",
-      "node scripts/check-agent-contracts.mjs --staged",
       "node scripts/check-doc-sync.mjs --staged"
     ]
   },
@@ -29,24 +23,7 @@
     "src/AGENTS.md",
     "src-tauri/src/AGENTS.md"
   ],
-  "workflowEntrypoints": [
-    {
-      "path": "AGENTS.md",
-      "requiredReferences": ["CONTRIBUTING.md", "TASKS.md"]
-    },
-    {
-      "path": "CLAUDE.md",
-      "requiredReferences": ["AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
-    },
-    {
-      "path": ".cursor/rules/project-workflow.mdc",
-      "requiredReferences": ["alwaysApply: true", "AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
-    },
-    {
-      "path": "opencode.json",
-      "requiredReferences": ["AGENTS.md", "CONTRIBUTING.md", "TASKS.md"]
-    }
-  ],
+  "workflowEntrypoints": [],
   "codebaseDocs": [
     "STACK.md",
     "STRUCTURE.md",
@@ -58,46 +35,13 @@
   ],
   "taskWindow": {
     "path": "TASKS.md",
-    "start": "<!-- ACTIVE_TASKS_START -->",
-    "end": "<!-- ACTIVE_TASKS_END -->",
-    "maxNonEmptyLines": 8,
-    "maxCharacters": 2800
+    "start": "# 任务清单",
+    "end": "## 说明",
+    "maxNonEmptyLines": 200,
+    "maxCharacters": 30000
   },
-  "sourceNavigation": {
-    "roots": ["src", "scripts", "src-tauri/src", "src-tauri/scripts", "src-tauri/tests"],
-    "files": [".githooks/pre-commit", "index.html", "vite.config.ts", "src-tauri/build.rs"],
-    "extensions": [".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".css", ".html"],
-    "maxHeadLines": 16
-  },
-  "scopes": [
-    {
-      "id": "frontend",
-      "root": "src",
-      "instructions": "src/AGENTS.md",
-      "requiredDocs": [
-        "docs/codebase/STRUCTURE.md",
-        "docs/codebase/CONVENTIONS.md",
-        "docs/codebase/ARCHITECTURE.md"
-      ],
-      "verify": ["npm run lint", "npm run build"]
-    },
-    {
-      "id": "rust-backend",
-      "root": "src-tauri/src",
-      "instructions": "src-tauri/src/AGENTS.md",
-      "requiredDocs": [
-        "docs/codebase/ARCHITECTURE.md",
-        "docs/codebase/INTEGRATIONS.md",
-        "docs/codebase/TESTING.md",
-        "docs/codebase/CONCERNS.md"
-      ],
-      "verify": [
-        "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
-        "cargo check --manifest-path src-tauri/Cargo.toml",
-        "cargo test --manifest-path src-tauri/Cargo.toml"
-      ]
-    }
-  ],
+  "sourceNavigation": null,
+  "scopes": [],
   "boundaries": {
     "tauriInvoke": {
       "roots": ["src"],

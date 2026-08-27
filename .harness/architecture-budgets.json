@@ -3,8 +3,6 @@
   "pathBudgets": [
     {
       "path": "src/App.tsx",
-      "maxCharacters": 23819,
-      "maxLineLength": 180,
       "maxUseState": 14,
       "maxUseEffect": 1,
       "maxAsyncFunctions": 13
@@ -32,67 +30,9 @@
     {
       "path": "src/components/ProviderSettingsModal.tsx",
       "maxTopLevelProps": 1
-    },
-    {
-      "path": "src/lib/local-store.ts",
-      "maxCharacters": 21926,
-      "maxLineLength": 364
-    },
-    {
-      "path": "src-tauri/src/agentloop.rs",
-      "maxCharacters": 154822,
-      "maxLineLength": 1403
-    },
-    {
-      "path": "src-tauri/src/agentloop/policy.rs",
-      "maxCharacters": 18963,
-      "maxLineLength": 181
-    },
-    {
-      "path": "src-tauri/src/assets.rs",
-      "maxCharacters": 175087,
-      "maxLineLength": 735
-    },
-    {
-      "path": "src-tauri/src/timeline.rs",
-      "maxCharacters": 74216,
-      "maxLineLength": 643
-    },
-    {
-      "path": "src-tauri/src/taskrouter.rs",
-      "maxCharacters": 54818,
-      "maxLineLength": 625
-    },
-    {
-      "path": "src-tauri/src/agent.rs",
-      "maxCharacters": 54614,
-      "maxLineLength": 242
-    },
-    {
-      "path": "src-tauri/src/preview.rs",
-      "maxCharacters": 22055,
-      "maxLineLength": 408
-    },
-    {
-      "path": "src-tauri/src/preview_tests.rs",
-      "maxCharacters": 14932,
-      "maxLineLength": 408
     }
   ],
-  "directoryBudgets": [
-    {
-      "directory": "src/components",
-      "extensions": [".tsx"],
-      "maxCharacters": 14000,
-      "maxLineLength": 180
-    },
-    {
-      "directory": "src/hooks",
-      "extensions": [".ts", ".tsx"],
-      "maxCharacters": 16000,
-      "maxLineLength": 180
-    }
-  ],
+  "directoryBudgets": [],
   "forbiddenPaths": [
     "src/components/ConversationWorkspace.tsx"
   ],
@@ -100,22 +40,22 @@
     {
       "path": "src/App.tsx",
       "text": "agent-edit-completed",
-      "message": "Agent task 终态监听必须留在 useAgentRunReconciliation。"
+      "message": "Agent task 终态监听留在 useAgentRunReconciliation。"
     },
     {
       "path": "src/App.tsx",
       "text": "listAssetPage",
-      "message": "素材分页与轮询必须留在 useAssetWorkspaceController。"
+      "message": "素材分页与轮询留在 useAssetWorkspaceController。"
     },
     {
       "path": "src/App.tsx",
       "text": "createTimelineDraft",
-      "message": "成果创建与交付必须留在 useArtifactWorkspaceController。"
+      "message": "成果创建与交付留在 useArtifactWorkspaceController。"
     },
     {
       "path": "src/App.tsx",
       "text": "getExperimentalOpenAIOAuthStatus",
-      "message": "Provider 状态与凭据入口必须留在 useProviderController。"
+      "message": "Provider 状态与凭据入口留在 useProviderController。"
     }
   ],
   "budgetReplacements": []

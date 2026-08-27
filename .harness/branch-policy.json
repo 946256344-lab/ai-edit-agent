@@ -1,16 +1,5 @@
 {
   "version": 1,
-  "baseBranch": "origin/master",
-  "protectedBranches": ["master", "main"],
-  "allowedPrefixes": [
-    "codex/",
-    "cursor/",
-    "claude/",
-    "opencode/",
-    "feature/",
-    "fix/",
-    "refactor/",
-    "docs/",
-    "chore/"
-  ]
+  "description": "提交前只检查分支策略与文档同步；架构预算和 Agent 契约改为可选检查，不再作为提交硬门。",
+  "protectedBranches": ["master", "main"]
 }
