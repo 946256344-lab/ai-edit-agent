@@ -186,6 +186,12 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         visual_evidence: Vec::new(),
         visual_analysis_note: None,
         visual_analysis_status: "queued".to_owned(),
+        visual_quality_score: None,
+        evidence_embedding: None,
+        embedding_model: None,
+        embedding_dimensions: None,
+        embedding_source_hash: None,
+        embedding_version: None,
         keyframe_grid_path: None,
     })
 }
@@ -328,6 +334,111 @@ fn generate_video_keyframes(
         })
         .collect();
     Ok((keyframes, scenes))
+}
+
+fn laplacian_variance(image: &image::GrayImage) -> Option<f64> {
+    let (width, height) = image.dimensions();
+    if width < 3 || height < 3 {
+        return None;
+    }
+    let mut sum = 0.0;
+    let mut sum_squared = 0.0;
+    let mut count = 0.0;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let center = image.get_pixel(x, y)[0] as f64;
+            let response = center * 4.0
+                - image.get_pixel(x - 1, y)[0] as f64
+                - image.get_pixel(x + 1, y)[0] as f64
+                - image.get_pixel(x, y - 1)[0] as f64
+                - image.get_pixel(x, y + 1)[0] as f64;
+            sum += response;
+            sum_squared += response * response;
+            count += 1.0;
+        }
+    }
+    let mean = sum / count;
+    Some((sum_squared / count - mean * mean).max(0.0))
+}
+
+fn normalize_laplacian_variance(variance: f64) -> f64 {
+    // 关键帧统一缩放到 320px 宽；饱和曲线避免少量高纹理/噪声帧支配评分。
+    (variance / (variance + 500.0)).clamp(0.0, 1.0)
+}
+
+fn keyframe_visual_quality_score(keyframes: &[KeyframeMetadata]) -> Option<f64> {
+    let mut scores = keyframes
+        .iter()
+        .filter_map(|frame| image::open(&frame.image_path).ok())
+        .filter_map(|frame| laplacian_variance(&frame.to_luma8()))
+        .map(normalize_laplacian_variance)
+        .collect::<Vec<_>>();
+    if scores.is_empty() {
+        return None;
+    }
+    scores.sort_by(f64::total_cmp);
+    let middle = scores.len() / 2;
+    Some(if scores.len() % 2 == 0 {
+        (scores[middle - 1] + scores[middle]) / 2.0
+    } else {
+        scores[middle]
+    })
+}
+
+/// 为已有技术就绪视频补齐质量分。条件更新避免覆盖并发分析写入的新元数据。
+pub(crate) fn backfill_project_visual_quality(
+    connection: &rusqlite::Connection,
+    project_id: &str,
+) -> Result<usize, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, metadata_json FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND json_extract(metadata_json, '$.visualQualityScore') IS NULL",
+        )
+        .map_err(|_| "visual_quality_backfill_query_failed".to_owned())?;
+    let rows = statement
+        .query_map(params![project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|_| "visual_quality_backfill_query_failed".to_owned())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "visual_quality_backfill_query_failed".to_owned())?;
+    drop(statement);
+
+    let mut pending = Vec::new();
+    for (asset_id, original_json) in rows {
+        let mut metadata: TechnicalMetadata =
+            serde_json::from_str(&original_json).unwrap_or_default();
+        let Some(score) = keyframe_visual_quality_score(&metadata.keyframes) else {
+            continue;
+        };
+        metadata.visual_quality_score = Some(score);
+        for segment in &mut metadata.scene_segments {
+            segment.visual_quality_score = Some(score);
+        }
+        pending.push((asset_id, original_json, metadata));
+    }
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
+    let mut updated = 0;
+    for (asset_id, original_json, metadata) in pending {
+        let next_json = serde_json::to_string(&metadata)
+            .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
+        updated += transaction
+            .execute(
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND project_id = ?4 AND metadata_json = ?5",
+                params![next_json, now_millis(), asset_id, project_id, original_json],
+            )
+            .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
+    }
+    transaction
+        .commit()
+        .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
+    Ok(updated)
 }
 
 fn tesseract_program() -> PathBuf {
@@ -498,6 +609,10 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
         if kind == "video" {
             (metadata.keyframes, metadata.scene_segments) =
                 generate_video_keyframes(&app, &asset_id, &source, metadata.duration_ms)?;
+            metadata.visual_quality_score = keyframe_visual_quality_score(&metadata.keyframes);
+            for segment in &mut metadata.scene_segments {
+                segment.visual_quality_score = metadata.visual_quality_score;
+            }
 
             // 生成关键帧网格图
             if !metadata.keyframes.is_empty() {
@@ -1076,5 +1191,19 @@ mod tests {
         // 验证固定采样策略：不再依赖场景检测，改为固定时间点采样
         // 该测试验证关键帧提取不使用 scene detection filter
         assert_eq!(KEYFRAME_COUNT, 4);
+    }
+
+    #[test]
+    fn sharp_keyframe_scores_higher_than_flat_keyframe() {
+        let flat = image::GrayImage::from_pixel(8, 8, image::Luma([128]));
+        let sharp = image::GrayImage::from_fn(8, 8, |x, y| {
+            image::Luma([if (x + y) % 2 == 0 { 0 } else { 255 }])
+        });
+
+        let flat_score = normalize_laplacian_variance(laplacian_variance(&flat).unwrap());
+        let sharp_score = normalize_laplacian_variance(laplacian_variance(&sharp).unwrap());
+
+        assert_eq!(flat_score, 0.0);
+        assert!(sharp_score > 0.9);
     }
 }

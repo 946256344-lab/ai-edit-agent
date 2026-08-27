@@ -122,11 +122,10 @@ fn update_visual_metadata(
     note: Option<&str>,
 ) -> Result<(), String> {
     let connection = open_connection(app)?;
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
+    let mut updates = Vec::new();
+    let mut embedding_unavailable = false;
     for asset_id in asset_ids {
-        let metadata_json: String = transaction
+        let metadata_json: String = connection
             .query_row(
                 "SELECT metadata_json FROM assets WHERE id = ?1",
                 params![asset_id],
@@ -147,16 +146,33 @@ fn update_visual_metadata(
         } else if status == "failed" || status == "skipped" {
             metadata.visual_evidence.clear();
         }
-        transaction
+        if crate::storyboard::semantic::refresh_metadata_embedding(app, &mut metadata).is_err() {
+            embedding_unavailable = true;
+        }
+        updates.push((
+            asset_id.clone(),
+            metadata_json,
+            serde_json::to_string(&metadata).map_err(|error| error.to_string())?,
+        ));
+    }
+    if embedding_unavailable {
+        log::warn!(
+            "Local semantic embedding unavailable; lexical storyboard ranking remains active."
+        );
+    }
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for (asset_id, original_metadata_json, metadata_json) in updates {
+        let updated = transaction
             .execute(
-                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3",
-                params![
-                    serde_json::to_string(&metadata).map_err(|error| error.to_string())?,
-                    now_millis(),
-                    asset_id
-                ],
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND metadata_json = ?4",
+                params![metadata_json, now_millis(), asset_id, original_metadata_json],
             )
             .map_err(|error| error.to_string())?;
+        if updated == 0 {
+            return Err("Visual metadata changed while analysis was completing.".to_owned());
+        }
     }
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -649,14 +665,40 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
             },
         );
     }
-    let _ = update_visual_metadata(&app, &ready_ids, "ready", &visual, None);
-    let _ = update_visual_metadata(
+    if update_visual_metadata(&app, &ready_ids, "ready", &visual, None).is_err() {
+        let _ = update_visual_batch_task(
+            &app,
+            &task_id,
+            "failed",
+            requested_count,
+            0,
+            0,
+            requested_count,
+            Some("visual_metadata_conflict"),
+        );
+        return;
+    }
+    if update_visual_metadata(
         &app,
         &failed_ids,
         "failed",
         &HashMap::new(),
         Some("visual_response_incomplete"),
-    );
+    )
+    .is_err()
+    {
+        let _ = update_visual_batch_task(
+            &app,
+            &task_id,
+            "failed",
+            requested_count,
+            ready_ids.len(),
+            0,
+            failed_ids.len(),
+            Some("visual_metadata_conflict"),
+        );
+        return;
+    }
     let _ = update_visual_batch_task(
         &app,
         &task_id,

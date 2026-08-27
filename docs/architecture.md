@@ -24,7 +24,7 @@
 | Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
-| 视觉质量评分 / 语义重复检测 | ⚠️ 部分实现 | 仅单帧低分辨率候选 |
+| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 安装包内置中文向量模型；不可用时词面降级 |
 | 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
 | Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
 | Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
@@ -148,7 +148,7 @@ Windows 桌面应用（Tauri + React）
   -> 可选地创建新的 Jianying Pro 8.0 仅视频草稿
 ```
 
-视觉建议是 AI 建议，不是经验证的媒体事实。语义相似度、质量评分和多帧重复检测仍为 `TODO`。
+视觉建议是 AI 建议，不是经验证的媒体事实。文本语义召回和关键帧清晰度评分已经实现；跨镜头的多帧视觉重复检测仍为 `TODO`。
 
 storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只用于模型明确认为已有证据直接支撑的信息点；`contextual` 只用于诚实的场景承载并在选片理由中说明限制。模型同时提出 `targetDurationMs` 与 `scriptMode`（完整文案或关键表达）；镜头数、信息点数和时长不再是固定创作规格，只保留 30 镜头/信息点、120 秒的本地处理安全上限。生成校验拒绝 `insufficient`、未知/重复信息点、未覆盖且未声明缺失的信息点、跨镜头重叠复用的同一视频源范围，以及完整英文文案被压缩到低于最低阅读时长的 storyboard。`uncoveredBeatIds` 是创作缺口，不进入内部时间线；界面会提示该缺口，用户可据此补充素材或接受现有上下文剪辑。
 
@@ -267,7 +267,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 ## 配音（ElevenLabs，2026-08-20）
 
-有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从技术 `ready` 的可访问视频池中取出最多 5 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空；图片、音频和其他类型不用于补足候选数量。可空字符串参数把空串当成 null。
+有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从技术 `ready` 的可访问视频池中取出最多 12 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空；图片、音频和其他类型不用于补足候选数量。可空字符串参数把空串当成 null。
 
 ## 本地音乐轨（2026-08-12）
 
@@ -279,9 +279,11 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 三阶段生成流程**（2026-08-18）：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把素材池硬过滤为技术分析 `ready`、`kind = video`、未排除且源文件可访问，再针对每个 beat 独立预排序并提供最多 5 个候选。预排序的语义分当前是 `requiredVisual + purpose` 与视觉标签/OCR 的词面重合（英文词元、中文相邻双字），同时叠加质量、时长、连续复用和仍为固定值的新鲜度分；它不是 embedding 语义检索。模型随后读取候选卡、场景段和可用关键帧网格，返回 1 个视频、源时间范围、理由及 `matchLevel`，或诚实留空。Phase 3 由模型调整精确时间范围、节奏和镜头组合，Rust 再验证素材、范围和多样性；验证失败最多反馈重试 3 次，Phase 1/2 结果保持稳定。实现位于 `src-tauri/src/storyboard/phases.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 三阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把素材池硬过滤为技术分析 `ready`、`kind = video`、未排除且源文件可访问，再针对每个 beat 独立预排序并提供最多 12 个候选。预排序优先使用安装包内置 `bge-small-zh-v1.5` 比较 beat 与 subjects/actions/products/scene/OCR 拼接文本的余弦相似度，失败或旧素材无有效向量时回退英文词元/中文相邻双字；同时叠加关键帧清晰度、时长、连续复用和按剪辑任务去重的历史使用次数。模型随后读取候选卡、场景段和可用关键帧网格，返回 1 个视频、源时间范围、理由及 `matchLevel`，或诚实留空。Phase 3 由模型调整精确时间范围、节奏和镜头组合，Rust 再验证素材、范围和多样性；验证失败最多反馈重试 3 次，Phase 1/2 结果保持稳定。实现位于 `src-tauri/src/storyboard/phases.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
-storyboard 生成会记录详细日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他分类计数）、素材样本（前 10 个的 ID/类型/时长）、Phase 1 完成（beats 数量、target_duration）、Phase 2 每个 beat 的专属 TOP-5 清单（asset_id + kind）、Phase 2 完成（shots 数量、uncovered beats）、Phase 3 每次尝试进度、多模态内容构建、模型请求/响应、候选接收情况（shots/beats/时长/未覆盖 beats）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结，所有日志使用 Rust `log` crate 的 info/warn/error 级别。素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断数据库分类与文件系统不一致等异常情况。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
+storyboard 生成会记录详细日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他分类计数）、素材样本（前 10 个的 ID/类型/时长）、Phase 1 完成（beats 数量、target_duration）、Phase 2 每个 beat 的专属 TOP-12 清单（asset_id + kind）、Phase 2 完成（shots 数量、uncovered beats）、Phase 3 每次尝试进度、多模态内容构建、模型请求/响应、候选接收情况（shots/beats/时长/未覆盖 beats）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结，所有日志使用 Rust `log` crate 的 info/warn/error 级别。素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断数据库分类与文件系统不一致等异常情况。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
+
+关键帧统一缩放到 320px 宽后计算拉普拉斯方差，取归一化中位数作为素材质量分；旧素材在首次 storyboard 前从既有关键帧补齐。视觉 evidence 写入后生成 512 维文本向量；向量与模型名、维度、版本、证据文本 SHA-256 一起保存在素材 `metadata_json`。旧素材按项目批量补齐，条件更新避免覆盖并发视觉分析；向量只供 Rust 排序，不进入 Provider payload。历史使用次数来自每个剪辑任务最新时间线，同一任务重复镜头只计一次。
 
 ## 技术约束
 
@@ -291,7 +293,7 @@ storyboard 生成会记录详细日志：入口参数（project_id、editing_tas
 
 已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
 
-- FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 是当前开发机依赖，尚未随生产安装包分发。
+- `bge-small-zh-v1.5` ONNX 模型和本地推理运行时已随生产安装包分发，运行时不联网下载。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
 - Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 

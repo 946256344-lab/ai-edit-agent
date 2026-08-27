@@ -15,7 +15,7 @@ pub(crate) struct ScoredCandidate {
 /// 为所有候选片段打分并排序（降序）。
 ///
 /// 评分维度：
-/// - 语义相关性（0-50分）：`requiredVisual`/`purpose` 与画面证据、OCR 的词面重合
+/// - 语义相关性（0-30分）：优先使用本地向量相似度，无向量时使用词面重合
 /// - 画面质量（0-25分）：来自 visual_quality_score
 /// - 时长匹配度（0-15分）：候选时长与目标时长的适配度
 /// - 多样性惩罚（-10分）：连续使用同一素材降权
@@ -25,13 +25,20 @@ pub(crate) fn rank_segment_candidates(
     beat: &StoryboardBeat,
     target_duration_ms: i64,
     prior_selections: &[String], // 已选镜头的 asset_id 列表
-    _usage_counts: &std::collections::HashMap<String, i32>, // 素材在项目其他 timeline 的使用次数（TODO：从 DB 读取）
+    usage_counts: &std::collections::HashMap<String, i32>, // 素材在项目其他 timeline 的去重使用次数
+    beat_embedding: Option<&[f32]>,
 ) -> Vec<ScoredCandidate> {
     let mut scored: Vec<_> = candidates
         .into_iter()
         .map(|candidate| {
-            let score =
-                calculate_candidate_score(&candidate, beat, target_duration_ms, prior_selections);
+            let score = calculate_candidate_score(
+                &candidate,
+                beat,
+                target_duration_ms,
+                prior_selections,
+                usage_counts,
+                beat_embedding,
+            );
             ScoredCandidate {
                 source: candidate,
                 score,
@@ -52,11 +59,13 @@ fn calculate_candidate_score(
     beat: &StoryboardBeat,
     target_duration_ms: i64,
     prior_selections: &[String],
+    usage_counts: &std::collections::HashMap<String, i32>,
+    beat_embedding: Option<&[f32]>,
 ) -> f64 {
     let mut score = 0.0;
 
-    // 1. 语义相关性（0-50分）：按当前 beat 的画面要求匹配，而不是全局证据条数
-    score += semantic_match_score(candidate, beat);
+    // 1. 语义相关性（0-30分）：本地向量优先，缺失或不兼容时保留词面降级。
+    score += semantic_match_score(candidate, beat, beat_embedding);
 
     // 2. 画面质量（0-25分）
     let quality = candidate.visual_quality_score.unwrap_or(0.5);
@@ -86,26 +95,38 @@ fn calculate_candidate_score(
         }
     }
 
-    // 5. 新鲜度（0-10分）
-    // TODO: 从 usage_counts 读取该素材在项目其他 timeline 的使用次数
-    // 当前暂不实现，预留接口
-    score += 10.0; // 默认给满分
+    // 5. 新鲜度（0-10分）：每个剪辑任务只计一次，使用越多分数越低。
+    let usage_count = usage_counts.get(&candidate.asset_id).copied().unwrap_or(0);
+    score += 10.0 / (1.0 + usage_count.max(0) as f64);
 
     score
 }
 
-fn semantic_match_score(candidate: &StoryboardSource, beat: &StoryboardBeat) -> f64 {
+fn semantic_match_score(
+    candidate: &StoryboardSource,
+    beat: &StoryboardBeat,
+    beat_embedding: Option<&[f32]>,
+) -> f64 {
+    if let (Some(query), Some(candidate_embedding)) =
+        (beat_embedding, candidate.evidence_embedding.as_deref())
+    {
+        if let Some(similarity) =
+            crate::storyboard::semantic::cosine_similarity(query, candidate_embedding)
+        {
+            return similarity.max(0.0) * 30.0;
+        }
+    }
     let query = query_terms(&format!("{} {}", beat.required_visual, beat.purpose));
     if query.is_empty() {
         return ((candidate.visual_evidence.len() + candidate.ocr_evidence.len()) as f64).min(10.0)
-            * 2.0;
+            * 1.2;
     }
     let blob = evidence_blob(candidate);
     let hits = query
         .iter()
         .filter(|term| blob.contains(term.as_str()))
         .count();
-    (hits as f64 / query.len() as f64) * 50.0
+    (hits as f64 / query.len() as f64) * 30.0
 }
 
 fn evidence_blob(candidate: &StoryboardSource) -> String {
@@ -184,6 +205,7 @@ mod tests {
             ocr_evidence: vec![],
             visual_evidence: vec![],
             visual_quality_score: Some(quality),
+            evidence_embedding: None,
             keyframe_grid_path: None,
         }
     }
@@ -202,8 +224,9 @@ mod tests {
         let high = make_source("high", "video", Some(10_000), 0.9);
         let low = make_source("low", "video", Some(10_000), 0.3);
 
-        let high_score = calculate_candidate_score(&high, &test_beat(), 10_000, &[]);
-        let low_score = calculate_candidate_score(&low, &test_beat(), 10_000, &[]);
+        let usage = std::collections::HashMap::new();
+        let high_score = calculate_candidate_score(&high, &test_beat(), 10_000, &[], &usage, None);
+        let low_score = calculate_candidate_score(&low, &test_beat(), 10_000, &[], &usage, None);
 
         assert!(high_score > low_score, "高质量素材应得分更高");
     }
@@ -213,8 +236,11 @@ mod tests {
         let perfect = make_source("perfect", "video", Some(5_000), 0.5);
         let too_long = make_source("long", "video", Some(50_000), 0.5);
 
-        let perfect_score = calculate_candidate_score(&perfect, &test_beat(), 5_000, &[]);
-        let long_score = calculate_candidate_score(&too_long, &test_beat(), 5_000, &[]);
+        let usage = std::collections::HashMap::new();
+        let perfect_score =
+            calculate_candidate_score(&perfect, &test_beat(), 5_000, &[], &usage, None);
+        let long_score =
+            calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None);
 
         assert!(perfect_score > long_score, "时长完美匹配应得分更高");
     }
@@ -224,8 +250,10 @@ mod tests {
         let candidate = make_source("asset-1", "video", Some(10_000), 0.8);
         let prior = vec!["asset-1".to_owned()];
 
-        let penalized = calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior);
-        let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[]);
+        let usage = std::collections::HashMap::new();
+        let penalized =
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None);
+        let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
 
         assert!(penalized < normal, "连续使用同一素材应被降权");
         assert!((normal - penalized - 10.0).abs() < 0.1, "降权应为 -10 分");
@@ -263,6 +291,7 @@ mod tests {
             10_000,
             &[],
             &std::collections::HashMap::new(),
+            None,
         );
         assert_eq!(ranked[0].source.asset_id, "factory");
     }
@@ -288,10 +317,36 @@ mod tests {
             10_000,
             &[],
             &std::collections::HashMap::new(),
+            None,
         );
 
         assert_eq!(ranked[0].source.asset_id, "high");
         assert_eq!(ranked[1].source.asset_id, "mid");
         assert_eq!(ranked[2].source.asset_id, "low");
+    }
+
+    #[test]
+    fn previously_used_asset_loses_freshness_points() {
+        let fresh = make_source("fresh", "video", Some(10_000), 0.5);
+        let used = make_source("used", "video", Some(10_000), 0.5);
+        let usage = std::collections::HashMap::from([("used".to_owned(), 3)]);
+
+        let ranked =
+            rank_segment_candidates(vec![used, fresh], &test_beat(), 10_000, &[], &usage, None);
+
+        assert_eq!(ranked[0].source.asset_id, "fresh");
+    }
+
+    #[test]
+    fn internal_embeddings_are_not_serialized_for_the_provider() {
+        let mut source = make_source("embedded", "video", Some(10_000), 0.5);
+        source.evidence_embedding = Some(vec![0.1, 0.2, 0.3]);
+        source.keyframe_grid_path = Some("C:\\private\\grid.jpg".to_owned());
+
+        let serialized = serde_json::to_value(source).expect("storyboard source should serialize");
+
+        assert!(serialized.get("evidenceEmbedding").is_none());
+        assert!(serialized.get("evidence_embedding").is_none());
+        assert!(serialized.get("keyframeGridPath").is_none());
     }
 }

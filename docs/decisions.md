@@ -582,3 +582,10 @@
 - 决策：在每次 NativeToolLoop 的静态系统提示之后、会话历史之前注入由 Rust 从当前 project/editing task 作用域重建的状态快照。快照固定字段顺序、最多 1200 字符，只投影任务 brief/最近终态、素材与分析/健康计数、storyboard/timeline 版本和数量、磁盘 preview、Jianying 状态及外部能力配置布尔值；身份只用版本号，禁止路径、文件名、UUID、素材备注、OCR/视觉证据、会话原文、Base URL、模型名和凭据值。非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，下一次 Provider 请求前重读并原位替换唯一快照；16k 裁剪保护该块。初始构建、写后刷新或凭据状态读取失败均失败封闭。
 - 原因：纯拉式项目观察依赖关键词门和模型主动选工具；漏检时会凭旧历史回答，命中时又需丢弃第一次自然语言并 nudge。高层状态由 Rust 主动提供后，模型可直接回答计数、版本和存在性，观察工具保留为详细镜头、候选和证据的按需读取。
 - 后果：成功快照在 RunReceipt 中作为来源 `state_snapshot` 的本轮成功观察，`request_requires_project_observation` 与 nudge 逻辑保留但生产路径不再为已有快照的直接事实回答重问。模型文本仍不能创建产物或满足具名写工具完成门，`get_edit_status` 工具及其决策级硬门不变。不新增工具、Tauri 命令、依赖、缓存或 SQLite schema。
+
+## ADR-080：Storyboard 使用内置中文向量模型做本地语义召回
+
+- 状态：已采用（2026-08-27）
+- 决策：Phase 2 每个 beat 的候选由 5 个扩大为 12 个，模型仍查看关键帧后只选择 1 个。Rust 使用随安装包分发的 `bge-small-zh-v1.5` ONNX 模型，将 `requiredVisual + purpose` 与素材 subjects/actions/products/scene/OCR 文本编码为 512 维向量并按余弦相似度评分；不启用 Hugging Face 运行时下载。语义分权重由 50 降为 30，模型或向量不可用时回退既有词面匹配。向量带模型名、维度、版本和证据文本 SHA-256，旧素材在首次 storyboard 前批量回填。
+- 原因：中文相邻双字只能识别词面重合，“汽车”与“车辆”等同义表达会在 Top-5 截断前被淘汰。让远端模型读取整个素材库会增加调用次数、图片输入、延迟和费用；本地文本向量可在 Rust 侧扩大召回，同时把远端模型限制在 12 个关键帧网格内。
+- 后果：`fastembed` 固定为 4.9.1，ONNX 文件、tokenizer、许可说明和运行时进入 MSI/NSIS，运行时不访问模型仓库。仓库声明的 Rust 1.77.2 与当前锁文件已有依赖的实际最低版本不一致，本决策不声称恢复该旧版本兼容性。`metadata_json` 新增向后兼容的质量与向量字段，不改变 SQLite schema 或 Tauri 命令。关键帧质量分采用归一化拉普拉斯方差中位数；新鲜度只统计每个剪辑任务最新时间线并在任务内按素材去重。模型资源或推理失败不会阻止 storyboard，而是保留词面排序和中性质量降级。

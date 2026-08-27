@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-08-27，codex/semantic-storyboard-retrieval）：Storyboard Phase 2 每 beat 以本地中文向量/词面降级召回 Top-12，模型选 1 个且 Phase 3 不得换出；接入真实关键帧质量、去重使用次数、旧素材安全回填和安装包内置模型。240 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 lint/build/agent/harness/release 全绿，三轮独立审查无剩余 P0-P2。见 `docs/changes/2026-08-27-storyboard-semantic-retrieval.md`。
 - [x] 完成（2026-08-26，codex/video-only-storyboard-candidates）：Storyboard 每个 beat 的候选入口只接收 `analysis_status = 'ready'` 且 `kind = 'video'` 的未排除、可访问素材，图片、音频和其他类型不再补足 Top 5；回归覆盖六类资格边界，并记录 Rust 词面预排序与模型视觉复选的真实边界。233 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 agent/branch/harness 全绿，独立审查无 P0-P2 问题。见 `docs/changes/2026-08-26-video-only-storyboard-candidates.md`。
 - [x] 完成（2026-08-26，codex/relax-native-tool-policy）：NativeToolLoop 默认向模型开放可逆本地编辑工具，不再依赖“生成/制作”等正向关键词；Rust 仅收缩明确只读/禁止项，并继续负责敏感能力授权、参数与作用域校验、事务副作用和真实完成裁决。补充“剪辑一个视频”、中英文只读/否定语义及重复无效调用回归；232 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 lint/build/agent/harness 全绿，独立审查无剩余阻断。见 `docs/changes/2026-08-26-relax-native-tool-policy.md`。
 - [x] 完成（2026-08-26，codex/fix-agent-continuation-review）：NativeToolLoop 新增有界失败恢复与质量精炼续步；Bugbot 的字幕主题词误授权、旧 preview 收据及续步事实误清除问题已修复，且与权威状态快照完成集成。235 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 lint/build/agent/harness 全绿。见 `docs/changes/2026-08-26-native-recovery-refinement-continuations.md`。
@@ -10,9 +11,9 @@
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：「生成视频/配音」步骤耗尽修复。授权 storyboard+时间线+配音；有界 list_assets；空串当 null；Chat 工具消息合并；配音失败码。198 个库测试通过。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，feature/elevenlabs-voiceover）：ElevenLabs 文案转配音。配音是时钟、字幕跟 alignment、失败封闭、密钥进 Credential Manager。191 个 Rust 库测试、lint/build、agent/harness 通过；真机合成未跑。见 `docs/changes/2026-08-20-elevenlabs-voiceover.md`。
 - [x] 完成（2026-08-20，codex/cleanup-legacy-runtime）：工具成功后瞬时失败有界重试且不重放工具；单步超时按剩余次数拆分。桌面问素材数量已返回自然语言计数。见 `docs/changes/2026-08-20-native-provider-followup-recovery.md`。
-- [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
 <!-- ACTIVE_TASKS_END -->
 
+- [x] 完成（2026-08-20，chore/native-provider-inspector）：debug + `NATIVE_PROVIDER_FULL_TRACE=1` 把 Native 每次 HTTP 的 INPUT/OUTPUT 写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进前端、不写 SQLite。见 `docs/changes/2026-08-20-native-provider-full-trace.md`。
 - [x] 完成（2026-08-20，fix/isolate-resolver-from-sibling-tasks）：Task Resolver 只看见当前激活任务；兄弟任务 title/brief/active_subgoal 不再进入路由模型。见 `docs/changes/2026-08-20-isolate-resolver-from-sibling-tasks.md`。
 - [x] 完成（2026-08-20）：会话隔离 JOIN `editing_task_id` 失败封闭；Provider 诊断保留原始错误。负向测试收尾见独立分支。变更记录见 `docs/changes/2026-08-20-fix-session-isolation-message-history.md`。
 - [x] 完成（2026-08-19，remove-fixed-loop-goal）：移除固定 LoopGoal；原生 function_call 继续、自然语言结束，RunReceipt 裁决终态。见 `docs/changes/2026-08-19-remove-fixed-loop-goal.md`。

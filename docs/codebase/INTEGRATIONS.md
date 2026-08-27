@@ -14,6 +14,7 @@
 | Tesseract | 本机进程 | OCR | 无 | 中 | `assets.rs` |
 | Python + pyJianYingDraft | 本机适配器 | Jianying draft 文件生成 | 无 | 高、实验性 | `jianying.rs`、`create_jianying_draft.py` |
 | Jianying Pro | 本地应用/文件格式 | 草稿注册和后续人工编辑 | 本机用户 | 高、单向 | `jianying.rs` |
+| BGE-small-zh + ONNX Runtime | 安装包内本地模型 | storyboard 中文语义召回 | 无、离线 | 中 | `storyboard/semantic.rs`、`tauri.conf.json` |
 | Google Fonts | WebView 静态资源 | UI 字体 | 无 | 低 | `src/index.css`、`tauri.conf.json` |
 
 ## 2）数据存储
@@ -34,6 +35,7 @@ SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 fo
 - Native 状态快照只从凭据所有者读取模型、ElevenLabs 与 Jamendo 的配置布尔值，不读取或返回凭据内容、Base URL 或模型名；凭据读取异常使快照和本轮请求失败封闭。
 - 自定义 API 配置整体保存到 Credential Manager；读取错误不会静默回退 OAuth。
 - 模型只接收精简 prompt、证据文本和低分辨率派生帧，不接收原始媒体或本机路径。
+- storyboard 粗排的 BGE 模型完全在本机运行；素材证据向量只保存在素材 `metadata_json`，不发送给 Provider。
 - Jamendo 工具只接受 API 明示允许下载且为 CC0/CC-BY 的曲目，并保留 CC-BY attribution。
 - 自定义 Base URL 当前只校验非空，没有 scheme/TLS 约束；是否允许局域网 HTTP Provider 是待确认的产品边界，见 `CONCERNS.md` 问题 2。
 

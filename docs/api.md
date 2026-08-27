@@ -44,7 +44,7 @@
 | `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs` 和独立 `visualAnalysisStatus`；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
-| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；仅以这些素材的证据作为实验性模型输入，在本地校验后创建任务内版本。 |
+| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 召回最多 12 个候选，模型查看关键帧后选择 1 个，在本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
 | `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
@@ -114,13 +114,15 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 首次场景检测的滤镜顺序为 `fps=4 -> scale=320:-2:flags=fast_bilinear -> select(scene) -> showinfo`；它先降低比较成本，再以 `pts_time` 保存源时间。前 30 秒和最多 4 张关键帧仍是本地安全上限。
 
+新分析的视频会从统一为 320px 宽的关键帧计算拉普拉斯方差，取归一化中位数写入 `visualQualityScore`；已有技术就绪视频在首次 storyboard 前用既有关键帧补齐。视觉 evidence 写入后，本地内置模型生成证据文本向量；旧素材同样在首次 storyboard 前批量补齐，失败只关闭语义路径，不影响词面排序。
+
 ## 素材证据与 storyboard
 
 Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
 
-**Storyboard 三阶段生成流程**（2026-08-18）：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把候选硬过滤为技术分析 `ready`、`kind = video`、未被排除且源文件可访问的素材，再针对每个 beat 独立预排序并提供最多 5 个候选。Rust 预排序以 `requiredVisual + purpose` 对视觉标签/OCR 的词面命中为主要语义分，叠加当前质量、时长与连续复用分；随后模型读取候选卡、场景段和可用的关键帧网格，返回 1 个 `assetId`、源时间范围、理由与 `matchLevel`，或诚实标记 uncovered。Phase 3 由模型精调时间范围、节奏与组合，Rust 验证失败时最多反馈重试 3 次；Phase 1/2 结果保持稳定。
+**Storyboard 三阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把候选硬过滤为技术分析 `ready`、`kind = video`、未被排除且源文件可访问的素材，再针对每个 beat 独立预排序并提供最多 12 个候选。Rust 优先比较 `requiredVisual + purpose` 与视觉 evidence/OCR 文本的本地中文向量，向量缺失、失效或模型不可用时回退词面匹配；叠加真实关键帧质量、时长、连续复用与跨剪辑任务新鲜度。随后模型读取候选卡、场景段和可用的关键帧网格，返回 1 个 `assetId`、源时间范围、理由与 `matchLevel`，或诚实标记 uncovered。Phase 3 由模型精调时间范围、节奏与组合，Rust 验证失败时最多反馈重试 3 次；Phase 1/2 结果保持稳定。
 
-`storyboard/scoring.rs` 的 0–50 语义分当前是词面匹配：英文按连续字母数字词元、中文按相邻双字切分，再检查这些词元是否出现在视觉 evidence 的 subjects/actions/products/scene 或 OCR 中；另加画面质量 0–25、时长匹配 0–15、连续复用惩罚 -10 和新鲜度 0–10。当前素材加载没有独立质量分时统一按 0.5，新鲜度仍固定为 10，因此主要有效差异来自词面命中、时长和连续复用。模型复选不是关键词规则：它获得最多 5 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 返回选择。`storyboard/semantic.rs` 的 embedding 接口仍为 TODO，当前没有 CLIP/向量相似度参与 Rust 预排序。
+`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、连续复用惩罚 -10 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。模型获得最多 12 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 选择 1 个。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
