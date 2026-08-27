@@ -10,13 +10,14 @@
 ## 实现
 
 - `storyboard/phases.rs` 将候选上限从 5 调整为 12；每个 beat 编码 `requiredVisual + purpose` 后参与排序。
-- `storyboard/scoring.rs` 将语义分范围从 0–50 调整为 0–30；有效向量使用余弦相似度，没有有效向量时继续使用英文词元和中文相邻双字。质量仍占 25 分、时长占 15 分、连续复用扣 10 分；新鲜度按 `10 / (1 + 使用任务数)` 计算。
+- `storyboard/scoring.rs` 将语义分范围从 0–50 调整为 0–30；有效向量使用余弦相似度，没有有效向量时继续使用英文词元和中文相邻双字。质量仍占 25 分、时长占 15 分；同一次 Storyboard 中每次复用累计扣 15 分，连续复用额外扣 30 分；新鲜度按 `10 / (1 + 使用任务数)` 计算。
 - `assets/analysis.rs` 对统一为 320px 宽的关键帧计算拉普拉斯方差，归一化后取中位数。新分析直接写入质量分；已有技术就绪视频在首次 storyboard 前从本地关键帧补齐。
 - 新鲜度只读取每个剪辑任务最新的 timeline，并在一个任务内按 `assetId` 去重，避免追加式历史版本和重复镜头虚增次数。
 - `storyboard/semantic.rs` 从安装包资源加载 `BAAI/bge-small-zh-v1.5` 的 Xenova ONNX 转换，生成 512 维文本向量。素材文本只来自 subjects/actions/products/scene/OCR；向量、模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`。
 - 视觉 evidence 成功写入时增量生成向量；已有素材在首次 storyboard 前按项目批量补齐。数据库写入带旧 `metadata_json` 条件，避免覆盖并发视觉分析结果。
 - `StoryboardSource.evidence_embedding` 禁止序列化，因此向量不会进入 Phase 3 Provider payload。模型缺失、完整性校验失败、推理失败、旧素材缺向量或维度不匹配时，Rust 使用原有词面排序。
 - Phase 3 只接收 Phase 2 已选中的素材，不再读取全库；Rust 固定 Phase 1/2 的叙事结构并校验每个 beat 只能继续使用其 Phase 2 所选素材。向量和本机关键帧路径均禁止序列化给 Provider。
+- Phase 2 与最终校验共用同一素材占比上限；某素材达到当前镜头规模允许的次数后，不再进入后续 beat 的 Top-12，避免 Phase 3 在禁止换素材的同时又因 40% 多样性硬门必然失败。
 - 视觉 evidence 写入若发生并发元数据冲突，批次明确失败而不是误报完成；损坏的历史 timeline 只跳过新鲜度统计，不阻断 storyboard。
 
 ## 模型与安装包
@@ -27,7 +28,7 @@
 
 ## 验证
 
-- Rust 全量：240 个库测试和 2 个契约测试通过。
+- Rust 全量：242 个库测试和 2 个契约测试通过。
 - 真实内置模型回归：`汽车驶过城市街道` 与 `城市道路上的车辆` 的余弦相似度显著高于厨房切菜场景。
 - 回归覆盖：Top-12 常量、清晰关键帧高于纯色帧、质量字段加载、历史 timeline 去重、新鲜素材优先、无效向量拒绝，以及内部向量不序列化给 Provider。
 - Windows release、MSI、NSIS 构建通过；此前的 PDB 不兼容错误未复现。

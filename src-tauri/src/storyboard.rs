@@ -553,7 +553,7 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
         *asset_usage.entry(&shot.asset_id).or_insert(0) += 1;
     }
 
-    let max_allowed = (shots.len() * 2 / 5).max(1); // 40% 向上取整
+    let max_allowed = max_asset_uses_for_shot_count(shots.len());
     for (asset_id, count) in asset_usage {
         if count > max_allowed {
             let percentage = count * 100 / shots.len();
@@ -577,6 +577,10 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
     }
 
     Ok(())
+}
+
+fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
+    (shot_count * 2 / 5).max(1)
 }
 
 fn minimum_storyboard_duration(brief: &str) -> i64 {

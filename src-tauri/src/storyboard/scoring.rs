@@ -18,7 +18,8 @@ pub(crate) struct ScoredCandidate {
 /// - 语义相关性（0-30分）：优先使用本地向量相似度，无向量时使用词面重合
 /// - 画面质量（0-25分）：来自 visual_quality_score
 /// - 时长匹配度（0-15分）：候选时长与目标时长的适配度
-/// - 多样性惩罚（-10分）：连续使用同一素材降权
+/// - 当前 Storyboard 复用惩罚（每次 -15 分）：已经选过的素材累计降权
+/// - 连续复用惩罚（额外 -30 分）：避免相邻镜头继续使用同一视频
 /// - 新鲜度（0-10分）：根据项目内使用次数降权
 pub(crate) fn rank_segment_candidates(
     candidates: Vec<StoryboardSource>,
@@ -88,10 +89,18 @@ fn calculate_candidate_score(
         score += 15.0;
     }
 
-    // 4. 多样性惩罚（-10分）
+    // 4. 当前 Storyboard 内的累计复用惩罚。历史新鲜度描述跨任务使用，
+    // 这里单独避免同一次选镜被少数高语义分素材垄断。
+    let current_storyboard_uses = prior_selections
+        .iter()
+        .filter(|asset_id| *asset_id == &candidate.asset_id)
+        .count();
+    score -= current_storyboard_uses as f64 * 15.0;
+
+    // 相邻镜头的视觉重复最明显，因此在累计惩罚之外再扣 30 分。
     if let Some(last_asset) = prior_selections.last() {
         if last_asset == &candidate.asset_id {
-            score -= 10.0; // 连续使用同一素材降权
+            score -= 30.0;
         }
     }
 
@@ -256,7 +265,26 @@ mod tests {
         let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
 
         assert!(penalized < normal, "连续使用同一素材应被降权");
-        assert!((normal - penalized - 10.0).abs() < 0.1, "降权应为 -10 分");
+        assert!(
+            (normal - penalized - 45.0).abs() < 0.1,
+            "连续复用应包含累计 -15 分和额外 -30 分"
+        );
+    }
+
+    #[test]
+    fn non_consecutive_reuse_is_penalized() {
+        let candidate = make_source("asset-1", "video", Some(10_000), 0.8);
+        let prior = vec!["asset-1".to_owned(), "asset-2".to_owned()];
+
+        let usage = std::collections::HashMap::new();
+        let penalized =
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None);
+        let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
+
+        assert!(
+            (normal - penalized - 15.0).abs() < 0.1,
+            "非连续的第二次使用也应累计扣 15 分"
+        );
     }
 
     #[test]

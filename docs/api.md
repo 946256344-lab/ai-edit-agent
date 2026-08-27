@@ -122,7 +122,7 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 **Storyboard 三阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把候选硬过滤为技术分析 `ready`、`kind = video`、未被排除且源文件可访问的素材，再针对每个 beat 独立预排序并提供最多 12 个候选。Rust 优先比较 `requiredVisual + purpose` 与视觉 evidence/OCR 文本的本地中文向量，向量缺失、失效或模型不可用时回退词面匹配；叠加真实关键帧质量、时长、连续复用与跨剪辑任务新鲜度。随后模型读取候选卡、场景段和可用的关键帧网格，返回 1 个 `assetId`、源时间范围、理由与 `matchLevel`，或诚实标记 uncovered。Phase 3 由模型精调时间范围、节奏与组合，Rust 验证失败时最多反馈重试 3 次；Phase 1/2 结果保持稳定。
 
-`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、连续复用惩罚 -10 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。模型获得最多 12 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 选择 1 个。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
+`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。模型获得最多 12 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 选择 1 个；某素材达到与最终 40% 多样性校验相同的次数上限后，不再进入后续 beat 的候选。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 

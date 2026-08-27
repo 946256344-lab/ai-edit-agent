@@ -108,6 +108,7 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut uncovered_beat_ids = Vec::new();
     let mut prior_selections = Vec::new();
     let mut semantic_fallback_logged = false;
+    let max_asset_uses = super::max_asset_uses_for_shot_count(narrative.beats.len());
 
     for (index, beat) in narrative.beats.iter().enumerate() {
         let beat_text = format!("{} {}", beat.required_visual, beat.purpose);
@@ -125,7 +126,7 @@ pub(crate) fn phase2_rough_shot_selection(
                 }
             };
         let ranked = scoring::rank_segment_candidates(
-            sources.to_vec(),
+            candidates_within_diversity_limit(sources, &prior_selections, max_asset_uses),
             beat,
             target_each,
             &prior_selections,
@@ -191,6 +192,24 @@ pub(crate) fn phase2_rough_shot_selection(
         uncovered_beat_ids,
         shots,
     })
+}
+
+fn candidates_within_diversity_limit(
+    sources: &[StoryboardSource],
+    prior_selections: &[String],
+    max_asset_uses: usize,
+) -> Vec<StoryboardSource> {
+    sources
+        .iter()
+        .filter(|source| {
+            prior_selections
+                .iter()
+                .filter(|asset_id| *asset_id == &source.asset_id)
+                .count()
+                < max_asset_uses
+        })
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -412,8 +431,11 @@ fn candidate_grid_image(source: &StoryboardSource) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{enforce_phase3_scope, parse_beat_pick, RoughStoryboard, PHASE2_TOP_CANDIDATES};
-    use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot};
+    use super::{
+        candidates_within_diversity_limit, enforce_phase3_scope, parse_beat_pick, RoughStoryboard,
+        PHASE2_TOP_CANDIDATES,
+    };
+    use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
 
     fn shot(asset_id: &str) -> StoryboardShot {
         StoryboardShot {
@@ -440,9 +462,38 @@ mod tests {
         }
     }
 
+    fn source(asset_id: &str) -> StoryboardSource {
+        StoryboardSource {
+            asset_id: asset_id.to_owned(),
+            kind: "video".to_owned(),
+            duration_ms: Some(10_000),
+            scene_segments: Vec::new(),
+            ocr_evidence: Vec::new(),
+            visual_evidence: Vec::new(),
+            visual_quality_score: Some(0.5),
+            evidence_embedding: None,
+            keyframe_grid_path: None,
+        }
+    }
+
     #[test]
     fn phase2_sends_twelve_candidates_to_the_model() {
         assert_eq!(PHASE2_TOP_CANDIDATES, 12);
+    }
+
+    #[test]
+    fn phase2_excludes_an_asset_after_it_reaches_the_diversity_limit() {
+        let sources = vec![source("repeated"), source("available")];
+        let prior = vec![
+            "repeated".to_owned(),
+            "other".to_owned(),
+            "repeated".to_owned(),
+        ];
+
+        let candidates = candidates_within_diversity_limit(&sources, &prior, 2);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].asset_id, "available");
     }
 
     #[test]
