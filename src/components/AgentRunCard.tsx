@@ -17,6 +17,7 @@ const TOOL_LABELS: Record<string, string> = {
   search_assets: '检索素材候选',
   search_asset_segments: '检索可用素材片段',
   request_asset_analysis: '准备素材分析',
+  retry_failed_asset_analysis: '重试失败素材分析',
   get_asset_health_summary: '读取素材健康状态',
   get_storyboard: '读取 storyboard',
   generate_storyboard: '生成 storyboard',

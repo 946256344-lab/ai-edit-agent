@@ -320,6 +320,61 @@
       ]
     },
     {
+      "name": "retry_failed_asset_analysis",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "optional": true,
+            "enum": ["technical", "visual", "both"],
+            "fallback": "both"
+          },
+          "assetIds": {
+            "type": "array",
+            "optional": true,
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "optional": true,
+            "minimum": 1,
+            "maximum": 200,
+            "fallback": 200
+          }
+        },
+        "required": ["stage", "assetIds", "limit"]
+      },
+      "scope": {
+        "boundary": "imported_assets_in_current_project",
+        "resolution": "projectId comes from LoopState; null assetIds collects failed assets in the current project up to limit"
+      },
+      "sideEffect": true,
+      "idempotency": "assets with active analysis tasks are skipped; failed technical and visual assets can be re-queued",
+      "retryPolicy": "safe to call again when failures remain; does not retry user-skipped visual analysis",
+      "preconditions": [
+        "requested assets belong to the current project when assetIds is provided",
+        "failed assets have readable source files",
+        "visual retries require technical ready video or image assets with representative frames"
+      ],
+      "produces": [
+        "analyze_asset_task",
+        "analyze_asset_visual_batch_task"
+      ],
+      "returns": [
+        "technicalQueued",
+        "visualQueued",
+        "skippedCount",
+        "sample"
+      ]
+    },
+    {
       "name": "generate_storyboard",
       "version": 1,
       "kind": "edit",

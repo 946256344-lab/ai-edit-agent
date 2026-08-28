@@ -158,6 +158,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 | --- | --- | --- |
 | `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
 | `request_asset_analysis` | Native `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
+| `retry_failed_asset_analysis` | Native `{ stage: "technical"\|"visual"\|"both"\|null, assetIds: string[]\|null, limit: number\|null }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 时自动收集最多 `limit`（默认 200）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
@@ -192,7 +193,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 
 ### 原生工具目录与 `read_logs`
 
-NativeToolLoop 每轮直接向 Provider 注册全部 24 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 仍复核全局白名单与请求只读策略，目录可见性不等于执行授权。
+NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 仍复核全局白名单与请求只读策略，目录可见性不等于执行授权。
 
 `read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`，模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
 

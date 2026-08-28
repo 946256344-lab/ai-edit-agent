@@ -23,6 +23,7 @@ const GET_TEXT_CAPABILITIES: &str = "get_text_capabilities";
 #[allow(dead_code)]
 const RENDER_PREVIEW: &str = "render_preview";
 const REQUEST_ASSET_ANALYSIS: &str = "request_asset_analysis";
+const RETRY_FAILED_ASSET_ANALYSIS: &str = "retry_failed_asset_analysis";
 const GENERATE_STORYBOARD: &str = "generate_storyboard";
 const CREATE_TIMELINE_DRAFT: &str = "create_timeline_draft";
 const REPLACE_CLIPS: &str = "replace_clips";
@@ -238,6 +239,35 @@ fn main_chain_function_tools() -> Vec<Value> {
                 }
             }),
             vec!["assetIds"],
+        ),
+        function_tool(
+            RETRY_FAILED_ASSET_ANALYSIS,
+            "Re-queue failed technical and/or visual analysis for imported assets in the current project. Use null assetIds to retry all discovered failures up to limit.",
+            json!({
+                "stage": {
+                    "type": ["string", "null"],
+                    "enum": ["technical", "visual", "both", null],
+                    "description": "Which analysis stage to retry; null means both."
+                },
+                "assetIds": {
+                    "type": ["array", "null"],
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                    },
+                    "description": "Optional asset identifiers; null retries all failed assets in the current project."
+                },
+                "limit": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Maximum failed assets to collect when assetIds is null; defaults to 200."
+                }
+            }),
+            vec!["stage", "assetIds", "limit"],
         ),
         function_tool(
             GENERATE_STORYBOARD,
@@ -746,6 +776,7 @@ mod tests {
         assert_eq!(names.len(), tools.len());
         for name in [
             "request_asset_analysis",
+            "retry_failed_asset_analysis",
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
@@ -767,6 +798,7 @@ mod tests {
         let tools = native_function_tools_for_request(false, true);
         for name in [
             "request_asset_analysis",
+            "retry_failed_asset_analysis",
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",

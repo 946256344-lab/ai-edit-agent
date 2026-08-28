@@ -49,6 +49,7 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "get_text_capabilities",
     "render_preview",
     "request_asset_analysis",
+    "retry_failed_asset_analysis",
     "generate_storyboard",
     "create_timeline_draft",
     "replace_clips",
@@ -1074,6 +1075,43 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
             Ok(value)
         }
+        "retry_failed_asset_analysis" => {
+            if object.len() != 3
+                || !object.contains_key("stage")
+                || !object.contains_key("assetIds")
+                || !object.contains_key("limit")
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["stage"].is_null()
+                || object["stage"].as_str().is_some_and(|stage| {
+                    matches!(stage, "technical" | "visual" | "both")
+                }))
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["assetIds"].is_null() || object["assetIds"].is_array()) {
+                return Err(invalid_arguments());
+            }
+            if let Some(asset_ids) = object["assetIds"].as_array() {
+                if asset_ids.is_empty()
+                    || asset_ids.len() > 200
+                    || !asset_ids
+                        .iter()
+                        .all(|asset_id| required_non_empty_string(asset_id))
+                {
+                    return Err(invalid_arguments());
+                }
+            }
+            if !(object["limit"].is_null()
+                || object["limit"]
+                    .as_u64()
+                    .is_some_and(|limit| (1..=200).contains(&limit)))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
         "generate_storyboard" => {
             if object.len() != 1 || !object.contains_key("brief") {
                 return Err(invalid_arguments());
@@ -1393,6 +1431,7 @@ fn prepare_native_tool_result(tool: &str, mut result: Value) -> Result<Value, Va
     let status_allowed = match (tool, result["status"].as_str()) {
         (_, Some("ok")) => true,
         ("request_asset_analysis", Some("queued")) => true,
+        ("retry_failed_asset_analysis", Some("queued")) => true,
         ("generate_storyboard", Some("needs_confirmation")) => true,
         _ => false,
     };
@@ -2720,6 +2759,7 @@ mod tests {
         assert!(policy.read_only);
         for tool in [
             "request_asset_analysis",
+            "retry_failed_asset_analysis",
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
@@ -2820,6 +2860,26 @@ mod tests {
         assert!(parse_native_arguments(
             "request_asset_analysis",
             r#"{"assetIds":["asset-1"],"projectId":"project-1"}"#
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":null,"assetIds":null,"limit":null}"#
+        )
+        .is_ok());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":"both","assetIds":["asset-1"],"limit":50}"#
+        )
+        .is_ok());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":"both","assetIds":[],"limit":null}"#
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":"both","assetIds":null,"limit":0}"#
         )
         .is_err());
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());

@@ -689,6 +689,30 @@ pub(super) fn apply_skill(
                 json!({ "tool": "request_asset_analysis", "status": "queued", "queuedCount": queued }),
             )
         }
+        "retry_failed_asset_analysis" => {
+            let stage = crate::assets::RetryFailedAnalysisStage::parse(
+                args.get("stage").and_then(Value::as_str),
+            )?;
+            let asset_ids = match args.get("assetIds") {
+                Some(value) if value.is_null() => None,
+                Some(value) => Some(
+                    serde_json::from_value(value.clone())
+                        .map_err(|error| error.to_string())?,
+                ),
+                None => None,
+            };
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(200) as usize;
+            crate::assets::retry_failed_asset_analysis(
+                state.app,
+                state.project_id,
+                stage,
+                asset_ids,
+                limit,
+            )
+        }
         "get_storyboard" => Ok(json!({
             "tool": "get_storyboard",
             "status": "ok",

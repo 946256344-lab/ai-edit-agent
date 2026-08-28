@@ -7,8 +7,9 @@ use crate::models::{
     KeyframeMetadata, OcrEvidence, SceneSegment, TechnicalMetadata,
 };
 use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
@@ -1039,6 +1040,302 @@ pub(crate) fn request_asset_analysis(
     Ok(queued)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryFailedAnalysisStage {
+    Technical,
+    Visual,
+    Both,
+}
+
+impl RetryFailedAnalysisStage {
+    pub(crate) fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("both") => Ok(Self::Both),
+            Some("technical") => Ok(Self::Technical),
+            Some("visual") => Ok(Self::Visual),
+            Some(_) => Err(
+                "retry_failed_asset_analysis stage must be technical, visual, or both.".to_owned(),
+            ),
+        }
+    }
+
+    fn includes_technical(self) -> bool {
+        matches!(self, Self::Technical | Self::Both)
+    }
+
+    fn includes_visual(self) -> bool {
+        matches!(self, Self::Visual | Self::Both)
+    }
+}
+
+#[derive(Clone)]
+struct FailedAssetRetryCandidate {
+    asset_id: String,
+    display_name: String,
+    stage: &'static str,
+}
+
+const RETRY_FAILED_SAMPLE_LIMIT: usize = 10;
+const RETRY_FAILED_ASSET_LIMIT: usize = 200;
+
+fn asset_source_available(source_reference: &str) -> bool {
+    Path::new(source_reference).is_file()
+}
+
+fn query_technical_failed_assets(
+    connection: &Connection,
+    project_id: &str,
+    limit: usize,
+) -> Result<Vec<FailedAssetRetryCandidate>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, display_name, source_reference FROM assets
+             WHERE project_id = ?1 AND analysis_status = 'failed'
+             AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project_id, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .filter_map(|row| row.ok())
+        .filter_map(|(asset_id, display_name, source_reference)| {
+            asset_source_available(&source_reference).then_some(FailedAssetRetryCandidate {
+                asset_id,
+                display_name,
+                stage: "technical",
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(rows)
+}
+
+fn query_visual_failed_assets(
+    connection: &Connection,
+    project_id: &str,
+    limit: usize,
+) -> Result<Vec<FailedAssetRetryCandidate>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, display_name, source_reference, metadata_json FROM assets
+             WHERE project_id = ?1 AND analysis_status = 'ready' AND kind IN ('video', 'image')
+             AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
+             AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project_id, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .filter_map(|row| row.ok())
+        .filter_map(|(asset_id, display_name, source_reference, metadata_json)| {
+            if !asset_source_available(&source_reference) {
+                return None;
+            }
+            let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+            if representative_frame(&metadata, "video").is_some()
+                || representative_frame(&metadata, "image").is_some()
+            {
+                Some(FailedAssetRetryCandidate {
+                    asset_id,
+                    display_name,
+                    stage: "visual",
+                })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(rows)
+}
+
+fn classify_asset_for_retry(
+    connection: &Connection,
+    project_id: &str,
+    asset_id: &str,
+    stage: RetryFailedAnalysisStage,
+) -> Result<Option<FailedAssetRetryCandidate>, String> {
+    let row = connection
+        .query_row(
+            "SELECT display_name, source_reference, analysis_status, kind, metadata_json,
+             coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0)
+             FROM assets WHERE id = ?1 AND project_id = ?2",
+            params![asset_id, project_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some((display_name, source_reference, analysis_status, kind, metadata_json, excluded)) =
+        row
+    else {
+        return Err("Selected asset is not available in this project.".to_owned());
+    };
+    if excluded != 0 || !asset_source_available(&source_reference) {
+        return Ok(None);
+    }
+    let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+    if stage.includes_technical() && analysis_status == "failed" {
+        return Ok(Some(FailedAssetRetryCandidate {
+            asset_id: asset_id.to_owned(),
+            display_name,
+            stage: "technical",
+        }));
+    }
+    if stage.includes_visual()
+        && analysis_status == "ready"
+        && matches!(kind.as_str(), "video" | "image")
+        && metadata.visual_analysis_status == "failed"
+        && representative_frame(&metadata, &kind).is_some()
+    {
+        return Ok(Some(FailedAssetRetryCandidate {
+            asset_id: asset_id.to_owned(),
+            display_name,
+            stage: "visual",
+        }));
+    }
+    Ok(None)
+}
+
+fn collect_failed_assets_for_retry(
+    connection: &Connection,
+    project_id: &str,
+    stage: RetryFailedAnalysisStage,
+    asset_ids: Option<&[String]>,
+    limit: usize,
+) -> Result<Vec<FailedAssetRetryCandidate>, String> {
+    let limit = limit.clamp(1, RETRY_FAILED_ASSET_LIMIT);
+    if let Some(asset_ids) = asset_ids {
+        if asset_ids.is_empty() {
+            return Err("Select one or more imported assets to retry.".to_owned());
+        }
+        if asset_ids.len() > RETRY_FAILED_ASSET_LIMIT {
+            return Err(format!(
+                "Cannot retry more than {RETRY_FAILED_ASSET_LIMIT} assets at once."
+            ));
+        }
+        let mut candidates = Vec::new();
+        for asset_id in asset_ids {
+            if let Some(candidate) =
+                classify_asset_for_retry(connection, project_id, asset_id, stage)?
+            {
+                candidates.push(candidate);
+            }
+        }
+        return Ok(candidates);
+    }
+
+    let mut candidates = Vec::new();
+    if stage.includes_technical() {
+        candidates.extend(query_technical_failed_assets(connection, project_id, limit)?);
+    }
+    if stage.includes_visual() {
+        let remaining = limit.saturating_sub(candidates.len());
+        if remaining > 0 {
+            candidates.extend(query_visual_failed_assets(connection, project_id, remaining)?);
+        }
+    }
+    Ok(candidates)
+}
+
+/// Agent 重试当前项目内失败的技术/视觉分析；可自动收集失败项或限定 assetIds。
+pub(crate) fn retry_failed_asset_analysis(
+    app: &AppHandle,
+    project_id: &str,
+    stage: RetryFailedAnalysisStage,
+    asset_ids: Option<Vec<String>>,
+    limit: usize,
+) -> Result<Value, String> {
+    let requested_count = asset_ids.as_ref().map_or(0, Vec::len);
+    let connection = open_connection(app)?;
+    let candidates = collect_failed_assets_for_retry(
+        &connection,
+        project_id,
+        stage,
+        asset_ids.as_deref(),
+        limit,
+    )?;
+
+    let mut technical_ids = Vec::new();
+    let mut visual_ids = Vec::new();
+    for candidate in &candidates {
+        match candidate.stage {
+            "technical" => technical_ids.push(candidate.asset_id.clone()),
+            "visual" => visual_ids.push(candidate.asset_id.clone()),
+            _ => {}
+        }
+    }
+
+    let technical_queued = if stage.includes_technical() && !technical_ids.is_empty() {
+        request_asset_analysis(app, project_id, &technical_ids)?
+    } else {
+        0
+    };
+    let visual_queued = if stage.includes_visual() && !visual_ids.is_empty() {
+        super::visual::queue_visual_analysis_batch(app, &visual_ids)?;
+        visual_ids.len()
+    } else {
+        0
+    };
+
+    let queued_total = technical_queued + visual_queued;
+    let skipped_count = if requested_count > 0 {
+        requested_count.saturating_sub(queued_total)
+    } else {
+        0
+    };
+
+    let sample: Vec<Value> = candidates
+        .iter()
+        .take(RETRY_FAILED_SAMPLE_LIMIT)
+        .map(|candidate| {
+            json!({
+                "assetId": candidate.asset_id,
+                "displayName": candidate.display_name,
+                "stage": candidate.stage,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "tool": "retry_failed_asset_analysis",
+        "status": if queued_total > 0 { "queued" } else { "ok" },
+        "stage": match stage {
+            RetryFailedAnalysisStage::Technical => "technical",
+            RetryFailedAnalysisStage::Visual => "visual",
+            RetryFailedAnalysisStage::Both => "both",
+        },
+        "requestedCount": if requested_count > 0 { requested_count } else { candidates.len() },
+        "technicalQueued": technical_queued,
+        "visualQueued": visual_queued,
+        "skippedCount": skipped_count,
+        "sample": sample,
+    }))
+}
+
 #[tauri::command]
 pub fn retry_asset_analysis_batch(
     app: AppHandle,
@@ -1159,6 +1456,23 @@ pub fn get_asset_task_center(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_failed_analysis_stage_parses_supported_values() {
+        assert_eq!(
+            RetryFailedAnalysisStage::parse(None).expect("both default"),
+            RetryFailedAnalysisStage::Both
+        );
+        assert_eq!(
+            RetryFailedAnalysisStage::parse(Some("technical")).expect("technical"),
+            RetryFailedAnalysisStage::Technical
+        );
+        assert_eq!(
+            RetryFailedAnalysisStage::parse(Some("visual")).expect("visual"),
+            RetryFailedAnalysisStage::Visual
+        );
+        assert!(RetryFailedAnalysisStage::parse(Some("unknown")).is_err());
+    }
 
     #[test]
     fn technical_worker_slots_are_bounded_and_released() {

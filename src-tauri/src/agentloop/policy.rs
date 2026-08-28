@@ -28,6 +28,7 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "download_music",
     "use_online_music",
     "request_asset_analysis",
+    "retry_failed_asset_analysis",
     "generate_storyboard",
     "create_timeline_draft",
     "replace_clips",
