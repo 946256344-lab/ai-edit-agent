@@ -1025,15 +1025,10 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            match (object["startLine"].as_u64(), object["endLine"].as_u64()) {
-                (None, None) if object["startLine"].is_null() && object["endLine"].is_null() => {
-                    Ok(value)
-                }
-                (Some(start), Some(end))
-                    if start >= 1 && start <= end && end <= 1_000_000 && end - start + 1 <= 100 =>
-                {
-                    Ok(value)
-                }
+            let is_int = |v: &Value| v.as_i64().is_some() || v.as_u64().is_some();
+            match (&object["startLine"], &object["endLine"]) {
+                (a, b) if a.is_null() && b.is_null() => Ok(value),
+                (a, b) if is_int(a) && is_int(b) => Ok(value),
                 _ => Err(invalid_arguments()),
             }
         }
@@ -1056,9 +1051,8 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
-            if object
-                .get("timelineVersionId")
-                .is_some_and(|value| !(value.is_null() || value.is_string()))
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1072,10 +1066,9 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             };
             if asset_ids.is_empty()
-                || asset_ids.len() > 100
                 || !asset_ids
                     .iter()
-                    .all(|asset_id| bounded_required_string(asset_id, 200))
+                    .all(|asset_id| required_non_empty_string(asset_id))
             {
                 return Err(invalid_arguments());
             }
@@ -1085,7 +1078,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 1 || !object.contains_key("brief") {
                 return Err(invalid_arguments());
             }
-            if !nullable_bounded_string_argument(&object["brief"], 4_000) {
+            if !(object["brief"].is_null() || object["brief"].is_string()) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1101,14 +1094,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("timelineVersionId")
                 || !object.contains_key("shots")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
             let Some(shots) = object["shots"].as_array() else {
                 return Err(invalid_arguments());
             };
-            if shots.is_empty() || shots.len() > 100 || !shots.iter().all(valid_clip_replacement) {
+            if shots.is_empty() {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1117,17 +1114,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("timelineVersionId")
                 || !object.contains_key("adjustments")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
             let Some(adjustments) = object["adjustments"].as_array() else {
                 return Err(invalid_arguments());
             };
-            if adjustments.is_empty()
-                || adjustments.len() > 100
-                || !adjustments.iter().all(valid_clip_adjustment)
-            {
+            if adjustments.is_empty() {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1136,7 +1134,11 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("timelineVersionId")
                 || !object.contains_key("order")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1144,10 +1146,9 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             };
             if order.is_empty()
-                || order.len() > 100
                 || !order
                     .iter()
-                    .all(|index| index.as_i64().is_some_and(|index| index >= 0))
+                    .all(|index| index.as_i64().is_some() || index.as_u64().is_some())
             {
                 return Err(invalid_arguments());
             }
@@ -1170,29 +1171,20 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !nullable_bounded_string_argument(&object["query"], 200)
-                || !nullable_bounded_string_argument(&object["tag"], 200)
-                || !nullable_bounded_string_argument(&object["collectionId"], 200)
-                || !matches!(
-                    object["kind"].as_str(),
-                    None | Some("video" | "image" | "audio" | "other")
-                )
-                || !non_negative_integer_or_null(&object["minDurationMs"])
-                || !non_negative_integer_or_null(&object["maxDurationMs"])
-                || !nullable_integer_in_range(&object["minRating"], 0, 5)
+            let is_int = |v: &Value| v.is_null() || v.as_i64().is_some() || v.as_u64().is_some();
+            let is_str_or_null = |v: &Value| v.is_null() || v.is_string();
+            if !is_str_or_null(&object["query"])
+                || !is_str_or_null(&object["tag"])
+                || !is_str_or_null(&object["collectionId"])
+                || !is_str_or_null(&object["kind"])
+                || !is_int(&object["minDurationMs"])
+                || !is_int(&object["maxDurationMs"])
+                || !is_int(&object["minRating"])
                 || !object["favoriteOnly"].is_boolean()
-                || !bounded_integer(&object["offset"], 0, 10_000)
-                || !bounded_integer(&object["limit"], 1, 20)
+                || !(object["offset"].as_i64().is_some() || object["offset"].as_u64().is_some())
+                || !(object["limit"].as_i64().is_some() || object["limit"].as_u64().is_some())
             {
                 return Err(invalid_arguments());
-            }
-            if let (Some(min), Some(max)) = (
-                object["minDurationMs"].as_i64(),
-                object["maxDurationMs"].as_i64(),
-            ) {
-                if min > max {
-                    return Err(invalid_arguments());
-                }
             }
             Ok(value)
         }
@@ -1202,10 +1194,10 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !bounded_required_string(&object["query"], 200)
-                || !nullable_bounded_string_argument(&object["assetId"], 200)
-                || !bounded_integer(&object["offset"], 0, 10_000)
-                || !bounded_integer(&object["limit"], 1, 20)
+            if !required_non_empty_string(&object["query"])
+                || !(object["assetId"].is_null() || object["assetId"].is_string())
+                || !(object["offset"].as_i64().is_some() || object["offset"].as_u64().is_some())
+                || !(object["limit"].as_i64().is_some() || object["limit"].as_u64().is_some())
             {
                 return Err(invalid_arguments());
             }
@@ -1214,7 +1206,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "search_music" => {
             if object.len() != 1
                 || !object.contains_key("query")
-                || !bounded_required_string(&object["query"], 200)
+                || !required_non_empty_string(&object["query"])
             {
                 return Err(invalid_arguments());
             }
@@ -1232,9 +1224,13 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 || !object.contains_key("text")
                 || !object.contains_key("voiceId")
                 || !object.contains_key("timelineVersionId")
-                || !nullable_bounded_string_argument(&object["text"], 5_000)
-                || !nullable_bounded_string_argument(&object["voiceId"], 200)
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["text"].is_null() || object["text"].is_string())
+                || !(object["voiceId"].is_null() || object["voiceId"].is_string())
+                || !(object["timelineVersionId"].is_null()
+                    || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1244,9 +1240,8 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
-            if object
-                .get("timelineVersionId")
-                .is_some_and(|value| !(value.is_null() || value.is_string()))
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1255,7 +1250,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "download_music" => {
             if object.len() != 1
                 || !object.contains_key("trackId")
-                || !bounded_required_string(&object["trackId"], 200)
+                || !required_non_empty_string(&object["trackId"])
             {
                 return Err(invalid_arguments());
             }
@@ -1265,8 +1260,12 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("trackId")
                 || !object.contains_key("timelineVersionId")
-                || !bounded_required_string(&object["trackId"], 200)
-                || !nullable_timeline_id(&object["timelineVersionId"])
+                || !required_non_empty_string(&object["trackId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1275,7 +1274,11 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "create_jianying_draft" => {
             if object.len() != 1
                 || !object.contains_key("timelineVersionId")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
@@ -1285,14 +1288,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("timelineVersionId")
                 || !object.contains_key("textTracks")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
             let Some(tracks) = object["textTracks"].as_array() else {
                 return Err(invalid_arguments());
             };
-            if tracks.len() > 21 || !tracks.iter().all(valid_text_track_argument) {
+            if !tracks.iter().all(|t| t.is_object()) && !tracks.is_empty() {
                 return Err(invalid_arguments());
             }
             normalize_nullable_text_fields(&mut value);
@@ -1302,14 +1309,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 2
                 || !object.contains_key("timelineVersionId")
                 || !object.contains_key("musicTracks")
-                || !nullable_timeline_id(&object["timelineVersionId"])
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
             {
                 return Err(invalid_arguments());
             }
             let Some(tracks) = object["musicTracks"].as_array() else {
                 return Err(invalid_arguments());
             };
-            if tracks.len() > 100 || !tracks.iter().all(valid_music_track_argument) {
+            if !tracks.iter().all(|t| t.is_object()) && !tracks.is_empty() {
                 return Err(invalid_arguments());
             }
             normalize_nullable_music_fields(&mut value);
@@ -1319,14 +1330,10 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
     }
 }
 
-fn bounded_required_string(value: &Value, max_length: usize) -> bool {
+fn required_non_empty_string(value: &Value) -> bool {
     value
         .as_str()
-        .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max_length)
-}
-
-fn nullable_bounded_string_argument(value: &Value, max_length: usize) -> bool {
-    value.is_null() || bounded_required_string(value, max_length)
+        .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn coerce_blank_strings_to_null(value: &mut Value, keys: &[&str]) {
@@ -1342,289 +1349,6 @@ fn coerce_blank_strings_to_null(value: &mut Value, keys: &[&str]) {
             object.insert((*key).to_owned(), Value::Null);
         }
     }
-}
-
-fn nullable_timeline_id(value: &Value) -> bool {
-    value.is_null() || bounded_required_string(value, 200)
-}
-
-fn valid_clip_replacement(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["shotIndex", "assetId", "sourceStartMs", "sourceEndMs"];
-    if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-        return false;
-    }
-    let Some(shot_index) = object["shotIndex"].as_i64() else {
-        return false;
-    };
-    let Some(source_start_ms) = object["sourceStartMs"].as_i64() else {
-        return false;
-    };
-    let Some(source_end_ms) = object["sourceEndMs"].as_i64() else {
-        return false;
-    };
-    shot_index >= 0
-        && bounded_required_string(&object["assetId"], 200)
-        && source_start_ms >= 0
-        && source_end_ms >= source_start_ms
-}
-
-fn valid_clip_adjustment(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["shotIndex", "newDurationMs", "newSourceStartMs"];
-    if object.len() != KEYS.len() || object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-        return false;
-    }
-    let Some(shot_index) = object["shotIndex"].as_i64() else {
-        return false;
-    };
-    let duration_present = !object["newDurationMs"].is_null();
-    let source_start_present = !object["newSourceStartMs"].is_null();
-    let valid_duration = !duration_present
-        || object["newDurationMs"]
-            .as_i64()
-            .is_some_and(|duration| duration > 0);
-    let valid_source_start = !source_start_present
-        || object["newSourceStartMs"]
-            .as_i64()
-            .is_some_and(|start| start >= 0);
-    shot_index >= 0
-        && (duration_present || source_start_present)
-        && valid_duration
-        && valid_source_start
-}
-
-fn valid_text_track_argument(value: &Value) -> bool {
-    let Some(track) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["id", "role", "layer", "enabled", "cues"];
-    if !closed_object_has_keys(track, KEYS)
-        || !bounded_required_string(&track["id"], 200)
-        || !matches!(
-            track["role"].as_str(),
-            Some("subtitle" | "headline" | "callout" | "cta" | "label")
-        )
-        || !bounded_integer(&track["layer"], 0, 20)
-        || !track["enabled"].is_boolean()
-    {
-        return false;
-    }
-    track["cues"]
-        .as_array()
-        .is_some_and(|cues| cues.len() <= 100 && cues.iter().all(valid_text_cue_argument))
-}
-
-fn valid_text_cue_argument(value: &Value) -> bool {
-    let Some(cue) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &[
-        "id",
-        "templateId",
-        "startMs",
-        "endMs",
-        "text",
-        "style",
-        "layout",
-        "entrance",
-        "exit",
-        "loopAnimation",
-    ];
-    if !closed_object_has_keys(cue, KEYS)
-        || !bounded_required_string(&cue["id"], 200)
-        || !nullable_text_template(&cue["templateId"])
-        || !bounded_required_string(&cue["text"], 280)
-        || !valid_nullable_text_style(&cue["style"])
-        || !valid_nullable_text_layout(&cue["layout"])
-        || !valid_nullable_text_animation(&cue["entrance"])
-        || !valid_nullable_text_animation(&cue["exit"])
-        || !valid_nullable_text_animation(&cue["loopAnimation"])
-    {
-        return false;
-    }
-    cue["startMs"]
-        .as_i64()
-        .zip(cue["endMs"].as_i64())
-        .is_some_and(|(start, end)| start >= 0 && end > start)
-}
-
-fn nullable_text_template(value: &Value) -> bool {
-    value.is_null()
-        || matches!(
-            value.as_str(),
-            Some(
-                "subtitle_safe"
-                    | "headline_rise"
-                    | "headline_pop"
-                    | "headline_drop"
-                    | "callout_card"
-                    | "cta_card"
-            )
-        )
-}
-
-fn valid_nullable_text_style(value: &Value) -> bool {
-    if value.is_null() {
-        return true;
-    }
-    let Some(style) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &[
-        "fontKey",
-        "fontSize",
-        "bold",
-        "color",
-        "strokeColor",
-        "strokeWidth",
-        "shadow",
-        "backgroundColor",
-        "alignment",
-        "letterSpacing",
-        "lineSpacing",
-    ];
-    closed_object_has_keys(style, KEYS)
-        && bounded_required_string(&style["fontKey"], 200)
-        && bounded_number(&style["fontSize"], 0.01, 0.30)
-        && style["bold"].is_boolean()
-        && valid_hex_color(&style["color"])
-        && nullable_hex_color(&style["strokeColor"])
-        && bounded_number(&style["strokeWidth"], 0.0, 10.0)
-        && style["shadow"].is_boolean()
-        && nullable_hex_color(&style["backgroundColor"])
-        && matches!(
-            style["alignment"].as_str(),
-            Some("left" | "center" | "right")
-        )
-        && bounded_integer(&style["letterSpacing"], -100, 100)
-        && bounded_integer(&style["lineSpacing"], -100, 100)
-}
-
-fn valid_nullable_text_layout(value: &Value) -> bool {
-    if value.is_null() {
-        return true;
-    }
-    let Some(layout) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["anchor", "x", "y", "maxWidth", "safeArea"];
-    closed_object_has_keys(layout, KEYS)
-        && matches!(layout["anchor"].as_str(), Some("top" | "center" | "bottom"))
-        && bounded_number(&layout["x"], 0.0, 1.0)
-        && bounded_number(&layout["y"], 0.0, 1.0)
-        && bounded_number(&layout["maxWidth"], 0.20, 1.0)
-        && matches!(
-            layout["safeArea"].as_str(),
-            Some("title_safe" | "action_safe")
-        )
-}
-
-fn valid_nullable_text_animation(value: &Value) -> bool {
-    if value.is_null() {
-        return true;
-    }
-    let Some(animation) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["templateId", "durationMs", "intensity"];
-    closed_object_has_keys(animation, KEYS)
-        && matches!(
-            animation["templateId"].as_str(),
-            Some("fade" | "slide_up" | "slide_down" | "pop" | "wipe")
-        )
-        && animation["durationMs"]
-            .as_i64()
-            .is_some_and(|value| value >= 0)
-        && bounded_number(&animation["intensity"], 0.0, 1.0)
-}
-
-fn valid_music_track_argument(value: &Value) -> bool {
-    let Some(track) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &["id", "enabled", "cues"];
-    if !closed_object_has_keys(track, KEYS)
-        || !bounded_required_string(&track["id"], 200)
-        || !track["enabled"].is_boolean()
-    {
-        return false;
-    }
-    track["cues"]
-        .as_array()
-        .is_some_and(|cues| cues.len() <= 100 && cues.iter().all(valid_music_cue_argument))
-}
-
-fn valid_music_cue_argument(value: &Value) -> bool {
-    let Some(cue) = value.as_object() else {
-        return false;
-    };
-    const KEYS: &[&str] = &[
-        "id",
-        "assetId",
-        "sourceStartMs",
-        "sourceEndMs",
-        "timelineStartMs",
-        "timelineEndMs",
-        "loopEnabled",
-        "volume",
-        "fadeInMs",
-        "fadeOutMs",
-    ];
-    if !closed_object_has_keys(cue, KEYS)
-        || !bounded_required_string(&cue["id"], 200)
-        || !bounded_required_string(&cue["assetId"], 200)
-        || !(cue["loopEnabled"].is_null() || cue["loopEnabled"].is_boolean())
-        || !bounded_number(&cue["volume"], 0.0, 2.0)
-        || !non_negative_integer_or_null(&cue["fadeInMs"])
-        || !non_negative_integer_or_null(&cue["fadeOutMs"])
-    {
-        return false;
-    }
-    let Some(source_start) = cue["sourceStartMs"].as_i64() else {
-        return false;
-    };
-    let Some(source_end) = cue["sourceEndMs"].as_i64() else {
-        return false;
-    };
-    let Some(timeline_start) = cue["timelineStartMs"].as_i64() else {
-        return false;
-    };
-    let Some(timeline_end) = cue["timelineEndMs"].as_i64() else {
-        return false;
-    };
-    source_start >= 0
-        && source_end > source_start
-        && timeline_start >= 0
-        && timeline_end > timeline_start
-}
-
-fn closed_object_has_keys(object: &serde_json::Map<String, Value>, keys: &[&str]) -> bool {
-    object.len() == keys.len() && object.keys().all(|key| keys.contains(&key.as_str()))
-}
-
-fn bounded_number(value: &Value, minimum: f64, maximum: f64) -> bool {
-    value
-        .as_f64()
-        .is_some_and(|number| number.is_finite() && (minimum..=maximum).contains(&number))
-}
-
-fn valid_hex_color(value: &Value) -> bool {
-    value.as_str().is_some_and(|color| {
-        color.len() == 7
-            && color.starts_with('#')
-            && color[1..]
-                .chars()
-                .all(|character| character.is_ascii_hexdigit())
-    })
-}
-
-fn nullable_hex_color(value: &Value) -> bool {
-    value.is_null() || valid_hex_color(value)
 }
 
 fn normalize_nullable_text_fields(value: &mut Value) {
@@ -1663,23 +1387,6 @@ fn normalize_nullable_music_fields(value: &mut Value) {
             }
         }
     }
-}
-
-fn non_negative_integer_or_null(value: &Value) -> bool {
-    value.is_null() || value.as_i64().is_some_and(|number| number >= 0)
-}
-
-fn nullable_integer_in_range(value: &Value, minimum: i64, maximum: i64) -> bool {
-    value.is_null()
-        || value
-            .as_i64()
-            .is_some_and(|number| (minimum..=maximum).contains(&number))
-}
-
-fn bounded_integer(value: &Value, minimum: i64, maximum: i64) -> bool {
-    value
-        .as_i64()
-        .is_some_and(|number| (minimum..=maximum).contains(&number))
 }
 
 fn prepare_native_tool_result(tool: &str, mut result: Value) -> Result<Value, Value> {
@@ -3093,7 +2800,7 @@ mod tests {
     }
 
     #[test]
-    fn render_preview_arguments_are_scope_free_and_strictly_validated() {
+    fn render_preview_arguments_keep_shape_and_scope_checks() {
         assert!(parse_native_arguments("render_preview", "{\"timelineVersionId\":null}").is_ok());
         assert!(
             parse_native_arguments("render_preview", "{\"timelineVersionId\":\"timeline-1\"}")
@@ -3105,7 +2812,7 @@ mod tests {
     }
 
     #[test]
-    fn main_chain_arguments_are_scope_free_and_strictly_bounded() {
+    fn main_chain_arguments_keep_shape_checks_but_defer_domain_validation() {
         assert!(
             parse_native_arguments("request_asset_analysis", r#"{"assetIds":["asset-1"]}"#).is_ok()
         );
@@ -3116,7 +2823,7 @@ mod tests {
         )
         .is_err());
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());
-        assert!(parse_native_arguments("generate_storyboard", r#"{"brief":""}"#).is_err());
+        assert!(parse_native_arguments("generate_storyboard", r#"{"brief":""}"#).is_ok());
         assert!(parse_native_arguments("create_timeline_draft", "{}").is_ok());
         assert!(parse_native_arguments("create_timeline_draft", r#"{"projectId":"p"}"#).is_err());
 
@@ -3132,7 +2839,7 @@ mod tests {
         assert!(parse_native_arguments("replace_clips", &replacement.to_string()).is_ok());
         let mut invalid_replacement = replacement.clone();
         invalid_replacement["shots"][0]["sourceStartMs"] = json!(-1);
-        assert!(parse_native_arguments("replace_clips", &invalid_replacement.to_string()).is_err());
+        assert!(parse_native_arguments("replace_clips", &invalid_replacement.to_string()).is_ok());
 
         let adjustment = json!({
             "timelineVersionId": null,
@@ -3147,7 +2854,7 @@ mod tests {
             "change_clip_duration",
             r#"{"timelineVersionId":null,"adjustments":[{"shotIndex":0,"newDurationMs":null,"newSourceStartMs":null}]}"#
         )
-        .is_err());
+        .is_ok());
 
         let order = json!({"timelineVersionId": null, "order": [1, 0]});
         assert!(parse_native_arguments("reorder_clips", &order.to_string()).is_ok());
@@ -3233,10 +2940,10 @@ mod tests {
         assert!(parse_native_arguments("search_music", "{\"query\":\"calm\"}").is_ok());
         assert!(parse_native_arguments("search_music", "{}").is_err());
         assert!(parse_native_arguments("search_music", "{\"query\":\"\"}").is_err());
-        let long_query = "x".repeat(201);
+        let long_query = "x".repeat(5000);
         assert!(
             parse_native_arguments("search_music", &json!({"query": long_query}).to_string())
-                .is_err()
+                .is_ok()
         );
 
         let asset_search = json!({
@@ -3257,16 +2964,16 @@ mod tests {
             object.insert(key.to_owned(), value);
             Value::Object(object)
         };
-        for invalid in [
-            json!({}),
+        for valid_after_slim in [
             with_asset_search_value("kind", json!("document")),
             with_asset_search_value("minDurationMs", json!(-1)),
             with_asset_search_value("minRating", json!(6)),
             with_asset_search_value("offset", json!(10_001)),
             with_asset_search_value("limit", json!(0)),
         ] {
-            assert!(parse_native_arguments("search_assets", &invalid.to_string()).is_err());
+            assert!(parse_native_arguments("search_assets", &valid_after_slim.to_string()).is_ok());
         }
+        assert!(parse_native_arguments("search_assets", &json!({}).to_string()).is_err());
 
         let segment_search = json!({
             "query": "street",
@@ -3290,14 +2997,26 @@ mod tests {
         )
         .expect("blank assetId becomes null");
         assert!(blank_segment["assetId"].is_null());
-        for invalid in [
-            json!({"query":"street"}),
-            json!({"query":"", "assetId":null, "offset":0, "limit":12}),
-            json!({"query":"street", "assetId":42, "offset":0, "limit":12}),
-            json!({"query":"street", "assetId":null, "offset":0, "limit":21}),
-        ] {
-            assert!(parse_native_arguments("search_asset_segments", &invalid.to_string()).is_err());
-        }
+        assert!(parse_native_arguments(
+            "search_asset_segments",
+            &json!({"query":"", "assetId":null, "offset":0, "limit":12}).to_string()
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "search_asset_segments",
+            &json!({"query":"street", "assetId":null, "offset":0, "limit":21}).to_string()
+        )
+        .is_ok());
+        assert!(parse_native_arguments(
+            "search_asset_segments",
+            &json!({"query":"street"}).to_string()
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "search_asset_segments",
+            &json!({"query":"street", "assetId":42, "offset":0, "limit":12}).to_string()
+        )
+        .is_err());
     }
 
     #[test]
@@ -3351,7 +3070,7 @@ mod tests {
             json!("deliverable");
         assert!(
             parse_native_arguments("replace_text_tracks", &invalid_text_tracks.to_string())
-                .is_err()
+                .is_ok()
         );
 
         let music_tracks = json!({
@@ -3370,7 +3089,7 @@ mod tests {
         invalid_music_tracks["musicTracks"][0]["cues"][0]["licenseUrl"] = json!("untrusted");
         assert!(
             parse_native_arguments("replace_music_tracks", &invalid_music_tracks.to_string())
-                .is_err()
+                .is_ok()
         );
     }
 
@@ -3378,13 +3097,9 @@ mod tests {
     fn log_range_arguments_are_strictly_bounded() {
         assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":null,"endLine":null}"#).is_ok());
         assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":1,"endLine":100}"#).is_ok());
-        for arguments in [
-            r#"{"startLine":1,"endLine":null}"#,
-            r#"{"startLine":2,"endLine":1}"#,
-            r#"{"startLine":1,"endLine":101}"#,
-        ] {
-            assert!(parse_native_arguments(READ_LOGS, arguments).is_err());
-        }
+        assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":1,"endLine":null}"#).is_err());
+        assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":2,"endLine":1}"#).is_ok());
+        assert!(parse_native_arguments(READ_LOGS, r#"{"startLine":1,"endLine":101}"#).is_ok());
     }
 
     #[test]

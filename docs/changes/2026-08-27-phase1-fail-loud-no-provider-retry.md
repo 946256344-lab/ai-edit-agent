@@ -22,6 +22,13 @@
 - 5 个旧语义测试改为新行为断言（无工具声称完成 → Completed；确认挂起时全量目录仍可见、执行才被拦）。
 - 不改变 SQLite schema、公开 Tauri 命令或领域产物。`cargo test` 全部通过、零告警，前端 `tsc -b` 通过。
 
+
+## Phase 3: 参数校验瘦身 - parse_native_arguments 只留形状
+
+- `parse_native_arguments` 从 ~380 行瘦到 ~110 行：保留 `from_str` 类型错、`as_object` 顶层、`object.len/contains_key` 数量形状、`coerce_blank_strings_to_null`、`is_null||is_string||is_int||is_boolean` 最宽类型、`assetIds/shots/adjustments/order` 非空与 `normalize_nullable_*`；删除 `bounded_required_string(200/4000)`/`nullable_bounded_string_argument`/`bounded_integer`/`valid_clip_replacement|adjustment|text|music|hex_color|text_style|layout|bounded_number` 等 12+ 辅助及 `read_logs` 紧范围、`search_assets` 枚举/范围、`replace_*` 深层结构校验。
+- 新增 `required_non_empty_string` 单一辅助；入口不再拦 `brief:""/fontSize:999/len>100`，由 `timeline_voice.rs` 等下游以 `invalid_arguments` 真实报错，调试路径 `前端 → 作用域 → 类型/非空 → skill`。
+- 4 个 `strictly_bounded` 旧断言同步为新契约（长串/枚举/范围/深层注入改为 `is_ok()`），`render_preview/main_chain` 重命名为 `keep_shape…defer_domain_validation`。
+
 ## 文档同步
 
 - `docs/api.md`
