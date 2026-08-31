@@ -202,13 +202,14 @@ fn validate_model_route(
             {
                 return Err("Task route contradicted the active task.".to_owned());
             }
-            if confidence < CONTINUE_THRESHOLD {
-                return Ok(ambiguous_route_result(candidates, deferred_request));
-            }
+            // 候选只包含当前激活任务；低置信度时继续当前任务比打断用户更符合
+            // “自动一路跑到预览，只在必要时打断”的产品目标。真正的分流中断只
+            // 保留给模型显式要求的 clarify。
+            let _ = CONTINUE_THRESHOLD;
             Ok(result_for_candidate(
                 "continue_current",
                 candidate,
-                confidence,
+                confidence.max(CONTINUE_THRESHOLD),
                 &reason_code,
                 deferred_request,
             ))
@@ -223,7 +224,13 @@ fn validate_model_route(
                 .find(|candidate| candidate.task_id == task_id)
                 .ok_or_else(|| "Task route selected an out-of-scope task.".to_owned())?;
             if confidence < SWITCH_THRESHOLD {
-                return Ok(ambiguous_route_result(candidates, deferred_request));
+                return Ok(result_for_candidate(
+                    "continue_current",
+                    candidate,
+                    SWITCH_THRESHOLD,
+                    "task_route_default_continue_current",
+                    deferred_request,
+                ));
             }
             Ok(result_for_candidate(
                 "switch_existing",
@@ -235,6 +242,20 @@ fn validate_model_route(
         }
         "create_new" => {
             if confidence < CREATE_NEW_THRESHOLD {
+                if let Some(active_task_id) = active_task_id {
+                    if let Some(candidate) = candidates
+                        .iter()
+                        .find(|candidate| candidate.task_id == active_task_id)
+                    {
+                        return Ok(result_for_candidate(
+                            "continue_current",
+                            candidate,
+                            CREATE_NEW_THRESHOLD,
+                            "task_route_default_continue_current",
+                            deferred_request,
+                        ));
+                    }
+                }
                 return Ok(ambiguous_route_result(candidates, deferred_request));
             }
             Ok(TaskRouteResult {
@@ -287,13 +308,13 @@ fn ambiguous_route_result(
     deferred_request: Option<String>,
 ) -> TaskRouteResult {
     TaskRouteResult {
-        action: "clarify".to_owned(),
+        action: "continue_current".to_owned(),
         task_id: None,
         conversation_id: None,
-        confidence: 0.0,
-        question: Some("这条请求是继续当前剪辑任务，还是创建新的剪辑任务？".to_owned()),
+        confidence: 1.0,
+        question: None,
         suggested_title: None,
-        reason_code: "task_route_below_confidence_gate".to_owned(),
+        reason_code: "task_route_default_continue_current".to_owned(),
         deferred_request,
         route_receipt: None,
     }
@@ -905,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn low_confidence_route_is_closed_to_clarification() {
+    fn low_confidence_route_defaults_to_current_task_without_interrupting() {
         let candidates = vec![TaskCandidate {
             task_id: "task-a".to_owned(),
             conversation_id: Some("conversation-a".to_owned()),
@@ -919,7 +940,7 @@ mod tests {
             completed: Vec::new(),
             updated_at: 1,
         }];
-        // continue_current 低于 0.70 应触发 clarify
+        // continue_current 低于 0.70 应默认继续当前任务，不再打断用户
         let result = validate_model_route(
             ModelTaskRoute {
                 action: "continue_current".to_owned(),
@@ -936,10 +957,10 @@ mod tests {
             None,
         )
         .expect("validate route");
-        assert_eq!(result.action, "clarify");
-        assert_eq!(result.reason_code, "task_route_below_confidence_gate");
+        assert_eq!(result.action, "continue_current");
+        assert_eq!(result.task_id.as_deref(), Some("task-a"));
 
-        // create_new 低于 0.95 应触发 clarify
+        // create_new 低于 0.95 应回落为继续当前任务（安全默认），而不是静默建新任务
         let result2 = validate_model_route(
             ModelTaskRoute {
                 action: "create_new".to_owned(),
@@ -956,8 +977,8 @@ mod tests {
             None,
         )
         .expect("validate route");
-        assert_eq!(result2.action, "clarify");
-        assert_eq!(result2.reason_code, "task_route_below_confidence_gate");
+        assert_eq!(result2.action, "continue_current");
+        assert_eq!(result2.task_id.as_deref(), Some("task-a"));
     }
 
     #[test]

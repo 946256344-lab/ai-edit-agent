@@ -421,10 +421,6 @@ export async function submitConversationTurn(projectId: string, editingTaskId: s
   return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt })
 }
 
-export async function confirmStoryboardAndPreview(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<string>('confirm_storyboard_and_preview', { projectId, editingTaskId, conversationId, storyboardVersionId })
-}
 
 export async function resolveConversationTask(projectId: string, activeEditingTaskId: string | null, request: string) {
   requireDesktopRuntime()

@@ -55,7 +55,7 @@
 | `list_operation_logs` | `{ projectId, editingTaskId, agentTaskId? }` | `OperationLog[]` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
 | `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
-| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | 用户确认 storyboard 后，解决同目标的 pending clarification（如有），创建人工确认消息，并自动依次执行 `create_timeline_draft` + `render_preview`；返回后台任务 ID，完成时发出 `agent-edit-completed` 事件。 |
+| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 与前端成果工作区在 storyboard 成功后自动串联 timeline 与 preview；`src/lib/local-store.ts` 不再封装此命令。 |
 | `submit_conversation_turn` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `{ kind: 'run', agentTaskId }`（保留 `immediate` 兼容变体） | 后端先消费一次性 route receipt，随后普通聊天、澄清、项目事实和工具执行统一创建 Agent task 并进入 NativeToolLoop；不调用对话分类模型、不返回 route/goal decision，也不预选首个工具。异步终态先幂等写入原 conversation，再发出 `agent-edit-completed`。 |
 | `get_experimental_openai_oauth_status` | 无 | `ExperimentalOAuthStatus` | 仅从 Windows Credential Manager 读取连接状态。 |
 | `start_experimental_openai_oauth` | 无 | `ExperimentalOAuthStart` | 启动五分钟 loopback PKCE 回调并返回浏览器授权 URL；仅个人测试。 |
@@ -86,7 +86,7 @@ Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴�
 
 运行时覆盖：未限定的“创建草稿”、澄清、事实问答和普通聊天均进入 NativeToolLoop。非只读请求默认携带可逆本地工具；RequestToolPolicy 只按明确只读/禁止项缩小集合，并继续要求外部下载、付费配音和 Jianying 交付草稿的显式授权。模型不能通过文本自证产物已经完成。
 
-schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。Task Resolver 只把当前激活任务的快照交给路由模型，不读取同一项目内其他任务的 title、brief 或 `active_subgoal`。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。任何模型自动归属低于 0.85 都必须澄清，模型不能通过自报请求只读来降低门槛。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
+schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。Task Resolver 只把当前激活任务的快照交给路由模型，不读取同一项目内其他任务的 title、brief 或 `active_subgoal`。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。存在激活任务时，模型自动归属低于各动作门槛（continue 0.70、switch 0.85、create_new 0.95）默认回落为 `continue_current`，不再因低置信度打断用户；只有模型显式返回且通过校验的 `clarify` 才会提问。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
 
 桌面应用直接进入 Agent 会话。自然语言消息先调用 `resolve_conversation_task` 绑定项目/任务/会话；新任务与 conversation 由路由事务原子创建，已有任务则由后端校验项目作用域。前端激活返回的目标、保存用户消息后，将同一请求和 `routeReceipt` 交给 `submit_conversation_turn`；保存 user message 会在同一事务中唯一占用凭证，receipt 消费成功后直接进入 NativeToolLoop。若多个凭证引用同一 pending，胜出者消费时会原子删除其余未消费 sibling，且消息占用也要求 pending 仍有效。若保存或提交前中断，项目级 pending 请求仍保持可恢复；若提交失败发生在消费之后，用户消息已经存在于目标 conversation。
 
@@ -166,7 +166,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
-| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。内部先生成 beats，再对每个 beat 从全库排序取 5 个匹配预选并读关键帧后挑选，直到分镜填满或诚实留空。 |
+| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。内部先生成 beats，再对每个 beat 从全库排序取 5 个匹配预选并读关键帧后挑选，直到分镜填满或诚实留空。成功后同一调用内自动执行 `create_timeline_draft` 与 `render_preview`；工具结果 `status` 为 `ok`（可含 `timelineError`/`previewError`），不再返回 `needs_confirmation`。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
@@ -258,3 +258,4 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-08-20）：公开 Tauri 命令不变；agentloop/prompt.rs::load_native_message_history 内部函数新增 `editing_task_id` 参数，查询改为 JOIN `conversations` 表并同时验证 `conversation_id` 和 `editing_task_id`，确保严格会话隔离，防止跨会话数据泄漏。负向回归：conversation 与 editing_task 不匹配时历史必须为空。修改仅影响 Rust 内部 API，不改变任何 Tauri 命令签名或前端接口。
 维护记录（2026-08-20）：`resolve_conversation_task` 命令签名不变；候选从最近 12 个任务改为仅当前激活任务，路由模型不再接收兄弟任务的 title/brief/`active_subgoal`，也不再按名称切换已有任务。没有激活任务时直接创建新任务。澄清文案不再列举其他任务名称。
 维护记录（2026-08-27）：公开 Tauri 命令、参数、返回值与 SQLite schema 不变；Rust 后端 dead-code 清理删除未使用的旧 storyboard 入口与 Provider 包装函数，不影响 Provider 协议或 Agent 工具白名单。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
+维护记录（2026-08-31）：Agent `generate_storyboard` 成功后自动串联 timeline 与 preview；前端移除 storyboard 确认 UI 与 `confirmStoryboardAndPreview` invoke。Task Resolver 低置信度默认继续当前任务。`confirm_storyboard_and_preview` Tauri 命令保留兼容。见 docs/changes/2026-08-31-streamline-storyboard-to-preview.md。

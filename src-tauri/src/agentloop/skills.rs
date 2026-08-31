@@ -779,24 +779,84 @@ pub(super) fn apply_skill(
             let version_number = generated.version_number;
             let summary = generated.summary.clone();
             state.storyboard = Some(generated.clone());
-            state.timelines = Vec::new();
-            state.last_outcome = Some(AgentEditResult {
-                agent_task_id,
-                message: format!(
-                    "已按你的目标生成 storyboard（版本 {version}）。{summary}\n\n请确认该 storyboard，确认后系统将自动创建时间线并生成预览。",
-                    version = version_number
-                ),
-                storyboard: Some(generated),
-                timeline: None,
-                preview: None,
-                jianying_draft: None,
-            });
-            Ok(json!({
-                "tool": "generate_storyboard",
-                "status": "needs_confirmation",
-                "storyboardVersionId": storyboard_version_id,
-                "versionNumber": version_number
-            }))
+            state.timelines.clear();
+            let mut message = format!(
+                "已按你的目标生成 storyboard（版本 {version}）。{summary}",
+                version = version_number
+            );
+            let timeline_result = create_timeline_draft(
+                state.app.clone(),
+                state.project_id.to_owned(),
+                storyboard_version_id.clone(),
+            );
+            match timeline_result {
+                Ok(timeline) => {
+                    let timeline_version_id = timeline.id.clone();
+                    let timeline_version_number = timeline.version_number;
+                    state.timelines = vec![timeline.clone()];
+                    message.push_str(&format!(
+                        "\n\n已继续生成时间线 v{timeline_version_number}。"
+                    ));
+                    match render_preview(state.app.clone(), timeline_version_id.clone()) {
+                        Ok(preview) => {
+                            message.push_str("预览也已生成。");
+                            state.last_outcome = Some(AgentEditResult {
+                                agent_task_id,
+                                message,
+                                storyboard: Some(generated),
+                                timeline: Some(timeline),
+                                preview: Some(preview),
+                                jianying_draft: None,
+                            });
+                            Ok(json!({
+                                "tool": "generate_storyboard",
+                                "status": "ok",
+                                "storyboardVersionId": storyboard_version_id,
+                                "timelineVersionId": timeline_version_id,
+                                "previewTimelineVersionId": timeline_version_id,
+                                "versionNumber": version_number
+                            }))
+                        }
+                        Err(error) => {
+                            message.push_str(" 但预览生成失败，请稍后重试。 ");
+                            state.last_outcome = Some(AgentEditResult {
+                                agent_task_id,
+                                message,
+                                storyboard: Some(generated),
+                                timeline: Some(timeline),
+                                preview: None,
+                                jianying_draft: None,
+                            });
+                            Ok(json!({
+                                "tool": "generate_storyboard",
+                                "status": "ok",
+                                "storyboardVersionId": storyboard_version_id,
+                                "timelineVersionId": timeline_version_id,
+                                "versionNumber": version_number,
+                                "previewError": error,
+                            }))
+                        }
+                    }
+                }
+                Err(error) => {
+                    message.push_str("\n\n时间线自动生成失败，请稍后重试。 ");
+                    state.last_outcome = Some(AgentEditResult {
+                        agent_task_id,
+                        message,
+                        storyboard: Some(generated),
+                        timeline: None,
+                        preview: None,
+                        jianying_draft: None,
+                    });
+                    Ok(json!({
+                        "tool": "generate_storyboard",
+                        "status": "ok",
+                        "storyboardVersionId": storyboard_version_id,
+                        "versionNumber": version_number,
+                        "timelineError": error,
+                    }))
+                }
+            }
         }
         "create_timeline_draft" => {
             let storyboard = state

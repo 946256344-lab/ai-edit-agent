@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import {
-  confirmStoryboardAndPreview,
   createJianyingDraft,
   createTimelineDraft,
   generateStoryboard,
@@ -11,12 +10,10 @@ import {
   getLatestStoryboard,
   getLatestTimeline,
   listAgentTasks,
-  listMessages,
   listOperationLogs,
   listTimelineVersions,
   renderPreview,
 } from '../lib/local-store'
-import { toMessage } from '../lib/message'
 import type {
   AgentEditEvent,
   JianyingRegistrationStatus,
@@ -238,11 +235,33 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           sessionId,
-          `已根据当前剪辑会话创建故事板 v${generated.versionNumber}。你可以检查镜头，或继续要求创建草稿和预览。`,
+          `已根据当前剪辑会话创建故事板 v${generated.versionNumber}。系统会继续尝试生成时间线和预览。`,
         )
       }
       options.setSessionBrief(sessionId, brief)
       options.selectView('artifacts')
+      const nextTimeline = await createTimelineDraft(projectId, generated.id)
+      if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+      setTimeline(nextTimeline)
+      setTimelineState('draft')
+      if (options.session?.conversationId) {
+        await options.appendAgentMessage(
+          options.session.conversationId,
+          sessionId,
+          `内部时间线 v${nextTimeline.versionNumber} 已生成，继续生成预览。`,
+        )
+      }
+      const previewResult = await renderPreview(nextTimeline.id)
+      if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+      applyPreview(previewResult)
+      setTimelineState('preview-ready')
+      if (options.session?.conversationId) {
+        await options.appendAgentMessage(
+          options.session.conversationId,
+          sessionId,
+          '本地预览已经生成，可以直接查看。',
+        )
+      }
     } catch {
       if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
         setStoryboardError('Agent 未能生成可用 storyboard；没有修改现有版本。请确认素材分析已完成后重试。')
@@ -327,29 +346,6 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   }
 
   // 返回后台任务 ID，供 App 层注册 pendingEdit 并驱动 reconciliation 轮询。
-  async function confirmStoryboard(): Promise<string> {
-    if (!options.projectId || !options.sessionId || !options.session || !storyboard) {
-      throw new Error('Storyboard confirmation preconditions not met.')
-    }
-    const conversationId = options.session.conversationId
-    if (!conversationId) throw new Error('No active conversation.')
-    const projectId = options.projectId
-    const sessionId = options.sessionId
-    const storyboardId = storyboard.id
-    const taskId = await confirmStoryboardAndPreview(projectId, sessionId, conversationId, storyboardId)
-    const [artifactSnapshot, nextMessages, nextAgentTasks] = await Promise.all([
-      loadSession(projectId, sessionId),
-      listMessages(conversationId),
-      listAgentTasks(projectId, sessionId, conversationId),
-    ])
-    if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
-      options.setMessages(nextMessages.map(toMessage))
-      options.setAgentTasks(nextAgentTasks)
-      applySessionSnapshot(artifactSnapshot)
-    }
-    return taskId
-  }
-
   return {
     storyboard,
     timeline,
@@ -385,7 +381,6 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       createTimeline: () => void createTimeline(),
       renderPreview: () => void createPreview(),
       createJianyingDraft: () => void deliverJianyingDraft(),
-      confirmStoryboard: () => confirmStoryboard(),
     },
   }
 }
