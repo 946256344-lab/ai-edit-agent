@@ -741,10 +741,25 @@ pub struct StoryboardShot {
     pub beat_id: String,
     #[serde(default = "default_storyboard_match_level")]
     pub match_level: String,
+    /// 该 shot 在其所属 beat 内的子镜头序号（1-based）。
+    /// 未拆分的 beat 恒为 1；拆分后按组内连续编号。
+    #[serde(default)]
+    pub beat_part_index: i64,
+    /// 该 shot 所属 beat 拆分出的子镜头总数；未拆分时为 1。
+    #[serde(default)]
+    pub beat_part_count: i64,
+    /// 子镜头角色：lead（主镜头）/ bridge（中间过渡）/ tail（收尾）。
+    /// 未拆分的 beat 恒为 lead。
+    #[serde(default = "default_storyboard_split_role")]
+    pub split_role: String,
 }
 
 fn default_storyboard_match_level() -> String {
     "contextual".to_owned()
+}
+
+fn default_storyboard_split_role() -> String {
+    "lead".to_owned()
 }
 
 #[derive(Clone, Deserialize, Serialize)]

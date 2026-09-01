@@ -4,9 +4,12 @@
 mod keyframes;
 pub(crate) mod multimodal;
 pub(crate) mod phases;
+pub(crate) mod repair;
 mod scoring;
 pub(crate) mod semantic;
 mod validation;
+
+use crate::storyboard::repair::{RepairPacket, StoryboardIssue};
 
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
@@ -25,6 +28,8 @@ use uuid::Uuid;
 /// provider never blocks the agent loop forever.
 const STORYBOARD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_STORYBOARD_REVISIONS: usize = 3;
+const MAX_PHASE1_REVISIONS: usize = 3;
+const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
 
 fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>) -> String {
     let message = message.into();
@@ -194,11 +199,30 @@ pub(crate) fn validate_storyboard(
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
-    if content.script_mode == "full_script" && total_duration < minimum_storyboard_duration(brief) {
-        return Err(storyboard_repair_message(
-            "Storyboard is too short for the supplied full-script narration.",
-            content.shots.iter().map(|shot| shot.order_index).collect(),
-        ));
+    if content.script_mode == "full_script" {
+        let estimated_duration = minimum_storyboard_duration(brief);
+        // 镜头数下限按未截断的朗读时长计算，避免短文案被强制拆成多个镜头。
+        let raw_estimated_duration = estimated_storyboard_duration_ms(brief);
+        let minimum_shot_count = ((raw_estimated_duration + 7_999) / 8_000).max(1) as usize;
+        if content.shots.len() < minimum_shot_count {
+            return Err(storyboard_repair_message(
+                format!(
+                    "Storyboard has too few shots for the supplied full-script narration. Estimated narration duration is about {} ms, so the storyboard should contain at least {} shots to keep each shot near 8 seconds or less.",
+                    raw_estimated_duration,
+                    minimum_shot_count
+                ),
+                content.shots.iter().map(|shot| shot.order_index).collect(),
+            ));
+        }
+        if total_duration < estimated_duration {
+            return Err(storyboard_repair_message(
+                format!(
+                    "Storyboard is too short for the supplied full-script narration. Estimated narration duration is about {} ms.",
+                    estimated_duration
+                ),
+                content.shots.iter().map(|shot| shot.order_index).collect(),
+            ));
+        }
     }
     if content.beats.is_empty() || content.beats.len() > 30 {
         return Err(storyboard_repair_message(
@@ -215,6 +239,17 @@ pub(crate) fn validate_storyboard(
         {
             return Err(storyboard_repair_message(
                 "Storyboard beats are invalid.",
+                content.shots.iter().map(|shot| shot.order_index).collect(),
+            ));
+        }
+        if estimated_storyboard_duration_ms(&beat.narration) > MAX_BEAT_SPOKEN_MS {
+            return Err(storyboard_repair_message(
+                format!(
+                    "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
+                    beat.id,
+                    estimated_storyboard_duration_ms(&beat.narration),
+                    MAX_BEAT_SPOKEN_MS
+                ),
                 content.shots.iter().map(|shot| shot.order_index).collect(),
             ));
         }
@@ -416,16 +451,59 @@ fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
     (shot_count * 2 / 5).max(1)
 }
 
-fn minimum_storyboard_duration(brief: &str) -> i64 {
-    let word_count = brief
-        .split_whitespace()
-        .filter(|word| !word.is_empty())
-        .count();
-    if word_count < 20 {
-        10_000
-    } else {
-        (word_count as i64 * 300).clamp(10_000, 45_000)
+fn estimated_english_words(text: &str) -> f64 {
+    let mut words: f64 = 0.0;
+    let mut ascii_run = false;
+    let mut cjk_count: f64 = 0.0;
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() {
+            if cjk_count > 0.0 {
+                words += (cjk_count / 2.0).ceil();
+                cjk_count = 0.0;
+            }
+            if !ascii_run {
+                words += 1.0;
+                ascii_run = true;
+            }
+        } else if ('\u{4e00}'..='\u{9fff}').contains(&character) {
+            ascii_run = false;
+            cjk_count += 1.0;
+            if cjk_count >= 2.0 {
+                words += 1.0;
+                cjk_count = 0.0;
+            }
+        } else {
+            ascii_run = false;
+            if cjk_count > 0.0 {
+                words += (cjk_count / 2.0).ceil();
+                cjk_count = 0.0;
+            }
+        }
     }
+    if cjk_count > 0.0 {
+        words += (cjk_count / 2.0).ceil();
+    }
+    words.max(1.0)
+}
+
+fn estimated_storyboard_duration_ms(brief: &str) -> i64 {
+    let words = estimated_english_words(brief);
+    (words * 300.0).round() as i64
+}
+
+fn minimum_storyboard_duration(brief: &str) -> i64 {
+    estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
+}
+
+/// 从口播文本生成简短字幕：取第一句，最多 40 个字符。
+/// 模型漏写 onScreenText 时作为兜底，保证成片有可见字幕。
+fn subtitle_text_from_narration(narration: &str) -> String {
+    let first_sentence = narration
+        .split(|character: char| character == '。' || character == '！' || character == '？')
+        .map(str::trim)
+        .find(|part| !part.is_empty())
+        .unwrap_or(narration.trim());
+    first_sentence.chars().take(40).collect()
 }
 
 fn normalize_storyboard_candidate(
@@ -493,6 +571,38 @@ fn normalize_storyboard_candidate(
     for (index, shot) in content.shots.iter_mut().enumerate() {
         shot.order_index = index as i64 + 1;
     }
+    // 按 beat 分组补全子镜头字段：同一 beat 的连续 shot 重新编号并标注角色，
+    // 保证模型未返回这些字段时数据也自洽。
+    let mut group_cursor = 0usize;
+    while group_cursor < content.shots.len() {
+        let group_beat_id = content.shots[group_cursor].beat_id.clone();
+        let mut group_end = group_cursor;
+        while group_end < content.shots.len()
+            && content.shots[group_end].beat_id == group_beat_id
+        {
+            group_end += 1;
+        }
+        let group_count = (group_end - group_cursor) as i64;
+        for (offset, shot) in content
+            .shots
+            .iter_mut()
+            .enumerate()
+            .take(group_end)
+            .skip(group_cursor)
+        {
+            let part_index = (offset - group_cursor + 1) as i64;
+            shot.beat_part_index = part_index;
+            shot.beat_part_count = group_count;
+            shot.split_role = if group_count <= 1 || part_index == 1 {
+                "lead".to_owned()
+            } else if part_index == group_count {
+                "tail".to_owned()
+            } else {
+                "bridge".to_owned()
+            };
+        }
+        group_cursor = group_end;
+    }
     let beat_narration = content
         .beats
         .iter()
@@ -512,6 +622,9 @@ fn normalize_storyboard_candidate(
                 .cloned()
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| shot.purpose.trim().to_owned());
+        }
+        if shot.on_screen_text.trim().is_empty() && !shot.narration_text.trim().is_empty() {
+            shot.on_screen_text = subtitle_text_from_narration(&shot.narration_text);
         }
     }
     let total_duration: i64 = content
@@ -744,8 +857,9 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        minimum_storyboard_duration, normalize_storyboard_candidate, storyboard_sources,
-        storyboard_usage_counts, validate_storyboard,
+        estimated_storyboard_duration_ms, minimum_storyboard_duration,
+        normalize_storyboard_candidate, storyboard_sources, storyboard_usage_counts,
+        validate_storyboard,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, TimelineClip,
@@ -803,6 +917,9 @@ mod tests {
                 reason: "The verified product view establishes context.".to_owned(),
                 beat_id: "context".to_owned(),
                 match_level: match_level.to_owned(),
+                beat_part_index: 1,
+                beat_part_count: 1,
+                split_role: "lead".to_owned(),
             }],
         }
     }
@@ -989,6 +1106,9 @@ mod tests {
             reason: "This deliberately overlaps the first test shot.".to_owned(),
             beat_id: "context".to_owned(),
             match_level: "direct".to_owned(),
+            beat_part_index: 1,
+            beat_part_count: 1,
+            split_role: "lead".to_owned(),
         });
         assert!(validate_storyboard(&storyboard, &[source()], "brief").is_err());
     }
@@ -1000,6 +1120,76 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(minimum_storyboard_duration(&brief), 36_000);
+    }
+
+    #[test]
+    fn cjk_reading_duration_counts_two_characters_as_one_word() {
+        // 12 个汉字 ≈ 6 个英文词 ≈ 1800ms。
+        let brief = "一二三四五六七八九十甲乙";
+        assert_eq!(estimated_storyboard_duration_ms(brief), 1_800);
+    }
+
+    #[test]
+    fn mixed_reading_duration_sums_ascii_and_cjk_units() {
+        // coffee / machine / 上海 = 3 个词元 ≈ 900ms。
+        let brief = "coffee machine 上海";
+        assert_eq!(estimated_storyboard_duration_ms(brief), 900);
+    }
+
+    #[test]
+    fn full_script_rejects_too_few_shots_for_long_narration() {
+        let brief = std::iter::repeat("word")
+            .take(120)
+            .collect::<Vec<_>>()
+            .join(" ");
+        // 120 词 ≈ 36s，至少 5 个镜头。content 只有 1 个镜头。
+        assert!(validate_storyboard(&content("direct"), &[source()], &brief).is_err());
+    }
+
+    #[test]
+    fn full_script_accepts_enough_shots_for_long_narration() {
+        let brief = std::iter::repeat("word")
+            .take(120)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut storyboard = content("direct");
+        let mut sources = vec![source()];
+        // 补足到 5 个镜头，每个 8 秒，总计 40s > 36s，且素材各不相同。
+        for index in 2..=5 {
+            let asset_id = format!("asset-{}", index);
+            let mut extra_source = source();
+            extra_source.asset_id = asset_id.clone();
+            storyboard.shots.push(StoryboardShot {
+                order_index: index,
+                duration_ms: 8_000,
+                purpose: "Additional shot".to_owned(),
+                on_screen_text: String::new(),
+                narration_text: String::new(),
+                asset_id,
+                source_start_ms: 0,
+                source_end_ms: 8_000,
+                reason: "Provides enough shots for the narration.".to_owned(),
+                beat_id: "context".to_owned(),
+                match_level: "contextual".to_owned(),
+                beat_part_index: 1,
+                beat_part_count: 1,
+                split_role: "lead".to_owned(),
+            });
+            sources.push(extra_source);
+        }
+        storyboard.target_duration_ms = 40_000;
+        assert!(validate_storyboard(&storyboard, &sources, &brief).is_ok());
+    }
+
+    #[test]
+    fn beat_narration_longer_than_limit_is_rejected() {
+        let mut storyboard = content("direct");
+        // 40 个词 ≈ 12s，超过 8s 上限。
+        storyboard.beats[0].narration = std::iter::repeat("word")
+            .take(40)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(validate_storyboard(&storyboard, &[source()], "brief").is_err());
     }
 
     #[test]
@@ -1041,6 +1231,9 @@ mod tests {
             reason: "Same source reused.".to_owned(),
             beat_id: "second".to_owned(),
             match_level: "direct".to_owned(),
+            beat_part_index: 1,
+            beat_part_count: 1,
+            split_role: "lead".to_owned(),
         });
         let normalized = normalize_storyboard_candidate(storyboard, &[long.clone()], "brief");
         assert!(validate_non_overlapping_after(&normalized, &[long]));
@@ -1059,10 +1252,21 @@ mod tests {
             normalized.shots[0].narration_text,
             "This is the opening scene."
         );
-        assert_ne!(
-            normalized.shots[0].narration_text,
-            normalized.shots[0].on_screen_text
-        );
+        // 模型漏写字幕时，字幕应从口播首句兜底生成（非空且简短）。
+        assert!(!normalized.shots[0].on_screen_text.is_empty());
+        assert!(normalized.shots[0].on_screen_text.chars().count() <= 40);
+    }
+
+    #[test]
+    fn normalize_fills_missing_subtitle_from_narration() {
+        let mut storyboard = content("direct");
+        storyboard.shots[0].on_screen_text = String::new();
+        storyboard.shots[0].narration_text =
+            "我们承诺持续生产稳定质量。任何降低成本的做法都会被复审。".to_owned();
+        let normalized = normalize_storyboard_candidate(storyboard, &[source()], "brief");
+        let subtitle = normalized.shots[0].on_screen_text.as_str();
+        assert_eq!(subtitle, "我们承诺持续生产稳定质量");
+        assert!(subtitle.chars().count() <= 40);
     }
 
     #[test]
@@ -1079,6 +1283,45 @@ mod tests {
         sources: &[StoryboardSource],
     ) -> bool {
         super::validate_non_overlapping_video_sources(&content.shots, sources).is_ok()
+    }
+
+    #[test]
+    fn normalize_labels_split_shots_by_beat_group() {
+        let mut storyboard = content("direct");
+        // beat context 拆成三个连续镜头，最后一个故意不带 part 字段，
+        // 验证 normalize 会按 beat 分组补全（1-based 连续编号 + lead/bridge/tail）。
+        for index in 2..=3 {
+            let mut split_shot = storyboard.shots[0].clone();
+            split_shot.order_index = index;
+            split_shot.beat_id = "context".to_owned();
+            split_shot.asset_id = "asset-1".to_owned();
+            split_shot.source_start_ms = 0;
+            split_shot.source_end_ms = 10_000;
+            if index == 3 {
+                split_shot.beat_part_index = 0;
+                split_shot.beat_part_count = 0;
+                split_shot.split_role = String::new();
+            }
+            storyboard.shots.push(split_shot);
+        }
+        let normalized = normalize_storyboard_candidate(storyboard, &[source(), source()], "brief");
+        let context_shots = normalized
+            .shots
+            .iter()
+            .filter(|shot| shot.beat_id == "context")
+            .collect::<Vec<_>>();
+        assert_eq!(context_shots.len(), 3);
+        let part_indices = context_shots
+            .iter()
+            .map(|shot| shot.beat_part_index)
+            .collect::<Vec<_>>();
+        assert_eq!(part_indices, vec![1, 2, 3]);
+        assert!(context_shots
+            .iter()
+            .all(|shot| shot.beat_part_count == 3));
+        assert_eq!(context_shots[0].split_role, "lead");
+        assert_eq!(context_shots[1].split_role, "bridge");
+        assert_eq!(context_shots[2].split_role, "tail");
     }
 
     #[test]
@@ -1219,8 +1462,53 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1: 生成叙事结构
-    let narrative = phases::phase1_generate_narrative(&access, brief)?;
+    // Phase 1: 生成叙事结构。若 beat 数或朗读时长不满足下限，带反馈重试。
+    let mut phase1_feedback = None;
+    let narrative = (0..MAX_PHASE1_REVISIONS).find_map(|revision| {
+        log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
+        match phases::phase1_generate_narrative(&access, brief, phase1_feedback.as_deref()) {
+            Ok(candidate) => {
+                let estimated_duration = minimum_storyboard_duration(brief);
+                let minimum_shot_count =
+                    ((estimated_duration + 7_999) / 8_000).max(1) as usize;
+                let beat_issue = (candidate.script_mode == "full_script"
+                    && candidate.beats.len() < minimum_shot_count)
+                    .then(|| {
+                        format!(
+                            "Storyboard should contain at least {} beats for the estimated {} ms of full-script narration; only {} beats were provided.",
+                            minimum_shot_count, estimated_duration, candidate.beats.len()
+                        )
+                    });
+                let narration_issue = candidate.beats.iter().find(|beat| {
+                    let beat_duration = estimated_storyboard_duration_ms(&beat.narration);
+                    beat_duration > MAX_BEAT_SPOKEN_MS
+                }).map(|beat| {
+                    format!(
+                        "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
+                        beat.id,
+                        estimated_storyboard_duration_ms(&beat.narration),
+                        MAX_BEAT_SPOKEN_MS
+                    )
+                });
+                let issue = beat_issue.or(narration_issue);
+                if issue.is_none() {
+                    Some(candidate)
+                } else {
+                    log::warn!("Phase 1 narrative rejected: {}", issue.clone().unwrap_or_default());
+                    phase1_feedback = issue;
+                    None
+                }
+            }
+            Err(error) => {
+                log::warn!("Phase 1 request failed: {error}");
+                phase1_feedback = Some(error);
+                None
+            }
+        }
+    }).ok_or_else(|| {
+        phase1_feedback
+            .unwrap_or_else(|| "Storyboard narrative structure could not be generated.".to_owned())
+    })?;
     log::info!(
         "Phase 1 complete: narrative with {} beats, target_duration={}ms",
         narrative.beats.len(),
@@ -1243,7 +1531,12 @@ fn generate_storyboard_internal(
     );
 
     // Phase 3: 精剪与验证重试循环
-    let mut feedback = None;
+    //
+    // 流程：模型生成候选 → Rust 收集结构性问题 → 语义问题打包成 RepairPacket
+    // 回传模型继续决策 → Rust 做最后机械兜底（normalize + 只修正无歧义字段）。
+    // Err 仅表示模型请求失败或 JSON 无法解析，直接重试；问题越修越少不重跑整条链路。
+    // 每次回传携带：① 已确认正确的冻结镜头 ② 修复记忆（前几轮修了什么、结果如何）。
+    let mut repair: Option<RepairPacket> = None;
     let mut content = None;
     for revision in 0..MAX_STORYBOARD_REVISIONS {
         log::info!(
@@ -1251,43 +1544,151 @@ fn generate_storyboard_internal(
             revision + 1,
             MAX_STORYBOARD_REVISIONS
         );
-        match phases::phase3_fine_edit(&access, brief, &rough, &sources, feedback.as_deref()) {
-            Ok(candidate) => {
+        match phases::phase3_fine_edit(&access, brief, &rough, &sources, repair.as_ref()) {
+            Ok((candidate, issues)) => {
                 log::info!(
-                    "Phase 3 produced candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}",
+                    "Phase 3 produced candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}, issues={}",
                     candidate.shots.len(),
                     candidate.beats.len(),
                     candidate.target_duration_ms,
-                    candidate.uncovered_beat_ids.len()
+                    candidate.uncovered_beat_ids.len(),
+                    issues.len()
                 );
-                // 规范化数值约束
-                let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
-                match validate_storyboard(&candidate, &sources, brief) {
-                    Ok(()) => {
-                        log::info!("Storyboard validation passed.");
-                        content = Some(candidate);
-                        break;
+                if issues.is_empty()
+                    || !issues
+                        .iter()
+                        .any(|issue| issue.needs_model_decision)
+                {
+                    // 无问题，或只剩 Rust 可机械兜底的问题：接受候选，做最后机械修正。
+                    let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
+                    match validate_storyboard(&candidate, &sources, brief) {
+                        Ok(()) => {
+                            log::info!("Storyboard validation passed.");
+                            content = Some(candidate);
+                            break;
+                        }
+                        Err(error) => {
+                            log::warn!("Phase 3 validation failed: {error}");
+                            repair = Some(RepairPacket::new(
+                                revision + 1,
+                                vec![StoryboardIssue::new(
+                                    "validation",
+                                    error,
+                                    true,
+                                )],
+                            ));
+                        }
                     }
-                    Err(error) => {
-                        log::warn!("Phase 3 validation failed: {error}");
-                        feedback = Some(error);
+                } else {
+                    // 有语义问题：把结构化修复包回传给模型，让模型做下一步决策。
+                    let semantic = issues
+                        .iter()
+                        .collect::<Vec<_>>();
+                    for issue in &semantic {
+                        log::warn!(
+                            "Phase 3 semantic issue [{}]: {} (shots={:?})",
+                            issue.kind,
+                            issue.message,
+                            issue.affected_shots
+                        );
                     }
+                    // 冻结：未被任何问题点名的镜头视为已确认正确，模型应保持不动。
+                    let frozen = crate::storyboard::repair::frozen_shot_indices(
+                        candidate.shots.iter().map(|shot| shot.order_index),
+                        &issues,
+                    );
+                    let previous_shots = candidate
+                        .shots
+                        .iter()
+                        .map(|shot| crate::storyboard::repair::ShotSnapshot {
+                            shot_index: shot.order_index,
+                            beat_id: shot.beat_id.clone(),
+                            asset_id: shot.asset_id.clone(),
+                            duration_ms: shot.duration_ms,
+                            source_start_ms: shot.source_start_ms,
+                            source_end_ms: shot.source_end_ms,
+                        })
+                        .collect::<Vec<_>>();
+                    // 修复记忆：记录"这套修复指令本身用到的模型尝试历史"。
+                    // 上一轮生成的候选经过本轮的校验，若某类问题不再出现，
+                    // 说明模型上一轮修对了，记入记忆避免模型回退。
+                    let repair_history = if let Some(previous) = repair.as_ref() {
+                        let unresolved_kinds = issues
+                            .iter()
+                            .map(|issue| issue.kind.clone())
+                            .collect::<std::collections::HashSet<_>>();
+                        let mut history = previous
+                            .repair_history
+                            .iter()
+                            .map(|record| {
+                                let mut latest = record.clone();
+                                if !unresolved_kinds.contains(&record.kind) {
+                                    latest.resolved = true;
+                                }
+                                latest
+                            })
+                            .collect::<Vec<_>>();
+                        history.extend(issues.iter().map(|issue| {
+                            crate::storyboard::repair::RepairRecord::new(
+                                revision + 1,
+                                issue.kind.clone(),
+                                issue.affected_shots.clone(),
+                                false,
+                            )
+                        }));
+                        history
+                    } else {
+                        issues
+                            .iter()
+                            .map(|issue| {
+                                crate::storyboard::repair::RepairRecord::new(
+                                    revision + 1,
+                                    issue.kind.clone(),
+                                    issue.affected_shots.clone(),
+                                    false,
+                                )
+                            })
+                            .collect()
+                    };
+                    repair = Some(RepairPacket::with_context(
+                        revision + 1,
+                        issues,
+                        previous_shots,
+                        frozen,
+                        repair_history,
+                    ));
                 }
             }
             Err(error) => {
                 log::warn!("Phase 3 request failed: {error}");
-                feedback = Some(error);
+                repair = Some(RepairPacket::new(
+                    revision + 1,
+                    vec![StoryboardIssue::new(
+                        "request_failed",
+                        error,
+                        false,
+                    )],
+                ));
             }
         }
     }
     let content = content.ok_or_else(|| {
+        let needs_model = repair
+            .as_ref()
+            .map(RepairPacket::needs_model_decision)
+            .unwrap_or(false);
+        let unresolved = repair
+            .as_ref()
+            .and_then(|packet| packet.issues.first())
+            .map(|issue| issue.message.clone())
+            .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned());
         log::error!(
-            "Storyboard generation failed after {} Phase 3 attempts. final_feedback={:?}",
+            "Storyboard generation failed after {} Phase 3 attempts. needs_model_decision={}, unresolved_issue={}",
             MAX_STORYBOARD_REVISIONS,
-            feedback
+            needs_model,
+            unresolved
         );
-        feedback
-            .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned())
+        unresolved
     })?;
     log::info!("Storyboard content finalized. Persisting to database.");
     let version_number = connection.query_row(

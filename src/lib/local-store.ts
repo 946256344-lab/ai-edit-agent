@@ -193,6 +193,15 @@ export type TimelineVersion = {
 export type PreviewQualityReport = { checks: Array<{ category: string; severity: string; message: string; shotIndices: number[] }> }
 
 export type PreviewResult = { timelineVersionId: string; previewPath: string; qualityReport: PreviewQualityReport }
+export type VoiceoverApplyResult = {
+  assetId: string
+  generationId: string
+  durationMs: number
+  timelineVersionId: string
+  subtitleCueCount: number
+  reusedCache: boolean
+  qualityWarnings: PreviewQualityReport['checks']
+}
 export type JianyingDraftResult = {
   draftDirectory: string
   draftContentPath: string
@@ -390,6 +399,7 @@ export async function getAssetEvidence(assetId: string) { requireDesktopRuntime(
 export async function generateStoryboard(projectId: string, editingTaskId: string, brief: string) { requireDesktopRuntime(); return invoke<StoryboardVersion>('generate_storyboard', { projectId, editingTaskId, brief }) }
 export async function getLatestStoryboard(projectId: string, editingTaskId: string) { requireDesktopRuntime(); return invoke<StoryboardVersion | null>('get_latest_storyboard', { projectId, editingTaskId }) }
 export async function createTimelineDraft(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<TimelineVersion>('create_timeline_draft', { projectId, storyboardVersionId }) }
+export async function synthesizeStoryboardVoiceover(projectId: string, editingTaskId: string, conversationId: string, timelineVersionId: string) { requireDesktopRuntime(); return invoke<VoiceoverApplyResult>('synthesize_storyboard_voiceover', { projectId, editingTaskId, conversationId, timelineVersionId }) }
 
 export async function getLatestTimeline(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<LatestTimeline | null>('get_latest_timeline', { projectId, storyboardVersionId }) }
 

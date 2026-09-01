@@ -123,6 +123,7 @@ pub fn run() {
             agent::submit_conversation_turn,
             agent::execute_agent_edit,
             confirmation::confirm_storyboard_and_preview,
+            voice_provider::synthesize_storyboard_voiceover,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,6 +13,7 @@ import {
   listOperationLogs,
   listTimelineVersions,
   renderPreview,
+  synthesizeStoryboardVoiceover,
 } from '../lib/local-store'
 import type {
   AgentEditEvent,
@@ -251,7 +252,39 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           `内部时间线 v${nextTimeline.versionNumber} 已生成，继续生成预览。`,
         )
       }
-      const previewResult = await renderPreview(nextTimeline.id)
+      // 自动合成配音+对齐字幕：失败（例如未配置 ElevenLabs）时跳过，
+      // 仍用当前 timeline 渲染预览，不阻塞主流程。
+      let previewTimeline = nextTimeline
+      const conversationId = options.session?.conversationId
+      if (conversationId) {
+        try {
+          const voiced = await synthesizeStoryboardVoiceover(
+            projectId,
+            sessionId,
+            conversationId,
+            nextTimeline.id,
+          )
+          if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+          const latest = await getLatestTimeline(projectId, generated.id)
+          if (latest?.timeline) {
+            previewTimeline = latest.timeline
+            setTimeline(latest.timeline)
+          }
+          await options.appendAgentMessage(
+            conversationId,
+            sessionId,
+            `已自动合成配音并生成对齐字幕（cue=${voiced.subtitleCueCount}）。`,
+          )
+        } catch (error) {
+          console.warn(`Automatic voiceover skipped: ${error}`)
+          await options.appendAgentMessage(
+            conversationId,
+            sessionId,
+            '自动配音暂不可用（检查 ElevenLabs 配置），预览将不包含配音。',
+          )
+        }
+      }
+      const previewResult = await renderPreview(previewTimeline.id)
       if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
       applyPreview(previewResult)
       setTimelineState('preview-ready')

@@ -97,6 +97,9 @@ mod tests {
                 reason: "test reason".to_owned(),
                 beat_id: "beat-1".to_owned(),
                 match_level: "direct".to_owned(),
+                beat_part_index: 1,
+                beat_part_count: 1,
+                split_role: "lead".to_owned(),
             }],
         };
 

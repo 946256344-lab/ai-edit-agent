@@ -680,6 +680,42 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     ))
 }
 
+/// storyboard 生成后自动合成配音+对齐字幕：从 timeline 反查其 storyboard，取全部
+/// shot 的 narrationText 合成整段语音，写回为 timeline 新版本。前端在
+/// create_timeline_draft 之后调用，把返回的新版本用于渲染预览。
+#[tauri::command]
+pub fn synthesize_storyboard_voiceover(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    conversation_id: String,
+    timeline_version_id: String,
+) -> Result<VoiceoverApplyResult, String> {
+    let connection = crate::db::open_connection(&app)?;
+    let timeline = crate::timeline::load_timeline_version(&connection, &timeline_version_id)?;
+    if timeline.project_id != project_id {
+        return Err("Timeline does not belong to this project.".to_owned());
+    }
+    let storyboard = crate::storyboard::load_storyboard_version(
+        &connection,
+        &timeline.storyboard_version_id,
+    )?;
+    let narration = storyboard_narration_text(Some(&storyboard))
+        .ok_or_else(|| "Storyboard has no narration text to synthesize.".to_owned())?;
+    let (_version, result) = synthesize_voiceover_for_timeline(
+        &app,
+        &connection,
+        &project_id,
+        &editing_task_id,
+        &conversation_id,
+        "",
+        &timeline,
+        &narration,
+        None,
+    )?;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

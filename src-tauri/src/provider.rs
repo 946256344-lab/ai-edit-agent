@@ -857,13 +857,21 @@ fn post_model_payload_with_custom_model(
             match request_builder.send_string(&request.to_string()) {
                 Ok(response) => {
                     let status = response.status();
-                    let body = response.into_string().map_err(|_| {
+                    let body = response.into_string().map_err(|error| {
                         format!(
-                            "自定义 API 响应为空（{}，模型 {}）",
+                            "自定义 API 读取响应失败（{}，模型 {}）:{}",
                             config.base_url,
-                            custom_model.unwrap_or(&config.model)
+                            custom_model.unwrap_or(&config.model),
+                            error
                         )
                     })?;
+                    if body.trim().is_empty() {
+                        return Err(format!(
+                            "自定义 API 返回空响应体（{}，模型 {}）:HTTP {status}",
+                            config.base_url,
+                            custom_model.unwrap_or(&config.model)
+                        ));
+                    }
                     observe_wire_response(
                         observe_response,
                         status,
