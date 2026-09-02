@@ -9,6 +9,8 @@ import { STUDIO_BASE_PX_PER_SEC, STUDIO_ZOOM_MAX, STUDIO_ZOOM_MIN } from '../hoo
 import type { Mash } from '../lib/moviemasher-adapter'
 import { SUBTITLE_PRESETS } from '../lib/subtitle-presets'
 import { attachJassub } from '../lib/jassub-adapter'
+import { FPS_30 } from '../opencut/time/frameRate'
+import { formatRulerLabel, getRulerConfig as getOpencutRulerConfig } from '../opencut/timeline/ruler-utils'
 
 type StudioWorkspaceProps = {
   controller: StudioWorkspaceController
@@ -24,28 +26,7 @@ const RULER_H = 22
 const GAP = 6
 const PADDING_TOP = 2
 const TRACK_H: Record<string, number> = { video: 65, overlay: 56, text: 26, audio: 50, graphic: 26, effect: 26 }
-const MIN_LABEL_SPACING = 120
-const MIN_TICK_SPACING = 18
-const LABEL_INTERVALS = [2, 3, 5, 10, 15] as const
-const TICK_INTERVALS = [1, 2, 3, 5, 10, 15] as const
-const SECOND_MULTS = [1, 2, 3, 5, 10, 15, 30, 60, 120, 300] as const
 
-function getRulerConfig(zoomLevel: number, fps = 30) {
-  const pps = STUDIO_BASE_PX_PER_SEC * zoomLevel
-  const ppf = pps / fps
-  const find = (minPx: number, frames: readonly number[]) => {
-    for (const f of frames) if (ppf * f >= minPx) return f / fps
-    for (const s of SECOND_MULTS) if (pps * s >= minPx) return s
-    return 60
-  }
-  const label = find(MIN_LABEL_SPACING, LABEL_INTERVALS)
-  let tick = find(MIN_TICK_SPACING, TICK_INTERVALS)
-  const lf = Math.round(label * fps), tf = Math.round(tick * fps)
-  if (lf % tf !== 0) {
-    for (const f of TICK_INTERVALS) if (lf % f === 0 && ppf * f >= MIN_TICK_SPACING) { tick = f / fps; break }
-  }
-  return { labelInterval: label, tickInterval: tick }
-}
 function sliderToZoom(slider: number, minZoom: number) {
   const minLog = Math.log(minZoom), maxLog = Math.log(STUDIO_ZOOM_MAX)
   return Math.exp(minLog + slider * (maxLog - minLog))
@@ -54,10 +35,8 @@ function zoomToSlider(zoom: number, minZoom: number) {
   const minLog = Math.log(minZoom), maxLog = Math.log(STUDIO_ZOOM_MAX)
   return (Math.log(zoom) - minLog) / (maxLog - minLog)
 }
-function fmtRulerLabel(s: number) {
-  const total = Math.round(s)
-  const m = Math.floor(total / 60), sec = total % 60
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+function fmtRulerLabel(s: number): string {
+  return formatRulerLabel({ timeInSeconds: s, fps: FPS_30 })
 }
 
 export function StudioWorkspace({ controller, projectId, sessionId, timeline, preview, previewNonce, onCommitted }: StudioWorkspaceProps) {
@@ -132,17 +111,17 @@ export function StudioWorkspace({ controller, projectId, sessionId, timeline, pr
     v.addEventListener('timeupdate', onTime)
     return () => v.removeEventListener('timeupdate', onTime)
   }, [preview, setPlayheadMs])
-  const activeCueText = useMemo(() => {
-    if (!mash) return ''
-    const textTrack = mash.tracks.find(t => t.kind === 'text')
-    if (!textTrack) return ''
-    const cue = textTrack.clips.find(c => playheadMs >= c.timelineStartMs && playheadMs < c.timelineEndMs)
-    return cue?.text ?? ''
+  const activeLiveCue = useMemo(() => {
+    if (!mash) return null
+    for (const t of mash.tracks.filter(x => x.kind === 'text')) {
+      const cue = t.clips.find(c => playheadMs >= c.timelineStartMs && playheadMs < c.timelineEndMs)
+      if (cue) return cue
+    }
+    return null
   }, [mash, playheadMs])
+  const activeCueText = activeLiveCue?.text ?? ''
   const activeCueStyleKey = useMemo(() => {
-    if (!mash) return 'classic_stroke'
-    const c = mash.tracks.find(t => t.kind === 'text')?.clips.find(x => playheadMs >= x.timelineStartMs && playheadMs < x.timelineEndMs)
-    const tid = (c?.templateId ?? '') as string
+    const tid = (activeLiveCue?.templateId ?? '') as string
     if (tid === 'subtitle_douyin') return 'sub-douyin'
     if (tid === 'subtitle_variety') return 'sub-variety'
     if (tid === 'subtitle_newsbar') return 'sub-news'
@@ -150,23 +129,100 @@ export function StudioWorkspace({ controller, projectId, sessionId, timeline, pr
     if (tid === 'subtitle_impact') return 'sub-impact'
     if (tid === 'subtitle_karaoke') return 'sub-karaoke'
     return 'sub-classic'
-  }, [mash, playheadMs])
+  }, [activeLiveCue])
+  const liveTextTracks = useMemo(() => {
+    if (!mash) return timeline?.textTracks ?? []
+    const tracks = mash.tracks.filter(t => t.kind === 'text')
+    if (tracks.length === 0) return []
+    const roleFromLabel = (label: string): string => {
+      if (label === '标题') return 'headline'
+      if (label === '标注') return 'callout'
+      if (label === 'CTA') return 'cta'
+      return 'subtitle'
+    }
+    return tracks.map(t => {
+      const orig = timeline?.textTracks.find(x => x.id === t.id)
+      return {
+      id: t.id,
+      role: ((t.clips[0]?.role as string | undefined) ?? roleFromLabel(t.label)) as import('../lib/local-store').TextTrack['role'],
+      layer: orig?.layer ?? 1,
+      enabled: t.enabled,
+      origin: (t as unknown as { origin?: string }).origin ?? orig?.origin ?? 'storyboard_generated',
+      generationId: (orig?.generationId ?? null) as string | null,
+      editable: (t as unknown as { editable?: boolean }).editable ?? orig?.editable ?? true,
+      locked: (t as unknown as { locked?: boolean }).locked ?? orig?.locked ?? false,
+      cues: t.clips.map(c => ({
+        id: c.id,
+        templateId: c.templateId ?? null,
+        startMs: c.timelineStartMs,
+        endMs: c.timelineEndMs,
+        text: c.text ?? '',
+        style: c.textStyle ?? { fontKey:'jianying_default', fontSize:0.055, bold:true, color:'#FFFFFF', strokeColor:null, strokeWidth:0, shadow:false, backgroundColor:null, alignment:'center', letterSpacing:0, lineSpacing:0 },
+        layout: c.textLayout ?? { anchor:'bottom', x:0.5, y:0.82, maxWidth:0.86, safeArea:'title_safe' },
+        entrance: c.textEntrance ?? null,
+        exit: c.textExit ?? null,
+        loopAnimation: c.textLoop ?? null,
+        jianyingCompatibility: 'verified' as const,
+      })),
+    }}) as unknown as import('../lib/local-store').TextTrack[]
+  }, [mash, timeline])
+  const liveSpanStyle = useMemo(() => {
+    if (!activeLiveCue) return null as unknown as React.CSSProperties
+    const s = (activeLiveCue.textStyle ?? { fontKey:'jianying_default', fontSize:0.055, bold:true, color:'#FFFFFF', strokeColor:null, strokeWidth:0, shadow:false, backgroundColor:null, alignment:'center', letterSpacing:0, lineSpacing:0 }) as { fontKey:string; fontSize:number; bold:boolean; color:string; strokeColor:string|null; strokeWidth:number; shadow:boolean; backgroundColor:string|null; alignment:string; letterSpacing:number; lineSpacing:number }
+    const sizePx = Math.round(Math.max(12, s.fontSize * 400))
+    const stroke = s.strokeColor && s.strokeWidth > 0 ? `${s.strokeWidth}px ${s.strokeColor}` : undefined
+    const out: React.CSSProperties = {
+      color: s.color,
+      fontSize: sizePx,
+      fontWeight: s.bold ? 800 : 600,
+      letterSpacing: s.letterSpacing ? `${s.letterSpacing}px` : undefined,
+      lineHeight: s.lineSpacing ? `${1.1 + s.lineSpacing * 0.04}` : 1.15,
+      textAlign: (s.alignment as never) ?? 'center',
+      backgroundColor: s.backgroundColor ?? undefined,
+      padding: s.backgroundColor ? '4px 10px' : '2px 6px',
+      borderRadius: s.backgroundColor ? 8 : undefined,
+      textShadow: s.shadow ? '0 2px 10px rgba(0,0,0,0.7), 0 1px 2px rgba(0,0,0,0.9)' : undefined,
+      display: 'inline-block',
+      maxWidth: '92%',
+      wordBreak: 'break-word' as never,
+    }
+    if (stroke) (out as unknown as Record<string,string>).WebkitTextStroke = stroke
+    if (stroke) (out as unknown as Record<string,string>).paintOrder = 'stroke fill'
+    return out
+  }, [activeLiveCue])
+  const liveWrapStyle = useMemo(() => {
+    if (!activeLiveCue) return null as unknown as React.CSSProperties
+    const l = (activeLiveCue.textLayout ?? { anchor:'bottom', x:0.5, y:0.82, maxWidth:0.86, safeArea:'title_safe' }) as { anchor:string; x:number; y:number; maxWidth:number }
+    const anchor = l.anchor
+    const map: Record<string,string> = { top:'translate(-50%,0)', middle_center:'translate(-50%,-50%)', center:'translate(-50%,-50%)', bottom:'translate(-50%,-100%)', bottom_left:'translate(0,-100%)', bottom_right:'translate(-100%,-100%)', top_left:'translate(0,0)', top_right:'translate(-100%,0)' }
+    const tr = map[anchor] ?? 'translate(-50%,-100%)'
+    return {
+      position: 'absolute' as const,
+      left: `${Math.max(0, Math.min(1, l.x)) * 100}%`,
+      top: `${Math.max(0, Math.min(1, l.y)) * 100}%`,
+      transform: tr,
+      maxWidth: `${Math.max(0.5, Math.min(1, l.maxWidth)) * 100}%`,
+      width: 'max-content' as never,
+      textAlign: ((activeLiveCue.textStyle as unknown as { alignment?:string })?.alignment ?? 'center') as never,
+      pointerEvents: 'none' as never,
+    }
+  }, [activeLiveCue])
   useEffect(() => {
-    if (!timeline) return
     const v = videoRef.current
     const c = jassubContainerRef.current
     if (!v || !c) return
     let cancelled = false
     jassubHandleRef.current?.destroy()
     jassubHandleRef.current = null
-    const tracks = timeline.textTracks
-    if (!tracks || tracks.length === 0) return
-    void attachJassub(v, c, tracks).then(h => {
-      if (cancelled) { h?.destroy(); return }
-      jassubHandleRef.current = h
-    })
-    return () => { cancelled = true; jassubHandleRef.current?.destroy(); jassubHandleRef.current = null }
-  }, [timeline])
+    if (!liveTextTracks || liveTextTracks.length === 0 || liveTextTracks.every(t => t.cues.length === 0)) return
+    const timer = setTimeout(() => {
+      void attachJassub(v, c, liveTextTracks).then(h => {
+        if (cancelled) { h?.destroy(); return }
+        jassubHandleRef.current = h
+      })
+    }, 120)
+    return () => { cancelled = true; clearTimeout(timer); jassubHandleRef.current?.destroy(); jassubHandleRef.current = null }
+  }, [liveTextTracks])
   const seekToMs = useCallback((ms: number) => {
     const clamped = Math.max(0, Math.min(durationMs, ms))
     setPlayheadMs(clamped)
@@ -455,7 +511,9 @@ export function StudioWorkspace({ controller, projectId, sessionId, timeline, pr
   const videoTrack = mash.tracks.find(t => t.kind === 'video')
   const selected = selectedClipId ? mash.tracks.flatMap(t => t.clips).find(c => c.id === selectedClipId) ?? null : null
   const selectedIsAudio = selected?.kind === 'audio'
-  const { labelInterval, tickInterval } = getRulerConfig(zoomLevel)
+  const rulerCfg = getOpencutRulerConfig({ zoomLevel, fps: FPS_30 })
+  const labelInterval = rulerCfg.labelIntervalSeconds
+  const tickInterval = rulerCfg.tickIntervalSeconds
   const canSplit = (() => {
     if (!mash) return false
     const vt = mash.tracks.find(t => t.kind === 'video')
@@ -500,12 +558,12 @@ export function StudioWorkspace({ controller, projectId, sessionId, timeline, pr
               <>
                 <video ref={videoRef} controls playsInline src={`${convertFileSrc(preview.previewPath)}?v=${previewNonce}`} onClick={() => videoRef.current?.paused ? void videoRef.current?.play() : videoRef.current?.pause()} />
                 <div ref={jassubContainerRef} style={{position:'absolute', inset:0, pointerEvents:'none'}} />
-                {activeCueText && <div className="subtitle-layer"><span className={activeCueStyleKey}>{activeCueText}</span></div>}
+                {activeLiveCue && <div style={liveWrapStyle as React.CSSProperties}><span style={liveSpanStyle as React.CSSProperties} className={activeCueStyleKey}>{activeCueText}</span></div>}
               </>
             ) : (
-              <div className="preview-placeholder">
+              <div className="preview-placeholder" style={{position:'relative'}}>
                 <span>暂无预览</span><small>保存后生成 540×960 本地预览</small>
-                {activeCueText && <div className="subtitle-layer"><span className={activeCueStyleKey}>{activeCueText}</span></div>}
+                {activeLiveCue && <div style={liveWrapStyle as React.CSSProperties}><span style={liveSpanStyle as React.CSSProperties} className={activeCueStyleKey}>{activeCueText}</span></div>}
               </div>
             )}
             <div className="preview-overlay">
