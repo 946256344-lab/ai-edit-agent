@@ -50,9 +50,9 @@ pub struct VoiceoverApplyResult {
     pub quality_warnings: Vec<crate::models::PreviewQualityCheck>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct VoiceoverManifest {
+pub(crate) struct VoiceoverManifest {
     fingerprint: String,
     voice_id: String,
     voice_name: String,
@@ -63,9 +63,17 @@ struct VoiceoverManifest {
 
 #[derive(Debug)]
 pub(crate) struct CachedVoiceover {
-    generation_id: String,
-    directory: PathBuf,
-    manifest: VoiceoverManifest,
+    pub(crate) generation_id: String,
+    pub(crate) directory: PathBuf,
+    pub(crate) manifest: VoiceoverManifest,
+}
+
+#[derive(Debug)]
+pub(crate) struct AudioFirstPrepared {
+    pub(crate) cached: CachedVoiceover,
+    pub(crate) duration_ms: i64,
+    pub(crate) alignment: Value,
+    pub(crate) reused_cache: bool,
 }
 
 pub(crate) trait VoiceTransport {
@@ -319,7 +327,7 @@ pub(crate) fn cues_from_alignment(
     Ok(cues)
 }
 
-fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue]) -> TextTrack {
+pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue]) -> TextTrack {
     TextTrack {
         id: format!("voice-alignment-{generation_id}"),
         role: "subtitle".to_owned(),
@@ -493,6 +501,41 @@ fn alignment_payload(payload: &Value) -> Result<&Value, String> {
         .or_else(|| payload.get("alignment"))
         .filter(|value| value.is_object())
         .ok_or_else(|| "incomplete_alignment".to_owned())
+}
+
+pub(crate) fn prepare_audio_first(
+    app: &AppHandle,
+    project_id: &str,
+    text: &str,
+    requested_voice_id: Option<&str>,
+) -> Result<AudioFirstPrepared, String> {
+    let normalized = validate_narration_text(text, DEFAULT_MODEL_ID)?;
+    let lock = project_lock(project_id);
+    let _guard = lock
+        .lock()
+        .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
+    let root = voiceover_root(app, project_id)?;
+    let (cached, _audio, alignment, reused) =
+        synthesize_with_transport(&ElevenLabsTransport, &normalized, requested_voice_id, &root)?;
+    let mp3_path = cached.directory.join("voiceover.mp3");
+    let duration_ms = probe_audio_duration_ms(&mp3_path)?;
+    cues_from_alignment(&alignment, duration_ms)?;
+    let mut manifest = cached.manifest;
+    manifest.duration_ms = duration_ms;
+    let _ = fs::write(
+        cached.directory.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap_or_default(),
+    );
+    Ok(AudioFirstPrepared {
+        cached: CachedVoiceover {
+            generation_id: cached.generation_id,
+            directory: cached.directory,
+            manifest,
+        },
+        duration_ms,
+        alignment,
+        reused_cache: reused,
+    })
 }
 
 pub(crate) fn synthesize_with_transport(
