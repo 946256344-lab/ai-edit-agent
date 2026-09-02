@@ -1076,7 +1076,9 @@ struct FailedAssetRetryCandidate {
 }
 
 const RETRY_FAILED_SAMPLE_LIMIT: usize = 10;
-const RETRY_FAILED_ASSET_LIMIT: usize = 200;
+/// Agent 重试一次可收集的失败素材上限。要能一次覆盖整个项目（主链工具 schema 同步此值），
+/// 视觉批次会在入队时自动按 worker 批次上限拆分。
+pub(crate) const RETRY_FAILED_ASSET_LIMIT: usize = 1000;
 
 fn asset_source_available(source_reference: &str) -> bool {
     Path::new(source_reference).is_file()
@@ -1228,10 +1230,7 @@ fn collect_failed_assets_for_retry(
     limit: usize,
 ) -> Result<Vec<FailedAssetRetryCandidate>, String> {
     let limit = limit.clamp(1, RETRY_FAILED_ASSET_LIMIT);
-    if let Some(asset_ids) = asset_ids {
-        if asset_ids.is_empty() {
-            return Err("Select one or more imported assets to retry.".to_owned());
-        }
+    if let Some(asset_ids) = asset_ids.filter(|ids| !ids.is_empty()) {
         if asset_ids.len() > RETRY_FAILED_ASSET_LIMIT {
             return Err(format!(
                 "Cannot retry more than {RETRY_FAILED_ASSET_LIMIT} assets at once."

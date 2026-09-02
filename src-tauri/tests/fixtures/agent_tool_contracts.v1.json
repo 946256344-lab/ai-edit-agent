@@ -335,8 +335,8 @@
           "assetIds": {
             "type": "array",
             "optional": true,
-            "minItems": 1,
-            "maxItems": 200,
+            "minItems": 0,
+            "maxItems": 1000,
             "items": {
               "type": "string"
             }
@@ -345,8 +345,8 @@
             "type": "integer",
             "optional": true,
             "minimum": 1,
-            "maximum": 200,
-            "fallback": 200
+            "maximum": 1000,
+            "fallback": 1000
           }
         },
         "required": ["stage", "assetIds", "limit"]
