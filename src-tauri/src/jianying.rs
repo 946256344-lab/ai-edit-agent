@@ -406,6 +406,27 @@ pub fn create_jianying_draft(
             "cues": cues,
         }));
     }
+    let mut overlay_clips = Vec::with_capacity(timeline.overlay_clips.len());
+    for (index, clip) in timeline.overlay_clips.iter().enumerate() {
+        let (source_reference, kind): (String, String) = connection
+            .query_row(
+                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                params![clip.asset_id, timeline.project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| "Timeline overlay references an unavailable asset.".to_owned())?;
+        if kind != "video" {
+            return Err(format!("Overlay clip {} is not a video asset.", index + 1));
+        }
+        if !Path::new(&source_reference).is_file() {
+            return Err(format!("Overlay source media file {} is unavailable.", index + 1));
+        }
+        overlay_clips.push(serde_json::json!({
+            "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,
+            "sourceEndMs": clip.source_end_ms,
+            "timelineStartMs": clip.timeline_start_ms, "timelineEndMs": clip.timeline_end_ms,
+        }));
+    }
     let draft_name = format!("Assembly Video Agent {}", Uuid::new_v4());
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");
@@ -413,6 +434,7 @@ pub fn create_jianying_draft(
         .clips
         .iter()
         .map(|clip| clip.timeline_end_ms)
+        .chain(timeline.overlay_clips.iter().map(|c| c.timeline_end_ms))
         .max()
         .unwrap_or(0);
     let input = serde_json::json!({
@@ -422,6 +444,7 @@ pub fn create_jianying_draft(
         "draftName": draft_name,
         "draftRegistryPath": draft_registry_path,
         "clips": clips,
+        "overlayClips": overlay_clips,
         "textTracks": timeline.text_tracks,
         "musicTracks": music_tracks
     });

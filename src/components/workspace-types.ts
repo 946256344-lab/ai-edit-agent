@@ -1,5 +1,5 @@
 // 前端工作区共享的轻量视图模型；持久化事实类型仍以 local-store bridge 为准。
-export type WorkspaceView = 'chat' | 'assets' | 'artifacts'
+export type WorkspaceView = 'chat' | 'assets' | 'artifacts' | 'studio'
 
 export type EditingSessionView = {
   id: string

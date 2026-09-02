@@ -14,10 +14,10 @@ use super::policy::RequestToolPolicy;
 pub(super) const MAX_STEPS: usize = 10;
 
 /// 单次模型请求的硬超时。
-pub(super) const AGENT_STEP_TIMEOUT: Duration = Duration::from_secs(120);
+pub(super) const AGENT_STEP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// 一轮用户请求的总模型决策预算。
-pub(super) const AGENT_RUN_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const AGENT_RUN_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// Native 工具执行共享同一作用域和产物缓存；模型文字不能修改这些事实。
 pub(super) struct LoopState<'a> {

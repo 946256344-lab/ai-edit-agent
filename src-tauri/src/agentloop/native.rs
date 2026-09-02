@@ -47,6 +47,7 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "get_storyboard",
     "get_timeline",
     "get_text_capabilities",
+    "transcribe_asset",
     "render_preview",
     "request_asset_analysis",
     "retry_failed_asset_analysis",
@@ -1010,6 +1011,9 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "get_timeline" | "render_preview" | "create_jianying_draft" => {
             coerce_blank_strings_to_null(&mut value, &["timelineVersionId"]);
         }
+        "transcribe_asset" => {
+            coerce_blank_strings_to_null(&mut value, &["assetId", "language"])
+        }
         "synthesize_voiceover" => {
             coerce_blank_strings_to_null(&mut value, &["text", "voiceId", "timelineVersionId"])
         }
@@ -1360,6 +1364,22 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             }
             normalize_nullable_music_fields(&mut value);
+            Ok(value)
+        }
+        "transcribe_asset" => {
+            if object.len() != 2
+                || !object.contains_key("assetId")
+                || !object.contains_key("language")
+            {
+                return Err(invalid_arguments());
+            }
+            if !(required_non_empty_string(&object["assetId"]))
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["language"].is_null() || object["language"].is_string()) {
+                return Err(invalid_arguments());
+            }
             Ok(value)
         }
         _ => Err(invalid_arguments()),

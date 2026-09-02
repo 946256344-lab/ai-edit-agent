@@ -110,6 +110,7 @@ pub fn create_timeline_draft(
         text_tracks,
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: now_millis(),
     };
@@ -195,6 +196,7 @@ pub(crate) fn insert_timeline_version_with_log(
         text_tracks,
         music_tracks,
         voiceover_tracks,
+        overlay_clips: timeline.overlay_clips.clone(),
         quality_report: None,
         created_at: now_millis(),
     };
@@ -220,7 +222,13 @@ fn apply_text_template(cue: &mut TextCue, track_role: &str) -> Result<(), String
         return Ok(());
     };
     let expected_role = match template_id {
-        "subtitle_safe" => "subtitle",
+        "subtitle_safe"
+        | "subtitle_douyin"
+        | "subtitle_variety"
+        | "subtitle_newsbar"
+        | "subtitle_karaoke"
+        | "subtitle_bubble"
+        | "subtitle_impact" => "subtitle",
         "headline_rise" => "headline",
         "headline_pop" => "headline",
         "headline_drop" => "headline",
@@ -416,6 +424,42 @@ fn apply_text_template(cue: &mut TextCue, track_role: &str) -> Result<(), String
             }),
             None,
         ),
+        "subtitle_douyin" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.062, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#FFD400".to_owned()), stroke_width: 7.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 1, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.88, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 180, intensity: 0.65 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+        ),
+        "subtitle_variety" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.068, bold: true, color: "#FFEB3B".to_owned(), stroke_color: Some("#FF4D00".to_owned()), stroke_width: 6.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 1, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.84, max_width: 0.86, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 180, intensity: 0.7 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+        ),
+        "subtitle_newsbar" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.05, bold: true, color: "#FFFFFF".to_owned(), stroke_color: None, stroke_width: 0.0, shadow: false, background_color: Some("#CC000000".to_owned()), alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.92, max_width: 1.0, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 160, intensity: 0.5 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 160, intensity: 0.5 }),
+        ),
+        "subtitle_karaoke" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.06, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#000000".to_owned()), stroke_width: 5.0, shadow: false, background_color: None, alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.88, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 120, intensity: 0.4 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 120, intensity: 0.4 }),
+        ),
+        "subtitle_bubble" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.06, bold: true, color: "#0F172A".to_owned(), stroke_color: None, stroke_width: 0.0, shadow: false, background_color: Some("#FFE600".to_owned()), alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.80, max_width: 0.80, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 200, intensity: 0.7 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+        ),
+        "subtitle_impact" => (
+            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.068, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#00E5FF".to_owned()), stroke_width: 8.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 2, line_spacing: 0 },
+            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.86, safe_area: "title_safe".to_owned() },
+            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 200, intensity: 0.7 }),
+            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+        ),
         _ => unreachable!("template role was checked above"),
     };
     cue.style = style;
@@ -434,6 +478,12 @@ pub(crate) fn text_recipe_capabilities() -> Vec<serde_json::Value> {
         serde_json::json!({"templateId": "headline_drop", "role": "headline", "purpose": "Centered headline with a top-down entrance and fade exit", "selectionHint": "Use for a conclusion, rule, warning, or decisive statement. Do not layer it over another headline in the same beat.", "preview": "supported", "jianying": "verified"}),
         serde_json::json!({"templateId": "callout_card", "role": "callout", "purpose": "Dark callout card with shadow and pop", "selectionHint": "Use only for an optional supporting fact in a local preview; it is not Jianying deliverable yet.", "preview": "supported", "jianying": "local_preview_only"}),
         serde_json::json!({"templateId": "cta_card", "role": "cta", "purpose": "High-contrast CTA card with shadow and pop", "selectionHint": "Use only for a final call to action in a local preview; it is not Jianying deliverable yet.", "preview": "supported", "jianying": "local_preview_only"}),
+        serde_json::json!({"templateId": "subtitle_douyin", "role": "subtitle", "purpose": "Douyin viral yellow-stroke white text, bottom centered", "selectionHint": "Use for short-video viral punchlines. White text #FFFFFF with yellow stroke #FFD400, bold. Local preview + ffmpeg ass burn verified.", "preview": "supported", "jianying": "local_preview_only", "styleHint": {"color":"#FFFFFF","strokeColor":"#FFD400","strokeWidth":7.0,"shadow":true}}),
+        serde_json::json!({"templateId": "subtitle_variety", "role": "subtitle", "purpose": "Variety show flower text orange-stroke yellow fill", "selectionHint": "Use for综艺花字 emphasis. Yellow #FFEB3B on orange #FF4D00 stroke. High energy.", "preview": "supported", "jianying": "local_preview_only", "styleHint": {"color":"#FFEB3B","strokeColor":"#FF4D00","strokeWidth":6.0,"shadow":true}}),
+        serde_json::json!({"templateId": "subtitle_newsbar", "role": "subtitle", "purpose": "News lower-third bar with translucent background", "selectionHint": "Use for news/info lower third: white on #CC000000 bar, centered bottom.", "preview": "supported", "jianying": "local_preview_only", "styleHint": {"color":"#FFFFFF","backgroundColor":"#CC000000","strokeWidth":0.0}}),
+        serde_json::json!({"templateId": "subtitle_karaoke", "role": "subtitle", "purpose": "Karaoke word-by-word highlight bottom subtitle", "selectionHint": "Use for lyrics/sung narration. White base with cyan highlight driven by jassub karaoke timing.", "preview": "supported", "jianying": "local_preview_only"}),
+        serde_json::json!({"templateId": "subtitle_bubble", "role": "subtitle", "purpose": "Bubble pop yellow background dark text", "selectionHint": "Use for cute/pop annotation bubble, yellow #FFE600 background.", "preview": "supported", "jianying": "local_preview_only", "styleHint": {"color":"#0F172A","backgroundColor":"#FFE600","strokeWidth":0.0}}),
+        serde_json::json!({"templateId": "subtitle_impact", "role": "subtitle", "purpose": "Impact cyan-stroke bold subtitle", "selectionHint": "Use for tech/impact emphasis, cyan #00E5FF stroke on white.", "preview": "supported", "jianying": "local_preview_only", "styleHint": {"color":"#FFFFFF","strokeColor":"#00E5FF","strokeWidth":8.0,"shadow":true}}),
     ]
 }
 
@@ -996,7 +1046,7 @@ pub(crate) fn load_timeline_version(
             let content: TimelineContent = serde_json::from_str(&row.get::<_, String>(4)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok(TimelineVersion {
-                id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, quality_report: content.quality_report, created_at: row.get(5)?,
+                id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, quality_report: content.quality_report, created_at: row.get(5)?,
             })
         },
     ).map_err(|_| "Timeline version could not be read.".to_owned())
@@ -1025,6 +1075,7 @@ pub(crate) fn timeline_candidates_for_storyboard(
                 text_tracks: content.text_tracks,
                 music_tracks: content.music_tracks,
                 voiceover_tracks: content.voiceover_tracks,
+                overlay_clips: content.overlay_clips,
                 quality_report: content.quality_report,
                 created_at: row.get(5)?,
             })
@@ -1057,6 +1108,7 @@ pub(crate) fn timeline_candidates_for_editing_task(
                 text_tracks: content.text_tracks,
                 music_tracks: content.music_tracks,
                 voiceover_tracks: content.voiceover_tracks,
+                overlay_clips: content.overlay_clips,
                 quality_report: content.quality_report,
                 created_at: row.get(5)?,
             })
@@ -1101,7 +1153,7 @@ pub fn get_latest_timeline(
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok((
                 TimelineVersion {
-                    id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, quality_report: content.quality_report, created_at: row.get(5)?,
+                    id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, quality_report: content.quality_report, created_at: row.get(5)?,
                 },
                 row.get::<_, String>(6)?,
             ))

@@ -239,6 +239,28 @@
       "returns": ["text_capabilities"]
     },
     {
+      "name": "transcribe_asset",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "assetId": { "type": "string" }
+        },
+        "required": ["assetId"]
+      },
+      "scope": {
+        "boundary": "current_project_and_ready_asset",
+        "resolution": "returns transcription result for a ready asset in the current project"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["asset belongs to the current project", "asset analysis is ready"],
+      "produces": [],
+      "returns": ["transcription"]
+    },
+    {
       "name": "download_music",
       "version": 1,
       "kind": "edit",

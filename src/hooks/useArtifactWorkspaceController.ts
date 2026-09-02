@@ -378,17 +378,31 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     }
   }
 
+  function applyStudioCommit(nextTimeline: TimelineVersion, nextPreview: PreviewResult | null) {
+    setTimeline(nextTimeline)
+    activeTimelineRef.current = nextTimeline.id
+    if (nextPreview) {
+      applyPreview(nextPreview)
+      setTimelineState('preview-ready')
+    } else {
+      setTimelineState('draft')
+    }
+    setTimelineVersions((prev) => [nextTimeline, ...prev.filter((v) => v.id !== nextTimeline.id)])
+  }
+
   // 返回后台任务 ID，供 App 层注册 pendingEdit 并驱动 reconciliation 轮询。
   return {
     storyboard,
     timeline,
     preview,
+    previewNonce,
     timelineState,
     operationLogs,
     timelineVersions,
     loadSession,
     applySessionSnapshot,
     applyAgentResult,
+    applyStudioCommit,
     refreshAudit,
     reset,
     model: {

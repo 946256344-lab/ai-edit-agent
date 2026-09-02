@@ -208,6 +208,29 @@ def add_text_tracks(script, tracks):
             escape_text_material_unicode(script)
 
 
+def add_overlay_tracks(script, clips):
+    if not clips:
+        return
+    prepared = []
+    for index, clip in enumerate(clips, start=1):
+        source = Path(clip["sourceReference"])
+        if not source.is_file():
+            raise RuntimeError(f"Overlay source media file {index} is unavailable.")
+        timeline_duration_us = to_microseconds(clip["timelineEndMs"] - clip["timelineStartMs"])
+        source_start_us = to_microseconds(clip["sourceStartMs"])
+        material = VideoMaterial(str(source))
+        source_duration_us = fit_source_duration(source_start_us, timeline_duration_us, material.duration)
+        prepared.append((clip, material, timeline_duration_us, source_start_us, source_duration_us))
+    script.add_track(TrackType.video, track_name="overlay-main")
+    for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared:
+        segment = VideoSegment(
+            material,
+            Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
+            source_timerange=Timerange(source_start_us, source_duration_us),
+        )
+        script.add_segment(segment, track_name="overlay-main")
+
+
 def add_music_tracks(script, tracks):
     enabled_tracks = [track for track in tracks if track.get("enabled", True)]
     for track_index, track in enumerate(enabled_tracks):
@@ -423,6 +446,7 @@ def main():
                 source_timerange=Timerange(source_start_us, source_duration_us),
             )
             script.add_segment(segment)
+        add_overlay_tracks(script, payload.get("overlayClips", []))
         add_text_tracks(script, payload.get("textTracks", []))
         add_music_tracks(script, payload.get("musicTracks", []))
         script.save()

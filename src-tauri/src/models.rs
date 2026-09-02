@@ -292,6 +292,8 @@ pub struct TimelineVersion {
     pub music_tracks: Vec<MusicTrack>,
     #[serde(default)]
     pub voiceover_tracks: Vec<VoiceoverTrack>,
+    #[serde(default)]
+    pub overlay_clips: Vec<TimelineClip>,
     pub quality_report: Option<PreviewQualityReport>,
     pub created_at: i64,
 }
@@ -303,6 +305,7 @@ impl TimelineVersion {
             text_tracks: self.text_tracks.clone(),
             music_tracks: self.music_tracks.clone(),
             voiceover_tracks: self.voiceover_tracks.clone(),
+            overlay_clips: self.overlay_clips.clone(),
             quality_report: self.quality_report.clone(),
         }
     }
@@ -574,6 +577,8 @@ pub struct TimelineContent {
     pub(crate) music_tracks: Vec<MusicTrack>,
     #[serde(default)]
     pub(crate) voiceover_tracks: Vec<VoiceoverTrack>,
+    #[serde(default)]
+    pub(crate) overlay_clips: Vec<TimelineClip>,
     #[serde(default)]
     pub(crate) quality_report: Option<PreviewQualityReport>,
 }

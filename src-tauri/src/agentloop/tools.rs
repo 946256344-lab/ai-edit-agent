@@ -163,9 +163,18 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             GET_TEXT_CAPABILITIES,
-            "Read backend-verified local preview and Jianying text capability recipes.",
+            "Read backend-verified local preview and Jianying text capability recipes. Includes 12 style templates and 8 color presets for subtitles.",
             json!({}),
             Vec::new(),
+        ),
+        function_tool(
+            "transcribe_asset",
+            "Transcribe spoken audio from a ready video/audio asset into timed subtitle segments. Returns segments the model can edit then write via replace_text_tracks.",
+            json!({
+                "assetId": bounded_required_string_schema("Ready video/audio asset id in current project.", 200),
+                "language": nullable_bounded_string("Optional BCP-47 language hint, e.g. zh, en. Null auto-detects.", 20)
+            }),
+            vec!["assetId", "language"],
         ),
         function_tool(
             READ_LOGS,

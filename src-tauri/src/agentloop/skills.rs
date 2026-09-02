@@ -16,6 +16,7 @@ use crate::timeline::{
     replace_music_tracks, replace_text_tracks, select_timeline_candidate, text_recipe_capabilities,
     text_track_quality_warnings, ClipAdjustment, ClipReplacement,
 };
+use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -734,6 +735,21 @@ pub(super) fn apply_skill(
                 "timeline": build_timeline_snapshot(state, timeline_id)
             }))
         }
+        "transcribe_asset" => {
+            let asset_id = args
+                .get("assetId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "transcribe_asset needs assetId.".to_owned())?;
+            let language = args.get("language").and_then(Value::as_str);
+            let result = transcribe_asset(state.app, state.project_id, asset_id, language)?;
+            // 转写是只读观察，不产生 timeline version；模型拿到分句后自行调用 replace_text_tracks 选样式写入
+            Ok(json!({
+                "tool": "transcribe_asset",
+                "status": "ok",
+                "result": serde_json::to_value(&result).unwrap_or(json!({})),
+                "nextStepHint": "Edit segment texts if needed, then call replace_text_tracks with a textRecipe from get_text_capabilities (e.g. subtitle_douyin) and your chosen preset style."
+            }))
+        }
         "get_text_capabilities" => Ok(json!({
             "tool": "get_text_capabilities",
             "status": "ok",
@@ -758,7 +774,9 @@ pub(super) fn apply_skill(
                 {"templateId": "wipe", "preview": "supported", "jianying": "local_preview_only"}
             ],
             "textRecipes": text_recipe_capabilities(),
-            "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Text content is serialized through the verified escaped nested-text path."
+            "subtitlePresets": subtitle_style_presets(),
+            "styleGuide": "For花字: call transcribe_asset -> pick a textRecipe templateId (subtitle_douyin/variety/newsbar...) and/or supply style overrides (color/strokeColor/strokeWidth/shadow/backgroundColor). Setting templateId auto-fills a curated style; omitting it allows full custom via replace_text_tracks style field.",
+            "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only."
         })),
         "generate_storyboard" => {
             let brief = args

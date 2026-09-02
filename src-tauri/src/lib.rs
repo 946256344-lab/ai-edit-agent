@@ -44,6 +44,10 @@ mod taskrouter;
 mod timeline;
 /// 旁白写入时间线：补画面、替换系统字幕、创建旁白轨版本。
 mod timeline_voice;
+/// Studio 工作台：前端 mash diff 落库为新的 timeline version。
+mod studio;
+/// 自动字幕转写与花字样式预设（Whisper 占位实现，模型通过工具灵活调用）。
+mod subtitle;
 /// ElevenLabs 配音凭据、合成、指纹缓存与 alignment 字幕。
 mod voice_provider;
 
@@ -123,6 +127,7 @@ pub fn run() {
             agent::submit_conversation_turn,
             agent::execute_agent_edit,
             confirmation::confirm_storyboard_and_preview,
+            studio::commit_studio_edits,
             voice_provider::synthesize_storyboard_voiceover,
         ])
         .run(tauri::generate_context!())
