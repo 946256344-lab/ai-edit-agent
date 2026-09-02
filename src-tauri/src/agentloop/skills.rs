@@ -695,16 +695,17 @@ pub(super) fn apply_skill(
             )?;
             let asset_ids = match args.get("assetIds") {
                 Some(value) if value.is_null() => None,
-                Some(value) => Some(
-                    serde_json::from_value(value.clone())
-                        .map_err(|error| error.to_string())?,
-                ),
+                Some(value) => {
+                    let ids: Vec<String> =
+                        serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+                    (!ids.is_empty()).then_some(ids)
+                }
                 None => None,
             };
             let limit = args
                 .get("limit")
                 .and_then(Value::as_u64)
-                .unwrap_or(200) as usize;
+                .unwrap_or(crate::assets::RETRY_FAILED_ASSET_LIMIT as u64) as usize;
             crate::assets::retry_failed_asset_analysis(
                 state.app,
                 state.project_id,

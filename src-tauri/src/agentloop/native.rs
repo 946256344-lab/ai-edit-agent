@@ -1076,39 +1076,37 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             Ok(value)
         }
         "retry_failed_asset_analysis" => {
-            if object.len() != 3
-                || !object.contains_key("stage")
-                || !object.contains_key("assetIds")
-                || !object.contains_key("limit")
+            if object.iter().any(|(key, _)| !["stage", "assetIds", "limit"].contains(&key.as_str()))
             {
                 return Err(invalid_arguments());
             }
-            if !(object["stage"].is_null()
-                || object["stage"].as_str().is_some_and(|stage| {
-                    matches!(stage, "technical" | "visual" | "both")
-                }))
-            {
-                return Err(invalid_arguments());
+            if let Some(stage) = object.get("stage") {
+                if !(stage.is_null()
+                    || stage.as_str().is_some_and(|stage| {
+                        matches!(stage, "technical" | "visual" | "both")
+                    }))
+                {
+                    return Err(invalid_arguments());
+                }
             }
-            if !(object["assetIds"].is_null() || object["assetIds"].is_array()) {
-                return Err(invalid_arguments());
-            }
-            if let Some(asset_ids) = object["assetIds"].as_array() {
-                if asset_ids.is_empty()
-                    || asset_ids.len() > 200
-                    || !asset_ids
+            if let Some(asset_ids) = object.get("assetIds").filter(|value| !value.is_null()) {
+                let Some(ids) = asset_ids.as_array() else {
+                    return Err(invalid_arguments());
+                };
+                if ids.len() > crate::assets::RETRY_FAILED_ASSET_LIMIT
+                    || !ids
                         .iter()
                         .all(|asset_id| required_non_empty_string(asset_id))
                 {
                     return Err(invalid_arguments());
                 }
             }
-            if !(object["limit"].is_null()
-                || object["limit"]
-                    .as_u64()
-                    .is_some_and(|limit| (1..=200).contains(&limit)))
-            {
-                return Err(invalid_arguments());
+            if let Some(limit) = object.get("limit").filter(|value| !value.is_null()) {
+                if !limit.as_u64().is_some_and(|limit| {
+                    (1..=crate::assets::RETRY_FAILED_ASSET_LIMIT as u64).contains(&limit)
+                }) {
+                    return Err(invalid_arguments());
+                }
             }
             Ok(value)
         }
@@ -2874,12 +2872,28 @@ mod tests {
         .is_ok());
         assert!(parse_native_arguments(
             "retry_failed_asset_analysis",
-            r#"{"stage":"both","assetIds":[],"limit":null}"#
+            r#"{"stage":"visual","assetIds":null,"limit":545}"#
+        )
+        .is_ok());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":"visual","assetIds":[],"limit":null}"#
+        )
+        .is_ok());
+        assert!(parse_native_arguments("retry_failed_asset_analysis", "{}").is_ok());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"stage":"both","assetIds":null,"limit":0}"#
         )
         .is_err());
         assert!(parse_native_arguments(
             "retry_failed_asset_analysis",
-            r#"{"stage":"both","assetIds":null,"limit":0}"#
+            r#"{"stage":"both","assetIds":null,"limit":1001}"#
+        )
+        .is_err());
+        assert!(parse_native_arguments(
+            "retry_failed_asset_analysis",
+            r#"{"projectId":"project-1","stage":"visual","assetIds":null,"limit":null}"#
         )
         .is_err());
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());

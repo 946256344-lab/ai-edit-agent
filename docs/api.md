@@ -159,7 +159,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 | --- | --- | --- |
 | `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
 | `request_asset_analysis` | Native `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
-| `retry_failed_asset_analysis` | Native `{ stage: "technical"\|"visual"\|"both"\|null, assetIds: string[]\|null, limit: number\|null }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 时自动收集最多 `limit`（默认 200）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
+| `retry_failed_asset_analysis` | Native `{ stage: "technical"\|"visual"\|"both"\|null, assetIds: string[]\|null, limit: number\|null }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 或空数组时自动收集最多 `limit`（默认 1000）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。视觉批次入队时自动按 worker 批次上限拆分。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |

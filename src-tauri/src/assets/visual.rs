@@ -420,7 +420,6 @@ pub(crate) fn queue_visual_analysis_batch(
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
     let mut visual_asset_ids = Vec::new();
-    let mut skipped_asset_ids = Vec::new();
     let mut project_id = None;
     for asset_id in asset_ids {
         let row = transaction
@@ -444,7 +443,6 @@ pub(crate) fn queue_visual_analysis_batch(
         } else {
             metadata.visual_analysis_status = "skipped".to_owned();
             metadata.visual_analysis_note = Some("visual_analysis_not_applicable".to_owned());
-            skipped_asset_ids.push(asset_id.clone());
         }
         transaction
             .execute(
@@ -458,16 +456,20 @@ pub(crate) fn queue_visual_analysis_batch(
             .map_err(|error| error.to_string())?;
     }
     if let Some(project_id) = project_id.filter(|_| !visual_asset_ids.is_empty()) {
-        transaction.execute(
-            "INSERT INTO agent_tasks (id, project_id, tool_name, status, input_json, result_json, created_at, updated_at) VALUES (?1, ?2, 'analyze_asset_visual_batch', 'queued', ?3, ?4, ?5, ?5)",
-            params![
-                Uuid::new_v4().to_string(),
-                project_id,
-                serde_json::json!({ "assetIds": visual_asset_ids }).to_string(),
-                serde_json::json!({ "requestedCount": visual_asset_ids.len(), "readyCount": 0, "skippedCount": skipped_asset_ids.len(), "failedCount": 0 }).to_string(),
-                now_millis(),
-            ],
-        ).map_err(|error| error.to_string())?;
+        // Worker 只接受 <= VISUAL_ANALYSIS_BATCH_SIZE 的批次；多余时必须按
+        // 批次上限拆分，否则整个任务会被直接判为 visual_task_input_invalid。
+        for batch in visual_asset_ids.chunks(VISUAL_ANALYSIS_BATCH_SIZE) {
+            transaction.execute(
+                "INSERT INTO agent_tasks (id, project_id, tool_name, status, input_json, result_json, created_at, updated_at) VALUES (?1, ?2, 'analyze_asset_visual_batch', 'queued', ?3, ?4, ?5, ?5)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    project_id,
+                    serde_json::json!({ "assetIds": batch }).to_string(),
+                    serde_json::json!({ "requestedCount": batch.len(), "readyCount": 0, "skippedCount": 0, "failedCount": 0 }).to_string(),
+                    now_millis(),
+                ],
+            ).map_err(|error| error.to_string())?;
+        }
     }
     transaction.commit().map_err(|error| error.to_string())?;
     spawn_visual_analysis_worker(app.clone());

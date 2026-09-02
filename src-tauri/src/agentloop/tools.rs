@@ -242,7 +242,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             RETRY_FAILED_ASSET_ANALYSIS,
-            "Re-queue failed technical and/or visual analysis for imported assets in the current project. Use null assetIds to retry all discovered failures up to limit.",
+            "Re-queue failed technical and/or visual analysis for imported assets in the current project. Use null or empty assetIds to retry all discovered failures up to limit.",
             json!({
                 "stage": {
                     "type": ["string", "null"],
@@ -251,20 +251,20 @@ fn main_chain_function_tools() -> Vec<Value> {
                 },
                 "assetIds": {
                     "type": ["array", "null"],
-                    "minItems": 1,
-                    "maxItems": 200,
+                    "minItems": 0,
+                    "maxItems": 1000,
                     "items": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 200
                     },
-                    "description": "Optional asset identifiers; null retries all failed assets in the current project."
+                    "description": "Optional asset identifiers; null or empty retries all failed assets in the current project."
                 },
                 "limit": {
                     "type": ["integer", "null"],
                     "minimum": 1,
-                    "maximum": 200,
-                    "description": "Maximum failed assets to collect when assetIds is null; defaults to 200."
+                    "maximum": 1000,
+                    "description": "Maximum failed assets to collect when assetIds is null; defaults to 1000."
                 }
             }),
             vec!["stage", "assetIds", "limit"],

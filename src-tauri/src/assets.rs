@@ -15,7 +15,7 @@ pub(crate) use library::{
 // analysis：分析队列与恢复
 pub(crate) use analysis::{
     drain_pending_analysis, request_asset_analysis, resume_incomplete_analysis,
-    retry_failed_asset_analysis, RetryFailedAnalysisStage,
+    retry_failed_asset_analysis, RetryFailedAnalysisStage, RETRY_FAILED_ASSET_LIMIT,
 };
 // visual：视觉批次优先级与等待
 pub(crate) use visual::{prioritize_pending_visual_batches, wait_for_visual_batch};
