@@ -177,15 +177,25 @@ export type TextCue = {
   loopAnimation: TextAnimation | null
   jianyingCompatibility: 'verified' | 'local_preview_only'
 }
-export type TextTrack = { id: string; role: 'subtitle' | 'headline' | 'callout' | 'cta' | 'label'; layer: number; enabled: boolean; cues: TextCue[] }
+export type TextTrack = { id: string; role: 'subtitle' | 'headline' | 'callout' | 'cta' | 'label'; layer: number; enabled: boolean; origin?: string; generationId?: string | null; editable?: boolean; locked?: boolean; cues: TextCue[] }
+
+export type MusicCue = { id: string; assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; volume: number; loopEnabled?: boolean; fadeInMs?: number; fadeOutMs?: number; jianyingCompatibility?: string; provider?: string | null; licenseUrl?: string | null }
+export type MusicTrackState = { id: string; enabled: boolean; cues: MusicCue[] }
+export type VoiceoverCue = { id: string; assetId: string; generationId?: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; volume: number; fadeInMs?: number; fadeOutMs?: number; provider?: string; voiceId?: string; voiceName?: string | null }
+export type VoiceoverTrackState = { id: string; enabled: boolean; cues: VoiceoverCue[] }
+
+export type TimelineClipDto = { shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string; clipKind?: string; derivedFromShotIndex?: number | null; fitReason?: string | null }
 
 export type TimelineVersion = {
   id: string
   projectId: string
   storyboardVersionId: string
   versionNumber: number
-  clips: Array<{ shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string }>
+  clips: TimelineClipDto[]
   textTracks: TextTrack[]
+  musicTracks?: MusicTrackState[]
+  voiceoverTracks?: VoiceoverTrackState[]
+  overlayClips?: TimelineClipDto[]
   qualityReport: PreviewQualityReport | null
   createdAt: number
 }
@@ -435,4 +445,32 @@ export async function submitConversationTurn(projectId: string, editingTaskId: s
 export async function resolveConversationTask(projectId: string, activeEditingTaskId: string | null, request: string) {
   requireDesktopRuntime()
   return invoke<TaskRouteResult>('resolve_conversation_task', { projectId, activeEditingTaskId, request })
+}
+
+export type StudioCommitPayload = {
+  projectId: string
+  editingTaskId: string
+  timelineVersionId: string
+  reorder?: number[] | null
+  adjustments?: Array<{ shotIndex: number; newDurationMs: number; newSourceStartMs: number }> | null
+  clipReplacements?: Array<{ shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number }> | null
+  textTracks?: TextTrack[] | null
+  inserted?: Array<{ assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string; derivedFromShotIndex: number | null }> | null
+  deletedShotIndices?: number[] | null
+  overlayInserted?: Array<{ assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string }> | null
+  overlayDeletedShotIndices?: number[] | null
+  overlayAdjustments?: Array<{ shotIndex: number; newDurationMs: number; newSourceStartMs: number; newTimelineStartMs: number }> | null
+  overlayReorder?: number[] | null
+  musicTracks?: MusicTrackState[] | null
+  voiceoverTracks?: VoiceoverTrackState[] | null
+}
+
+export type StudioCommitResult = {
+  timeline: TimelineVersion
+  applied: string[]
+}
+
+export async function commitStudioEdits(payload: StudioCommitPayload) {
+  requireDesktopRuntime()
+  return invoke<StudioCommitResult>('commit_studio_edits', { payload })
 }

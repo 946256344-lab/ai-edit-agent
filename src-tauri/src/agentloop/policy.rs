@@ -19,6 +19,7 @@ pub(super) const OBSERVATION_TOOLS: &[&str] = &[
     "get_storyboard",
     "get_timeline",
     "get_text_capabilities",
+    "transcribe_asset",
 ];
 
 /// 会创建、下载或修改可审计产物的技能。只读请求会一次性关闭整组技能。

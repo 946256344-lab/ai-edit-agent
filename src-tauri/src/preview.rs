@@ -263,6 +263,49 @@ fn ass_filter_path(path: &Path) -> String {
         .replace('\'', "\\'")
 }
 
+fn composite_overlay_clips(
+    base: &Path,
+    overlays: &[(PathBuf, f64, f64)],
+    out: &Path,
+) -> Result<(), String> {
+    if overlays.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = hidden_command("ffmpeg");
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"]);
+    cmd.arg(base);
+    for (path, _, _) in overlays {
+        cmd.arg("-i");
+        cmd.arg(path);
+    }
+    let mut filter_parts: Vec<String> = Vec::new();
+    for (i, _) in overlays.iter().enumerate() {
+        let idx = i + 1;
+        filter_parts.push(format!("[{idx}:v]scale=180:320:flags=bicubic[ov{idx}]"));
+    }
+    let mut last_label = "0:v".to_owned();
+    for (i, (_, start, end)) in overlays.iter().enumerate() {
+        let idx = i + 1;
+        let out_label = if i + 1 == overlays.len() { "outv".to_owned() } else { format!("tmp{i}") };
+        let enable = format!("between(t,{start:.3},{end:.3})");
+        filter_parts.push(format!(
+            "[{last_label}][ov{idx}]overlay=W-w-16:16:enable='{enable}'[{out_label}]"
+        ));
+        last_label = out_label;
+    }
+    let filter_complex = filter_parts.join(";");
+    cmd.args(["-filter_complex", &filter_complex, "-map", "[outv]", "-c:v", "libx264", "-preset", "veryfast", "-movflags", "+faststart", "-an"]);
+    cmd.arg(out);
+    let status = cmd
+        .status()
+        .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("FFmpeg could not composite overlay clips.".to_owned())
+    }
+}
+
 fn inspect_preview_quality(
     preview_path: &Path,
     clips: &[TimelineClip],
@@ -474,6 +517,30 @@ pub fn render_preview(
         if !status.success() {
             return Err("FFmpeg could not render text tracks in the preview.".to_owned());
         }
+    }
+    if !timeline.overlay_clips.is_empty() {
+        let mut overlay_renders: Vec<(PathBuf, f64, f64)> = Vec::new();
+        for (index, clip) in timeline.overlay_clips.iter().enumerate() {
+            let (src, kind): (String, String) = connection
+                .query_row(
+                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                    params![clip.asset_id, timeline.project_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| "Timeline overlay references an unavailable asset.".to_owned())?;
+            if !Path::new(&src).is_file() {
+                return Err("Timeline overlay source media is no longer available.".to_owned());
+            }
+            let dest = directory.join(format!("overlay_{index:03}.mp4"));
+            render_timeline_clip(Path::new(&src), &kind, clip, &dest)?;
+            let start = clip.timeline_start_ms as f64 / 1000.0;
+            let end = clip.timeline_end_ms as f64 / 1000.0;
+            overlay_renders.push((dest, start, end));
+        }
+        let composited = directory.join("preview_composited.mp4");
+        composite_overlay_clips(&preview_path, &overlay_renders, &composited)?;
+        fs::rename(&composited, &preview_path)
+            .map_err(|_| "Could not finalize overlay preview.".to_owned())?;
     }
     if !timeline.music_tracks.is_empty() || !timeline.voiceover_tracks.is_empty() {
         let mixed_path = directory.join("preview_mixed.mp4");

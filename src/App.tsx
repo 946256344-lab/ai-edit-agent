@@ -8,6 +8,7 @@ import { AppSidebar } from './components/AppSidebar'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
+import { StudioWorkspace } from './components/StudioWorkspace'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import type { ConversationMessage, EditingSessionView, WorkspaceView } from './components/workspace-types'
 import { useAgentRunReconciliation } from './hooks/useAgentRunReconciliation'
@@ -15,6 +16,7 @@ import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
 import { getTimelineLabel, useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceController'
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
+import { useStudioWorkspaceController } from './hooks/useStudioWorkspaceController'
 import {
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
@@ -112,6 +114,10 @@ function App() {
     ),
     refreshEditingSessions,
   })
+  const studioWorkspace = useStudioWorkspaceController(
+    artifactWorkspace.timeline,
+    artifactWorkspace.preview,
+  )
 
   async function applyAgentEditCompletion(pending: PendingAgentEdit, event?: AgentEditEvent) {
     const { projectId, sessionId } = pending
@@ -508,6 +514,19 @@ function App() {
                 setActiveView('chat')
                 setInput(`调整第 ${orderIndex} 个镜头：`)
               },
+            }}
+          />
+        )}
+        {activeView === 'studio' && (
+          <StudioWorkspace
+            controller={studioWorkspace}
+            projectId={activeProjectId}
+            sessionId={activeEditingSessionId}
+            timeline={artifactWorkspace.timeline}
+            preview={artifactWorkspace.preview}
+            previewNonce={artifactWorkspace.previewNonce}
+            onCommitted={(nextTimeline, nextPreview) => {
+              artifactWorkspace.applyStudioCommit(nextTimeline, nextPreview)
             }}
           />
         )}

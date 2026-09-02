@@ -37,6 +37,9 @@ export function WorkspaceHeader({ model, selectView }: WorkspaceHeaderProps) {
         <button className={model.view === 'artifacts' ? 'selected' : ''} onClick={() => selectView('artifacts')}>
           成果 <span>{model.shotCount}</span>
         </button>
+        <button className={model.view === 'studio' ? 'selected' : ''} onClick={() => selectView('studio')}>
+          工作台
+        </button>
         <div className="timeline-state">{model.timelineLabel}</div>
       </div>
     </>

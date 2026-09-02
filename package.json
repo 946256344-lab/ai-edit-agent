@@ -24,9 +24,11 @@
     "tauri:build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build"
   },
   "dependencies": {
+    "@moviemasher/moviemasher.js": "^5.1.1",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-opener": "^2.5.4",
+    "jassub": "^1.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

@@ -10,7 +10,7 @@ pub(crate) const VOICEOVER_TAIL_MS: i64 = 500;
 pub(crate) const EXCESSIVE_VISUAL_TAIL_MS: i64 = 1_500;
 
 pub(crate) fn fit_visual_to_voiceover(
-    mut clips: Vec<TimelineClip>,
+    clips: Vec<TimelineClip>,
     voice_duration_ms: i64,
 ) -> Result<(Vec<TimelineClip>, Option<PreviewQualityCheck>), String> {
     if clips.is_empty() {
@@ -35,33 +35,10 @@ pub(crate) fn fit_visual_to_voiceover(
         });
         return Ok((clips, warning));
     }
-    let last = clips
-        .last()
-        .cloned()
-        .ok_or_else(|| "Timeline has no clips to fit to the voiceover.".to_owned())?;
-    let pad_ms = (voice_duration_ms + VOICEOVER_TAIL_MS) - visual;
-    let freeze_start = last
-        .source_end_ms
-        .saturating_sub(40)
-        .max(last.source_start_ms);
-    let freeze_end = last.source_end_ms.max(freeze_start);
-    if freeze_end <= freeze_start {
-        return Err("Last clip has no verified source range for a freeze-frame fill.".to_owned());
-    }
-    let next_index = clips.iter().map(|clip| clip.shot_index).max().unwrap_or(0) + 1;
-    clips.push(TimelineClip {
-        shot_index: next_index,
-        asset_id: last.asset_id.clone(),
-        source_start_ms: freeze_start,
-        source_end_ms: freeze_end,
-        timeline_start_ms: last.timeline_end_ms,
-        timeline_end_ms: last.timeline_end_ms + pad_ms,
-        on_screen_text: String::new(),
-        clip_kind: "freeze_frame".to_owned(),
-        derived_from_shot_index: Some(last.shot_index),
-        fit_reason: Some("voiceover_tail_fill".to_owned()),
-    });
-    Ok((clips, None))
+    let deficit = (voice_duration_ms + VOICEOVER_TAIL_MS) - visual;
+    Err(format!(
+        "voiceover_longer_than_picture: visual={visual} voice={voice_duration_ms} deficit={deficit} hint=freeze_frame is forbidden. Use search_asset_segments and then insert_clips or change_clip_duration/replace_clips to add {deficit}ms within verified source ranges."
+    ))
 }
 
 pub(crate) fn replace_generated_subtitle_tracks(
@@ -161,7 +138,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_picture_gets_a_freeze_frame_instead_of_extending_source_range() {
+    fn short_picture_returns_deficit_error_and_never_uses_freeze_frame() {
         let clips = vec![TimelineClip {
             shot_index: 1,
             asset_id: "video-1".to_owned(),
@@ -172,15 +149,10 @@ mod tests {
             on_screen_text: String::new(),
             ..Default::default()
         }];
-        let (fitted, warning) = fit_visual_to_voiceover(clips, 3_000).expect("fit");
-        assert!(warning.is_none());
-        assert_eq!(fitted.len(), 2);
-        let freeze = &fitted[1];
-        assert_eq!(freeze.clip_kind, "freeze_frame");
-        assert_eq!(freeze.fit_reason.as_deref(), Some("voiceover_tail_fill"));
-        assert_eq!(freeze.derived_from_shot_index, Some(1));
-        assert!(freeze.source_end_ms <= 2_000);
-        assert!(freeze.timeline_end_ms >= 3_000);
+        let error = fit_visual_to_voiceover(clips, 3_000).unwrap_err();
+        assert!(error.starts_with("voiceover_longer_than_picture:"));
+        assert!(error.contains("deficit="));
+        assert!(error.contains("freeze_frame is forbidden"));
     }
 
     #[test]
