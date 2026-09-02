@@ -136,6 +136,15 @@ pub(crate) struct ClipAdjustment {
     pub(crate) new_source_start_ms: Option<i64>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ClipInsertion {
+    pub(crate) asset_id: String,
+    pub(crate) source_start_ms: i64,
+    pub(crate) source_end_ms: i64,
+    pub(crate) duration_ms: Option<i64>,
+    pub(crate) insert_after_shot_index: Option<i64>,
+}
+
 fn duplicate_shot_index(shots: &[i64]) -> Option<i64> {
     let mut seen = std::collections::HashSet::new();
     shots.iter().copied().find(|shot| !seen.insert(*shot))
