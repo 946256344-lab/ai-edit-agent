@@ -944,6 +944,7 @@ mod tests {
             text_tracks: Vec::new(),
             music_tracks: Vec::new(),
             voiceover_tracks: Vec::new(),
+            overlay_clips: Vec::new(),
             quality_report: None,
         })
         .expect("serialize timeline fixture")
@@ -1357,7 +1358,7 @@ pub(crate) fn generate_storyboard_for_agent(
     brief: String,
     voice_id: Option<String>,
 ) -> Result<StoryboardVersion, String> {
-    generate_storyboard_internal(app, project_id, editing_task_id, brief, voice_id, false)
+    generate_storyboard_internal(app, project_id, editing_task_id, brief, voice_id.as_deref(), false)
 }
 
 fn generate_storyboard_internal(
@@ -1832,9 +1833,11 @@ fn finalize_audio_first_timeline(
     if visual_ms == 0 {
         return Ok(());
     }
-    if duration_ms > visual_ms + 1_500 {
-        log::warn!("Audio-first deficit too large to auto-fill: visual={visual_ms} voice={duration_ms}; leaving to insert_clips/change_clip_duration");
-        // still create timeline without voiceover so user sees length mismatch; model can then use insert_clips
+    let voiceover_fits = visual_ms >= duration_ms;
+    if !voiceover_fits {
+        log::warn!(
+            "Audio-first deficit: visual={visual_ms} voice={duration_ms}; creating picture-only timeline for insert_clips/change_clip_duration repair"
+        );
     }
     // Build draft timeline for draft-then-promote pattern: we create timeline_versions entry ourselves to reuse insert path
     let mut cues: Vec<TextCue> = Vec::new();
@@ -1849,29 +1852,58 @@ fn finalize_audio_first_timeline(
     let mut text_tracks: Vec<TextTrack> = if cues.is_empty() { Vec::new() } else {
         vec![TextTrack{id:"storyboard-subtitles".to_owned(), role:"subtitle".to_owned(), layer:1, enabled:true, origin:"storyboard_generated".to_owned(), generation_id: None, editable:true, locked:false, cues}]
     };
-    if let Ok(align_cues) = cues_from_alignment(&prepared.alignment, duration_ms) {
-        // Replace generated subtitles with alignment cues, keeping user locked tracks (none yet at this point)
-        let generated = subtitle_track_from_cues(&generation_id, &align_cues);
-        // reuse timeline_voice helper semantics: filter out storyboard_generated and keep others
-        let kept: Vec<TextTrack> = text_tracks.into_iter().filter(|t| !(t.role=="subtitle" && !t.locked && matches!(t.origin.as_str(), "storyboard_generated" | "voice_alignment"))).collect();
-        let mut new_tracks = kept;
-        new_tracks.push(generated);
-        text_tracks = new_tracks;
+    let mut vt: Vec<VoiceoverTrack> = Vec::new();
+    if voiceover_fits {
+        if let Ok(align_cues) = cues_from_alignment(&prepared.alignment, duration_ms) {
+            let generated = subtitle_track_from_cues(&generation_id, &align_cues);
+            let kept: Vec<TextTrack> = text_tracks
+                .into_iter()
+                .filter(|t| {
+                    !(t.role == "subtitle"
+                        && !t.locked
+                        && matches!(t.origin.as_str(), "storyboard_generated" | "voice_alignment"))
+                })
+                .collect();
+            let mut new_tracks = kept;
+            new_tracks.push(generated);
+            text_tracks = new_tracks;
+        }
+        let mut voiceover = VoiceoverTrack {
+            id: format!("voiceover-{generation_id}"),
+            enabled: true,
+            cues: vec![VoiceoverCue {
+                id: format!("voiceover-{generation_id}-cue"),
+                asset_id: String::new(),
+                generation_id: generation_id.clone(),
+                source_start_ms: 0,
+                source_end_ms: duration_ms,
+                timeline_start_ms: 0,
+                timeline_end_ms: duration_ms,
+                volume: 1.0,
+                fade_in_ms: 0,
+                fade_out_ms: 80,
+                provider: "ElevenLabs".to_owned(),
+                voice_id: voice_id.clone(),
+                voice_name: voice_name.clone(),
+            }],
+        };
+        match (|| -> Result<String, String> {
+            let mp3_path = prepared.cached.directory.join("voiceover.mp3");
+            let disp = format!("ElevenLabs: {} voiceover", voice_name);
+            let asset =
+                crate::assets::store_downloaded_audio(app, &storyboard.project_id, mp3_path, &disp)?;
+            let asset = crate::assets::wait_for_asset_ready(app, &storyboard.project_id, &asset.id)?;
+            Ok(asset.id)
+        })() {
+            Ok(asset_id) => {
+                for cue in &mut voiceover.cues {
+                    cue.asset_id = asset_id.clone();
+                }
+            }
+            Err(error) => log::warn!("Audio-first asset persist skipped: {error}"),
+        }
+        vt = vec![voiceover];
     }
-    let voiceover_tracks: Vec<VoiceoverTrack> = vec![VoiceoverTrack{id: format!("voiceover-{generation_id}"), enabled:true, cues: vec![VoiceoverCue{id: format!("voiceover-{generation_id}-cue"), asset_id: String::new(), generation_id: generation_id.clone(), source_start_ms: 0, source_end_ms: duration_ms, timeline_start_ms: 0, timeline_end_ms: duration_ms, volume: 1.0, fade_in_ms: 0, fade_out_ms: 80, provider:"ElevenLabs".to_owned(), voice_id: voice_id.clone(), voice_name: voice_name.clone()}]}];
-    // Persist audio as asset entry so timeline voiceover assetId is resolvable
-    let asset_id = match (|| -> Result<String, String> {
-        let mp3_path = prepared.cached.directory.join("voiceover.mp3");
-        let disp = format!("ElevenLabs: {} voiceover", voice_name);
-        let asset = crate::assets::store_downloaded_audio(app, &storyboard.project_id, mp3_path, &disp)?;
-        let asset = crate::assets::wait_for_asset_ready(app, &storyboard.project_id, &asset.id)?;
-        Ok(asset.id)
-    })() {
-        Ok(id) => id,
-        Err(e) => { log::warn!("Audio-first asset persist skipped: {e}"); String::new() }
-    };
-    let mut vt = voiceover_tracks.clone();
-    if !asset_id.is_empty() { for t in &mut vt { for c in &mut t.cues { c.asset_id = asset_id.clone(); } } }
     // Use shared timeline helper to insert version; we synthesize content_json and status directly
     let version_number: i64 = connection.query_row("SELECT COALESCE(MAX(version_number),0)+1 FROM timeline_versions WHERE project_id=?1", params![storyboard.project_id], |r| r.get(0)).map_err(|e| e.to_string())?;
     let new_id = uuid::Uuid::new_v4().to_string();
@@ -1884,7 +1916,7 @@ fn finalize_audio_first_timeline(
     let before = serde_json::Value::Null;
     let after: serde_json::Value = serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
     let _ = connection.execute("INSERT INTO operation_logs (id, project_id, editing_task_id, conversation_id, agent_task_id, actor, operation_type, entity_type, entity_id, before_json, after_json, created_at) VALUES (?1,?2,?3,?4,NULL,'agent','audio_first_timeline','timeline_version',?5,?6,?7,?8)", params![uuid::Uuid::new_v4().to_string(), storyboard.project_id, editing_task_id, conversation_id, new_id, serde_json::to_string(&before).unwrap_or_default(), serde_json::to_string(&after).unwrap_or_default(), created_at]);
-    log::info!("Audio-first timeline v{} created with voiceover {}ms id={}", version_number, duration_ms, new_id);
+    log::info!("Audio-first timeline v{} created voice_fits={} voice={}ms id={}", version_number, voiceover_fits, duration_ms, new_id);
     Ok(())
 }
 

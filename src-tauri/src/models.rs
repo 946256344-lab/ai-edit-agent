@@ -633,6 +633,18 @@ pub(crate) struct ClipAdjustmentParams {
     pub(crate) new_source_start_ms: Option<i64>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClipInsertionParams {
+    pub(crate) asset_id: String,
+    pub(crate) source_start_ms: i64,
+    pub(crate) source_end_ms: i64,
+    #[serde(default)]
+    pub(crate) duration_ms: Option<i64>,
+    #[serde(default)]
+    pub(crate) insert_after_shot_index: Option<i64>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEditResult {

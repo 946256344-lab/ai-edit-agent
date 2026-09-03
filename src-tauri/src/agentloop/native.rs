@@ -54,6 +54,7 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "generate_storyboard",
     "create_timeline_draft",
     "replace_clips",
+    "insert_clips",
     "change_clip_duration",
     "reorder_clips",
     "replace_text_tracks",
@@ -413,6 +414,7 @@ fn merge_native_outcomes(
             tool,
             "create_timeline_draft"
                 | "replace_clips"
+                | "insert_clips"
                 | "change_clip_duration"
                 | "reorder_clips"
                 | "replace_text_tracks"
@@ -454,6 +456,7 @@ struct NativeRunReceipt {
 const TIMELINE_VERSION_WRITE_TOOLS: &[&str] = &[
     "create_timeline_draft",
     "replace_clips",
+    "insert_clips",
     "change_clip_duration",
     "reorder_clips",
     "replace_text_tracks",
@@ -1115,11 +1118,20 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             Ok(value)
         }
         "generate_storyboard" => {
-            if object.len() != 1 || !object.contains_key("brief") {
+            let allowed = ["brief", "voiceId"];
+            if object.is_empty()
+                || !object.contains_key("brief")
+                || object.keys().any(|key| !allowed.contains(&key.as_str()))
+            {
                 return Err(invalid_arguments());
             }
             if !(object["brief"].is_null() || object["brief"].is_string()) {
                 return Err(invalid_arguments());
+            }
+            if let Some(voice_id) = object.get("voiceId") {
+                if !(voice_id.is_null() || voice_id.is_string()) {
+                    return Err(invalid_arguments());
+                }
             }
             Ok(value)
         }
@@ -1146,6 +1158,26 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             };
             if shots.is_empty() {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "insert_clips" => {
+            if object.len() != 2
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("clips")
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null()
+                || object["timelineVersionId"].is_string())
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(clips) = object["clips"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if clips.is_empty() {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1704,6 +1736,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
             "replace_text_tracks",
@@ -1769,6 +1802,7 @@ mod tests {
             for name in [
                 "create_timeline_draft",
                 "replace_clips",
+                "insert_clips",
                 "change_clip_duration",
                 "reorder_clips",
                 "replace_text_tracks",
@@ -2781,6 +2815,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
         ] {
@@ -2971,6 +3006,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
             "replace_text_tracks",
@@ -2988,6 +3024,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
             "replace_text_tracks",

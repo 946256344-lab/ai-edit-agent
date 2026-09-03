@@ -33,6 +33,7 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "generate_storyboard",
     "create_timeline_draft",
     "replace_clips",
+    "insert_clips",
     "change_clip_duration",
     "reorder_clips",
     "replace_text_tracks",

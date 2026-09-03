@@ -6,15 +6,15 @@
 
 use crate::jianying::create_jianying_draft;
 use crate::models::{
-    AgentEditResult, ClipAdjustmentParams, ClipReplacementParams, MusicCue, MusicTrack, TextTrack,
-    TimelineVersion,
+    AgentEditResult, ClipAdjustmentParams, ClipInsertionParams, ClipReplacementParams, MusicCue,
+    MusicTrack, TextTrack, TimelineVersion,
 };
 use crate::music_provider::{attribution_for, download_track, eligible_track, search_tracks};
 use crate::preview::render_preview;
 use crate::timeline::{
-    change_clip_duration, create_timeline_draft, reorder_clips, replace_clips,
+    change_clip_duration, create_timeline_draft, insert_clips, reorder_clips, replace_clips,
     replace_music_tracks, replace_text_tracks, select_timeline_candidate, text_recipe_capabilities,
-    text_track_quality_warnings, ClipAdjustment, ClipReplacement,
+    text_track_quality_warnings, ClipAdjustment, ClipInsertion, ClipReplacement,
 };
 use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -35,6 +35,7 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         "generate_storyboard" => Some("storyboard"),
         "create_timeline_draft"
         | "replace_clips"
+        | "insert_clips"
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
@@ -59,6 +60,7 @@ pub(super) fn persisted_artifact_for_tool(
             .map(|artifact| ("storyboard_version", artifact.id.clone())),
         "create_timeline_draft"
         | "replace_clips"
+        | "insert_clips"
         | "change_clip_duration"
         | "reorder_clips"
         | "replace_text_tracks"
@@ -85,7 +87,9 @@ pub(super) fn persisted_artifact_for_tool(
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub(super) fn safe_step_error_code(error: &str) -> &'static str {
-    if error.starts_with("storyboard_source_inventory_unavailable:")
+    if error.starts_with("voiceover_longer_than_picture:") {
+        "voiceover_longer_than_picture"
+    } else if error.starts_with("storyboard_source_inventory_unavailable:")
         || error.starts_with("storyboard_visual_evidence_unavailable:")
     {
         "unavailable_media"
@@ -136,6 +140,25 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": true,
             "recovery": "若还没有分镜，先调用 generate_storyboard；用户确认后再调用 create_timeline_draft，然后重试当前工具。",
             "responseInstruction": "Tell the user this step needs an internal timeline. If generate_storyboard and create_timeline_draft are available, use that path. Do not claim the requested artifact was created."
+        });
+    }
+    if error.starts_with("voiceover_longer_than_picture:") {
+        let visual = diagnostic_count(error, "visual").unwrap_or(0);
+        let voice = diagnostic_count(error, "voice").unwrap_or(0);
+        let deficit = diagnostic_count(error, "deficit").unwrap_or(0);
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "voiceover_fit",
+            "code": "voiceover_longer_than_picture",
+            "facts": [
+                format!("Picture spans {visual} ms"),
+                format!("Voiceover spans {voice} ms"),
+                format!("Need about {deficit} ms more picture")
+            ],
+            "retryable": true,
+            "recovery": "Never use freeze_frame. Call search_asset_segments, then insert_clips and/or change_clip_duration/replace_clips to add picture duration within verified source ranges, then retry synthesize_voiceover.",
+            "responseInstruction": "Explain that voiceover was not written because the picture is shorter than the narration. Extend the timeline with real footage, then synthesize again. Do not claim freeze-frames or silent padding were used."
         });
     }
     if code == "missing_narration" {
@@ -788,11 +811,18 @@ pub(super) fn apply_skill(
             if brief.is_empty() {
                 return Err("The user has no video goal to base a storyboard on.".to_owned());
             }
+            let voice_id = args
+                .get("voiceId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
             let generated = crate::storyboard::generate_storyboard_for_agent(
                 state.app.clone(),
                 state.project_id.to_owned(),
                 state.editing_task_id.to_owned(),
                 brief.to_owned(),
+                voice_id,
             )?;
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;
@@ -803,11 +833,23 @@ pub(super) fn apply_skill(
                 "已按你的目标生成 storyboard（版本 {version}）。{summary}",
                 version = version_number
             );
-            let timeline_result = create_timeline_draft(
+            // Prefer the audio-first timeline written during storyboard generation when present.
+            let timeline_result = match crate::timeline::get_latest_timeline(
                 state.app.clone(),
                 state.project_id.to_owned(),
                 storyboard_version_id.clone(),
-            );
+            ) {
+                Ok(Some(latest))
+                    if latest.timeline.storyboard_version_id == storyboard_version_id =>
+                {
+                    Ok(latest.timeline)
+                }
+                _ => create_timeline_draft(
+                    state.app.clone(),
+                    state.project_id.to_owned(),
+                    storyboard_version_id.clone(),
+                ),
+            };
             match timeline_result {
                 Ok(timeline) => {
                     let timeline_version_id = timeline.id.clone();
@@ -948,6 +990,58 @@ pub(super) fn apply_skill(
             });
             Ok(json!({
                 "tool": "replace_clips",
+                "status": "ok",
+                "timelineVersionId": timeline_version_id,
+                "versionNumber": version_number,
+                "qualityWarnings": quality_warnings
+            }))
+        }
+        "insert_clips" => {
+            let existing = select_timeline_for_tool(state, args)?;
+            let clips_json = args
+                .get("clips")
+                .ok_or_else(|| "insert_clips needs a clips array.".to_owned())?;
+            let params: Vec<ClipInsertionParams> =
+                serde_json::from_value(clips_json.clone()).map_err(|error| error.to_string())?;
+            if params.is_empty() {
+                return Err("Agent did not identify any clips to insert.".to_owned());
+            }
+            let insertions: Vec<ClipInsertion> = params
+                .into_iter()
+                .map(|insertion| ClipInsertion {
+                    asset_id: insertion.asset_id,
+                    source_start_ms: insertion.source_start_ms,
+                    source_end_ms: insertion.source_end_ms,
+                    duration_ms: insertion.duration_ms,
+                    insert_after_shot_index: insertion.insert_after_shot_index,
+                })
+                .collect();
+            let result = insert_clips(
+                state.connection,
+                state.project_id,
+                state.editing_task_id,
+                state.conversation_id,
+                state.agent_task_id,
+                &existing,
+                &insertions,
+            )?;
+            let timeline_version_id = result.id.clone();
+            let version_number = result.version_number;
+            let quality_warnings = text_track_quality_warnings(&result.text_tracks);
+            upsert(&mut state.timelines, result.clone());
+            state.last_outcome = Some(AgentEditResult {
+                agent_task_id,
+                message: format!(
+                    "已插入镜头补足画面时长，并创建新的内部时间线 v{}。",
+                    version_number
+                ),
+                storyboard: None,
+                timeline: Some(result),
+                preview: None,
+                jianying_draft: None,
+            });
+            Ok(json!({
+                "tool": "insert_clips",
                 "status": "ok",
                 "timelineVersionId": timeline_version_id,
                 "versionNumber": version_number,

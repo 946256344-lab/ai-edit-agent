@@ -54,8 +54,8 @@ pub struct VoiceoverApplyResult {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VoiceoverManifest {
     fingerprint: String,
-    voice_id: String,
-    voice_name: String,
+    pub(crate) voice_id: String,
+    pub(crate) voice_name: String,
     model_id: String,
     duration_ms: i64,
     status: String,

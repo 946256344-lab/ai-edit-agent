@@ -410,6 +410,7 @@ fn requested_timeline_is_used_when_multiple_candidates_exist() {
         text_tracks: Vec::new(),
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: version_number,
     };
@@ -431,6 +432,7 @@ fn explicit_unknown_timeline_never_falls_back_to_the_only_candidate() {
         text_tracks: Vec::new(),
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: 1,
     };
@@ -486,6 +488,7 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
         text_tracks: Vec::new(),
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: 1,
     };
@@ -517,6 +520,98 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
             .expect("count operation logs"),
         1
     );
+}
+
+#[test]
+fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() {
+    let connection = Connection::open_in_memory().expect("open test database");
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
+            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
+            CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
+            ",
+        )
+        .expect("create test tables");
+    let metadata = serde_json::to_string(&TechnicalMetadata {
+        duration_ms: Some(10_000),
+        ..TechnicalMetadata::default()
+    })
+    .expect("serialize metadata");
+    connection
+        .execute(
+            "INSERT INTO assets VALUES ('extra-video', 'project-1', 'video', 'ready', ?1)",
+            params![metadata],
+        )
+        .expect("insert asset");
+    connection
+        .execute(
+            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1)",
+            [],
+        )
+        .expect("insert existing version");
+    let existing = TimelineVersion {
+        id: "existing".to_owned(),
+        project_id: "project-1".to_owned(),
+        storyboard_version_id: "storyboard-1".to_owned(),
+        version_number: 1,
+        clips: vec![
+            TimelineClip {
+                shot_index: 1,
+                asset_id: "a".to_owned(),
+                source_start_ms: 0,
+                source_end_ms: 2_000,
+                timeline_start_ms: 0,
+                timeline_end_ms: 2_000,
+                on_screen_text: String::new(),
+                ..Default::default()
+            },
+            TimelineClip {
+                shot_index: 2,
+                asset_id: "b".to_owned(),
+                source_start_ms: 0,
+                source_end_ms: 1_000,
+                timeline_start_ms: 2_000,
+                timeline_end_ms: 3_000,
+                on_screen_text: String::new(),
+                ..Default::default()
+            },
+        ],
+        text_tracks: Vec::new(),
+        music_tracks: Vec::new(),
+        voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
+        quality_report: None,
+        created_at: 1,
+    };
+    let extended = insert_clips(
+        &connection,
+        "project-1",
+        "editing-task-1",
+        "conversation-1",
+        "agent-task-1",
+        &existing,
+        &[ClipInsertion {
+            asset_id: "extra-video".to_owned(),
+            source_start_ms: 1_000,
+            source_end_ms: 2_500,
+            duration_ms: Some(1_500),
+            insert_after_shot_index: Some(1),
+        }],
+    )
+    .expect("insert clip");
+    assert_eq!(extended.version_number, 2);
+    assert_eq!(extended.clips.len(), 3);
+    assert_eq!(extended.clips[0].shot_index, 1);
+    assert_eq!(extended.clips[1].asset_id, "extra-video");
+    assert_eq!(extended.clips[1].timeline_start_ms, 2_000);
+    assert_eq!(extended.clips[1].timeline_end_ms, 3_500);
+    assert_eq!(extended.clips[1].fit_reason.as_deref(), Some("timeline_extend"));
+    assert_ne!(extended.clips[1].clip_kind, "freeze_frame");
+    assert_eq!(extended.clips[2].shot_index, 2);
+    assert_eq!(extended.clips[2].timeline_start_ms, 3_500);
+    assert_eq!(extended.clips[2].timeline_end_ms, 4_500);
 }
 
 #[test]
@@ -578,6 +673,7 @@ fn changing_clip_duration_shifts_following_shots_and_stays_in_source_range() {
         text_tracks: Vec::new(),
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: 1,
     };
@@ -720,6 +816,7 @@ fn reordering_clips_requires_a_full_permutation() {
         text_tracks: Vec::new(),
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: 1,
     };
@@ -773,6 +870,7 @@ fn select_timeline_candidate_picks_latest_when_multiple_versions_exist() {
         text_tracks: vec![],
         music_tracks: vec![],
         voiceover_tracks: vec![],
+        overlay_clips: Vec::new(),
         quality_report: None,
         created_at: 2000,
     };

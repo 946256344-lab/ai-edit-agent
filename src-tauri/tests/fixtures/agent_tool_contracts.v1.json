@@ -407,6 +407,11 @@
             "type": "string",
             "optional": true,
             "fallback": "LoopState.taskBrief"
+          },
+          "voiceId": {
+            "type": "string",
+            "optional": true,
+            "fallback": "Charlie when ElevenLabs audio-first prepare runs"
           }
         },
         "required": []
@@ -426,7 +431,8 @@
         "model output passes local storyboard evidence and source-range validation"
       ],
       "produces": [
-        "storyboard_version"
+        "storyboard_version",
+        "timeline_version_when_audio_first_succeeds"
       ],
       "returns": [
         "storyboardVersionId",
@@ -515,6 +521,64 @@
         "replacement assets are analyzed and available in the current project",
         "video source range is valid and exactly equals the replaced timeline slot duration",
         "image source range is 0 to 0"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "versionNumber"
+      ]
+    },
+    {
+      "name": "insert_clips",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "clips": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "assetId",
+                "sourceStartMs",
+                "sourceEndMs"
+              ],
+              "properties": {
+                "assetId": { "type": "string" },
+                "sourceStartMs": { "type": "integer" },
+                "sourceEndMs": { "type": "integer" },
+                "durationMs": { "type": "integer", "optional": true },
+                "insertAfterShotIndex": { "type": "integer", "optional": true }
+              }
+            }
+          }
+        },
+        "required": [
+          "clips"
+        ]
+      },
+      "scope": {
+        "boundary": "timeline_loaded_for_current_storyboard_and_assets_in_current_project",
+        "resolution": "timeline is selected only from LoopState; inserted asset lookup includes current projectId and ready analysis status"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every successful invocation creates a new timeline version and operation log",
+      "preconditions": [
+        "a scoped timeline can be selected",
+        "insertAfterShotIndex is null or exists on the current timeline",
+        "inserted assets are analyzed and available in the current project",
+        "video source range is valid within file duration and duration equals the range",
+        "image source range is 0 to 0 and durationMs is positive"
       ],
       "produces": [
         "timeline_version",

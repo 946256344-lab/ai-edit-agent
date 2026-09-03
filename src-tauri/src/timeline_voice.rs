@@ -37,7 +37,7 @@ pub(crate) fn fit_visual_to_voiceover(
     }
     let deficit = (voice_duration_ms + VOICEOVER_TAIL_MS) - visual;
     Err(format!(
-        "voiceover_longer_than_picture: visual={visual} voice={voice_duration_ms} deficit={deficit} hint=freeze_frame is forbidden. Use search_asset_segments and then insert_clips or change_clip_duration/replace_clips to add {deficit}ms within verified source ranges."
+        "voiceover_longer_than_picture: visual={visual}; voice={voice_duration_ms}; deficit={deficit}; hint=freeze_frame is forbidden. Use search_asset_segments and then insert_clips or change_clip_duration/replace_clips to add {deficit}ms within verified source ranges."
     ))
 }
 
@@ -149,7 +149,10 @@ mod tests {
             on_screen_text: String::new(),
             ..Default::default()
         }];
-        let error = fit_visual_to_voiceover(clips, 3_000).unwrap_err();
+        let error = match fit_visual_to_voiceover(clips, 3_000) {
+            Err(error) => error,
+            Ok(_) => panic!("expected voiceover_longer_than_picture"),
+        };
         assert!(error.starts_with("voiceover_longer_than_picture:"));
         assert!(error.contains("deficit="));
         assert!(error.contains("freeze_frame is forbidden"));

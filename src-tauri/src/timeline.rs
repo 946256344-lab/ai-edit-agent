@@ -142,6 +142,7 @@ pub(crate) struct ClipInsertion {
     pub(crate) source_start_ms: i64,
     pub(crate) source_end_ms: i64,
     pub(crate) duration_ms: Option<i64>,
+    /// `None` inserts at the start; `Some(shot)` inserts immediately after that existing shot.
     pub(crate) insert_after_shot_index: Option<i64>,
 }
 
@@ -983,6 +984,135 @@ pub(crate) fn change_clip_duration(
         agent_task_id,
         timeline,
         "change_clip_duration",
+        clips,
+        timeline.text_tracks.clone(),
+        timeline.music_tracks.clone(),
+        timeline.voiceover_tracks.clone(),
+    )
+}
+
+/// 在既有时间线中插入新镜头并生成新版本；后续片段平移，字幕轨不自动改写。
+/// 用于配音长于画面时的补时长（禁止 freeze_frame）。
+pub(crate) fn insert_clips(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+    conversation_id: &str,
+    agent_task_id: &str,
+    timeline: &TimelineVersion,
+    insertions: &[ClipInsertion],
+) -> Result<TimelineVersion, String> {
+    if timeline.project_id != project_id {
+        return Err("Timeline does not belong to this project.".to_owned());
+    }
+    if insertions.is_empty() {
+        return Err("No clips were provided to insert.".to_owned());
+    }
+    let existing_indexes: std::collections::HashSet<i64> =
+        timeline.clips.iter().map(|clip| clip.shot_index).collect();
+    for insertion in insertions {
+        if let Some(after) = insertion.insert_after_shot_index {
+            if !existing_indexes.contains(&after) {
+                return Err(format!(
+                    "insert_after_shot_index {after} does not exist on the current timeline."
+                ));
+            }
+        }
+    }
+
+    let mut prepared: Vec<(usize, TimelineClip)> = Vec::with_capacity(insertions.len());
+    let mut next_shot_index = timeline
+        .clips
+        .iter()
+        .map(|clip| clip.shot_index)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for insertion in insertions {
+        let (kind, metadata) =
+            asset_kind_and_metadata(connection, project_id, &insertion.asset_id)?;
+        let duration_ms = if kind == "video" {
+            let file_duration = metadata
+                .duration_ms
+                .ok_or_else(|| "Inserted video has no verified duration.".to_owned())?;
+            if insertion.source_start_ms < 0
+                || insertion.source_end_ms <= insertion.source_start_ms
+                || insertion.source_end_ms > file_duration
+            {
+                return Err(
+                    "Inserted video range must be verified and stay within the file duration."
+                        .to_owned(),
+                );
+            }
+            let range = insertion.source_end_ms - insertion.source_start_ms;
+            let duration = insertion.duration_ms.unwrap_or(range);
+            if duration != range {
+                return Err(
+                    "Inserted video duration_ms must equal sourceEndMs - sourceStartMs.".to_owned(),
+                );
+            }
+            duration
+        } else if kind == "image" {
+            if insertion.source_start_ms != 0 || insertion.source_end_ms != 0 {
+                return Err("Inserted images must use a zero source range.".to_owned());
+            }
+            let duration = insertion
+                .duration_ms
+                .ok_or_else(|| "Inserted images require duration_ms.".to_owned())?;
+            if duration <= 0 {
+                return Err("Inserted clip duration must be positive.".to_owned());
+            }
+            duration
+        } else {
+            return Err("Inserted asset must be a video or image.".to_owned());
+        };
+        let insert_at = match insertion.insert_after_shot_index {
+            None => 0,
+            Some(after) => timeline
+                .clips
+                .iter()
+                .position(|clip| clip.shot_index == after)
+                .map(|index| index + 1)
+                .ok_or_else(|| {
+                    format!("insert_after_shot_index {after} does not exist on the current timeline.")
+                })?,
+        };
+        let clip = TimelineClip {
+            shot_index: next_shot_index,
+            asset_id: insertion.asset_id.clone(),
+            source_start_ms: insertion.source_start_ms,
+            source_end_ms: if kind == "video" {
+                insertion.source_end_ms
+            } else {
+                0
+            },
+            timeline_start_ms: 0,
+            timeline_end_ms: duration_ms,
+            on_screen_text: String::new(),
+            clip_kind: "source".to_owned(),
+            derived_from_shot_index: None,
+            fit_reason: Some("timeline_extend".to_owned()),
+        };
+        prepared.push((insert_at, clip));
+        next_shot_index += 1;
+    }
+
+    // Apply from the end so earlier insert indexes stay valid relative to the original list.
+    let mut clips = timeline.clips.clone();
+    prepared.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.shot_index.cmp(&a.1.shot_index)));
+    for (insert_at, clip) in prepared {
+        let at = insert_at.min(clips.len());
+        clips.insert(at, clip);
+    }
+    recompute_timeline_positions(&mut clips);
+    insert_timeline_version_with_log(
+        connection,
+        project_id,
+        editing_task_id,
+        conversation_id,
+        agent_task_id,
+        timeline,
+        "insert_clips",
         clips,
         timeline.text_tracks.clone(),
         timeline.music_tracks.clone(),

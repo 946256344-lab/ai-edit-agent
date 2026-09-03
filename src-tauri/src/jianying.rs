@@ -528,6 +528,7 @@ mod tests {
             }],
             music_tracks: Vec::new(),
             voiceover_tracks: Vec::new(),
+            overlay_clips: Vec::new(),
             quality_report: None,
             created_at: 1,
         }

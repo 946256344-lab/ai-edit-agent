@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-03，feat/opencut-full-port）：音频优先 + 禁止冻结帧。`full_script` Phase1 后 TTS 定时长；画面不足不挂不匹配配音；新增 `insert_clips` 与 `voiceover_longer_than_picture` 可恢复失败上下文；契约/文档已同步。见 `docs/changes/2026-09-03-audio-first-no-freeze.md`。
 - [x] 完成（2026-08-27，chore/cleanup-rust-warnings）：清理 Rust 后端 18 个 unused/dead-code 警告；删除旧 `request_storyboard` 与场景检测遗留代码，预留契约以最小 `#[allow(dead_code)]` 保留。262 个 Rust 库测试、agent/harness 检查通过；无命令、schema、工具白名单或 Provider 协议变化。见 `docs/changes/2026-08-27-cleanup-rust-warnings.md`。
 - [x] 完成（2026-08-27，codex/dynamic-tool-loading）：NativeToolLoop 每轮提供完整工具名称/一句话目录，`load_tools(toolNames)` 每次替换并最多暴露 5 个完整 schema；加载从下一次 Provider 请求生效，Rust 拒绝同响应未暴露调用。`read_logs` 可由模型按需加载，按 1-based 行号范围读取当前活动应用日志，具备固定路径、分页、字符预算及敏感行遮蔽。会话历史取消固定条数/字符窗，完整 Provider payload 以 token 计量，40K 触发模型自主压缩、目标 30K、硬上限 60K。见 `docs/changes/2026-08-27-dynamic-tool-loading-and-log-reading.md`。
 - [x] 完成（2026-08-27，codex/semantic-storyboard-retrieval）：Storyboard Phase 2 每 beat 以本地中文向量/词面降级召回 Top-12，模型选 1 个且 Phase 3 不得换出；接入真实关键帧质量、去重使用次数、旧素材安全回填和安装包内置模型。后续补齐同次 Storyboard 复用累计扣 15 分、连续复用额外扣 30 分，按实际已选镜头动态执行 40% 上限并硬排除相邻重复；Phase 3 固定已覆盖 rough shot 一对一顺序并保留 uncovered beat，避免多样性规则冲突。247 个 Rust 库测试、2 个契约测试、14 个 Python 测试及 agent/branch/harness 全绿；安装包验证沿用本分支此前通过的 release 构建，独立审查无剩余 P0-P2。见 `docs/changes/2026-08-27-storyboard-semantic-retrieval.md`。

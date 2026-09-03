@@ -27,6 +27,7 @@ const RETRY_FAILED_ASSET_ANALYSIS: &str = "retry_failed_asset_analysis";
 const GENERATE_STORYBOARD: &str = "generate_storyboard";
 const CREATE_TIMELINE_DRAFT: &str = "create_timeline_draft";
 const REPLACE_CLIPS: &str = "replace_clips";
+const INSERT_CLIPS: &str = "insert_clips";
 const CHANGE_CLIP_DURATION: &str = "change_clip_duration";
 const REORDER_CLIPS: &str = "reorder_clips";
 const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
@@ -280,16 +281,22 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read five matching candidates, and pick one until every beat is filled or honestly uncovered. If the user gave no copy, still write spoken narration. Never use onScreenText as voiceover.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read five matching candidates, and pick one until every beat is filled or honestly uncovered. If the user gave no copy, still write spoken narration. Never use onScreenText as voiceover. For full_script narration, synthesizes voiceover first when ElevenLabs is configured so shot selection targets the real audio duration.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
                     "minLength": 1,
                     "maxLength": 4_000,
                     "description": "Optional storyboard brief; null uses the current task brief."
+                },
+                "voiceId": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Optional ElevenLabs voice id for audio-first storyboard generation; null selects Charlie when available."
                 }
             }),
-            vec!["brief"],
+            vec!["brief", "voiceId"],
         ),
         function_tool(
             CREATE_TIMELINE_DRAFT,
@@ -323,6 +330,34 @@ fn main_chain_function_tools() -> Vec<Value> {
                 }
             }),
             vec!["timelineVersionId", "shots"],
+        ),
+        function_tool(
+            INSERT_CLIPS,
+            "Create a new timeline version by inserting verified clips to extend picture duration. Use when voiceover is longer than picture; never pad with freeze_frame.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "clips": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "assetId": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "sourceStartMs": {"type": "integer", "minimum": 0},
+                            "sourceEndMs": {"type": "integer", "minimum": 0},
+                            "durationMs": {"type": ["integer", "null"], "minimum": 1},
+                            "insertAfterShotIndex": {"type": ["integer", "null"], "minimum": 0}
+                        },
+                        "required": ["assetId", "sourceStartMs", "sourceEndMs", "durationMs", "insertAfterShotIndex"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            vec!["timelineVersionId", "clips"],
         ),
         function_tool(
             CHANGE_CLIP_DURATION,
@@ -789,6 +824,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
             "replace_text_tracks",
@@ -811,6 +847,7 @@ mod tests {
             "generate_storyboard",
             "create_timeline_draft",
             "replace_clips",
+            "insert_clips",
             "change_clip_duration",
             "reorder_clips",
         ] {
