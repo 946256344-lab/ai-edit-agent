@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-04，fix/no-keyword-agent-policy）：去掉 Agent 关键词判定行动（`只`/`only` 只读门与观察词表）；意图交模型，Rust 守白名单/作用域/领域校验。见 `docs/changes/2026-09-04-no-keyword-agent-policy.md`。
 - [x] 完成（2026-09-04）：storyboard 完成后统一自动配音。有 `narrationText` 且语音 Provider 已配置时，Agent/前端共用 `auto_synthesize_storyboard_voiceover`；失败不挡预览；已有旁白轨跳过。见 `docs/changes/2026-09-04-auto-voiceover-after-storyboard.md`。
 - [x] 完成（2026-09-03）：Storyboard 安全上限抬到 100 镜/beat；Phase1 短 brief 偏 key_message/短时长；Phase5 机械自修、结构问题不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
 - [x] 完成（2026-09-03，refactor/storyboard-select-then-refine）：Storyboard 单步重试原语 + Phase2 去重补位 Top12 → Phase3 选 2–3 → Phase4 时间段精修 → Phase5 校验；uncovered 闭环文案与 `partialCandidateSummary`；`STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。

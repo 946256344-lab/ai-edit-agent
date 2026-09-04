@@ -175,7 +175,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次，候选多帧精检仍为 TODO。
+当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次；Phase 3 查看候选关键帧网格选片，Phase 4 先按画面变化选内容窗再在窗内精修源区间。
 
 ### Agent 编程上下文架构
 
@@ -208,7 +208,7 @@ docs/{architecture,api,...}.md   按需读取的长期事实和历史决策
 
 每个非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，Rust 在下一次 Provider 请求前重新读取并原位替换唯一快照，使新 storyboard/timeline/preview/注册状态立即可见；刷新失败同样封闭终止。上下文按完整 Provider payload 的 o200k token 计量，不再按固定消息数或字符数裁剪：40K 以上启动模型自主压缩，目标低于 30K，60K 为发送硬上限。压缩必须保留用户目标、明确约束、偏好、已作决定及原因和未解决问题；当前用户消息、唯一权威快照、近期原文及最近 function_call/function_call_output 对原样保护。
 
-每个普通自然语言请求还会生成只在本轮有效的 `RequestToolPolicy`。该策略不决定应该调用哪个工具，只把用户明确写出的负向副作用约束转换为禁用集合：例如“不生成 preview”“不创建 Jianying draft”“不分析素材”分别禁止对应写工具；排除素材分析还会禁止会下载媒体并触发本地分析的 `download_music`/`use_online_music`；“只读/readonly”禁止全部编辑与交付工具但保留观察工具。完整目录仍保持可见，越界调用在 Rust 执行前以 `user_restricted_tool` 封闭。策略只缩小执行权限，不替模型选择首个工具或构造业务目标。
+每个普通自然语言请求不再生成基于关键词的 `RequestToolPolicy`。工具目录默认完整开放，意图由模型选择工具；Rust 以全局白名单、作用域、参数与领域副作用校验为边界，不以“只/only/不要…”等请求文本收缩执行集。
 
 交互 Agent 的模型决策共享 90 秒协作式总预算，每次 Provider 请求取 120 秒单步上限与剩余预算的较小值；达到预算后不启动新的模型调用或副作用，但不会强杀已经开始的 FFmpeg、下载、preview 或 Jianying 副作用。安全诊断只记录固定数字耗时与错误码。Provider 调度在请求边界让交互模型调用优先于尚未开始的粗视觉调用；粗视觉连续三次失败后熔断 60 秒，期间批次保持 `queued`，冷却后只允许一个半开探测并恢复 worker。已经开始的视觉请求允许完成，避免取消未知网络状态。
 
@@ -226,7 +226,7 @@ Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的�
 
 NativeToolLoop 在可重试写失败后最多两次拦截模型的提前自然语言收工，要求调整参数、补齐前置条件或改用另一项可用工具；质量警告同样最多触发两次精炼续步。观察或无关前置工具成功不会清除原失败，编辑工具成功也不会清除另一产物的质量警告，只有原工具的新结果才能闭合对应事实。相同工具与语义相同的 JSON 参数首次返回 `invalid_arguments` 后，后端不再重复执行；参数会先规范化，不能靠空白或键顺序绕过。第二次返回不可重试的重复参数诊断，第三次原样调用有界终止；两次拦截仍各自写入 payload-free 的失败步骤审计。preview 成功收据绑定其 timeline 版本；后续时间线写入产生新版本或未返回可验证版本时，旧 preview 立即失效，终态不得把它计为最新产物已完成。
 
-NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，在静态系统提示后注入本轮权威状态快照，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output。系统提示始终携带完整、无可用状态标记的名称与简短用途目录；Provider payload 常驻 `load_tools` 并仅附带当前已加载的最多 5 个业务工具 schema，再次调用会整体替换集合且不跨用户请求持久化。明确只读、禁止项及敏感副作用授权只在 Rust 执行门裁决，不从目录隐藏工具。请求文本的最低产物期望只用于 RunReceipt 终态验真，不参与工具加载或首工具选择；模型文本仍不能自证任务完成。
+NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，在静态系统提示后注入本轮权威状态快照，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output。系统提示始终携带完整工具名称与简短用途目录；完整 schema 默认注册。意图由模型选择工具；Rust 以白名单、作用域与领域校验守边界，不以请求关键词判定只读/禁止。模型文本仍不能自证任务完成。
 
 ```text
 真实会话 input
@@ -284,7 +284,7 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏关键表达/较短成片；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（可诚实 uncovered）。Phase 4 只定源时间段与旁白拆分保流畅，禁止换片。Phase 5 Rust `normalize` 自修后硬校验；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s 短视频；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格）。Phase 4 **先选内容窗、再段内精修切点**（不确定局部加密；旁白时长托底），禁止换片。Phase 5 Rust `normalize` 自修后硬校验；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 
@@ -323,3 +323,4 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 维护记录（2026-08-27）：Rust 后端 dead-code 警告清理；删除旧单阶段 `request_storyboard` 与场景检测遗留代码，三阶段 storyboard 生产链路不变。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
 维护记录（2026-09-03）：Storyboard 改为五阶段选片/精修分离，单步重试与 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
 维护记录（2026-09-03）：安全上限 100 镜/beat；短 brief 时长收敛；Phase5 路由。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
+维护记录（2026-09-04）：`key_message` 默认 ≤15s（8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。

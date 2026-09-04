@@ -78,7 +78,7 @@
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 
-`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。工具是否可用由 RequestToolPolicy 过滤，模型在允许集合中决定下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。
+`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。
 
 Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。
 
@@ -90,7 +90,7 @@ Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴�
 
 ## 会话生命周期
 
-运行时覆盖：未限定的“创建草稿”、澄清、事实问答和普通聊天均进入 NativeToolLoop。非只读请求默认携带可逆本地工具；RequestToolPolicy 只按明确只读/禁止项缩小集合，并继续要求外部下载、付费配音和 Jianying 交付草稿的显式授权。模型不能通过文本自证产物已经完成。
+运行时覆盖：未限定的“创建草稿”、澄清、事实问答和普通聊天均进入 NativeToolLoop。完整可逆本地工具目录默认可用，意图由模型选择工具；Rust 不再用请求文本关键词收缩执行集，仍以全局白名单、作用域、参数与领域校验为边界。模型不能通过文本自证产物已经完成。
 
 schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。Task Resolver 只把当前激活任务的快照交给路由模型，不读取同一项目内其他任务的 title、brief 或 `active_subgoal`。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。存在激活任务时，模型自动归属低于各动作门槛（continue 0.70、switch 0.85、create_new 0.95）默认回落为 `continue_current`，不再因低置信度打断用户；只有模型显式返回且通过校验的 `clarify` 才会提问。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
 
@@ -112,7 +112,7 @@ OAuth 命令兼容当前 OpenCode 实现，但不是官方 OpenAI 第三方集�
 
 实验性 Responses 请求设置 `store: false` 与 `stream: true`。Provider 以协议无关的 `ModelTurn`/`ModelOutputItem`/`FunctionCall` 保留完整 `response.output`，包括 message、function call 及未知 output item；Chat Completions 的普通响应和 SSE 增量也转换为同一结构。旧的 `model_response_json_text` 接口仍供 storyboard/视觉等非 Native 请求使用，不参与对话 loop。回调成功、失败或超时后，后端发出 `experimental-openai-oauth-status` 事件；前端同时轮询状态作为恢复路径。
 
-NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真实 user/assistant 消息，以原生 role/content item 发送，不拼接“用户/助手/工具”标签 Prompt；设置 `store: false`、`parallel_tool_calls: false`，并将完整 Responses output（或 Chat 适配后的 assistant/function call 项）与 `function_call_output` 追加到下一轮。上下文预算只丢弃旧消息，最新 function_call 与对应 function_call_output 始终作为完整配对保留，即使结果很大也不拆散；最终自然语言回复以 assistant 消息保存。有 function_call 就执行并继续；没有 function_call 且有自然语言就结束本轮，不再声明固定 LoopGoal 或调用 finish/done/no_action。普通 message、澄清、项目事实问答和工具执行均经过同一 loop；非只读请求默认向模型提供分析、storyboard、内部时间线版本化编辑、文本/本地音乐编辑和低清 preview，模型以 `tool_choice:auto` 决定是否调用。RequestToolPolicy 只收缩明确只读/禁止项，并对外部音乐下载、付费配音和 Jianying 交付草稿保留显式授权；项目事实通过 10 个只读观察工具取得，搜索参数和主链参数由严格 schema 与 Rust 边界共同限制。工具失败只回传安全结构化错误，模型仍可解释或调整；语义相同的 `invalid_arguments` JSON 调用只真实执行一次，参数空白和键顺序不能绕过，第二/三次拒绝仍写入安全步骤审计，第三次会有界终止。工具成功后的模型总结请求若遇到瞬时 Provider 传输故障，会在同一逻辑步骤内有界重试且不重放工具。循环受 10 步、300 秒总预算、每步 120 秒和任务取消检查约束。
+NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真实 user/assistant 消息，以原生 role/content item 发送，不拼接“用户/助手/工具”标签 Prompt；设置 `store: false`、`parallel_tool_calls: false`，并将完整 Responses output（或 Chat 适配后的 assistant/function call 项）与 `function_call_output` 追加到下一轮。上下文预算只丢弃旧消息，最新 function_call 与对应 function_call_output 始终作为完整配对保留，即使结果很大也不拆散；最终自然语言回复以 assistant 消息保存。有 function_call 就执行并继续；没有 function_call 且有自然语言就结束本轮，不再声明固定 LoopGoal 或调用 finish/done/no_action。普通 message、澄清、项目事实问答和工具执行均经过同一 loop；完整工具目录默认向模型开放，模型以 `tool_choice:auto` 按意图调用；Rust 不以关键词判定只读/禁止项，而以全局白名单、作用域与领域校验守边界。项目事实通过权威状态快照与只读观察工具取得，搜索参数和主链参数由严格 schema 与 Rust 边界共同限制。工具失败只回传安全结构化错误，模型仍可解释或调整。循环受步数、总预算、单步超时和任务取消检查约束。
 
 可重试写失败和成功产物的 `qualityWarnings` 会分别触发最多两次恢复/精炼续步；无关观察或前置调用不能清除仍未闭合的失败/警告。默认工具可见性不等于完成清单；请求中明确要求的最低产物集合只用于 RunReceipt 终态验真，不参与工具暴露或路径选择。`render_preview` 的成功收据绑定返回的 `timelineVersionId`；任何后续时间线写工具若返回不同版本或缺少可验证版本，旧 preview 收据即失效，必须重新渲染才能满足 preview 完成门。
 
@@ -124,9 +124,9 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 ## 素材证据与 storyboard
 
-Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认偏 `key_message` 与约 15–45 秒，除非用户明确要求更长。
+Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认偏 `key_message` 与约 **8–15 秒**（硬上限 15s），除非用户明确要求更长。
 
-**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/15–45s；`full_script` 可先 TTS 再锁定 `targetDurationMs`）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**，可诚实 uncovered；不过关本步重试。Phase 4 模型只精修 `sourceStart/End`、时长与旁白拆分以保画面流畅，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s、约 2–5 beat；`full_script` 可先 TTS 再锁定 `targetDurationMs`）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试。Phase 4 **先选内容窗再段内精修**：场景切点建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；旁白时长托底减轻半句切断，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
 `storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
@@ -152,11 +152,11 @@ type ConversationTurnResult =
 
 前端会缓存最多 20 个先于命令返回到达的 `agent-edit-completed` 事件，并在取得任务 ID 后立即对账；composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时，还会以 1.2 秒周期读取持久化任务终态。一次列表快照尚未出现新任务、或任务由 `queued/running` 变为 terminal，都不得清空 pending 或停止轮询。没有内存 pending 且 conversation 仍为 `working` 时，最新同作用域 terminal task 也必须触发一次恢复对账，不要求前端先观察到其 active 状态。后端完成消息是权威来源，事件只是通知；任一通道先确认终态后，前端按项目、task、conversation 作用域重载消息和产物。仅当任务的 `projectId`/`editingTaskId` 仍等于当前活动作用域时才应用可见产物。模型超时、响应解析失败或循环耗尽且目标仍未满足时，无中间产物为 `failed`，已有真实中间产物为 `partially_completed`，两者结果代码均为 `agent_goal_not_reached`；中间版本保留并接受审计，但回复不得声称最终目标完成。
 
-Agent 请求统一经 `agentloop.rs` 的封闭、有界 NativeToolLoop 处理；它加载真实 SQLite 会话消息，并在静态系统提示之后、历史之前注入本轮从当前 project/editing task 作用域重建的权威状态快照，再直接消费 Provider 的 message/function_call/function_call_output。不再调用前置对话分类模型、要求 JSON decision、预选首个工具或锁定单一 LoopGoal。快照成功即在 RunReceipt 中记为来源 `state_snapshot` 的成功观察，因此高层项目事实可直接回答；观察工具仍用于完整 storyboard/timeline、素材搜索等细节。`RequestToolPolicy` 只负责执行前复核，完整目录不按策略隐藏；真实产物和确认状态由 Rust 与持久化事实裁决。自然语言可以结束模型循环，但只有具名成功工具和持久化产物能形成 completed/partially_completed。
+Agent 请求统一经 `agentloop.rs` 的封闭、有界 NativeToolLoop 处理；它加载真实 SQLite 会话消息，并在静态系统提示之后、历史之前注入本轮从当前 project/editing task 作用域重建的权威状态快照，再直接消费 Provider 的 message/function_call/function_call_output。不再调用前置对话分类模型、要求 JSON decision、预选首个工具或锁定单一 LoopGoal。快照成功即在 RunReceipt 中记为来源 `state_snapshot` 的成功观察，因此高层项目事实可直接回答；观察工具仍用于完整 storyboard/timeline、素材搜索等细节。完整工具目录默认开放，意图由模型选择；Rust 以白名单、作用域与领域校验守边界，不以请求关键词收缩执行集。真实产物和确认状态由 Rust 与持久化事实裁决。自然语言可以结束模型循环，但只有具名成功工具和持久化产物能形成 completed/partially_completed。
 
-普通自然语言请求会在 NativeToolLoop 中复用同一个请求级工具限制策略。完整目录始终可见；明确“不生成 preview”“不创建 Jianying draft”“不分析素材”时，对应调用在执行门拒绝，因为 `download_music` 与 `use_online_music` 会下载媒体并触发本地分析，排除素材分析时两者也不可执行。“只读/readonly/不要修改任何内容”请求不允许任何编辑或交付工具。负向限制不会直接选择替代工具，也不会把少量选项写死为业务流程；越界工具以安全码 `user_restricted_tool` 封闭，项目事实必须有成功状态快照或观察工具收据。
+普通自然语言请求不再做请求级关键词只读/禁止判定。完整目录始终可见且默认可执行；是否调用写工具由模型按用户意图决定。项目事实以成功状态快照或观察工具收据为准。
 
-NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向非只读请求开放，明确禁止 preview 时不进入原生 tools。它的 strict schema 仅接受 nullable `timelineVersionId`；project、conversation、本机路径和 FFmpeg 参数不属于模型契约。Rust 在执行前重新校验请求权限和参数，并从当前项目作用域选择时间线。成功的 `function_call_output` 只返回产物类型、时间线版本和质量检查计数；失败只返回安全错误码及恢复建议。无论成功或失败，loop 都再次调用模型，最终消息采用模型对真实结果的自然语言总结，同时任务终态仍持有后端验证的 preview 产物引用。
+NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开放。它的 strict schema 仅接受 nullable `timelineVersionId`；project、conversation、本机路径和 FFmpeg 参数不属于模型契约。Rust 在执行前重新校验参数，并从当前项目作用域选择时间线。成功的 `function_call_output` 只返回产物类型、时间线版本和质量检查计数；失败只返回安全错误码及恢复建议。无论成功或失败，loop 都再次调用模型，最终消息采用模型对真实结果的自然语言总结，同时任务终态仍持有后端验证的 preview 产物引用。
 
 每轮开始，`agentloop/snapshot.rs` 从 SQLite 重建固定顺序、最多 1200 字符的状态块：任务 brief/最近 Agent 终态时间，素材 kind、技术/视觉分析与源健康计数，最新 storyboard 的版本/镜头/uncovered/待确认状态，其最新 timeline 的版本和 clips/text/music/voiceover 计数，磁盘真实 preview，Jianying 创建/注册状态，以及模型、ElevenLabs、Jamendo 是否配置。身份只用版本号，不返回 UUID；路径、文件名、用户备注、OCR/视觉证据正文、会话原文、Base URL、模型名和凭据值禁止进入快照。brief 只允许不会伪装字段分隔符的保守字符集；含本地引用、ASCII 字母、点号、分隔符或内部标识时整体隐藏，超长安全文本才截断。非观察写工具返回 `ok`/`queued`/`needs_confirmation` 后，下一次 Provider 请求前原位刷新唯一快照。初始构建或刷新失败均封闭终止；完整 payload 超过 40K token 时自主压缩到 30K 内，60K 硬上限不得移除快照、当前用户消息或最近工具调用/结果对。完整 storyboard/时间线和素材候选细节仍通过观察工具读取。
 
@@ -200,7 +200,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 
 ### 原生工具目录与 `read_logs`
 
-NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 仍复核全局白名单与请求只读策略，目录可见性不等于执行授权。
+NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 复核全局白名单与作用域，不以请求关键词收缩执行集。
 
 `read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`，模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
 
@@ -269,4 +269,6 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；storyboard Phase 3 改为「模型全局主创 + Rust 结构化修复包回传」。`enforce_phase3_scope` 重写为 `collect_phase3_issues`，一次收集候选的全部结构性问题（beat 乱序、越池素材、beat 内重复素材、首镜头被换、uncovered beat 被补镜头等）并附 `allowedChanges`，`needs_model_decision=false` 的问题（请求失败、可机械修正的字段）不入模型、其余打包成 `RepairPacket` JSON 注入下一轮 Phase 3 prompt，模型只修被点名的镜头、不重写整条 storyboard；纯机械的子镜头字段标准化仍在 Rust 内无条件执行。主要失败信息归一到修复包第一条 issue 的 message，供任务终态与日志使用。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
 维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；RepairPacket 升级为 agent repair loop 的完整上下文：① `frozenShots`——未被问题点名的镜头视为已确认正确，prompt 明确「保持不动，除非修复其他问题确需改动」；② `previousShots`——模型每次 Phase 3 是独立请求无对话上下文，修复包携带上一轮候选的精简快照（序号/beat/asset/时长/源范围），模型据此"接着改"而不是重写全局；③ `repairHistory`——记录每轮修过什么问题类型、涉及哪些镜头、是否已解决，提示模型不要回退已修复内容；prompt 措辞为"你是编辑、规则是边界不是微指令"，避免限制模型发挥。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
 维护记录（2026-09-03）：公开契约不变；Storyboard 改为五阶段（本地 Top-12 去重补位 → 选 2–3 → 精修时间段 → 校验），单步重试分传输/语义预算，失败带 `partialCandidateSummary`，debug 可开 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
-维护记录（2026-09-03）：本地安全上限抬至 100 镜/beat；短 brief 偏 key_message/≤45s；Phase5 结构失败不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
+维护记录（2026-09-03）：本地安全上限抬至 100 镜/beat；短 brief 偏 key_message；Phase5 结构失败不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
+维护记录（2026-09-04）：`key_message` 收敛为 ≤15s 短视频（默认 8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
+维护记录（2026-09-04）：Phase 3 附带关键帧网格选片；Phase 4 先选内容窗再段内精修（不确定加密 + 旁白时长托底）。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。

@@ -8,8 +8,6 @@ use rusqlite::Connection;
 use std::time::Duration;
 use tauri::AppHandle;
 
-use super::policy::RequestToolPolicy;
-
 /// 单次 Native 循环最多允许的模型步骤数。
 pub(super) const MAX_STEPS: usize = 10;
 
@@ -28,7 +26,6 @@ pub(super) struct LoopState<'a> {
     pub(super) editing_task_id: &'a str,
     pub(super) conversation_id: &'a str,
     pub(super) task_brief: String,
-    pub(super) tool_policy: RequestToolPolicy,
     pub(super) storyboard: Option<StoryboardVersion>,
     pub(super) timelines: Vec<TimelineVersion>,
     pub(super) last_outcome: Option<AgentEditResult>,

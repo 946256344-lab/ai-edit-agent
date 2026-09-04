@@ -24,7 +24,7 @@ use super::context::{
     MAX_CONTEXT_TOKENS,
 };
 use super::continuation::ContinuationState;
-use super::policy::{request_requires_project_observation, RequestToolPolicy, OBSERVATION_TOOLS};
+use super::policy::{request_requires_project_observation, OBSERVATION_TOOLS};
 use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
     MAX_STEPS,
@@ -87,7 +87,6 @@ pub(crate) fn run_native_tool_loop(
         editing_task_id,
         request,
     );
-    let tool_policy = RequestToolPolicy::from_request(request);
     let initial_catalog = full_native_tool_catalog();
     let tool_directory = compact_tool_directory(&initial_catalog);
     let mut input = initial_native_input(
@@ -105,7 +104,6 @@ pub(crate) fn run_native_tool_loop(
         editing_task_id,
         conversation_id,
         task_brief: task_brief.to_owned(),
-        tool_policy: tool_policy.clone(),
         storyboard: storyboard.cloned(),
         timelines: timelines.to_vec(),
         last_outcome: None,
@@ -883,27 +881,6 @@ fn execute_native_tool(
             "responseInstruction": "Explain that only the allowed read-only observation or preview function tools are available, then answer from available facts or ask the user to rephrase."
         }));
     }
-    if !native_tool_call_allowed(&call.name, &state.tool_policy) {
-        finish_agent_run_step(
-            state.connection,
-            state.project_id,
-            state.editing_task_id,
-            state.agent_task_id,
-            &step_id,
-            "failed",
-            None,
-            None,
-            Some("user_restricted_tool"),
-        )?;
-        return Ok(json!({
-            "status": "failed",
-            "operation": call.name,
-            "stage": "permission",
-            "code": "user_restricted_tool",
-            "retryable": false,
-            "responseInstruction": "Explain that this operation was not authorized for the current request. Use the allowed observation functions or ask the user to explicitly request the operation; do not claim it ran."
-        }));
-    }
     let args = match parse_native_arguments(&call.name, &call.arguments) {
         Ok(args) => args,
         Err(error) => {
@@ -996,10 +973,6 @@ fn execute_native_tool(
             Ok(safe_tool_failure_context(&call.name, &error))
         }
     }
-}
-
-fn native_tool_call_allowed(tool: &str, policy: &RequestToolPolicy) -> bool {
-    !policy.read_only || OBSERVATION_TOOLS.contains(&tool)
 }
 
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
@@ -1726,28 +1699,42 @@ mod tests {
     }
 
     #[test]
-    fn read_only_requests_keep_the_directory_but_close_edit_execution() {
+    fn request_wording_never_closes_write_tool_execution() {
         for request in [
             "Please inspect these assets only.",
             "Only inspect these assets.",
             "Please only inspect these assets.",
             "只查看当前项目的素材",
+            "只检查，不要生成",
+            "只读查看素材状态",
+            "Don't only inspect; edit the clips.",
+            "Capacity is only one measure.",
+            "你好",
+            "检查素材并生成 storyboard",
+            "不要做 30 秒剪辑",
+            "Do not add subtitles",
+            "不要替换片段",
+            "不要生成预览",
         ] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(policy.read_only, "{request}");
-            assert!(native_tool_call_allowed("list_assets", &policy));
-            assert!(!native_tool_call_allowed("generate_storyboard", &policy));
+            assert!(
+                !request_requires_project_observation(request),
+                "keyword observation gate must stay off: {request}"
+            );
             let (_message, requests, _calls) =
                 fixture_driver_with_policy(request, vec![HELLO], json!({}));
+            let names = tool_names(&requests[0]);
             assert!(
-                tool_names(&requests[0]).contains("generate_storyboard"),
-                "read-only request still receives the full tool directory"
+                names.contains("generate_storyboard"),
+                "full catalog stays available for {request}"
             );
-        }
-        for request in ["你好", "检查素材并生成 storyboard"] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(!policy.read_only, "{request}");
-            assert!(native_tool_call_allowed("generate_storyboard", &policy));
+            assert!(
+                names.contains("render_preview"),
+                "preview stays available for {request}"
+            );
+            assert!(
+                names.contains("replace_clips"),
+                "edit tools stay available for {request}"
+            );
         }
     }
 
@@ -1795,24 +1782,27 @@ mod tests {
             "不要重排片段",
             "不要替换背景音乐",
             "不要生成预览",
+            "Don't only inspect; edit the clips.",
+            "Capacity is only one measure of a mobile BESS.",
         ] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(!policy.read_only, "{request}");
-            assert!(native_tool_call_allowed("generate_storyboard", &policy));
-            assert!(native_tool_call_allowed("replace_clips", &policy));
+            assert!(!request_requires_project_observation(request), "{request}");
+            let (_message, requests, _calls) =
+                fixture_driver_with_policy(request, vec![HELLO], json!({}));
+            let names = tool_names(&requests[0]);
+            assert!(names.contains("generate_storyboard"), "{request}");
+            assert!(names.contains("replace_clips"), "{request}");
         }
-
-        let policy = RequestToolPolicy::from_request("Don't only inspect; edit the clips.");
-        assert!(policy.read_only, "only marks the request read-only");
-        assert!(!native_tool_call_allowed("replace_clips", &policy));
     }
 
     #[test]
-    fn read_logs_is_an_observation_tool_always_allowed() {
-        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"]
-        {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(native_tool_call_allowed(READ_LOGS, &policy), "{request}");
+    fn read_logs_stays_in_the_full_catalog_for_any_wording() {
+        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"] {
+            let (_message, requests, _calls) =
+                fixture_driver_with_policy(request, vec![HELLO], json!({}));
+            assert!(
+                tool_names(&requests[0]).contains(READ_LOGS),
+                "{request}"
+            );
         }
     }
 
@@ -2770,43 +2760,15 @@ mod tests {
     }
 
     #[test]
-    fn read_only_preview_request_keeps_render_tool_but_closes_execution() {
-        let policy = RequestToolPolicy::from_request("只检查，不要生成");
-        assert!(policy.read_only);
-        assert!(!native_tool_call_allowed("render_preview", &policy));
-        let (_message, requests, _calls) =
-            fixture_driver_with_policy("只检查，不要生成", vec![HELLO], json!({}));
-        assert!(requests[0]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tool| tool["name"] == "render_preview"));
-    }
-
-    #[test]
-    fn read_only_request_keeps_main_chain_tools_but_closes_execution() {
-        let policy = RequestToolPolicy::from_request("只读查看素材状态");
-        assert!(policy.read_only);
-        for tool in [
-            "request_asset_analysis",
-            "retry_failed_asset_analysis",
-            "generate_storyboard",
-            "create_timeline_draft",
-            "replace_clips",
-            "insert_clips",
-            "change_clip_duration",
-            "reorder_clips",
-        ] {
-            assert!(!native_tool_call_allowed(tool, &policy), "{tool}");
-        }
-        let (_message, requests, _calls) =
-            fixture_driver_with_policy("只读查看素材状态", vec![HELLO], json!({}));
-        let names = requests[0]["tools"].as_array().expect("tools");
-        for name in ["generate_storyboard", "create_timeline_draft"] {
-            assert!(
-                names.iter().any(|tool| tool["name"] == name),
-                "{name} must stay visible for read-only requests"
-            );
+    fn preview_and_main_chain_tools_stay_executable_for_inspect_wording() {
+        for request in ["只检查，不要生成", "只读查看素材状态", "只查看"] {
+            let (_message, requests, _calls) =
+                fixture_driver_with_policy(request, vec![HELLO], json!({}));
+            let names = tool_names(&requests[0]);
+            assert!(names.contains("render_preview"), "{request}");
+            assert!(names.contains("generate_storyboard"), "{request}");
+            assert!(names.contains("create_timeline_draft"), "{request}");
+            assert!(names.contains("replace_clips"), "{request}");
         }
     }
 
@@ -3211,35 +3173,29 @@ mod tests {
     }
 
     #[test]
-    fn delivery_tools_are_available_by_default_and_closed_only_for_read_only() {
-        let ordinary = RequestToolPolicy::from_request("Explain music options");
-        assert!(!ordinary.read_only);
-        for tool in [
-            "download_music",
-            "use_online_music",
-            "create_jianying_draft",
-            "replace_music_tracks",
-            "replace_text_tracks",
+    fn delivery_tools_are_available_by_default_for_any_wording() {
+        for request in [
+            "Explain music options",
+            "只查看音乐选项",
+            "添加字幕并替换背景音乐",
         ] {
-            assert!(native_tool_call_allowed(tool, &ordinary), "{tool}");
-        }
-
-        let read_only = RequestToolPolicy::from_request("只查看音乐选项");
-        assert!(read_only.read_only);
-        for tool in [
-            "download_music",
-            "use_online_music",
-            "create_jianying_draft",
-            "replace_music_tracks",
-            "replace_text_tracks",
-        ] {
-            assert!(!native_tool_call_allowed(tool, &read_only), "{tool}");
+            let (_message, requests, _calls) =
+                fixture_driver_with_policy(request, vec![HELLO], json!({}));
+            let names = tool_names(&requests[0]);
+            for tool in [
+                "download_music",
+                "use_online_music",
+                "create_jianying_draft",
+                "replace_music_tracks",
+                "replace_text_tracks",
+            ] {
+                assert!(names.contains(tool), "{request} omitted {tool}");
+            }
         }
     }
 
     #[test]
     fn complete_directory_shows_and_allows_delivery_tools_by_default() {
-        let policy = RequestToolPolicy::from_request("添加字幕并替换背景音乐");
         let tools = full_native_tool_catalog();
         let names = tools
             .iter()
@@ -3256,7 +3212,6 @@ mod tests {
             "create_jianying_draft",
         ] {
             assert!(names.contains(tool), "{tool}");
-            assert!(native_tool_call_allowed(tool, &policy), "{tool}");
         }
     }
 
@@ -3429,32 +3384,28 @@ mod tests {
     }
 
     #[test]
-    fn preview_tool_is_broadly_available_unless_the_request_is_read_only() {
-        for request in ["生成预览", "你好", "怎么生成预览？", "不要生成预览"] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(!policy.read_only, "{request}");
+    fn preview_tool_stays_available_for_any_request_wording() {
+        for request in [
+            "生成预览",
+            "你好",
+            "怎么生成预览？",
+            "不要生成预览",
+            "只查看",
+            "只检查，不要生成",
+        ] {
+            let (_message, requests, _calls) =
+                fixture_driver_with_policy(request, vec![HELLO], json!({}));
             assert!(
-                native_tool_call_allowed("render_preview", &policy),
-                "{request}"
-            );
-        }
-        for request in ["只查看", "只检查，不要生成"] {
-            let policy = RequestToolPolicy::from_request(request);
-            assert!(policy.read_only, "{request}");
-            assert!(
-                !native_tool_call_allowed("render_preview", &policy),
+                tool_names(&requests[0]).contains("render_preview"),
                 "{request}"
             );
         }
     }
 
     #[test]
-    fn preview_execution_rechecks_request_policy_permission() {
-        let policy = RequestToolPolicy::from_request("你好");
-        assert!(!policy.read_only);
-        assert!(native_tool_call_allowed("render_preview", &policy));
-        let read_only = RequestToolPolicy::from_request("只检查，不要生成");
-        assert!(!native_tool_call_allowed("render_preview", &read_only));
+    fn preview_stays_in_catalog_without_request_policy_gate() {
+        let tools = full_native_tool_catalog();
+        assert!(tools.iter().any(|tool| tool["name"] == "render_preview"));
     }
 
     #[test]
@@ -3828,16 +3779,17 @@ mod tests {
 
     #[test]
     fn full_catalog_is_stable_across_request_wording() {
-        let policy = RequestToolPolicy::from_request("用这个文案生成视频");
         let tools = full_native_tool_catalog();
         let names = tools
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect::<std::collections::HashSet<_>>();
-        for name in ["generate_storyboard", "create_timeline_draft"] {
+        for name in ["generate_storyboard", "create_timeline_draft", "synthesize_voiceover"] {
             assert!(names.contains(name), "{name}");
         }
-        assert!(names.contains("synthesize_voiceover"));
-        assert!(native_tool_call_allowed("synthesize_voiceover", &policy));
+        assert!(!request_requires_project_observation("用这个文案生成视频"));
+        assert!(!request_requires_project_observation(
+            "Capacity is only one measure."
+        ));
     }
 }
