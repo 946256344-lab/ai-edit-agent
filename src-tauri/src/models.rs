@@ -790,7 +790,7 @@ pub struct StoryboardBeat {
     pub narration: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardContent {
     #[serde(default)]
@@ -832,6 +832,12 @@ pub struct StoryboardSource {
     /// 旧记录读取为 None，模型回退到文本证据。
     #[serde(default, skip_serializing)]
     pub(crate) keyframe_grid_path: Option<String>,
+    /// 已提取关键帧（含时间戳），供 Phase 4 贴时间选段；不进 Provider 文本序列化。
+    #[serde(default, skip_serializing)]
+    pub(crate) keyframes: Vec<KeyframeMetadata>,
+    /// 本地源路径，仅用于 Phase 4 加密抽帧；绝不写入模型 prompt。
+    #[serde(default, skip_serializing)]
+    pub(crate) source_path: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -879,7 +885,7 @@ fn default_visual_analysis_status() -> String {
     "queued".to_owned()
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyframeMetadata {
     pub(crate) time_ms: i64,

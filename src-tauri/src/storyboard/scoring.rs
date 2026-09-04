@@ -216,6 +216,8 @@ mod tests {
             visual_quality_score: Some(quality),
             evidence_embedding: None,
             keyframe_grid_path: None,
+            keyframes: Vec::new(),
+            source_path: None,
         }
     }
 

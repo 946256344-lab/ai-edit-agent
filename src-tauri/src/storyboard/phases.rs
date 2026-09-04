@@ -3,7 +3,7 @@
 // Phase 1: 叙事结构
 // Phase 2: 本地 Top-12 短名单（去同/去相似 + 补位）
 // Phase 3: 从池中选出 2–3 个互异 asset（顺序）
-// Phase 4: 为已选素材精修 source 时间段与旁白拆分（禁止换片）
+// Phase 4: 选内容窗 → 段内精修切点（禁止换片）
 // Phase 5: 由调用方执行 normalize + validate_storyboard
 
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
@@ -81,11 +81,11 @@ pub(crate) fn phase1_generate_narrative(
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn. If a beat contains more than two spoken clauses, split it further.\n\
         Keep beats short and specific: aim for about 4-8 seconds of spoken narration per beat.\n\
         Duration and scriptMode must follow the brief's real size:\n\
-        - If the brief is a short goal/outline without substantial speakable copy, use scriptMode=key_message, write concise narration, and keep targetDurationMs typically 15-45 seconds unless the user explicitly asks for a longer runtime.\n\
+        - If the brief is a short goal/outline without substantial speakable copy, use scriptMode=key_message: one punchy idea, concise narration, and targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime.\n\
         - Use scriptMode=full_script only when the brief already contains substantial speakable copy that should be narrated largely as written; then split that copy across beats without inventing a much longer script.\n\
-        - Never inflate a short brief into a long 60-90s essay. Prefer fewer, sharper beats over padded voiceover.\n\
+        - Never inflate a short brief into a 30-90s essay. Prefer a tight key_message cut over padded voiceover.\n\
         If the brief already contains speakable copy, split it across beats without repeating. If the brief has no speakable copy, write a short spoken line in the user's language. narration is voiceover, never on-screen titles.\n\
-        Determine the appropriate number of beats from distinct information points; a simple short goal often needs 3-8 beats, not 12+. Do not select any media yet — this stage is pure story structure.\n\
+        Determine the appropriate number of beats from distinct information points; a simple short goal / key_message cut often needs 2-5 beats, not 8+. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with the spoken narration length.\n\
         {feedback_context}"
     );
@@ -406,6 +406,7 @@ fn compact_candidate_card(index: usize, source: &StoryboardSource) -> Value {
         "kind": source.kind,
         "durationMs": source.duration_ms,
         "hasKeyframeGrid": source.keyframe_grid_path.is_some(),
+        "keyframeTimesMs": source.keyframes.iter().map(|frame| frame.time_ms).collect::<Vec<_>>(),
         "sceneSegments": source.scene_segments.iter().take(8).map(|segment| {
             json!({"startMs": segment.start_ms, "endMs": segment.end_ms})
         }).collect::<Vec<_>>(),
@@ -491,7 +492,8 @@ fn first_spoken_narration(candidates: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        candidates_within_diversity_limit, collect_phase3_issues, collect_phase4_issues,
+        apply_narration_phrase_duration_floor, candidates_within_diversity_limit,
+        clamp_shots_to_chosen_windows, collect_phase3_issues, collect_phase4_issues,
         dedupe_and_backfill_pool, parse_beat_pick, phase3_candidate_cards, phase3_pool_cards,
         BeatCandidatePool, RoughStoryboard, PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
     };
@@ -560,6 +562,8 @@ mod tests {
             visual_quality_score: Some(0.5),
             evidence_embedding: None,
             keyframe_grid_path: None,
+            keyframes: Vec::new(),
+            source_path: None,
         }
     }
 
@@ -958,6 +962,77 @@ mod tests {
     }
 
     #[test]
+    fn narration_duration_floor_extends_within_window() {
+        use crate::storyboard::multimodal::Phase4ContentWindow;
+        use std::collections::HashMap;
+
+        let mut content = StoryboardContent {
+            brief: String::new(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 5_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![{
+                let mut item = shot("selected");
+                item.narration_text = "这是一句比较完整的口播文案需要足够画面".to_owned();
+                item.source_start_ms = 1_000;
+                item.source_end_ms = 1_500;
+                item.duration_ms = 500;
+                item
+            }],
+        };
+        let window = Phase4ContentWindow {
+            window_id: "selected:w0".to_owned(),
+            asset_id: "selected".to_owned(),
+            start_ms: 0,
+            end_ms: 10_000,
+        };
+        let mut pick_map = HashMap::new();
+        pick_map.insert(1, (window, false));
+        apply_narration_phrase_duration_floor(&mut content, &pick_map);
+        assert!(content.shots[0].duration_ms > 500);
+        assert!(content.shots[0].source_end_ms <= 10_000);
+    }
+
+    #[test]
+    fn clamp_shots_survives_when_start_already_at_window_end() {
+        // 回归：start+1 > window.end 时旧 clamp 会 panic。
+        use crate::storyboard::multimodal::Phase4ContentWindow;
+        use std::collections::HashMap;
+
+        let mut content = StoryboardContent {
+            brief: String::new(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 5_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![{
+                let mut item = shot("selected");
+                item.source_start_ms = 1_000;
+                item.source_end_ms = 2_000;
+                item.duration_ms = 1_000;
+                item
+            }],
+        };
+        let window = Phase4ContentWindow {
+            window_id: "selected:w0".to_owned(),
+            asset_id: "selected".to_owned(),
+            start_ms: 0,
+            end_ms: 1_000,
+        };
+        let mut pick_map = HashMap::new();
+        pick_map.insert(1, (window, false));
+        clamp_shots_to_chosen_windows(&mut content, &pick_map);
+        assert!(content.shots[0].source_end_ms > content.shots[0].source_start_ms);
+        assert!(content.shots[0].source_end_ms <= 1_000);
+        assert!(content.shots[0].source_start_ms >= 0);
+    }
+
+    #[test]
     fn phase3_keeps_covered_shots_without_filling_uncovered_beats() {
         let mut uncovered_beat = beat();
         uncovered_beat.id = "beat-2".to_owned();
@@ -1110,7 +1185,7 @@ pub(crate) fn phase3_select(
     repair: Option<&RepairPacket>,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     log::info!(
-        "Phase 3: Selecting 2-3 assets per beat from {} pools",
+        "Phase 3: Selecting 2-3 assets per beat from {} pools (with keyframe grids)",
         rough.candidate_pools.len()
     );
 
@@ -1126,6 +1201,8 @@ pub(crate) fn phase3_select(
         Uncovered beat ids (do not create shots for these): {}\n\
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
+        Keyframe grids are attached below for candidate assetIds (2x2 overview of each clip).\n\
+        Use those frames to judge which assets best match each beat's purpose/requiredVisual.\n\
         For EACH covered beat, choose 2 or 3 DISTINCT assetIds from that beat's candidates, in playback order.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then assetIds must be [].\n\
         Do NOT invent assetIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
@@ -1139,13 +1216,16 @@ pub(crate) fn phase3_select(
         rough.uncovered_beat_ids.join(", ")
     );
 
+    let mut content_blocks = vec![json!({ "type": "input_text", "text": prompt })];
+    content_blocks.extend(phase3_keyframe_image_blocks(rough));
+
     let request = serde_json::json!({
         "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
         "store": false,
         "stream": true,
         "input": [{
             "role": "user",
-            "content": [{ "type": "input_text", "text": prompt }]
+            "content": content_blocks
         }],
         "text": { "format": { "type": "json_object" } }
     });
@@ -1196,6 +1276,41 @@ pub(crate) fn phase3_select(
         }
     }
     Ok((selected, issues))
+}
+
+/// 为 Phase 3 附上候选素材的导入期关键帧网格（去重、有上限）。
+fn phase3_keyframe_image_blocks(rough: &RoughStoryboard) -> Vec<Value> {
+    use crate::storyboard::multimodal::{read_input_image, PHASE3_MAX_GRID_IMAGES};
+    use std::path::Path;
+
+    let mut blocks = Vec::new();
+    let mut seen = HashSet::new();
+    for pool in &rough.candidate_pools {
+        for candidate in &pool.candidates {
+            if blocks.len() / 2 >= PHASE3_MAX_GRID_IMAGES {
+                return blocks;
+            }
+            if !seen.insert(candidate.asset_id.clone()) {
+                continue;
+            }
+            let Some(grid_path) = candidate.keyframe_grid_path.as_deref() else {
+                continue;
+            };
+            let Some(image) = read_input_image(Path::new(grid_path)) else {
+                continue;
+            };
+            blocks.push(json!({
+                "type": "input_text",
+                "text": format!("Keyframe grid (2x2) for assetId={}", candidate.asset_id)
+            }));
+            blocks.push(image);
+        }
+    }
+    log::info!(
+        "Phase 3 attached {} keyframe grid image(s)",
+        blocks.len() / 2
+    );
+    blocks
 }
 
 #[derive(Debug, Deserialize)]
@@ -1335,8 +1450,10 @@ fn assemble_phase3_selection(
     })
 }
 
-/// Phase 4: 精修已选素材的 source 时间段与旁白拆分；禁止更换 assetId。
+/// Phase 4: 先选内容窗 → 段内精修切点 → 旁白时长托底 → 不确定再局部加密。
+/// 禁止更换 assetId。
 pub(crate) fn phase4_refine_ranges(
+    app: &AppHandle,
     access: &ModelAccess,
     brief: &str,
     selected: &StoryboardContent,
@@ -1344,8 +1461,14 @@ pub(crate) fn phase4_refine_ranges(
     sources: &[StoryboardSource],
     repair: Option<&RepairPacket>,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
+    use crate::storyboard::multimodal::{
+        build_phase4_windows_from_keyframes, densify_times_in_range, extract_frames_at_times,
+        read_input_image, Phase4ContentWindow, PHASE4_REFINE_FRAMES, PHASE4_UNCERTAIN_FRAMES,
+    };
+    use std::path::Path;
+
     log::info!(
-        "Phase 4: Refining source ranges for {} locked shots",
+        "Phase 4: window-select then in-window refine for {} locked shots (keyframe windows, no per-asset scene scan)",
         selected.shots.len()
     );
 
@@ -1362,71 +1485,338 @@ pub(crate) fn phase4_refine_ranges(
     if selected_sources.len() != selected_asset_ids.len() {
         return Err("Phase 4 source scope was unavailable.".to_owned());
     }
-    let source_cards_json = serde_json::to_string(
-        &selected_sources
+
+    let mut windows_by_asset: HashMap<String, Vec<Phase4ContentWindow>> = HashMap::new();
+    let mut all_windows: Vec<Phase4ContentWindow> = Vec::new();
+    for source in &selected_sources {
+        let duration_ms = source.duration_ms.unwrap_or(0).max(1);
+        let keyframe_times: Vec<i64> = source.keyframes.iter().map(|frame| frame.time_ms).collect();
+        let windows =
+            build_phase4_windows_from_keyframes(&source.asset_id, duration_ms, &keyframe_times);
+        log::info!(
+            "Phase 4 windows for {}: count={} from_keyframes={}",
+            source.asset_id,
+            windows.len(),
+            keyframe_times.len()
+        );
+        windows_by_asset.insert(source.asset_id.clone(), windows.clone());
+        all_windows.extend(windows);
+    }
+    if all_windows.is_empty() {
+        return Err("Phase 4 could not build content windows.".to_owned());
+    }
+
+    let window_cards = serde_json::to_string(&all_windows)
+        .map_err(|_| "Could not serialize Phase 4 windows.".to_owned())?;
+    let shot_cards = serde_json::to_string(
+        &selected
+            .shots
             .iter()
-            .enumerate()
-            .map(|(index, source)| compact_candidate_card(index, source))
+            .map(|shot| {
+                json!({
+                    "orderIndex": shot.order_index,
+                    "assetId": shot.asset_id,
+                    "beatId": shot.beat_id,
+                    "purpose": shot.purpose,
+                    "narrationText": shot.narration_text,
+                    "durationMs": shot.duration_ms,
+                })
+            })
             .collect::<Vec<_>>(),
     )
-    .map_err(|_| "Could not serialize source map.".to_owned())?;
-    let locked_json = serde_json::to_string(selected)
-        .map_err(|_| "Could not serialize selected storyboard.".to_owned())?;
+    .map_err(|_| "Could not serialize Phase 4 shots.".to_owned())?;
     let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
 
-    let prompt = format!(
-        "Brief: {brief}\n\
-        Locked storyboard (assetIds are FINAL — do not change them): {locked_json}\n\
-        Available Sources (with scene segments): {source_cards_json}\n\
-        {feedback_context}\n\n\
-        Refine ONLY sourceStartMs/sourceEndMs, durationMs, narrationText split, onScreenText, reason, and matchLevel.\n\
-        Goals:\n\
-        1. Pick concrete source ranges so consecutive shots flow visually (motion/framing/scene continuity)\n\
-        2. No overlapping time ranges from the same video asset\n\
-        3. Total duration should approach targetDurationMs\n\
-        4. Keep beat order and every locked assetId exactly as given\n\
-        5. Divide each beat's narration across its shots\n\
-        6. Never create shots for uncovered beats; never add/remove/reorder shots; never swap assetIds\n\n\
-        Return the complete final JSON with: title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, and shots.\n\
-        Each shot must contain: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
-        matchLevel must be 'direct' or 'contextual'."
-    );
+    // —— Pass A：每窗 1 张代表帧，只选 windowId ——
+    let mut pass_a_blocks = vec![json!({
+        "type": "input_text",
+        "text": format!(
+            "Brief: {brief}\n\
+            Locked shots (assetIds FINAL): {shot_cards}\n\
+            Content windows from scene changes: {window_cards}\n\
+            {feedback_context}\n\n\
+            Each attached image is the midpoint of one windowId (windows come from import keyframes / head-mid-tail thirds, not a fresh full-clip scene scan).\n\
+            For EVERY locked shot, pick exactly one windowId that belongs to that shot's assetId.\n\
+            Prefer actionable/on-brief content over setup/prelude/idle when both exist.\n\
+            Set uncertain=true when the best window is ambiguous or you may cut mid spoken phrase.\n\
+            Return JSON only: {{\"picks\":[{{\"orderIndex\":1,\"windowId\":\"asset:w0\",\"uncertain\":false}}]}}"
+        )
+    })];
+    let mut pass_a_frames = 0usize;
+    for window in &all_windows {
+        let Some(source) = selected_sources
+            .iter()
+            .find(|source| source.asset_id == window.asset_id)
+        else {
+            continue;
+        };
+        let Some(path) = source.source_path.as_deref() else {
+            continue;
+        };
+        let frames = extract_frames_at_times(
+            app,
+            &window.asset_id,
+            Path::new(path),
+            &[window.mid_ms()],
+            &format!("passA_{}", window.window_id.replace(':', "_")),
+        );
+        for (time_ms, frame_path) in frames {
+            let Some(image) = read_input_image(&frame_path) else {
+                continue;
+            };
+            pass_a_blocks.push(json!({
+                "type": "input_text",
+                "text": format!(
+                    "windowId={} assetId={} [{},{}] midTimeMs={}",
+                    window.window_id, window.asset_id, window.start_ms, window.end_ms, time_ms
+                )
+            }));
+            pass_a_blocks.push(image);
+            pass_a_frames += 1;
+        }
+    }
+    log::info!("Phase 4 pass A attached {pass_a_frames} window midpoint frame(s)");
 
-    let request = serde_json::json!({
+    let pass_a_request = json!({
         "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
         "store": false,
         "stream": true,
-        "input": [{
-            "role": "user",
-            "content": [{ "type": "input_text", "text": prompt }]
-        }],
+        "input": [{ "role": "user", "content": pass_a_blocks }],
         "text": { "format": { "type": "json_object" } }
     });
-
     crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4",
+        "Phase 4a",
         None,
         repair.map(|packet| packet.attempt).unwrap_or(1),
         "request",
-        &request,
+        &pass_a_request,
     );
-    let body = post_model_payload(access, &request, Some(STORYBOARD_TIMEOUT))?;
-    let response_value =
-        serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
+    let pass_a_body = post_model_payload(access, &pass_a_request, Some(STORYBOARD_TIMEOUT))?;
     crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4",
+        "Phase 4a",
         None,
         repair.map(|packet| packet.attempt).unwrap_or(1),
         "response",
-        &response_value,
+        &serde_json::from_str::<Value>(&pass_a_body)
+            .unwrap_or_else(|_| json!({ "raw": pass_a_body })),
     );
-    let text = model_response_json_text(access, &body)
-        .ok_or_else(|| "Phase 4 response did not contain JSON.".to_owned())?;
+    let pass_a_text = model_response_json_text(access, &pass_a_body)
+        .ok_or_else(|| "Phase 4a response did not contain JSON.".to_owned())?;
+    let picks = parse_phase4_window_picks(&pass_a_text);
+    let pick_map = apply_phase4_window_picks(selected, &windows_by_asset, &picks);
 
-    let mut refined: StoryboardContent = serde_json::from_str(&text)
-        .map_err(|_| "Phase 4 JSON did not match StoryboardContent schema.".to_owned())?;
+    // —— Pass B：只在选中窗内加密抽帧，精修起止 ——
+    let mut draft = selected.clone();
+    for shot in &mut draft.shots {
+        if let Some((window, uncertain)) = pick_map.get(&shot.order_index) {
+            let target = shot.duration_ms.max(1).min(window.span_ms().max(1));
+            let start = window
+                .mid_ms()
+                .saturating_sub(target / 2)
+                .clamp(window.start_ms, window.end_ms.saturating_sub(1));
+            let end = (start + target).min(window.end_ms).max(start + 1);
+            shot.source_start_ms = start;
+            shot.source_end_ms = end;
+            shot.duration_ms = end - start;
+            if *uncertain {
+                shot.reason = format!("{} [window={} uncertain]", shot.reason, window.window_id);
+            } else {
+                shot.reason = format!("{} [window={}]", shot.reason, window.window_id);
+            }
+        }
+    }
+
+    let mut pass_b_blocks = vec![json!({
+        "type": "input_text",
+        "text": format!(
+            "Brief: {brief}\n\
+            Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
+            Chosen windows: {}\n\
+            {feedback_context}\n\n\
+            Timed frames below are densified ONLY inside each shot's chosen content window.\n\
+            Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
+            Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
+            Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
+            No overlapping ranges from the same asset. Approach targetDurationMs.\n\
+            Divide beat narration across shots when needed.\n\
+            Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
+            Each shot: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
+            matchLevel must be 'direct' or 'contextual'.",
+            serde_json::to_string(&draft).unwrap_or_else(|_| "{}".to_owned()),
+            serde_json::to_string(
+                &pick_map
+                    .iter()
+                    .map(|(order, (window, uncertain))| json!({
+                        "orderIndex": order,
+                        "windowId": window.window_id,
+                        "startMs": window.start_ms,
+                        "endMs": window.end_ms,
+                        "uncertain": uncertain
+                    }))
+                    .collect::<Vec<_>>()
+            )
+            .unwrap_or_else(|_| "[]".to_owned())
+        )
+    })];
+    let mut pass_b_frames = 0usize;
+    for (order_index, (window, _)) in &pick_map {
+        let Some(source) = selected_sources
+            .iter()
+            .find(|source| source.asset_id == window.asset_id)
+        else {
+            continue;
+        };
+        let Some(path) = source.source_path.as_deref() else {
+            continue;
+        };
+        let times = densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
+        let frames = extract_frames_at_times(
+            app,
+            &window.asset_id,
+            Path::new(path),
+            &times,
+            &format!("passB_{order_index}"),
+        );
+        for (time_ms, frame_path) in frames {
+            let Some(image) = read_input_image(&frame_path) else {
+                continue;
+            };
+            pass_b_blocks.push(json!({
+                "type": "input_text",
+                "text": format!(
+                    "shotOrderIndex={} windowId={} sourceTimeMs={}",
+                    order_index, window.window_id, time_ms
+                )
+            }));
+            pass_b_blocks.push(image);
+            pass_b_frames += 1;
+        }
+    }
+    log::info!("Phase 4 pass B attached {pass_b_frames} in-window frame(s)");
+
+    let pass_b_request = json!({
+        "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
+        "store": false,
+        "stream": true,
+        "input": [{ "role": "user", "content": pass_b_blocks }],
+        "text": { "format": { "type": "json_object" } }
+    });
+    crate::storyboard::provider_trace::append_storyboard_trace(
+        "Phase 4b",
+        None,
+        repair.map(|packet| packet.attempt).unwrap_or(1),
+        "request",
+        &pass_b_request,
+    );
+    let pass_b_body = post_model_payload(access, &pass_b_request, Some(STORYBOARD_TIMEOUT))?;
+    crate::storyboard::provider_trace::append_storyboard_trace(
+        "Phase 4b",
+        None,
+        repair.map(|packet| packet.attempt).unwrap_or(1),
+        "response",
+        &serde_json::from_str::<Value>(&pass_b_body)
+            .unwrap_or_else(|_| json!({ "raw": pass_b_body })),
+    );
+    let pass_b_text = model_response_json_text(access, &pass_b_body)
+        .ok_or_else(|| "Phase 4b response did not contain JSON.".to_owned())?;
+    let mut refined: StoryboardContent = serde_json::from_str(&pass_b_text)
+        .map_err(|_| "Phase 4b JSON did not match StoryboardContent schema.".to_owned())?;
+
+    // —— Pass C：仅 uncertain 镜头在窗内再加密 ——
+    let uncertain_orders = pick_map
+        .iter()
+        .filter(|(_, (_, uncertain))| *uncertain)
+        .map(|(order, _)| *order)
+        .collect::<Vec<_>>();
+    if !uncertain_orders.is_empty() {
+        log::info!(
+            "Phase 4 pass C densifying {} uncertain shot(s)",
+            uncertain_orders.len()
+        );
+        let mut pass_c_blocks = vec![json!({
+            "type": "input_text",
+            "text": format!(
+                "Re-check ONLY these uncertain shots with denser in-window frames.\n\
+                Current storyboard: {}\n\
+                Keep every other shot unchanged. assetIds stay FINAL.\n\
+                Return the complete Storyboard JSON after refining only the uncertain shots' source ranges.\n\
+                Avoid cutting mid spoken phrase.",
+                serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned())
+            )
+        })];
+        for order_index in &uncertain_orders {
+            let Some((window, _)) = pick_map.get(order_index) else {
+                continue;
+            };
+            let Some(source) = selected_sources
+                .iter()
+                .find(|source| source.asset_id == window.asset_id)
+            else {
+                continue;
+            };
+            let Some(path) = source.source_path.as_deref() else {
+                continue;
+            };
+            let times =
+                densify_times_in_range(window.start_ms, window.end_ms, PHASE4_UNCERTAIN_FRAMES);
+            let frames = extract_frames_at_times(
+                app,
+                &window.asset_id,
+                Path::new(path),
+                &times,
+                &format!("passC_{order_index}"),
+            );
+            for (time_ms, frame_path) in frames {
+                let Some(image) = read_input_image(&frame_path) else {
+                    continue;
+                };
+                pass_c_blocks.push(json!({
+                    "type": "input_text",
+                    "text": format!(
+                        "UNCERTAIN shotOrderIndex={} windowId={} sourceTimeMs={}",
+                        order_index, window.window_id, time_ms
+                    )
+                }));
+                pass_c_blocks.push(image);
+            }
+        }
+        let pass_c_request = json!({
+            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
+            "store": false,
+            "stream": true,
+            "input": [{ "role": "user", "content": pass_c_blocks }],
+            "text": { "format": { "type": "json_object" } }
+        });
+        crate::storyboard::provider_trace::append_storyboard_trace(
+            "Phase 4c",
+            None,
+            repair.map(|packet| packet.attempt).unwrap_or(1),
+            "request",
+            &pass_c_request,
+        );
+        if let Ok(pass_c_body) =
+            post_model_payload(access, &pass_c_request, Some(STORYBOARD_TIMEOUT))
+        {
+            crate::storyboard::provider_trace::append_storyboard_trace(
+                "Phase 4c",
+                None,
+                repair.map(|packet| packet.attempt).unwrap_or(1),
+                "response",
+                &serde_json::from_str::<Value>(&pass_c_body)
+                    .unwrap_or_else(|_| json!({ "raw": pass_c_body })),
+            );
+            if let Some(text) = model_response_json_text(access, &pass_c_body) {
+                if let Ok(updated) = serde_json::from_str::<StoryboardContent>(&text) {
+                    refined = updated;
+                }
+            }
+        }
+    }
+
+    clamp_shots_to_chosen_windows(&mut refined, &pick_map);
+    apply_narration_phrase_duration_floor(&mut refined, &pick_map);
+
     let issues = collect_phase4_issues(&mut refined, selected);
-    // 叙事结构仍由前序阶段拥有。
     refined.brief = brief.to_owned();
     refined.title = rough.title.clone();
     refined.summary = rough.summary.clone();
@@ -1435,11 +1825,168 @@ pub(crate) fn phase4_refine_ranges(
     refined.beats = rough.beats.clone();
     refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
     log::info!(
-        "Phase 4 refine complete: shots={}, issues={}",
+        "Phase 4 refine complete: shots={}, issues={}, uncertain={}",
         refined.shots.len(),
-        issues.len()
+        issues.len(),
+        uncertain_orders.len()
     );
     Ok((refined, issues))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Phase4WindowPick {
+    order_index: i64,
+    window_id: String,
+    #[serde(default)]
+    uncertain: bool,
+}
+
+fn parse_phase4_window_picks(text: &str) -> Vec<Phase4WindowPick> {
+    let value = serde_json::from_str::<Value>(text).unwrap_or(json!({}));
+    let picks = value
+        .get("picks")
+        .cloned()
+        .or_else(|| value.get("windowPicks").cloned())
+        .unwrap_or(json!([]));
+    serde_json::from_value::<Vec<Phase4WindowPick>>(picks).unwrap_or_default()
+}
+
+fn apply_phase4_window_picks(
+    selected: &StoryboardContent,
+    windows_by_asset: &HashMap<String, Vec<crate::storyboard::multimodal::Phase4ContentWindow>>,
+    picks: &[Phase4WindowPick],
+) -> HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)> {
+    let mut map = HashMap::new();
+    for shot in &selected.shots {
+        let asset_windows = windows_by_asset
+            .get(&shot.asset_id)
+            .cloned()
+            .unwrap_or_default();
+        let pick = picks
+            .iter()
+            .find(|pick| pick.order_index == shot.order_index);
+        let chosen = pick
+            .and_then(|pick| {
+                asset_windows
+                    .iter()
+                    .find(|window| window.window_id == pick.window_id)
+                    .cloned()
+            })
+            .or_else(|| {
+                asset_windows
+                    .iter()
+                    .max_by_key(|window| window.span_ms())
+                    .cloned()
+            });
+        if let Some(window) = chosen {
+            let uncertain = pick.map(|pick| pick.uncertain).unwrap_or(false);
+            map.insert(shot.order_index, (window, uncertain));
+        }
+    }
+    map
+}
+
+fn clamp_shots_to_chosen_windows(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+) {
+    for shot in &mut content.shots {
+        let Some((window, _)) = pick_map.get(&shot.order_index) else {
+            continue;
+        };
+        if shot.asset_id != window.asset_id {
+            continue;
+        }
+        let win_start = window.start_ms.min(window.end_ms);
+        let win_end = window.end_ms.max(window.start_ms);
+        if win_end <= win_start {
+            continue;
+        }
+        // 保证 clamp 的 min <= max：终点上限至少比起点多 1ms。
+        let start_max = win_end.saturating_sub(1).max(win_start);
+        let mut start = shot.source_start_ms.clamp(win_start, start_max);
+        let mut end = if shot.source_end_ms > start {
+            shot.source_end_ms.min(win_end).max(start + 1)
+        } else {
+            (start + shot.duration_ms.max(1))
+                .min(win_end)
+                .max(start + 1)
+        };
+        if end > win_end {
+            end = win_end;
+        }
+        if end <= start {
+            start = win_start;
+            end = win_end;
+        }
+        if end <= start {
+            end = start + 1;
+        }
+        shot.source_start_ms = start;
+        shot.source_end_ms = end;
+        shot.duration_ms = (end - start).max(1);
+    }
+}
+
+/// 旁白句界托底：切点落在窗内时，保证画面时长够念完本镜旁白，减轻「话说一半被切」。
+fn apply_narration_phrase_duration_floor(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+) {
+    for shot in &mut content.shots {
+        let narration = shot.narration_text.trim();
+        if narration.is_empty() {
+            continue;
+        }
+        let Some((window, _)) = pick_map.get(&shot.order_index) else {
+            continue;
+        };
+        let need_ms = estimated_narration_ms(narration);
+        if shot.duration_ms >= need_ms {
+            continue;
+        }
+        let new_end = (shot.source_start_ms + need_ms).min(window.end_ms);
+        if new_end > shot.source_end_ms {
+            shot.source_end_ms = new_end;
+            shot.duration_ms = shot.source_end_ms - shot.source_start_ms;
+        }
+    }
+}
+
+fn estimated_narration_ms(text: &str) -> i64 {
+    let mut units = 0.0_f64;
+    let mut ascii_run = false;
+    let mut cjk = 0.0_f64;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if cjk > 0.0 {
+                units += (cjk / 2.0).ceil();
+                cjk = 0.0;
+            }
+            if !ascii_run {
+                units += 1.0;
+                ascii_run = true;
+            }
+        } else if ('\u{4e00}'..='\u{9fff}').contains(&ch) {
+            ascii_run = false;
+            cjk += 1.0;
+            if cjk >= 2.0 {
+                units += 1.0;
+                cjk = 0.0;
+            }
+        } else {
+            ascii_run = false;
+            if cjk > 0.0 {
+                units += (cjk / 2.0).ceil();
+                cjk = 0.0;
+            }
+        }
+    }
+    if cjk > 0.0 {
+        units += (cjk / 2.0).ceil();
+    }
+    ((units.max(1.0)) * 300.0).round() as i64
 }
 
 /// 校验 Phase 3 选片输出并收集结构性问题。

@@ -1,12 +1,46 @@
 //! 多模态选镜：关键帧网格生成与视觉输入构建。
 //!
 //! 负责从已提取的关键帧拼接成网格图，并为模型准备多模态输入。
-//! 与评分模块（scoring.rs）协作：评分模块初筛 top-5 候选，本模块为这些候选
-//! 生成视觉证据，让模型直接从画面判断语义匹配度。
+//! Phase 3 附带候选 2×2 网格；Phase 4 用导入关键帧建粗窗，再在窗内加密抽帧。
 
 use crate::models::StoryboardSource;
+use crate::process::{hidden_command, run_hidden_command_with_timeout};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use image::{ImageBuffer, Rgb, RgbImage};
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tauri::{AppHandle, Manager};
+
+const PHASE4_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
+/// 单素材最多保留多少个内容候选窗（每窗 1 张代表帧给选段）。
+const PHASE4_MAX_WINDOWS_PER_ASSET: usize = 12;
+/// 段内精修默认抽帧数 / 不确定时加密码。
+pub(crate) const PHASE4_REFINE_FRAMES: usize = 6;
+pub(crate) const PHASE4_UNCERTAIN_FRAMES: usize = 10;
+/// Phase 3 单次请求最多附带多少张候选网格，避免体量失控。
+pub(crate) const PHASE3_MAX_GRID_IMAGES: usize = 36;
+
+/// Phase 4 内容候选窗：导入关键帧/三分段划出的一段可用素材。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Phase4ContentWindow {
+    pub window_id: String,
+    pub asset_id: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+impl Phase4ContentWindow {
+    pub(crate) fn mid_ms(&self) -> i64 {
+        self.start_ms + (self.end_ms - self.start_ms).max(0) / 2
+    }
+
+    pub(crate) fn span_ms(&self) -> i64 {
+        (self.end_ms - self.start_ms).max(0)
+    }
+}
 
 /// 关键帧网格配置：每个视频提取多少帧、拼成几行几列。
 #[derive(Debug, Clone)]
@@ -96,38 +130,200 @@ pub fn generate_keyframe_grid(
     Ok(Some(grid_path))
 }
 
+/// 读取 JPEG 为 Responses API `input_image` 块；失败返回 None（调用方跳过该图）。
+pub(crate) fn read_input_image(path: &Path) -> Option<Value> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "type": "input_image",
+        "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))
+    }))
+}
+
+/// 按边界时刻生成内容候选窗（合并过短段，数量封顶）；无边界时退回整段。
+pub(crate) fn phase4_content_windows(
+    asset_id: &str,
+    duration_ms: i64,
+    cut_times_ms: &[i64],
+) -> Vec<Phase4ContentWindow> {
+    if duration_ms <= 0 {
+        return Vec::new();
+    }
+    let mut boundaries = vec![0_i64];
+    for &cut in cut_times_ms {
+        if cut > 0 && cut < duration_ms {
+            boundaries.push(cut);
+        }
+    }
+    boundaries.push(duration_ms);
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut ranges = boundaries
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .filter(|(start, end)| end - start >= 400)
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        ranges.push((0, duration_ms));
+    }
+
+    // 合并过短邻段，避免碎窗刷屏。
+    let mut merged: Vec<(i64, i64)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if end - start < 1_200 {
+                last.1 = end;
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    while merged.len() > PHASE4_MAX_WINDOWS_PER_ASSET {
+        // 合并当前最短邻对，保持时间顺序覆盖全片。
+        let mut best_i = 0usize;
+        let mut best_span = i64::MAX;
+        for i in 0..merged.len().saturating_sub(1) {
+            let span = merged[i + 1].1 - merged[i].0;
+            if span < best_span {
+                best_span = span;
+                best_i = i;
+            }
+        }
+        let right = merged.remove(best_i + 1);
+        merged[best_i].1 = right.1;
+    }
+
+    merged
+        .into_iter()
+        .enumerate()
+        .map(|(index, (start_ms, end_ms))| Phase4ContentWindow {
+            window_id: format!("{asset_id}:w{index}"),
+            asset_id: asset_id.to_owned(),
+            start_ms,
+            end_ms,
+        })
+        .collect()
+}
+
+/// 在闭区间内均匀取 `count` 个检查时刻（略避开端点）。
+pub(crate) fn densify_times_in_range(start_ms: i64, end_ms: i64, count: usize) -> Vec<i64> {
+    if count == 0 || end_ms <= start_ms {
+        return Vec::new();
+    }
+    if count == 1 {
+        return vec![start_ms + (end_ms - start_ms) / 2];
+    }
+    let span = (end_ms - start_ms) as f64;
+    let mut times = Vec::with_capacity(count);
+    for index in 0..count {
+        let ratio = (index as f64 + 0.5) / count as f64;
+        let time = start_ms + (span * ratio).round() as i64;
+        times.push(time.clamp(start_ms, end_ms.saturating_sub(1).max(start_ms)));
+    }
+    times.sort_unstable();
+    times.dedup();
+    times
+}
+
+/// 用导入期关键帧时间做粗候选窗；无关键帧时退回前/中/后三段。
+/// **不做**每条素材的全片场景切点扫描（太慢且多数素材切点≈0）。
+pub(crate) fn build_phase4_windows_from_keyframes(
+    asset_id: &str,
+    duration_ms: i64,
+    keyframe_times_ms: &[i64],
+) -> Vec<Phase4ContentWindow> {
+    let duration_ms = duration_ms.max(1);
+    let mut cuts: Vec<i64> = keyframe_times_ms
+        .iter()
+        .copied()
+        .filter(|time| *time > 0 && *time < duration_ms)
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    if cuts.is_empty() && duration_ms > 3_000 {
+        cuts = vec![duration_ms / 3, (duration_ms * 2) / 3];
+    }
+    phase4_content_windows(asset_id, duration_ms, &cuts)
+}
+
+/// 在指定时刻列表抽 JPEG；`label` 区分 passA/passB 缓存目录。
+pub(crate) fn extract_frames_at_times(
+    app: &AppHandle,
+    asset_id: &str,
+    source_path: &Path,
+    times_ms: &[i64],
+    label: &str,
+) -> Vec<(i64, PathBuf)> {
+    if times_ms.is_empty() || !source_path.is_file() {
+        return Vec::new();
+    }
+    let Ok(app_data) = app.path().app_data_dir() else {
+        return Vec::new();
+    };
+    let directory = app_data
+        .join("derived")
+        .join(asset_id)
+        .join("phase4_inspect")
+        .join(label);
+    if std::fs::create_dir_all(&directory).is_err() {
+        return Vec::new();
+    }
+    let mut frames = Vec::new();
+    for (index, &time_ms) in times_ms.iter().enumerate() {
+        let destination = directory.join(format!("frame_{:03}_{time_ms}.jpg", index + 1));
+        if extract_jpeg_at_time(source_path, time_ms, &destination) {
+            frames.push((time_ms, destination));
+        } else {
+            log::warn!(
+                "Phase 4 frame extract failed: asset={} label={} t={}ms",
+                asset_id,
+                label,
+                time_ms
+            );
+        }
+    }
+    frames
+}
+
+fn extract_jpeg_at_time(source_path: &Path, time_ms: i64, destination: &Path) -> bool {
+    let time_seconds = (time_ms as f64 / 1000.0).max(0.0);
+    let mut command = hidden_command("ffmpeg");
+    command
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            &format!("{time_seconds:.3}"),
+            "-i",
+        ])
+        .arg(source_path)
+        .args(["-frames:v", "1", "-vf", "scale=320:-2"])
+        .arg(destination);
+    matches!(
+        run_hidden_command_with_timeout(&mut command, PHASE4_FRAME_FFMPEG_TIMEOUT),
+        Ok(_) if destination.is_file()
+    )
+}
+
 /// 为 top-N 候选构建多模态输入内容块。
-///
-/// 返回 Vec<serde_json::Value> 供 Provider 多模态请求使用。
-/// 每个候选的内容块顺序：
-/// 1. 如果有 keyframe_grid_path，读取图像并 base64 编码为 image block
-/// 2. 文本 block 包含 assetId、duration、sceneSegments 元数据
-#[allow(dead_code)] // 预留：统一多模态候选内容块构建，三阶段链路当前走 phases::candidate_grid_image
+#[allow(dead_code)] // 预留：统一多模态候选内容块；Phase 3/4 现走专用拼装
 pub fn build_multimodal_content(
     candidates: &[StoryboardSource],
 ) -> Result<Vec<serde_json::Value>, String> {
-    use base64::{engine::general_purpose, Engine as _};
-
     let mut blocks = Vec::new();
 
     for candidate in candidates {
-        // 如果有网格图路径，添加图像块
         if let Some(grid_path) = &candidate.keyframe_grid_path {
-            let image_data = std::fs::read(grid_path)
-                .map_err(|e| format!("Failed to read keyframe grid {}: {}", grid_path, e))?;
-            let base64_data = general_purpose::STANDARD.encode(&image_data);
-
-            blocks.push(serde_json::json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": base64_data
-                }
-            }));
+            if let Some(image) = read_input_image(Path::new(grid_path)) {
+                blocks.push(image);
+            }
         }
 
-        // 添加元数据文本块
         let scene_info = candidate
             .scene_segments
             .iter()
@@ -146,8 +342,8 @@ pub fn build_multimodal_content(
             }
         );
 
-        blocks.push(serde_json::json!({
-            "type": "text",
+        blocks.push(json!({
+            "type": "input_text",
             "text": metadata_text
         }));
     }
@@ -174,5 +370,36 @@ mod tests {
         let result = build_multimodal_content(&candidates);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn content_windows_follow_cuts_in_order() {
+        let windows = phase4_content_windows("a1", 20_000, &[5_000, 12_000]);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].window_id, "a1:w0");
+        assert_eq!(windows[0].start_ms, 0);
+        assert_eq!(windows[0].end_ms, 5_000);
+        assert_eq!(windows[2].start_ms, 12_000);
+        assert_eq!(windows[2].end_ms, 20_000);
+    }
+
+    #[test]
+    fn keyframe_windows_use_import_times_else_thirds() {
+        let from_kf = build_phase4_windows_from_keyframes("a1", 30_000, &[8_000, 18_000]);
+        assert_eq!(from_kf.len(), 3);
+        assert_eq!(from_kf[1].start_ms, 8_000);
+        assert_eq!(from_kf[1].end_ms, 18_000);
+
+        let thirds = build_phase4_windows_from_keyframes("a2", 9_000, &[]);
+        assert_eq!(thirds.len(), 3);
+        assert_eq!(thirds[0].end_ms, 3_000);
+        assert_eq!(thirds[2].start_ms, 6_000);
+    }
+
+    #[test]
+    fn densify_times_stay_inside_range() {
+        let times = densify_times_in_range(1_000, 5_000, 4);
+        assert_eq!(times.len(), 4);
+        assert!(times.iter().all(|time| (1_000..5_000).contains(time)));
     }
 }

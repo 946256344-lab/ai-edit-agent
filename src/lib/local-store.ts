@@ -357,6 +357,10 @@ export async function createConversation(projectId: string, editingTaskId: strin
 export async function createEditingTask(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingTask>('create_editing_task', { projectId, title }) }
 export async function createEditingSession(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingSession>('create_editing_session', { projectId, title }) }
 export async function listEditingSessions(projectId: string) { requireDesktopRuntime(); return invoke<StoredEditingSession[]>('list_editing_sessions', { projectId }) }
+export async function deleteEditingSession(projectId: string, editingTaskId: string, confirmed: boolean) {
+  requireDesktopRuntime()
+  return invoke<void>('delete_editing_session', { projectId, editingTaskId, confirmed })
+}
 
 export async function listEditingTasks(projectId: string) { requireDesktopRuntime(); return invoke<StoredEditingTask[]>('list_editing_tasks', { projectId }) }
 export async function updateEditingTaskBrief(editingTaskId: string, brief: string) { requireDesktopRuntime(); return invoke<void>('update_editing_task_brief', { editingTaskId, brief }) }
@@ -444,6 +448,10 @@ export async function executeAgentEdit(projectId: string, editingTaskId: string,
 export async function submitConversationTurn(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string) {
   requireDesktopRuntime()
   return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt })
+}
+export async function cancelAgentEdit(projectId: string, editingTaskId: string, conversationId: string, agentTaskId: string) {
+  requireDesktopRuntime()
+  return invoke<void>('cancel_agent_edit', { projectId, editingTaskId, conversationId, agentTaskId })
 }
 
 

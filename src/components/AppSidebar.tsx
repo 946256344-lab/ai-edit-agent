@@ -1,4 +1,5 @@
 // 应用侧栏：切换 local project、剪辑任务与顶层工作区，不拥有数据加载逻辑。
+import { useEffect, useRef, useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
 import type { EditingSessionView } from './workspace-types'
 
@@ -16,6 +17,7 @@ export type AppSidebarActions = {
   createProject: () => void
   selectProject: (projectId: string) => void
   selectSession: (sessionId: string) => void
+  deleteSession: (sessionId: string) => void
   openProvider: () => void
 }
 
@@ -24,7 +26,33 @@ type AppSidebarProps = {
   actions: AppSidebarActions
 }
 
+type SessionMenu = {
+  sessionId: string
+  x: number
+  y: number
+}
+
 export function AppSidebar({ model, actions }: AppSidebarProps) {
+  const [menu, setMenu] = useState<SessionMenu | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const close = (event: MouseEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return
+      setMenu(null)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -55,6 +83,10 @@ export function AppSidebar({ model, actions }: AppSidebarProps) {
             key={session.id}
             className={`conversation ${session.id === model.activeSessionId ? 'active' : ''}`}
             onClick={() => actions.selectSession(session.id)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY })
+            }}
           >
             <span className={`state-dot ${session.state}`} />
             <span><strong>{session.title}</strong><small>{session.preview}</small></span>
@@ -62,6 +94,25 @@ export function AppSidebar({ model, actions }: AppSidebarProps) {
           </button>
         ))}
       </nav>
+      {menu && (
+        <div
+          ref={menuRef}
+          className="session-context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              const sessionId = menu.sessionId
+              setMenu(null)
+              actions.deleteSession(sessionId)
+            }}
+          >
+            删除会话…
+          </button>
+        </div>
+      )}
       <div className="sidebar-footer">
         <button onClick={actions.openProvider}><span className="provider-dot" /> {model.providerLabel}</button>
         <button><span className="gear">o</span> 项目设置</button>

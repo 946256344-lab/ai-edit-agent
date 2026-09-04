@@ -13,7 +13,7 @@ use crate::provider::{
     model_turn_from_responses, post_model_payload_with_wire_observer, FunctionCall, ModelAccess,
     ModelOutputItem,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -299,6 +299,22 @@ fn interrupted_native_result(
     last_outcome: Option<AgentEditResult>,
     receipt: &NativeRunReceipt,
 ) -> (AgentEditResult, AgentLoopTerminalStatus) {
+    if error == "native_tool_loop_cancelled" {
+        let mut result = last_outcome.unwrap_or_else(|| AgentEditResult {
+            agent_task_id: agent_task_id.to_owned(),
+            message: String::new(),
+            storyboard: None,
+            timeline: None,
+            preview: None,
+            jianying_draft: None,
+        });
+        result.message = if receipt.successful_tool_call {
+            "已停止本轮处理；此前由工具确认的部分结果已保留。".to_owned()
+        } else {
+            "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。".to_owned()
+        };
+        return (result, AgentLoopTerminalStatus::Cancelled);
+    }
     let bounded_reason = match error {
         "native_tool_loop_deadline_exceeded" => Some("本轮达到总超时"),
         "native_tool_loop_max_steps" => Some("本轮达到步骤上限"),
@@ -1498,16 +1514,16 @@ fn storyboard_confirmation_required(tool: &str) -> Value {
 }
 
 fn native_task_cancelled(connection: &Connection, agent_task_id: &str) -> bool {
-    connection
-        .query_row(
-            "SELECT status FROM agent_tasks WHERE id = ?1",
-            params![agent_task_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .is_some_and(|status| status == "cancelled")
+    // 任务行缺失（例如剪辑会话已删除）时按已取消处理，避免后台循环继续写副作用。
+    match connection.query_row(
+        "SELECT status FROM agent_tasks WHERE id = ?1",
+        params![agent_task_id],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(status) => status == "cancelled",
+        Err(rusqlite::Error::QueryReturnedNoRows) => true,
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -1796,13 +1812,11 @@ mod tests {
 
     #[test]
     fn read_logs_stays_in_the_full_catalog_for_any_wording() {
-        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"] {
+        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"]
+        {
             let (_message, requests, _calls) =
                 fixture_driver_with_policy(request, vec![HELLO], json!({}));
-            assert!(
-                tool_names(&requests[0]).contains(READ_LOGS),
-                "{request}"
-            );
+            assert!(tool_names(&requests[0]).contains(READ_LOGS), "{request}");
         }
     }
 
@@ -3784,7 +3798,11 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect::<std::collections::HashSet<_>>();
-        for name in ["generate_storyboard", "create_timeline_draft", "synthesize_voiceover"] {
+        for name in [
+            "generate_storyboard",
+            "create_timeline_draft",
+            "synthesize_voiceover",
+        ] {
             assert!(names.contains(name), "{name}");
         }
         assert!(!request_requires_project_observation("用这个文案生成视频"));

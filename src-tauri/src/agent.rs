@@ -8,7 +8,7 @@ use crate::models::{AgentEditResult, ConversationTurnResult, StoryboardVersion};
 use crate::provider::ModelAccess;
 use crate::storyboard::load_storyboard_version;
 use crate::timeline::{timeline_candidates_for_editing_task, timeline_candidates_for_storyboard};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -116,14 +116,20 @@ fn finalize_agent_task(
                 "jianyingRegistrationStatus": result.jianying_draft.as_ref().map(|value| &value.registration_status),
             });
             let status = match terminal_status {
-                "completed" | "partially_completed" | "failed" | "needs_clarification" => {
-                    terminal_status
-                }
+                "completed"
+                | "partially_completed"
+                | "failed"
+                | "needs_clarification"
+                | "cancelled" => terminal_status,
                 _ => "failed",
             };
             summary["status"] = json!(status);
-            if matches!(status, "partially_completed" | "failed") {
-                summary["code"] = json!("agent_goal_not_reached");
+            if matches!(status, "partially_completed" | "failed" | "cancelled") {
+                summary["code"] = json!(if status == "cancelled" {
+                    "agent_run_cancelled"
+                } else {
+                    "agent_goal_not_reached"
+                });
             }
             let transaction = connection
                 .unchecked_transaction()
@@ -134,7 +140,11 @@ fn finalize_agent_task(
                 None,
                 status,
                 Some(&summary),
-                (status == "failed").then_some("Agent loop did not reach the requested goal."),
+                match status {
+                    "failed" => Some("Agent loop did not reach the requested goal."),
+                    "cancelled" => Some("Agent run was cancelled by the user."),
+                    _ => None,
+                },
             )?;
             if status == "needs_clarification" {
                 replace_pending_clarification(
@@ -287,6 +297,62 @@ pub fn submit_conversation_turn(
         request,
     )?;
     Ok(ConversationTurnResult::Run { agent_task_id })
+}
+
+/// 取消当前作用域内仍在排队或运行的 Agent 编辑任务；循环在下一步检查点停止。
+#[tauri::command]
+pub fn cancel_agent_edit(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    conversation_id: String,
+    agent_task_id: String,
+) -> Result<(), String> {
+    if project_id.trim().is_empty()
+        || editing_task_id.trim().is_empty()
+        || conversation_id.trim().is_empty()
+        || agent_task_id.trim().is_empty()
+    {
+        return Err("Agent cancellation requires a scoped task identifier.".to_owned());
+    }
+    let connection = open_connection(&app)?;
+    let updated = connection
+        .execute(
+            "UPDATE agent_tasks
+             SET status = 'cancelled',
+                 error_message = COALESCE(error_message, 'Agent run was cancelled by the user.'),
+                 updated_at = ?1
+             WHERE id = ?2
+               AND project_id = ?3
+               AND editing_task_id = ?4
+               AND conversation_id = ?5
+               AND status IN ('queued', 'running')",
+            params![
+                now_millis(),
+                agent_task_id,
+                project_id,
+                editing_task_id,
+                conversation_id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        let status: Option<String> = connection
+            .query_row(
+                "SELECT status FROM agent_tasks
+                 WHERE id = ?1 AND project_id = ?2 AND editing_task_id = ?3 AND conversation_id = ?4",
+                params![agent_task_id, project_id, editing_task_id, conversation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        return match status.as_deref() {
+            Some("cancelled") => Ok(()),
+            Some(_) => Err("Agent task is no longer cancellable.".to_owned()),
+            None => Err("Agent task was not found in the current editing session.".to_owned()),
+        };
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -626,14 +692,48 @@ fn run_agent_edit_pipeline(
     }
 
     let tool_name = "agent_loop".to_owned();
-    update_agent_task(
-        &connection,
-        agent_task_id,
-        Some(&tool_name),
-        "running",
-        None,
-        None,
-    )?;
+    let claimed = connection
+        .execute(
+            "UPDATE agent_tasks
+             SET tool_name = COALESCE(?1, tool_name), status = 'running', updated_at = ?2
+             WHERE id = ?3 AND status = 'queued'",
+            params![tool_name.as_str(), now_millis(), agent_task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if claimed == 0 {
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM agent_tasks WHERE id = ?1",
+                params![agent_task_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "failed".to_owned());
+        if status == "cancelled" {
+            return finalize_agent_task(
+                &connection,
+                agent_task_id,
+                &project_id,
+                &editing_task_id,
+                &conversation_id,
+                &tool_name,
+                Ok(AgentEditResult {
+                    agent_task_id: agent_task_id.to_owned(),
+                    message: "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。"
+                        .to_owned(),
+                    storyboard: None,
+                    timeline: None,
+                    preview: None,
+                    jianying_draft: None,
+                }),
+                "cancelled",
+                None,
+                "assistant",
+            );
+        }
+        return Err(format!(
+            "Agent task could not start from status '{status}'."
+        ));
+    }
 
     let access = match ModelAccess::resolve() {
         Ok(access) => access,

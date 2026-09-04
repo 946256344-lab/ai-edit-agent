@@ -874,8 +874,10 @@ pub fn synthesize_storyboard_voiceover(
 }
 
 fn voice_provider_configured() -> Result<bool, String> {
-    Ok(crate::music_provider::fish_audio::configured_for_snapshot()?
-        || crate::music_provider::elevenlabs_configured_for_snapshot()?)
+    Ok(
+        crate::music_provider::fish_audio::configured_for_snapshot()?
+            || crate::music_provider::elevenlabs_configured_for_snapshot()?,
+    )
 }
 
 /// 时间线就绪后统一自动配音（Agent / 前端共用）。
@@ -899,8 +901,7 @@ pub(crate) fn auto_synthesize_storyboard_voiceover(
     }
     if !voice_provider_configured()? {
         return Err(
-            "voice_provider_unconfigured: Voice Provider is not configured in settings."
-                .to_owned(),
+            "voice_provider_unconfigured: Voice Provider is not configured in settings.".to_owned(),
         );
     }
     let connection = crate::db::open_connection(app)?;

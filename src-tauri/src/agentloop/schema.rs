@@ -52,6 +52,7 @@ pub(crate) enum AgentLoopTerminalStatus {
     PartiallyCompleted,
     Failed,
     NeedsClarification,
+    Cancelled,
 }
 
 impl AgentLoopTerminalStatus {
@@ -61,6 +62,7 @@ impl AgentLoopTerminalStatus {
             Self::PartiallyCompleted => "partially_completed",
             Self::Failed => "failed",
             Self::NeedsClarification => "needs_clarification",
+            Self::Cancelled => "cancelled",
         }
     }
 }

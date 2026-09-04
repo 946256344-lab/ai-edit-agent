@@ -22,6 +22,8 @@ import {
   createEditingSession as createStoredEditingSession,
   createMessage as createStoredMessage,
   createProject as createStoredProject,
+  cancelAgentEdit as cancelStoredAgentEdit,
+  deleteEditingSession as deleteStoredEditingSession,
   initializeLocalStore,
   isDesktopRuntime,
   listAgentTasks,
@@ -58,6 +60,7 @@ function App() {
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [composerNotice, setComposerNotice] = useState<string | null>(null)
+  const cancelRequestedRef = useRef(false)
   const [routeStatusText, setRouteStatusText] = useState<string | null>(null)
   const [routeStatusDetail, setRouteStatusDetail] = useState<string | null>(null)
   const [routeStatusTone, setRouteStatusTone] = useState<'neutral' | 'info' | 'success' | 'warning'>('neutral')
@@ -227,6 +230,35 @@ function App() {
     setActiveView('chat')
   }
 
+  async function deleteEditingSessionWorkspace(sessionId: string) {
+    if (!desktopRuntime || !activeProjectId) return
+    const session = editingSessions.find((candidate) => candidate.id === sessionId)
+    const title = session?.title ?? '该剪辑会话'
+    const confirmed = window.confirm(
+      `确定删除「${title}」？\n\n将永久删除该会话的对话、Agent 记录、故事板、时间线和本地预览。项目素材不会删除。`,
+    )
+    if (!confirmed) return
+    const projectId = activeProjectId
+    try {
+      await deleteStoredEditingSession(projectId, sessionId, true)
+    } catch {
+      window.alert('删除失败，请稍后重试。')
+      return
+    }
+    const remaining = editingSessions.filter((candidate) => candidate.id !== sessionId)
+    setEditingSessions(remaining)
+    if (activeEditingSessionRef.current !== sessionId) return
+    if (remaining[0]) {
+      await selectEditingSession(projectId, remaining[0].id, remaining)
+      return
+    }
+    activeEditingSessionRef.current = null
+    setActiveEditingSessionId(null)
+    setMessages([])
+    setAgentTasks([])
+    artifactWorkspace.reset()
+  }
+
   async function ensureEditingSession() {
     let projectId = activeProjectId
     if (!projectId) {
@@ -331,6 +363,7 @@ function App() {
     event.preventDefault()
     const trimmed = input.trim()
     if (!trimmed || isSending || !desktopRuntime) return
+    cancelRequestedRef.current = false
     setIsSending(true)
     setComposerNotice(null)
     if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
@@ -341,6 +374,11 @@ function App() {
     let context: { conversationId: string; projectId: string; sessionId: string } | null = null
     try {
       const resolved = await resolveMessageContext(trimmed)
+      if (cancelRequestedRef.current) {
+        setIsSending(false)
+        setComposerNotice('已停止本轮处理。')
+        return
+      }
       if (!resolved.context) {
         showTaskRouteClarification(trimmed, resolved.route.question || '请确认这条请求属于哪个剪辑任务。')
         setInput('')
@@ -356,9 +394,21 @@ function App() {
         ? `${resolved.route.deferredRequest}\n\n任务归属补充：${trimmed}`
         : trimmed
       await appendStoredMessage(conversationId, sessionId, 'user', routedRequest, resolved.context.routeReceipt)
+      if (cancelRequestedRef.current) {
+        setIsSending(false)
+        setComposerNotice('已停止本轮处理。')
+        return
+      }
       await setConversationStatus(conversationId, 'working')
       await refreshEditingSessions(projectId)
       setInput('')
+      if (cancelRequestedRef.current) {
+        await setConversationStatus(conversationId, 'ready')
+        await refreshEditingSessions(projectId)
+        setIsSending(false)
+        setComposerNotice('已停止本轮处理。')
+        return
+      }
       const turnResult: ConversationTurnResult = await submitConversationTurn(
         projectId,
         sessionId,
@@ -378,6 +428,9 @@ function App() {
       const taskId = turnResult.agentTaskId
       if (!taskId) throw new Error('Agent run did not return a task identifier.')
       agentReconciliation.registerPendingEdit({ taskId, projectId, sessionId, conversationId })
+      if (cancelRequestedRef.current) {
+        await cancelStoredAgentEdit(projectId, sessionId, conversationId, taskId)
+      }
       void artifactWorkspace.refreshAudit(
         projectId,
         sessionId,
@@ -426,6 +479,24 @@ function App() {
     }
   }
 
+  function stopAgentRun() {
+    if (!isSending) return
+    cancelRequestedRef.current = true
+    const pending = agentReconciliation.peekPendingEdit()
+    if (!pending) {
+      setComposerNotice('正在停止…')
+      return
+    }
+    void cancelStoredAgentEdit(
+      pending.projectId,
+      pending.sessionId,
+      pending.conversationId,
+      pending.taskId,
+    )
+      .then(() => setComposerNotice('正在停止本轮处理…'))
+      .catch(() => setComposerNotice('停止请求未生效，请稍后再试。'))
+  }
+
   if (!desktopRuntime) {
     return (
       <main className="app-shell browser-notice">
@@ -455,6 +526,7 @@ function App() {
           createProject: () => void createProjectWorkspace(),
           selectProject: (projectId) => void selectProject(projectId),
           selectSession: (sessionId) => { if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) },
+          deleteSession: (sessionId) => void deleteEditingSessionWorkspace(sessionId),
           openProvider: provider.actions.open,
         }}
       />
@@ -497,6 +569,7 @@ function App() {
               },
               openArtifacts: () => setActiveView('artifacts'),
               sendMessage,
+              stopAgentRun,
             }}
           />
         )}

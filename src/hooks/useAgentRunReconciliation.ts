@@ -211,5 +211,5 @@ export function useAgentRunReconciliation(options: AgentRunReconciliationOptions
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [options.desktopRuntime])
 
-  return { listenerReady, ensureListener, registerPendingEdit }
+  return { listenerReady, ensureListener, registerPendingEdit, peekPendingEdit: () => pendingEditRef.current }
 }

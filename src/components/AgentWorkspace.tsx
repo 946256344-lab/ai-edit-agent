@@ -24,6 +24,7 @@ export type AgentWorkspaceActions = {
   setInput: (value: string) => void
   openArtifacts: () => void
   sendMessage: (event: FormEvent<HTMLFormElement>) => void
+  stopAgentRun: () => void
 }
 
 type AgentWorkspaceProps = {
@@ -94,9 +95,19 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           <span className={model.composerNotice ? 'composer-notice' : undefined}>
             {model.composerNotice ?? (model.session ? `当前会话：${model.session.title}` : '首次发送将创建 local project 和剪辑会话')}
           </span>
-          <button className="send-button" type="submit" disabled={model.isSending}>
-            {model.isSending ? (model.listenerReady ? '处理中' : '连接中') : '发送'}
-          </button>
+          {model.isSending ? (
+            <button
+              className="send-button send-button--stop"
+              type="button"
+              onClick={actions.stopAgentRun}
+            >
+              {model.listenerReady ? '停止' : '停止连接'}
+            </button>
+          ) : (
+            <button className="send-button" type="submit" disabled={!model.input.trim()}>
+              发送
+            </button>
+          )}
         </div>
       </form>
     </section>

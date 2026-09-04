@@ -38,7 +38,8 @@ const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
 const MAX_STORYBOARD_SHOTS: usize = 100;
 const MAX_STORYBOARD_BEATS: usize = 100;
 /// 短 brief 且无实质口播稿时，非 audio-first 下的目标时长上限。
-const SHORT_BRIEF_TARGET_CAP_MS: i64 = 45_000;
+/// `key_message` / 短 brief 默认成片上限：偏 15 秒内短视频。
+const SHORT_BRIEF_TARGET_CAP_MS: i64 = 15_000;
 
 fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>) -> String {
     let message = message.into();
@@ -85,8 +86,13 @@ pub(crate) fn storyboard_sources(
                 .then(|| metadata.evidence_embedding.clone())
                 .flatten();
 
-            // 从元数据中提取关键帧网格图路径
+            // 从元数据中提取关键帧网格图路径与单帧时间戳（供 Phase 3/4 多模态）
             let keyframe_grid_path = metadata.keyframe_grid_path.clone();
+            let keyframes = metadata.keyframes.clone();
+            let source_path = row
+                .get::<_, String>(3)
+                .ok()
+                .filter(|path| Path::new(path).is_file());
 
             Ok((
                 StoryboardSource {
@@ -107,6 +113,8 @@ pub(crate) fn storyboard_sources(
                     visual_quality_score,
                     evidence_embedding,
                     keyframe_grid_path,
+                    keyframes,
+                    source_path,
                 },
                 visual_ready,
                 source_available,
@@ -517,7 +525,7 @@ fn minimum_storyboard_duration(brief: &str) -> i64 {
     estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
 }
 
-/// 短目标/提纲（无大段可朗读文案）不应被 Phase1 扩成 60–90s 全旁白。
+/// 短目标/提纲（无大段可朗读文案）不应被 Phase1 扩成超过 15s 的 key_message，更不应写成 30–90s 全旁白。
 fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 20_000
 }
@@ -525,8 +533,21 @@ fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
 fn brief_requests_longer_runtime(brief: &str) -> bool {
     let lower = brief.to_ascii_lowercase();
     [
-        "分钟", "minute", "min", "60秒", "70秒", "80秒", "90秒", "120秒", "1分", "2分",
-        "longer", "long form", "长视频", "长一点", "久一点",
+        "分钟",
+        "minute",
+        "min",
+        "60秒",
+        "70秒",
+        "80秒",
+        "90秒",
+        "120秒",
+        "1分",
+        "2分",
+        "longer",
+        "long form",
+        "长视频",
+        "长一点",
+        "久一点",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
@@ -552,9 +573,9 @@ fn short_brief_duration_issue(
             narrative.target_duration_ms, SHORT_BRIEF_TARGET_CAP_MS
         ));
     }
-    if narrative.beats.len() > 8 {
+    if narrative.beats.len() > 5 {
         issues.push(format!(
-            "short brief produced {} beats; prefer 3-8 sharper beats instead of padding narration",
+            "short brief produced {} beats; prefer 2-5 sharper beats for a <=15s key_message cut",
             narrative.beats.len()
         ));
     }
@@ -939,8 +960,8 @@ mod tests {
     use super::{
         estimated_storyboard_duration_ms, minimum_storyboard_duration,
         normalize_storyboard_candidate, phase5_should_retry_phase4, short_brief_duration_issue,
-        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts, validate_storyboard,
-        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts,
+        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -962,6 +983,8 @@ mod tests {
             visual_quality_score: None,
             evidence_embedding: None,
             keyframe_grid_path: None,
+            keyframes: Vec::new(),
+            source_path: None,
         }
     }
 
@@ -1265,7 +1288,7 @@ mod tests {
         let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative)
             .expect("short brief should be rejected");
         assert!(issue.contains("key_message"));
-        assert!(issue.contains("45000") || issue.contains("45"));
+        assert!(issue.contains("15000") || issue.contains("15"));
     }
 
     #[test]
@@ -1879,6 +1902,7 @@ fn generate_storyboard_internal(
         let attempt = budget.semantic_attempt_number();
         log::info!("Phase 4 attempt {attempt}: refine source ranges");
         match phases::phase4_refine_ranges(
+            &app,
             &access,
             brief,
             &selected,

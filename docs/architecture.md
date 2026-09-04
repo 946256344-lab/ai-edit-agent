@@ -70,7 +70,7 @@ Project (项目)
     └── Previews / Jianying Drafts (基于 timeline，归任务)
 ```
 
-**会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。
+**会话（conversation）只是对话容器**，不拥有产物。用户可在同一剪辑任务下开启多个会话（例如第一轮讨论后重新开始），所有会话共享该任务的 storyboard、timeline 和 preview 版本。产物查询和创建只需 `(project_id, editing_task_id)`，不依赖 `conversation_id`。UI「剪辑会话」对应 editing task；`delete_editing_session` 在明确确认后级联删除该任务下的全部 conversation、消息、Agent 审计、storyboard/timeline 与本地 preview，不删除项目素材。
 
 **会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。Task Resolver 只把当前激活剪辑任务的快照交给路由模型，不得读取或提示同一项目内其他任务的 title、brief 或 `active_subgoal`；语言不能切换到其他已有任务，用户在 UI 中激活另一任务后，后续消息按 `continue_current` 归属。
 
@@ -175,7 +175,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次；Phase 3 查看候选关键帧网格选片，Phase 4 先按画面变化选内容窗再在窗内精修源区间。
+当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次；Phase 3 查看候选关键帧网格选片，Phase 4 用导入关键帧（或三分段）建粗窗再在窗内精修源区间。
 
 ### Agent 编程上下文架构
 
@@ -284,7 +284,7 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s 短视频；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格）。Phase 4 **先选内容窗、再段内精修切点**（不确定局部加密；旁白时长托底），禁止换片。Phase 5 Rust `normalize` 自修后硬校验；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s 短视频；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格）。Phase 4 **先选内容窗、再段内精修切点**（导入关键帧建窗，不做全片场景扫描；不确定局部加密；旁白时长托底），禁止换片。Phase 5 Rust `normalize` 自修后硬校验；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 

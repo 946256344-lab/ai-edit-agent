@@ -6,7 +6,8 @@ use crate::db::{now_millis, open_connection};
 use crate::jianying::resume_pending_jianying_registrations;
 use crate::models::{Conversation, EditingSession, EditingTask, Message, Project, StoreStatus};
 use rusqlite::{params, Connection, OptionalExtension};
-use tauri::AppHandle;
+use std::fs;
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 const MISSING_AGENT_REPLY_MESSAGE: &str = "上一条 Agent 任务已结束，但应用未能恢复其最终回复。请审阅当前 storyboard、时间线和 preview，并重新提问或继续操作。";
@@ -354,6 +355,135 @@ pub fn list_editing_sessions(
 ) -> Result<Vec<EditingSession>, String> {
     let connection = open_connection(&app)?;
     editing_sessions_for_project(&connection, &project_id)
+}
+
+/// 删除剪辑会话（editing task）及其会话消息、Agent 记录、storyboard/timeline 与本地 preview。
+/// 项目级素材保留。必须 `confirmed=true`。
+#[tauri::command]
+pub fn delete_editing_session(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    confirmed: bool,
+) -> Result<(), String> {
+    if !confirmed {
+        return Err("Deleting an editing session requires explicit confirmation.".to_owned());
+    }
+    if project_id.trim().is_empty() || editing_task_id.trim().is_empty() {
+        return Err("Project and editing session identifiers are required.".to_owned());
+    }
+    let connection = open_connection(&app)?;
+    let timeline_ids = delete_editing_session_records(&connection, &project_id, &editing_task_id)?;
+    drop(connection);
+    for timeline_id in timeline_ids {
+        let preview_dir = match app.path().app_data_dir() {
+            Ok(root) => root.join("previews").join(&timeline_id),
+            Err(_) => continue,
+        };
+        let _ = fs::remove_dir_all(preview_dir);
+    }
+    Ok(())
+}
+
+fn delete_editing_session_records(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+) -> Result<Vec<String>, String> {
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM editing_tasks WHERE id = ?1 AND project_id = ?2)",
+            params![editing_task_id, project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !exists {
+        return Err("Editing session was not found in this project.".to_owned());
+    }
+
+    let mut timeline_statement = connection
+        .prepare(
+            "SELECT timeline_versions.id
+             FROM timeline_versions
+             JOIN storyboard_versions
+               ON storyboard_versions.id = timeline_versions.storyboard_version_id
+             WHERE storyboard_versions.project_id = ?1
+               AND storyboard_versions.editing_task_id = ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let timeline_ids = timeline_statement
+        .query_map(params![project_id, editing_task_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(timeline_statement);
+
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let timestamp = now_millis();
+    transaction
+        .execute(
+            "UPDATE agent_tasks
+             SET status = 'cancelled',
+                 error_message = COALESCE(error_message, 'Editing session was deleted.'),
+                 updated_at = ?1
+             WHERE project_id = ?2
+               AND editing_task_id = ?3
+               AND status IN ('queued', 'running')",
+            params![timestamp, project_id, editing_task_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    let deletes = [
+        "DELETE FROM agent_run_steps WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM agent_diagnostics WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM pending_clarifications WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM task_route_receipts
+         WHERE project_id = ?1
+           AND (
+             target_editing_task_id = ?2
+             OR target_conversation_id IN (
+               SELECT id FROM conversations WHERE project_id = ?1 AND editing_task_id = ?2
+             )
+             OR pending_task_route_id IN (
+               SELECT id FROM pending_task_routes
+               WHERE project_id = ?1 AND active_editing_task_id = ?2
+             )
+           )",
+        "DELETE FROM pending_task_routes WHERE project_id = ?1 AND active_editing_task_id = ?2",
+        "DELETE FROM operation_logs
+         WHERE project_id = ?1
+           AND (
+             editing_task_id = ?2
+             OR conversation_id IN (
+               SELECT id FROM conversations WHERE project_id = ?1 AND editing_task_id = ?2
+             )
+           )",
+        "DELETE FROM messages
+         WHERE conversation_id IN (
+           SELECT id FROM conversations WHERE project_id = ?1 AND editing_task_id = ?2
+         )",
+        "DELETE FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM timeline_versions
+         WHERE project_id = ?1
+           AND storyboard_version_id IN (
+             SELECT id FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2
+           )",
+        "DELETE FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM conversations WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM task_state_snapshots WHERE project_id = ?1 AND editing_task_id = ?2",
+        "DELETE FROM editing_tasks WHERE id = ?2 AND project_id = ?1",
+    ];
+    for sql in deletes {
+        transaction
+            .execute(sql, params![project_id, editing_task_id])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(timeline_ids)
 }
 
 fn editing_sessions_for_project(

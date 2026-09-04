@@ -59,7 +59,8 @@ function taskStatusCopy(status: StoredAgentTask['status']) {
   if (status === 'partially_completed') return '部分完成'
   if (status === 'needs_clarification') return '需要你的回答'
   if (status === 'needs_review') return '需要检查'
-  if (status === 'failed' || status === 'cancelled') return '未能完成'
+  if (status === 'cancelled') return '已停止'
+  if (status === 'failed') return '未能完成'
   if (status === 'running') return '正在执行'
   return '等待执行'
 }
@@ -160,7 +161,8 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
             : '上次执行意外中断，现有产物未自动重放，请检查后重新运行。'}
         </p>
       )}
-      {(task.status === 'failed' || task.status === 'cancelled') && <p className="agent-run-attention error">任务未完成；现有 storyboard、时间线和 preview 不会被自动覆盖。</p>}
+      {task.status === 'cancelled' && <p className="agent-run-attention">已停止本轮处理；现有 storyboard、时间线和 preview 不会被自动覆盖。</p>}
+      {task.status === 'failed' && <p className="agent-run-attention error">任务未完成；现有 storyboard、时间线和 preview 不会被自动覆盖。</p>}
     </div>}
   </section>
 }

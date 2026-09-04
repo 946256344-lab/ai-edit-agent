@@ -17,6 +17,7 @@
 | `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
 | `create_editing_session` | `{ projectId, title }` | `StoredEditingSession` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
 | `list_editing_sessions` | `{ projectId }` | `StoredEditingSession[]` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |
+| `delete_editing_session` | `{ projectId, editingTaskId, confirmed }` | `void` | 删除剪辑会话（editing task）及其对话消息、Agent 记录、storyboard/timeline 与本地 preview 目录；项目级素材保留。必须 `confirmed=true`；进行中的 Agent 任务先标为 `cancelled`。不删除用户 Jianying 草稿目录中的外部草稿。 |
 | `create_editing_task` | `{ projectId, title }` | `StoredEditingTask` | 在既有项目内创建作用域化创作目标。 |
 | `list_editing_tasks` | `{ projectId }` | `StoredEditingTask[]` | 按最后更新时间倒序。 |
 | `update_editing_task_brief` | `{ editingTaskId, brief }` | `void` | 保存非空 brief；首次请求会为未命名任务定名。 |
@@ -59,6 +60,7 @@
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
 | `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 与前端成果工作区在 storyboard 成功后自动串联 timeline 与 preview；`src/lib/local-store.ts` 不再封装此命令。 |
 | `submit_conversation_turn` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `{ kind: 'run', agentTaskId }`（保留 `immediate` 兼容变体） | 后端先消费一次性 route receipt，随后普通聊天、澄清、项目事实和工具执行统一创建 Agent task 并进入 NativeToolLoop；不调用对话分类模型、不返回 route/goal decision，也不预选首个工具。异步终态先幂等写入原 conversation，再发出 `agent-edit-completed`。 |
+| `cancel_agent_edit` | `{ projectId, editingTaskId, conversationId, agentTaskId }` | `void` | 将作用域内仍为 `queued`/`running` 的 Agent 任务标为 `cancelled`；NativeToolLoop 在下一步检查点停止并写入取消终态与回复。已是 `cancelled` 视为成功；其他终态不可取消。 |
 | `get_experimental_openai_oauth_status` | 无 | `ExperimentalOAuthStatus` | 仅从 Windows Credential Manager 读取连接状态。 |
 | `start_experimental_openai_oauth` | 无 | `ExperimentalOAuthStart` | 启动五分钟 loopback PKCE 回调并返回浏览器授权 URL；仅个人测试。 |
 | `clear_experimental_openai_oauth` | 无 | `ExperimentalOAuthStatus` | 删除 Windows Credential Manager 中的实验性凭据并重置连接状态。 |
@@ -78,7 +80,7 @@
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 
-`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。
+`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
 
 Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。
 
@@ -126,7 +128,7 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认偏 `key_message` 与约 **8–15 秒**（硬上限 15s），除非用户明确要求更长。
 
-**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s、约 2–5 beat；`full_script` 可先 TTS 再锁定 `targetDurationMs`）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试。Phase 4 **先选内容窗再段内精修**：场景切点建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；旁白时长托底减轻半句切断，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s、约 2–5 beat；`full_script` 可先 TTS 再锁定 `targetDurationMs`）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试。Phase 4 **先选内容窗再段内精修**：导入关键帧（或三分段）建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；旁白时长托底减轻半句切断，**禁止换片**（不做每素材全片场景扫描）。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
 `storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
@@ -271,4 +273,4 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-09-03）：公开契约不变；Storyboard 改为五阶段（本地 Top-12 去重补位 → 选 2–3 → 精修时间段 → 校验），单步重试分传输/语义预算，失败带 `partialCandidateSummary`，debug 可开 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
 维护记录（2026-09-03）：本地安全上限抬至 100 镜/beat；短 brief 偏 key_message；Phase5 结构失败不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
 维护记录（2026-09-04）：`key_message` 收敛为 ≤15s 短视频（默认 8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
-维护记录（2026-09-04）：Phase 3 附带关键帧网格选片；Phase 4 先选内容窗再段内精修（不确定加密 + 旁白时长托底）。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。
+维护记录（2026-09-04）：Phase 3 附带关键帧网格选片；Phase 4 用导入关键帧建粗窗再段内精修（不确定加密 + 旁白时长托底；修窗尾 clamp panic）。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。
