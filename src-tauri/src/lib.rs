@@ -38,16 +38,16 @@ mod projects;
 mod provider;
 /// 基于证据的 storyboard 提案、校验、版本与查询。
 mod storyboard;
+/// Studio 工作台：前端 mash diff 落库为新的 timeline version。
+mod studio;
+/// 自动字幕转写与花字样式预设（Whisper 占位实现，模型通过工具灵活调用）。
+mod subtitle;
 /// 项目内任务归属、快照、pending route 与一次性 receipt。
 mod taskrouter;
 /// 内部 timeline 创建、校验编辑、文字/音乐轨与版本查询。
 mod timeline;
 /// 旁白写入时间线：补画面、替换系统字幕、创建旁白轨版本。
 mod timeline_voice;
-/// Studio 工作台：前端 mash diff 落库为新的 timeline version。
-mod studio;
-/// 自动字幕转写与花字样式预设（Whisper 占位实现，模型通过工具灵活调用）。
-mod subtitle;
 /// ElevenLabs 配音凭据、合成、指纹缓存与 alignment 字幕。
 mod voice_provider;
 
@@ -77,6 +77,10 @@ pub fn run() {
             music_provider::save_elevenlabs_api_key,
             music_provider::clear_elevenlabs_api_key,
             music_provider::import_elevenlabs_api_key_from_environment,
+            music_provider::fish_audio::get_fish_audio_status,
+            music_provider::fish_audio::save_fish_audio_api_key,
+            music_provider::fish_audio::clear_fish_audio_api_key,
+            music_provider::fish_audio::import_fish_audio_api_key_from_environment,
             projects::initialize_local_store,
             projects::create_project,
             projects::list_projects,

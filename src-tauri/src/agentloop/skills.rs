@@ -11,12 +11,12 @@ use crate::models::{
 };
 use crate::music_provider::{attribution_for, download_track, eligible_track, search_tracks};
 use crate::preview::render_preview;
+use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use crate::timeline::{
     change_clip_duration, create_timeline_draft, insert_clips, reorder_clips, replace_clips,
     replace_music_tracks, replace_text_tracks, select_timeline_candidate, text_recipe_capabilities,
     text_track_quality_warnings, ClipAdjustment, ClipInsertion, ClipReplacement,
 };
-use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -97,7 +97,11 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         "invalid_source_time_range"
     } else if error.contains("Narration text is required") {
         "missing_narration"
-    } else if error.starts_with("storyboard_phase2") {
+    } else if error.starts_with("storyboard_phase2")
+        || error.contains("partialCandidateSummary=")
+        || error.contains("Phase 3 failed")
+        || error.contains("Phase 4 failed")
+    {
         "storyboard_selection_failed"
     } else if error.contains("ElevenLabs") || error.contains("voice Provider") {
         if error.contains("not configured") || error.contains("Credential Manager") {
@@ -173,16 +177,33 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "responseInstruction": "Tell the user voiceover was not created because there is no spoken narration yet. Generate a storyboard that writes narration, then synthesize. Do not claim voiceover was created."
         });
     }
-    if code == "storyboard_selection_failed" {
+    if code == "storyboard_selection_failed"
+        || error.contains("partialCandidateSummary=")
+        || error.contains("Phase 3 failed")
+        || error.contains("Phase 4 failed")
+    {
+        let summary = error
+            .split("partialCandidateSummary=")
+            .nth(1)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut facts = vec![
+            "Storyboard generation stopped before a valid board was saved.".to_owned(),
+            "Keep the same brief on retry; do not silently shorten or rewrite it.".to_owned(),
+        ];
+        if let Some(summary) = summary {
+            facts.push(format!("partialCandidateSummary={summary}"));
+        }
         return json!({
             "status": "failed",
             "operation": tool,
             "stage": "storyboard_selection",
-            "code": code,
-            "facts": ["Storyboard shot selection did not finish a complete board."],
+            "code": "storyboard_selection_failed",
+            "facts": facts,
+            "partialCandidateSummary": summary,
             "retryable": true,
-            "recovery": "Retry generate_storyboard with the user's narration as brief. Do not assemble shots with list_assets or search_assets.",
-            "responseInstruction": "Tell the user the storyboard was not created. Retry generate_storyboard only. Do not claim shots were selected from a library listing."
+            "recovery": "Retry generate_storyboard with the SAME brief. Do not assemble shots with list_assets or search_assets. If partialCandidateSummary shows uncovered beats after a later success path, use insert_clips instead of rewriting the brief.",
+            "responseInstruction": "Tell the user the storyboard was not created. Retry generate_storyboard with the same brief only. Mention the last phase from partialCandidateSummary when present. Do not claim shots were selected from a library listing."
         });
     }
     if code.starts_with("voice_provider_") {
@@ -729,7 +750,8 @@ pub(super) fn apply_skill(
             let limit = args
                 .get("limit")
                 .and_then(Value::as_u64)
-                .unwrap_or(crate::assets::RETRY_FAILED_ASSET_LIMIT as u64) as usize;
+                .unwrap_or(crate::assets::RETRY_FAILED_ASSET_LIMIT as u64)
+                as usize;
             crate::assets::retry_failed_asset_analysis(
                 state.app,
                 state.project_id,
@@ -827,12 +849,29 @@ pub(super) fn apply_skill(
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;
             let summary = generated.summary.clone();
+            let completion_gaps = crate::storyboard::storyboard_completion_gaps(&generated);
+            let quality_warnings = completion_gaps
+                .iter()
+                .map(|gap| {
+                    json!({
+                        "category": gap.code,
+                        "severity": "warning",
+                        "message": gap.message,
+                    })
+                })
+                .collect::<Vec<_>>();
             state.storyboard = Some(generated.clone());
             state.timelines.clear();
             let mut message = format!(
                 "已按你的目标生成 storyboard（版本 {version}）。{summary}",
                 version = version_number
             );
+            if !completion_gaps.is_empty() {
+                message.push_str("\n\n收尾检查未通过，不能当作完成：");
+                for gap in &completion_gaps {
+                    message.push_str(&format!("\n- [{}] {}", gap.code, gap.message));
+                }
+            }
             // Prefer the audio-first timeline written during storyboard generation when present.
             let timeline_result = match crate::timeline::get_latest_timeline(
                 state.app.clone(),
@@ -852,13 +891,45 @@ pub(super) fn apply_skill(
             };
             match timeline_result {
                 Ok(timeline) => {
-                    let timeline_version_id = timeline.id.clone();
+                    let mut timeline = timeline;
                     let timeline_version_number = timeline.version_number;
-                    state.timelines = vec![timeline.clone()];
                     message.push_str(&format!(
                         "\n\n已继续生成时间线 v{timeline_version_number}。"
                     ));
-                    match render_preview(state.app.clone(), timeline_version_id.clone()) {
+                    // 有 narration 且配音已配置时统一自动合成；失败只提示，不挡预览。
+                    // full_script audio-first 若已写入旁白轨会自动跳过。
+                    match crate::voice_provider::auto_synthesize_storyboard_voiceover(
+                        &state.app,
+                        state.project_id,
+                        state.editing_task_id,
+                        state.conversation_id,
+                        &timeline,
+                    ) {
+                        Ok(Some((voiced, applied))) => {
+                            timeline = voiced;
+                            message.push_str(&format!(
+                                "\n已自动合成配音并生成对齐字幕（cue={}）。",
+                                applied.subtitle_cue_count
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            log::warn!("Automatic voiceover after storyboard skipped: {error}");
+                            message.push_str(
+                                "\n自动配音暂不可用（检查 Fish Audio / ElevenLabs 配置），预览将不包含配音。",
+                            );
+                        }
+                    }
+                    let timeline_version_id = timeline.id.clone();
+                    state.timelines = vec![timeline.clone()];
+                    // 有收尾缺口时仍可出预览，但 status=ok + qualityWarnings 会触发精炼续步。
+                    let preview_result = if quality_warnings.is_empty() {
+                        render_preview(state.app.clone(), timeline_version_id.clone())
+                    } else {
+                        // 缺口未闭合时先跳过预览，避免把不完整时间线当作成片收据。
+                        Err("preview deferred until completion gaps are repaired".to_owned())
+                    };
+                    match preview_result {
                         Ok(preview) => {
                             message.push_str("预览也已生成。");
                             state.last_outcome = Some(AgentEditResult {
@@ -875,11 +946,18 @@ pub(super) fn apply_skill(
                                 "storyboardVersionId": storyboard_version_id,
                                 "timelineVersionId": timeline_version_id,
                                 "previewTimelineVersionId": timeline_version_id,
-                                "versionNumber": version_number
+                                "versionNumber": version_number,
+                                "qualityWarnings": quality_warnings,
                             }))
                         }
                         Err(error) => {
-                            message.push_str(" 但预览生成失败，请稍后重试。 ");
+                            if quality_warnings.is_empty() {
+                                message.push_str(" 但预览生成失败，请稍后重试。 ");
+                            } else {
+                                message.push_str(
+                                    " 预览已推迟，请先用 insert_clips/change_clip_duration/replace_clips 补齐缺口后再渲染。",
+                                );
+                            }
                             state.last_outcome = Some(AgentEditResult {
                                 agent_task_id,
                                 message,
@@ -895,6 +973,7 @@ pub(super) fn apply_skill(
                                 "timelineVersionId": timeline_version_id,
                                 "versionNumber": version_number,
                                 "previewError": error,
+                                "qualityWarnings": quality_warnings,
                             }))
                         }
                     }
@@ -915,6 +994,7 @@ pub(super) fn apply_skill(
                         "storyboardVersionId": storyboard_version_id,
                         "versionNumber": version_number,
                         "timelineError": error,
+                        "qualityWarnings": quality_warnings,
                     }))
                 }
             }

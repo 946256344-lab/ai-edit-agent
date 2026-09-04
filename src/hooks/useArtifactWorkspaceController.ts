@@ -276,12 +276,18 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
             `已自动合成配音并生成对齐字幕（cue=${voiced.subtitleCueCount}）。`,
           )
         } catch (error) {
-          console.warn(`Automatic voiceover skipped: ${error}`)
-          await options.appendAgentMessage(
-            conversationId,
-            sessionId,
-            '自动配音暂不可用（检查 ElevenLabs 配置），预览将不包含配音。',
-          )
+          const detail = error instanceof Error ? error.message : String(error)
+          console.warn(`Automatic voiceover skipped: ${detail}`)
+          // 无旁白文案 / 已有轨：不提示「配置不可用」
+          const silent =
+            /no narration text|already has voiceover|narration is missing/i.test(detail)
+          if (!silent) {
+            await options.appendAgentMessage(
+              conversationId,
+              sessionId,
+              '自动配音暂不可用（检查 Fish Audio / ElevenLabs 配置），预览将不包含配音。',
+            )
+          }
         }
       }
       const previewResult = await renderPreview(previewTimeline.id)

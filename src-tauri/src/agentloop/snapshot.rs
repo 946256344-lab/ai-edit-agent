@@ -70,7 +70,8 @@ pub(super) fn build_state_snapshot(
     };
     let capabilities = SnapshotCapabilities {
         model: custom_model || oauth_model,
-        voiceover: crate::music_provider::elevenlabs_configured_for_snapshot()?,
+        voiceover: crate::music_provider::fish_audio::configured_for_snapshot()?
+            || crate::music_provider::elevenlabs_configured_for_snapshot()?,
         jamendo: crate::music_provider::jamendo_configured_for_snapshot()?,
     };
     build_state_snapshot_with_capabilities(

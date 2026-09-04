@@ -128,7 +128,7 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             LIST_VOICES,
-            "List ElevenLabs voices available to the configured voice Provider without synthesizing audio.",
+            "List voices available to the configured Fish Audio or ElevenLabs Provider without synthesizing audio.",
             json!({}),
             Vec::new(),
         ),
@@ -281,7 +281,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read five matching candidates, and pick one until every beat is filled or honestly uncovered. If the user gave no copy, still write spoken narration. Never use onScreenText as voiceover. For full_script narration, synthesizes voiceover first when ElevenLabs is configured so shot selection targets the real audio duration.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read candidates, and pick a main shot until every beat is filled or honestly uncovered. Phase 3 must expand every covered beat to at least 2 distinct shots from that beat's candidate pool. After the timeline is written, completion gaps (uncovered beats, fewer than 2 shots per covered beat, picture shorter than voice) are returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. For full_script narration, synthesizes voiceover first when a voice Provider is configured so shot selection targets the real audio duration.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
@@ -293,7 +293,7 @@ fn main_chain_function_tools() -> Vec<Value> {
                     "type": ["string", "null"],
                     "minLength": 1,
                     "maxLength": 200,
-                    "description": "Optional ElevenLabs voice id for audio-first storyboard generation; null selects Charlie when available."
+                    "description": "Optional Provider voice id for audio-first storyboard generation; null selects the Provider default."
                 }
             }),
             vec!["brief", "voiceId"],
@@ -452,7 +452,7 @@ fn delivery_function_tools() -> Vec<Value> {
         ),
         function_tool(
             SYNTHESIZE_VOICEOVER,
-            "Synthesize narration with ElevenLabs, fit picture duration to the voiceover, and replace generated subtitles using alignment. Pass narration text explicitly; do not speak on-screen titles.",
+            "Synthesize narration with the configured voice Provider, fit picture duration to the voiceover, and replace generated subtitles using alignment. Pass narration text explicitly; do not speak on-screen titles.",
             json!({
                 "text": {
                     "type": ["string", "null"],
@@ -460,7 +460,7 @@ fn delivery_function_tools() -> Vec<Value> {
                     "maxLength": 5000,
                     "description": "Spoken narration. Null uses storyboard narrationText when present. Never use onScreenText."
                 },
-                "voiceId": nullable_bounded_string("Optional ElevenLabs voice id; null selects Charlie when available.", 200),
+                "voiceId": nullable_bounded_string("Optional Provider voice id; null selects the Provider default.", 200),
                 "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version.")
             }),
             vec!["text", "voiceId", "timelineVersionId"],
@@ -669,9 +669,7 @@ mod tests {
 
         assert_eq!(tools.len(), OBSERVATION_TOOLS.len());
         assert_eq!(names.len(), tools.len());
-        assert!(OBSERVATION_TOOLS
-            .iter()
-            .all(|name| names.contains(name)));
+        assert!(OBSERVATION_TOOLS.iter().all(|name| names.contains(name)));
         assert!(EDIT_TOOLS.iter().all(|name| !names.contains(name)));
     }
 

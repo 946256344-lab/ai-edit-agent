@@ -39,6 +39,22 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
+            <strong>配音（Fish Audio）</strong>
+            <small>配置后优先用于配音；请求失败时不会切换到 ElevenLabs。API Key 只保存在 Windows 凭据库。</small>
+          </span>
+          <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已连接' : '密钥已存') : '未配置'}</b>
+        </div>
+        <p className="oauth-status">{model.fishAudioStatus.lastErrorCode ? `配音状态：${model.fishAudioStatus.lastErrorCode}` : model.fishAudioStatus.keyStored ? '已保存密钥，将使用 s2.1-pro-free。' : '尚未配置。'}</p>
+        <form className="custom-api-form" onSubmit={actions.saveFishAudioKey}>
+          <label><span>Fish Audio API Key</span><input type="password" value={model.form.fishAudioKey} onChange={(event) => actions.setFishAudioKey(event.target.value)} placeholder="Fish API Key" autoComplete="off" /></label>
+          <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.fishAudioKey.trim()}>{model.isSavingVoice ? '保存中' : '保存 Fish Audio 密钥'}</button>
+        </form>
+        {model.fishAudioStatus.importable && <button className="outline-button modal-button" onClick={actions.importFishAudioKey} disabled={model.isSavingVoice}>从 FISH_API_KEY 导入</button>}
+        {model.fishAudioStatus.keyStored && <button className="outline-button modal-button" onClick={actions.clearFishAudioKey}>清除 Fish Audio 密钥</button>}
+
+        <div className="provider-divider" />
+        <div className="provider-option chosen">
+          <span>
             <strong>自定义 API</strong>
             <small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。配置后自定义 API 会优先生效。</small>
           </span>

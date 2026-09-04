@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-04）：storyboard 完成后统一自动配音。有 `narrationText` 且语音 Provider 已配置时，Agent/前端共用 `auto_synthesize_storyboard_voiceover`；失败不挡预览；已有旁白轨跳过。见 `docs/changes/2026-09-04-auto-voiceover-after-storyboard.md`。
+- [x] 完成（2026-09-03）：Storyboard 安全上限抬到 100 镜/beat；Phase1 短 brief 偏 key_message/短时长；Phase5 机械自修、结构问题不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
+- [x] 完成（2026-09-03，refactor/storyboard-select-then-refine）：Storyboard 单步重试原语 + Phase2 去重补位 Top12 → Phase3 选 2–3 → Phase4 时间段精修 → Phase5 校验；uncovered 闭环文案与 `partialCandidateSummary`；`STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
+- [x] 完成（2026-09-03，fix/beat-min-shots-and-timeline-gate）：Phase 3 硬门禁「每个已覆盖 beat ≥2 镜」；generate_storyboard 收尾检查 uncovered / 镜数 / audio-first 缺口，经 qualityWarnings 触发精炼续步。见 `docs/changes/2026-09-03-beat-min-shots-and-timeline-gate.md`。
 - [x] 完成（2026-09-03，feat/opencut-full-port）：音频优先 + 禁止冻结帧。`full_script` Phase1 后 TTS 定时长；画面不足不挂不匹配配音；新增 `insert_clips` 与 `voiceover_longer_than_picture` 可恢复失败上下文；契约/文档已同步。见 `docs/changes/2026-09-03-audio-first-no-freeze.md`。
 - [x] 完成（2026-08-27，chore/cleanup-rust-warnings）：清理 Rust 后端 18 个 unused/dead-code 警告；删除旧 `request_storyboard` 与场景检测遗留代码，预留契约以最小 `#[allow(dead_code)]` 保留。262 个 Rust 库测试、agent/harness 检查通过；无命令、schema、工具白名单或 Provider 协议变化。见 `docs/changes/2026-08-27-cleanup-rust-warnings.md`。
 - [x] 完成（2026-08-27，codex/dynamic-tool-loading）：NativeToolLoop 每轮提供完整工具名称/一句话目录，`load_tools(toolNames)` 每次替换并最多暴露 5 个完整 schema；加载从下一次 Provider 请求生效，Rust 拒绝同响应未暴露调用。`read_logs` 可由模型按需加载，按 1-based 行号范围读取当前活动应用日志，具备固定路径、分页、字符预算及敏感行遮蔽。会话历史取消固定条数/字符窗，完整 Provider payload 以 token 计量，40K 触发模型自主压缩、目标 30K、硬上限 60K。见 `docs/changes/2026-08-27-dynamic-tool-loading-and-log-reading.md`。

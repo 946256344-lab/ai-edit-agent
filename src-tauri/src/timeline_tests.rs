@@ -607,7 +607,10 @@ fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() 
     assert_eq!(extended.clips[1].asset_id, "extra-video");
     assert_eq!(extended.clips[1].timeline_start_ms, 2_000);
     assert_eq!(extended.clips[1].timeline_end_ms, 3_500);
-    assert_eq!(extended.clips[1].fit_reason.as_deref(), Some("timeline_extend"));
+    assert_eq!(
+        extended.clips[1].fit_reason.as_deref(),
+        Some("timeline_extend")
+    );
     assert_ne!(extended.clips[1].clip_kind, "freeze_frame");
     assert_eq!(extended.clips[2].shot_index, 2);
     assert_eq!(extended.clips[2].timeline_start_ms, 3_500);

@@ -5,17 +5,21 @@ import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   clearCustomApi,
+  clearFishAudioApiKey,
   clearElevenLabsApiKey,
   clearExperimentalOpenAIOAuth,
   getCustomApiStatus,
+  getFishAudioStatus,
   getElevenLabsStatus,
   getExperimentalOpenAIOAuthStatus,
   importElevenLabsApiKeyFromEnvironment,
+  importFishAudioApiKeyFromEnvironment,
   saveCustomApi,
+  saveFishAudioApiKey,
   saveElevenLabsApiKey,
   startExperimentalOpenAIOAuth,
 } from '../lib/local-store'
-import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus } from '../lib/local-store'
+import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus, FishAudioStatus } from '../lib/local-store'
 
 const DISCONNECTED_OAUTH: ExperimentalOAuthStatus = {
   state: 'disconnected',
@@ -38,6 +42,7 @@ const DISCONNECTED_ELEVENLABS: ElevenLabsStatus = {
   lastErrorCode: null,
   importable: false,
 }
+const DISCONNECTED_FISH: FishAudioStatus = { keyStored: false, voicesReadable: false, lastErrorCode: null, importable: false }
 
 /**
  * Owns provider connection UI state. Credential values cross the Tauri bridge
@@ -54,6 +59,8 @@ export function useProviderController(desktopRuntime: boolean) {
   const [apiKey, setApiKey] = useState('')
   const [elevenLabsStatus, setElevenLabsStatus] = useState<ElevenLabsStatus>(DISCONNECTED_ELEVENLABS)
   const [elevenLabsKey, setElevenLabsKey] = useState('')
+  const [fishAudioStatus, setFishAudioStatus] = useState<FishAudioStatus>(DISCONNECTED_FISH)
+  const [fishAudioKey, setFishAudioKey] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [isSavingVoice, setIsSavingVoice] = useState(false)
 
@@ -71,6 +78,11 @@ export function useProviderController(desktopRuntime: boolean) {
       window.clearInterval(intervalId)
       stopListening?.()
     }
+  }, [desktopRuntime])
+
+  useEffect(() => {
+    if (!desktopRuntime) return
+    void getFishAudioStatus().then(setFishAudioStatus).catch(() => setFishAudioStatus({ ...DISCONNECTED_FISH, lastErrorCode: 'status_unreadable' }))
   }, [desktopRuntime])
 
   useEffect(() => {
@@ -190,12 +202,33 @@ export function useProviderController(desktopRuntime: boolean) {
     })))
   }
 
+  async function saveFishKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsSavingVoice(true)
+    try {
+      const status = await saveFishAudioApiKey(fishAudioKey.trim()).catch(() => ({ ...DISCONNECTED_FISH, lastErrorCode: 'save_failed' }))
+      setFishAudioStatus(status)
+      if (status.keyStored) setFishAudioKey('')
+    } finally { setIsSavingVoice(false) }
+  }
+
+  async function importFishKey() {
+    setIsSavingVoice(true)
+    try { setFishAudioStatus(await importFishAudioApiKeyFromEnvironment().catch(() => ({ ...DISCONNECTED_FISH, lastErrorCode: 'import_failed' }))) }
+    finally { setIsSavingVoice(false) }
+  }
+
+  async function clearFishKey() {
+    setFishAudioStatus(await clearFishAudioApiKey().catch(() => ({ ...DISCONNECTED_FISH, lastErrorCode: 'clear_failed' })))
+  }
+
   return {
     model: {
       isOpen,
       oauthStatus,
       customApiStatus,
       elevenLabsStatus,
+      fishAudioStatus,
       isSaving,
       isSavingVoice,
       providerLabel: customApiStatus.state === 'connected'
@@ -203,7 +236,7 @@ export function useProviderController(desktopRuntime: boolean) {
         : oauthStatus.state === 'connected'
           ? 'GPT OAuth 已连接'
           : '模型未连接',
-      form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey },
+      form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey, fishAudioKey },
     },
     actions: {
       open: () => setIsOpen(true),
@@ -216,6 +249,10 @@ export function useProviderController(desktopRuntime: boolean) {
       importElevenLabsKey: () => void importVoiceKey(),
       clearElevenLabsKey: () => void clearVoiceKey(),
       setElevenLabsKey,
+      saveFishAudioKey: (event: FormEvent<HTMLFormElement>) => void saveFishKey(event),
+      importFishAudioKey: () => void importFishKey(),
+      clearFishAudioKey: () => void clearFishKey(),
+      setFishAudioKey,
       setBaseUrl,
       setModel,
       setCoarseVisualModel,

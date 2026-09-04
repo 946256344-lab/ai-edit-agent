@@ -44,7 +44,7 @@
 | `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs` 和独立 `visualAnalysisStatus`；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
-| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 召回最多 12 个候选，模型查看关键帧后选择 1 个，在本地校验后创建任务内版本。 |
+| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 召回并去同/去相似补位到最多 12 个候选，模型从池中选出 2–3 个互异素材后再精修源时间范围，本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
 | `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
@@ -54,7 +54,7 @@
 | `list_agent_diagnostics` | `{ projectId, editingTaskId, agentTaskId }` | `AgentDiagnostic[]` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
 | `list_operation_logs` | `{ projectId, editingTaskId, agentTaskId? }` | `OperationLog[]` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
 | `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。 |
-| `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：从 timeline 反查其 storyboard，取全部 shot 的 `narrationText` 经 ElevenLabs `with-timestamps` 合成语音，按 alignment 生成对齐字幕并写回 timeline 新版本；前端在 `create_timeline_draft` 后调用并把新版本用于渲染预览。未配置 ElevenLabs 或合成失败时返回错误，调用方应跳过配音继续渲染。 |
+| `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：Fish Audio 配置后使用其时间戳流，否则使用 ElevenLabs；按 alignment 生成字幕并写回 timeline 新版本。Provider 失败时不自动切换。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
 | `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 与前端成果工作区在 storyboard 成功后自动串联 timeline 与 preview；`src/lib/local-store.ts` 不再封装此命令。 |
@@ -71,6 +71,10 @@
 | `save_elevenlabs_api_key` | `{ apiKey }` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
 | `clear_elevenlabs_api_key` | 无 | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |
 | `import_elevenlabs_api_key_from_environment` | 无 | `ElevenLabsStatus` | 当凭据库未配置时，从本机 `ELEVENLABS_API_KEY` 导入一次；不在每次 HTTP 时偷读环境变量。 |
+| `get_fish_audio_status` | 无 | `FishAudioStatus` | 返回 Fish Audio 密钥是否已存及音色列表是否可读；不返回 API Key。 |
+| `save_fish_audio_api_key` | `{ apiKey }` | `FishAudioStatus` | 将 Fish Audio API Key 写入 Windows Credential Manager，并用音色列表接口探活。配置后配音明确优先使用 Fish Audio，失败不切换 Provider。 |
+| `clear_fish_audio_api_key` | 无 | `FishAudioStatus` | 删除 Windows Credential Manager 中的 Fish Audio 密钥。 |
+| `import_fish_audio_api_key_from_environment` | 无 | `FishAudioStatus` | 从本机 `FISH_API_KEY` 导入一次。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 
@@ -120,11 +124,11 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 ## 素材证据与 storyboard
 
-Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；30 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。
+Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应还包含模型提出的 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认偏 `key_message` 与约 15–45 秒，除非用户明确要求更长。
 
-**Storyboard 三阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把候选硬过滤为技术分析 `ready`、`kind = video`、未被排除且源文件可访问的素材，再针对每个 beat 独立预排序并提供最多 12 个候选。Rust 优先比较 `requiredVisual + purpose` 与视觉 evidence/OCR 文本的本地中文向量，向量缺失、失效或模型不可用时回退词面匹配；叠加真实关键帧质量、时长、连续复用与跨剪辑任务新鲜度。随后模型读取候选卡、场景段和可用的关键帧网格，返回 1 个 `assetId`、源时间范围、理由与 `matchLevel`，或诚实标记 uncovered。Phase 3 由模型精调时间范围、节奏与组合；模型仍保持全局主创，Rust 把一次候选的全部结构性问题（不只第一个错误）收集成结构化 `RepairPacket` 回传模型继续决策，语义问题必须由模型修复，只有无歧义的子镜头字段标准化等机械修正由 Rust 直接落地；最多反馈重试 3 次。Phase 1/2 结果保持稳定。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/15–45s；`full_script` 可先 TTS 再锁定 `targetDurationMs`）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**，可诚实 uncovered；不过关本步重试。Phase 4 模型只精修 `sourceStart/End`、时长与旁白拆分以保画面流畅，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
-`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。模型获得最多 12 个候选的 ID、时长、场景段、最多 12 个视觉标签和实际可读的关键帧网格，再以 JSON 选择 1 个；上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算，避免 uncovered beat 改变最终口径。Phase 3 只允许精调 rough 已覆盖的 beat：一个 beat 可拆成 2–3 个连续镜头，拆分镜头必须使用该 beat 候选池内的不同素材，首镜头必须保留 Phase 2 主素材，不得填补 uncovered beat 或重排顺序。违反这些语义约束时，Rust 不替模型改素材，而是生成结构化修复包回传模型继续决策。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
+`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
@@ -168,7 +172,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认向
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
-| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。内部先生成 beats，再对每个 beat 从全库排序取 5 个匹配预选并读关键帧后挑选，直到分镜填满或诚实留空。成功后同一调用内自动执行 `create_timeline_draft` 与 `render_preview`；工具结果 `status` 为 `ok`（可含 `timelineError`/`previewError`），不再返回 `needs_confirmation`。 |
+| `generate_storyboard` | Native `{ brief: string|null }` | 已实现：`null` 使用当前任务 brief，只消费已就绪素材证据。内部 Phase2 本地 Top-12（去重补位）→ Phase3 选 2–3 镜 → Phase4 精修时间段 → Phase5 校验。成功后同一调用内自动执行时间线；**有 `narrationText` 且配音 Provider 已配置时自动合成旁白**（`full_script` audio-first 已写入则跳过；失败只提示不挡预览）。若存在 uncovered / 镜数不足 / 画面短于旁白等缺口，结果仍为 `status=ok` 但带 `qualityWarnings` 并推迟 preview，由精炼续步补齐。失败时带 `partialCandidateSummary`，要求同 brief 重试。不再返回 `needs_confirmation`。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
@@ -208,7 +212,7 @@ NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 stric
 
 `change_clip_duration` 对视频保存实际使用的源窗口：`sourceEndMs = sourceStartMs + timelineDurationMs`；图片仍使用零源范围。新起点不得早于变更前已验证窗口的 `sourceStartMs`，新结束点不得晚于其 `sourceEndMs` 或素材技术时长，因此缩短或移动镜头不会越出已验证范围。
 
-`create_timeline_draft` 的成功结果是按 storyboard 镜头顺序映射的内部时间线版本。版本化 `TimelineContent` 已预留 `textTracks`，旧版本读取为 `[]`；模型可经 `replace_text_tracks` 提交完整文本轨，后端校验 cue 时间、颜色、布局/样式范围、受限动画及唯一 ID，并按后端的已验证矩阵写入兼容性，绝不接受模型自证兼容。多轨音频、字幕、变换和自动化仍为 `TODO`。时间线变更目前只可经 `execute_agent_edit` 调用，决策严格限制在关闭工具集内：`replace_clips` 可一次替换多个既有 `shot_index`（每个保持对应时间线时长，视频源范围须已验证且严格等于该时长，图片源范围为零）；`insert_clips` 可在任意位置插入新镜头以延长画面（视频源范围须已验证，时长等于源窗口；图片须零源范围并提供正 `durationMs`）；`change_clip_duration` 在不超出已验证源范围的前提下重定时长与起止点；`reorder_clips` 的 `order` 必须是全部既有 `shot_index` 的完整排列。每次变更都会创建新 `TimelineVersion` 并记录前后变化；`ask_user` 仅返回澄清问题，不创建任何产物。`synthesize_voiceover` 在画面短于配音时返回可恢复错误 `voiceover_longer_than_picture`，禁止写入 `freeze_frame`；模型应 `insert_clips`/`change_clip_duration`/`replace_clips` 补足后再重试。`full_script` 故事板在 ElevenLabs 可用时走音频优先：Phase 1 后先合成旁白，用真实时长驱动 Phase 2/3，并尽量落一条带配音的时间线。
+`create_timeline_draft` 的成功结果是按 storyboard 镜头顺序映射的内部时间线版本。版本化 `TimelineContent` 已预留 `textTracks`，旧版本读取为 `[]`；模型可经 `replace_text_tracks` 提交完整文本轨，后端校验 cue 时间、颜色、布局/样式范围、受限动画及唯一 ID，并按后端的已验证矩阵写入兼容性，绝不接受模型自证兼容。多轨音频、字幕、变换和自动化仍为 `TODO`。时间线变更目前只可经 `execute_agent_edit` 调用，决策严格限制在关闭工具集内：`replace_clips` 可一次替换多个既有 `shot_index`（每个保持对应时间线时长，视频源范围须已验证且严格等于该时长，图片源范围为零）；`insert_clips` 可在任意位置插入新镜头以延长画面（视频源范围须已验证，时长等于源窗口；图片须零源范围并提供正 `durationMs`）；`change_clip_duration` 在不超出已验证源范围的前提下重定时长与起止点；`reorder_clips` 的 `order` 必须是全部既有 `shot_index` 的完整排列。每次变更都会创建新 `TimelineVersion` 并记录前后变化；`ask_user` 仅返回澄清问题，不创建任何产物。`synthesize_voiceover` 在画面短于配音时返回可恢复错误 `voiceover_longer_than_picture`，禁止写入 `freeze_frame`；模型应 `insert_clips`/`change_clip_duration`/`replace_clips` 补足后再重试。`full_script` 故事板在配音 Provider 可用时走音频优先：Phase 1 后先合成旁白，用真实时长驱动 Phase 2/3，并尽量落一条带配音的时间线。**无论 `full_script` 还是 `key_message`**，时间线就绪后只要有 `narrationText` 且 Provider 已配置，Agent 与前端都会走同一套 `auto_synthesize_storyboard_voiceover`；已有旁白轨则跳过，失败只提示不挡预览。
 
 `render_preview` 会把已启用的 `textTracks` 编译为 ASS，再通过 FFmpeg/libass 叠加；已验证的最小 Jianying 文本矩阵包含 Unicode 文案。适配器对每条文本素材的嵌套 `content` JSON 使用 Unicode 转义，已在当前剪映 11.2 实机验收中文正确显示。适配器也可写入描边、背景、阴影及五个剪映内置字体资源，但这些字段在实机视觉验收前仍不是可交付能力。
 
@@ -264,3 +268,5 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-08-31）：Agent `generate_storyboard` 成功后自动串联 timeline 与 preview；前端移除 storyboard 确认 UI 与 `confirmStoryboardAndPreview` invoke。Task Resolver 低置信度默认继续当前任务。`confirm_storyboard_and_preview` Tauri 命令保留兼容。见 docs/changes/2026-08-31-streamline-storyboard-to-preview.md。
 维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；storyboard Phase 3 改为「模型全局主创 + Rust 结构化修复包回传」。`enforce_phase3_scope` 重写为 `collect_phase3_issues`，一次收集候选的全部结构性问题（beat 乱序、越池素材、beat 内重复素材、首镜头被换、uncovered beat 被补镜头等）并附 `allowedChanges`，`needs_model_decision=false` 的问题（请求失败、可机械修正的字段）不入模型、其余打包成 `RepairPacket` JSON 注入下一轮 Phase 3 prompt，模型只修被点名的镜头、不重写整条 storyboard；纯机械的子镜头字段标准化仍在 Rust 内无条件执行。主要失败信息归一到修复包第一条 issue 的 message，供任务终态与日志使用。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
 维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；RepairPacket 升级为 agent repair loop 的完整上下文：① `frozenShots`——未被问题点名的镜头视为已确认正确，prompt 明确「保持不动，除非修复其他问题确需改动」；② `previousShots`——模型每次 Phase 3 是独立请求无对话上下文，修复包携带上一轮候选的精简快照（序号/beat/asset/时长/源范围），模型据此"接着改"而不是重写全局；③ `repairHistory`——记录每轮修过什么问题类型、涉及哪些镜头、是否已解决，提示模型不要回退已修复内容；prompt 措辞为"你是编辑、规则是边界不是微指令"，避免限制模型发挥。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
+维护记录（2026-09-03）：公开契约不变；Storyboard 改为五阶段（本地 Top-12 去重补位 → 选 2–3 → 精修时间段 → 校验），单步重试分传输/语义预算，失败带 `partialCandidateSummary`，debug 可开 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
+维护记录（2026-09-03）：本地安全上限抬至 100 镜/beat；短 brief 偏 key_message/≤45s；Phase5 结构失败不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。

@@ -21,6 +21,7 @@
 | Jianying 仅视频 + 受限文本草稿 | ✅ 已实现（实验性）| |
 | Jamendo 在线音乐下载 | ✅ 已实现（实验性）| Jianying UI 试听待验收 |
 | ElevenLabs 文案转配音 | ✅ 已实现 | 密钥进 Credential Manager；旁白轨 + alignment 字幕 + preview 混音 |
+| Fish Audio 文案转配音 | ✅ 已实现 | `s2.1-pro-free` 时间戳流；配置后优先使用且失败不切换 Provider |
 | Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
@@ -131,7 +132,7 @@ Windows 桌面应用（Tauri + React）
 
 视觉建议是 AI 建议，不是经验证的媒体事实。文本语义召回和关键帧清晰度评分已经实现；跨镜头的多帧视觉重复检测仍为 `TODO`。
 
-storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只用于模型明确认为已有证据直接支撑的信息点；`contextual` 只用于诚实的场景承载并在选片理由中说明限制。模型同时提出 `targetDurationMs` 与 `scriptMode`（完整文案或关键表达）；镜头数、信息点数和时长不再是固定创作规格，只保留 30 镜头/信息点、120 秒的本地处理安全上限。生成校验拒绝 `insufficient`、未知/重复信息点、未覆盖且未声明缺失的信息点、跨镜头重叠复用的同一视频源范围，以及完整英文文案被压缩到低于最低阅读时长的 storyboard。`uncoveredBeatIds` 是创作缺口，不进入内部时间线；界面会提示该缺口，用户可据此补充素材或接受现有上下文剪辑。
+storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只用于模型明确认为已有证据直接支撑的信息点；`contextual` 只用于诚实的场景承载并在选片理由中说明限制。模型同时提出 `targetDurationMs` 与 `scriptMode`（完整文案或关键表达）；镜头数、信息点数和时长不再是固定创作规格，只保留 **100** 镜头/信息点、120 秒的本地处理安全上限。短目标默认偏关键表达与较短成片，避免把提纲扩成无必要的长旁白。生成校验拒绝 `insufficient`、未知/重复信息点、未覆盖且未声明缺失的信息点、跨镜头重叠复用的同一视频源范围，以及完整英文文案被压缩到低于最低阅读时长的 storyboard。`uncoveredBeatIds` 是创作缺口，不进入内部时间线；界面会提示该缺口，用户可据此补充素材或接受现有上下文剪辑。
 
 ## 数据所有权与安全
 
@@ -267,9 +268,11 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 文本轨的 `layer` 是可交付的叠放语义：local preview 把它写入 ASS event layer，Jianying adapter 按 layer 创建独立且命名的文本轨。一个文本轨内不允许 cue 时间重叠，以匹配 Jianying 轨道段的约束；不同 layer 可以重叠并按层级显示。
 
-## 配音（ElevenLabs，2026-08-20）
+## 配音（Fish Audio / ElevenLabs，2026-09-04）
 
-有明确配音/旁白请求时才授权合成；“生成/剪辑视频”本身不隐式授权付费语音调用。用户只说配音、没给文案时，`generate_storyboard` 仍可为每个镜头写 `narrationText` 口播，确认后 `synthesize_voiceover` 用这条旁白，不得朗读 `onScreenText`。配音 HTTP 失败时时间线和预览仍保留，不得把确认整段标成失败。没有时间线时必须先走分镜确认。文案只来自 `synthesize_voiceover.text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager；可从本机 `ELEVENLABS_API_KEY` 一次性导入，运行时不偷读环境变量。默认 Charlie，缺失则失败并列出可用音色。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。`list_assets` 只报库存，不选镜头。`generate_storyboard` 先列 beats，再对每个 beat 从技术 `ready` 的可访问视频池中取出最多 12 个匹配预选（可读关键帧网格），挑到故事板满足或诚实留空；图片、音频和其他类型不用于补足候选数量。可空字符串参数把空串当成 null。
+分镜完成后，若 storyboard 有 `narrationText`、语音 Provider 已配置、且时间线尚无旁白轨，则 **自动合成配音**（`key_message` 与 `full_script` 均适用）：Agent `generate_storyboard` 与前端成果区共用 `auto_synthesize_storyboard_voiceover`。合成失败只提示，不挡预览；已有旁白轨则跳过。`full_script` 的 audio-first 仍只在 Phase1 后锁时长，其后自动配音因已有轨而跳过。
+
+显式 `synthesize_voiceover` / `synthesize_storyboard_voiceover` 仍可用。文案只来自请求 `text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager。配音时长是时钟：旁白 cue 等于完整音频，画面可以略长，不得截断口播；过短画面用 freeze-frame 派生段补尾。字幕只使用 TTS alignment，并只替换系统生成轨。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。超时不自动重试以免重复扣费。
 
 ## 本地音乐轨（2026-08-12）
 
@@ -281,9 +284,9 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 三阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats。Phase 2 先把素材池硬过滤为技术分析 `ready`、`kind = video`、未排除且源文件可访问，再针对每个 beat 独立预排序并提供最多 12 个候选。预排序优先使用安装包内置 `bge-small-zh-v1.5` 比较 beat 与 subjects/actions/products/scene/OCR 拼接文本的余弦相似度，失败或旧素材无有效向量时回退英文词元/中文相邻双字；同时叠加关键帧清晰度、时长、当前 Storyboard 累计复用、连续复用和按剪辑任务去重的历史使用次数。每次复用累计扣 15 分，连续复用额外扣 30 分；上一镜头的素材硬排除，40% 次数上限按已经实际选中的镜头数动态计算，因此 uncovered beat 不会改变预选与最终校验口径。模型随后读取候选卡、场景段和可用关键帧网格，返回 1 个视频、源时间范围、理由及 `matchLevel`，或诚实留空。Phase 3 只调整时间与节奏，必须按已有 rough shot（已覆盖 beat）顺序一对一返回镜头，保持 uncovered beat 不变，不得拆分、合并、增删或重排；Rust 再验证素材、范围和多样性。验证失败最多反馈重试 3 次，Phase 1/2 结果保持稳定。实现位于 `src-tauri/src/storyboard/phases.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏关键表达/较短成片；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（可诚实 uncovered）。Phase 4 只定源时间段与旁白拆分保流畅，禁止换片。Phase 5 Rust `normalize` 自修后硬校验；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
-storyboard 生成会记录详细日志：入口参数（project_id、editing_task_id、brief 长度）、素材库存统计（总数、视觉就绪数、视频/图片/音频/其他分类计数）、素材样本（前 10 个的 ID/类型/时长）、Phase 1 完成（beats 数量、target_duration）、Phase 2 每个 beat 的专属 TOP-12 清单（asset_id + kind）、Phase 2 完成（shots 数量、uncovered beats）、Phase 3 每次尝试进度、多模态内容构建、模型请求/响应、候选接收情况（shots/beats/时长/未覆盖 beats）、归一化修正（视频范围修正、脚本模式降级）、验证结果及最终失败总结，所有日志使用 Rust `log` crate 的 info/warn/error 级别。素材样本日志可快速识别素材池中视频/图片的实际比例，用于诊断数据库分类与文件系统不一致等异常情况。模型传输复用进程级 `ureq::Agent` 以共享 keep-alive 连接，同时保留每次请求超时。自定义 API 可配置独立粗视觉 Model，空值沿用主 Model；OAuth 不猜测未经验证的替代模型。
+storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 
 关键帧统一缩放到 320px 宽后计算拉普拉斯方差，取归一化中位数作为素材质量分；旧素材在首次 storyboard 前从既有关键帧补齐。视觉 evidence 写入后生成 512 维文本向量；向量与模型名、维度、版本、证据文本 SHA-256 一起保存在素材 `metadata_json`。旧素材按项目批量补齐，条件更新避免覆盖并发视觉分析；向量只供 Rust 排序，不进入 Provider payload。历史使用次数来自每个剪辑任务最新时间线，同一任务重复镜头只计一次。
 
@@ -318,3 +321,5 @@ storyboard 生成会记录详细日志：入口参数（project_id、editing_tas
 维护记录（2026-08-19）：Provider 新增协议无关的 ModelTurn/ModelOutputItem/FunctionCall。Responses 完整 response.output、Responses SSE item、Chat Completions 普通响应与 SSE tool-call 增量均可解析；自定义 Chat 适配器保留 tools/tool_choice/parallel_tool_calls，并将函数调用历史映射为 assistant.tool_calls 与 tool_call_id。Legacy Runtime、Router、LoopGoal 和副作用流程不变，store:false 不影响 output item 保留。
 维护记录（2026-08-27）：`agentloop/tools.rs` 集中维护完整工具目录（含常驻控制工具 `load_tools` 与普通只读诊断工具 `read_logs`）、主链及交付工具；Provider 每轮只接收 `load_tools` 与最多 5 个已加载业务 schema。每项使用 strict JSON Schema 与 additionalProperties=false；严格 schema 的所有属性都列入 required，语义可选值使用 nullable 类型并由 Native loop 再次校验长度、范围和枚举。模型不携带 projectId、conversationId 或本地路径；领域执行仍由既有 apply_skill 负责，许可证、文字兼容矩阵、确认门与领域算法不移入工具适配层。
 维护记录（2026-08-27）：Rust 后端 dead-code 警告清理；删除旧单阶段 `request_storyboard` 与场景检测遗留代码，三阶段 storyboard 生产链路不变。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
+维护记录（2026-09-03）：Storyboard 改为五阶段选片/精修分离，单步重试与 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
+维护记录（2026-09-03）：安全上限 100 镜/beat；短 brief 时长收敛；Phase5 路由。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。

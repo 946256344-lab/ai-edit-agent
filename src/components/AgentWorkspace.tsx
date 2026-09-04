@@ -77,8 +77,18 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         <textarea
           value={model.input}
           onChange={(event) => actions.setInput(event.target.value)}
-          placeholder="描述目标、提问或下达剪辑指令..."
+          placeholder="描述目标、提问或下达剪辑指令...（Enter 发送，Shift+Enter 换行）"
           rows={2}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+              return
+            }
+            event.preventDefault()
+            if (model.isSending || !model.input.trim()) {
+              return
+            }
+            event.currentTarget.form?.requestSubmit()
+          }}
         />
         <div>
           <span className={model.composerNotice ? 'composer-notice' : undefined}>

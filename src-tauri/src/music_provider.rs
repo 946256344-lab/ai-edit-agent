@@ -452,6 +452,283 @@ pub fn import_elevenlabs_api_key_from_environment() -> ElevenLabsStatus {
     save_elevenlabs_api_key(api_key)
 }
 
+pub(crate) mod fish_audio {
+    // Fish Audio 配音凭据与有界 HTTP 适配器。
+    // API Key 仅存 Windows Credential Manager；对外只返回连接状态和标准化音频/时间戳。
+
+    use base64::Engine;
+    use keyring::Entry;
+    use serde::Serialize;
+    use serde_json::{json, Value};
+    use std::{collections::BTreeMap, io::Read, time::Duration};
+
+    const CREDENTIAL_SERVICE: &str = "AssemblyVideoAgent";
+    const CREDENTIAL_ACCOUNT: &str = "fish-audio-voice-provider";
+    const API_ROOT: &str = "https://api.fish.audio";
+    const MODEL: &str = "s2.1-pro-free";
+    const TIMEOUT: Duration = Duration::from_secs(90);
+    const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FishAudioStatus {
+        pub key_stored: bool,
+        pub voices_readable: bool,
+        pub last_error_code: Option<String>,
+        pub importable: bool,
+    }
+
+    fn entry() -> Result<Entry, String> {
+        Entry::new(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
+            .map_err(|_| "Fish Audio Credential Manager is unavailable.".to_owned())
+    }
+
+    fn stored_key() -> Result<String, String> {
+        entry()?
+            .get_password()
+            .map_err(|_| "Fish Audio voice Provider is not configured.".to_owned())
+            .and_then(|value| {
+                let value = value.trim();
+                (!value.is_empty())
+                    .then(|| value.to_owned())
+                    .ok_or_else(|| "Fish Audio voice Provider is not configured.".to_owned())
+            })
+    }
+
+    fn environment_key() -> Option<String> {
+        std::env::var("FISH_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+
+    pub(crate) fn configured_for_snapshot() -> Result<bool, String> {
+        match entry()?.get_password() {
+            Ok(value) => Ok(!value.trim().is_empty()),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(_) => {
+                Err("Windows Credential Manager could not read Fish Audio credentials.".to_owned())
+            }
+        }
+    }
+
+    fn request(method: &str, path: &str, body: Option<Value>) -> Result<ureq::Response, String> {
+        let key = stored_key()?;
+        let url = format!("{API_ROOT}{path}");
+        let mut request = if method == "POST" {
+            ureq::post(&url)
+        } else {
+            ureq::get(&url)
+        };
+        request = request
+            .set("Authorization", &format!("Bearer {key}"))
+            .set("Accept", "application/json")
+            .timeout(TIMEOUT);
+        let result = if let Some(body) = body {
+            request
+                .set("Content-Type", "application/json")
+                .set("model", MODEL)
+                .send_string(&body.to_string())
+        } else {
+            request.call()
+        };
+        result.map_err(|error| match error {
+            ureq::Error::Status(401, _) => "Fish Audio API key was rejected.".to_owned(),
+            ureq::Error::Status(402, _) => {
+                "Fish Audio account cannot use the selected TTS model.".to_owned()
+            }
+            ureq::Error::Status(code, _) => format!("Fish Audio API error {code}."),
+            ureq::Error::Transport(transport) => {
+                let message = transport.to_string().to_ascii_lowercase();
+                if message.contains("timed out") || message.contains("timeout") {
+                    "Fish Audio request timed out.".to_owned()
+                } else {
+                    "Fish Audio is unavailable.".to_owned()
+                }
+            }
+        })
+    }
+
+    pub(crate) fn list_voices() -> Result<Value, String> {
+        let response = request("GET", "/model?page_size=20&page_number=1&self=true", None)?;
+        let payload: Value = serde_json::from_reader(response.into_reader())
+            .map_err(|_| "Fish Audio returned an invalid voice list.".to_owned())?;
+        let voices = payload
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let id = item.get("_id")?.as_str()?;
+                let name = item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unnamed");
+                Some(json!({ "voice_id": id, "name": name, "category": "fish_audio" }))
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({ "voices": voices }))
+    }
+
+    pub(crate) fn synthesize(text: &str, reference_id: Option<&str>) -> Result<Value, String> {
+        let mut body =
+            json!({ "text": text, "format": "mp3", "sample_rate": 44100, "mp3_bitrate": 128 });
+        if let Some(reference_id) = reference_id.filter(|value| !value.trim().is_empty()) {
+            body["reference_id"] = json!(reference_id);
+        }
+        let response = request("POST", "/v1/tts/stream/with-timestamp", Some(body))?;
+        let mut raw = String::new();
+        response
+            .into_reader()
+            .take(MAX_RESPONSE_BYTES + 1)
+            .read_to_string(&mut raw)
+            .map_err(|_| "Fish Audio response was interrupted.".to_owned())?;
+        if raw.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err("Fish Audio returned an unusable audio payload.".to_owned());
+        }
+        let mut audio = Vec::new();
+        let mut alignments = BTreeMap::<i64, Value>::new();
+        for line in raw.lines().filter_map(|line| line.strip_prefix("data: ")) {
+            let event: Value = serde_json::from_str(line)
+                .map_err(|_| "Fish Audio returned an invalid timestamp stream.".to_owned())?;
+            let encoded = event
+                .get("audio_base64")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !encoded.is_empty() {
+                audio.extend(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .map_err(|_| "Fish Audio returned invalid audio encoding.".to_owned())?,
+                );
+            }
+            if let (Some(sequence), Some(alignment)) = (
+                event.get("chunk_seq").and_then(Value::as_i64),
+                event.get("alignment").filter(|value| value.is_object()),
+            ) {
+                let offset = event
+                    .get("chunk_audio_offset_sec")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let mut value = alignment.clone();
+                value["offset"] = json!(offset);
+                alignments.insert(sequence, value);
+            }
+        }
+        if audio.is_empty() {
+            return Err("Fish Audio did not return audio.".to_owned());
+        }
+        let segments = alignments
+            .into_values()
+            .flat_map(|alignment| {
+                let offset = alignment
+                    .get("offset")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                alignment
+                    .get("segments")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |mut segment| {
+                        if let Some(start) = segment.get("start").and_then(Value::as_f64) {
+                            segment["start"] = json!(start + offset);
+                        }
+                        if let Some(end) = segment.get("end").and_then(Value::as_f64) {
+                            segment["end"] = json!(end + offset);
+                        }
+                        segment
+                    })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "audio_base64": base64::engine::general_purpose::STANDARD.encode(audio),
+            "alignment": { "segments": segments }
+        }))
+    }
+
+    fn status() -> FishAudioStatus {
+        let key_stored = stored_key().is_ok();
+        let importable = !key_stored && environment_key().is_some();
+        if !key_stored {
+            return FishAudioStatus {
+                key_stored: false,
+                voices_readable: false,
+                last_error_code: None,
+                importable,
+            };
+        }
+        match list_voices() {
+            Ok(_) => FishAudioStatus {
+                key_stored: true,
+                voices_readable: true,
+                last_error_code: None,
+                importable: false,
+            },
+            Err(error) => FishAudioStatus {
+                key_stored: true,
+                voices_readable: false,
+                last_error_code: Some(
+                    if error.contains("rejected") {
+                        "unauthorized"
+                    } else {
+                        "fish_audio_error"
+                    }
+                    .to_owned(),
+                ),
+                importable: false,
+            },
+        }
+    }
+
+    #[tauri::command]
+    pub fn get_fish_audio_status() -> FishAudioStatus {
+        status()
+    }
+
+    #[tauri::command]
+    pub fn save_fish_audio_api_key(api_key: String) -> FishAudioStatus {
+        if entry()
+            .and_then(|entry| {
+                entry
+                    .set_password(api_key.trim())
+                    .map_err(|_| "Could not save Fish Audio credentials.".to_owned())
+            })
+            .is_err()
+        {
+            return FishAudioStatus {
+                key_stored: false,
+                voices_readable: false,
+                last_error_code: Some("credential_store_failed".to_owned()),
+                importable: environment_key().is_some(),
+            };
+        }
+        status()
+    }
+
+    #[tauri::command]
+    pub fn clear_fish_audio_api_key() -> FishAudioStatus {
+        if let Ok(entry) = entry() {
+            let _ = entry.delete_credential();
+        }
+        status()
+    }
+
+    #[tauri::command]
+    pub fn import_fish_audio_api_key_from_environment() -> FishAudioStatus {
+        match environment_key() {
+            Some(key) => save_fish_audio_api_key(key),
+            None => FishAudioStatus {
+                key_stored: false,
+                voices_readable: false,
+                last_error_code: Some("environment_key_missing".to_owned()),
+                importable: false,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{allowed, attribution_for, classify_elevenlabs_http_error, JamendoTrack};

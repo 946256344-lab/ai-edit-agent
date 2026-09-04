@@ -66,7 +66,12 @@ pub(crate) struct RepairRecord {
 }
 
 impl RepairRecord {
-    pub(crate) fn new(round: usize, kind: impl Into<String>, shots: Vec<i64>, resolved: bool) -> Self {
+    pub(crate) fn new(
+        round: usize,
+        kind: impl Into<String>,
+        shots: Vec<i64>,
+        resolved: bool,
+    ) -> Self {
         RepairRecord {
             round,
             kind: kind.into(),
@@ -168,7 +173,11 @@ pub(crate) fn repair_packet_prompt_block(packet: &RepairPacket) -> String {
             packet.attempt
         ));
     } else {
-        let resolved = packet.repair_history.iter().filter(|record| record.resolved).count();
+        let resolved = packet
+            .repair_history
+            .iter()
+            .filter(|record| record.resolved)
+            .count();
         lines.push(format!(
             "You are in repair round {} of {MAX_REPAIR_ATTEMPTS}. Previous rounds resolved {resolved} issue(s); the issues below remain open.",
             packet.attempt
@@ -211,7 +220,11 @@ pub(crate) fn repair_packet_prompt_block(packet: &RepairPacket) -> String {
                     record.round,
                     record.kind,
                     record.shots,
-                    if record.resolved { "resolved" } else { "still open" }
+                    if record.resolved {
+                        "resolved"
+                    } else {
+                        "still open"
+                    }
                 )
             })
             .collect::<Vec<_>>()

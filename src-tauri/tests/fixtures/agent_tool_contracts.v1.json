@@ -432,11 +432,13 @@
       ],
       "produces": [
         "storyboard_version",
-        "timeline_version_when_audio_first_succeeds"
+        "timeline_version_when_audio_first_succeeds",
+        "quality_warnings_when_completion_gaps_remain"
       ],
       "returns": [
         "storyboardVersionId",
-        "versionNumber"
+        "versionNumber",
+        "qualityWarnings"
       ]
     },
     {

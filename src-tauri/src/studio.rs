@@ -140,7 +140,8 @@ fn asset_kind_and_duration(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| "素材不存在或尚未完成分析".to_owned())?;
-    let v: serde_json::Value = serde_json::from_str(&metadata_json).unwrap_or(serde_json::json!({}));
+    let v: serde_json::Value =
+        serde_json::from_str(&metadata_json).unwrap_or(serde_json::json!({}));
     let duration = v.get("durationMs").and_then(|x| x.as_i64());
     Ok((kind, duration))
 }
@@ -156,7 +157,10 @@ fn recompute_positions(clips: &mut [TimelineClip]) {
 }
 
 #[tauri::command]
-pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Result<StudioCommitResult, String> {
+pub fn commit_studio_edits(
+    app: AppHandle,
+    payload: StudioCommitPayload,
+) -> Result<StudioCommitResult, String> {
     let connection = open_connection(&app)?;
     let base = load_timeline_version(&connection, &payload.timeline_version_id)?;
     if base.project_id != payload.project_id {
@@ -183,7 +187,8 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
             if deleted.len() >= clips.len() {
                 return Err("至少保留一个镜头".to_owned());
             }
-            let existing: std::collections::HashSet<i64> = clips.iter().map(|c| c.shot_index).collect();
+            let existing: std::collections::HashSet<i64> =
+                clips.iter().map(|c| c.shot_index).collect();
             for s in &deleted {
                 if !existing.contains(s) {
                     return Err(format!("待删除镜头 {s} 不存在"));
@@ -225,20 +230,40 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
     if let Some(repls) = payload.clip_replacements {
         if !repls.is_empty() {
             let mut seen = std::collections::HashSet::new();
-            for r in &repls { if !seen.insert(r.shot_index) { return Err(format!("替换中镜头 {} 重复", r.shot_index)); } }
             for r in &repls {
-                let idx = clips.iter().position(|c| c.shot_index == r.shot_index).ok_or_else(|| format!("镜头 {} 不存在", r.shot_index))?;
-                if r.asset_id.is_empty() { return Err("替换缺少 assetId".to_owned()); }
+                if !seen.insert(r.shot_index) {
+                    return Err(format!("替换中镜头 {} 重复", r.shot_index));
+                }
+            }
+            for r in &repls {
+                let idx = clips
+                    .iter()
+                    .position(|c| c.shot_index == r.shot_index)
+                    .ok_or_else(|| format!("镜头 {} 不存在", r.shot_index))?;
+                if r.asset_id.is_empty() {
+                    return Err("替换缺少 assetId".to_owned());
+                }
                 let dur = clips[idx].timeline_end_ms - clips[idx].timeline_start_ms;
                 let src_dur = r.source_end_ms - r.source_start_ms;
-                if src_dur != dur { return Err(format!("镜头 {} 替换源时长与槽位时长不一致", r.shot_index)); }
-                if r.source_start_ms < 0 { return Err("替换源起点不能为负".to_owned()); }
-                let (kind, file_dur_opt) = asset_kind_and_duration(&connection, &payload.project_id, &r.asset_id)?;
+                if src_dur != dur {
+                    return Err(format!("镜头 {} 替换源时长与槽位时长不一致", r.shot_index));
+                }
+                if r.source_start_ms < 0 {
+                    return Err("替换源起点不能为负".to_owned());
+                }
+                let (kind, file_dur_opt) =
+                    asset_kind_and_duration(&connection, &payload.project_id, &r.asset_id)?;
                 if kind == "video" {
-                    if r.source_end_ms > file_dur_opt.unwrap_or(i64::MAX) { return Err(format!("镜头 {} 替换超出素材时长", r.shot_index)); }
+                    if r.source_end_ms > file_dur_opt.unwrap_or(i64::MAX) {
+                        return Err(format!("镜头 {} 替换超出素材时长", r.shot_index));
+                    }
                 } else if kind == "image" {
-                    if r.source_start_ms != 0 || r.source_end_ms != 0 { return Err(format!("镜头 {} 图片源必须为 0", r.shot_index)); }
-                } else { return Err(format!("镜头 {} 不支持的素材类型", r.shot_index)); }
+                    if r.source_start_ms != 0 || r.source_end_ms != 0 {
+                        return Err(format!("镜头 {} 图片源必须为 0", r.shot_index));
+                    }
+                } else {
+                    return Err(format!("镜头 {} 不支持的素材类型", r.shot_index));
+                }
                 clips[idx].asset_id = r.asset_id.clone();
                 clips[idx].source_start_ms = r.source_start_ms;
                 clips[idx].source_end_ms = r.source_end_ms;
@@ -257,7 +282,9 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
                 }
             }
             for adj in &adjs {
-                let idx = clips.iter().position(|c| c.shot_index == adj.shot_index)
+                let idx = clips
+                    .iter()
+                    .position(|c| c.shot_index == adj.shot_index)
                     .ok_or_else(|| format!("镜头 {} 不存在", adj.shot_index))?;
                 let orig = clips[idx].clone();
                 if adj.new_duration_ms < 200 || adj.new_duration_ms > 12000 {
@@ -266,7 +293,8 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
                 if adj.new_source_start_ms < 0 {
                     return Err("源起点不能为负".to_owned());
                 }
-                let (kind, duration_opt) = asset_kind_and_duration(&connection, &payload.project_id, &orig.asset_id)?;
+                let (kind, duration_opt) =
+                    asset_kind_and_duration(&connection, &payload.project_id, &orig.asset_id)?;
                 if kind == "video" {
                     let dur = duration_opt.ok_or_else(|| "视频素材无时长".to_owned())?;
                     if adj.new_source_start_ms + adj.new_duration_ms > dur {
@@ -305,12 +333,15 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
                 }
                 let src_dur = ins.source_end_ms - ins.source_start_ms;
                 // For video, source window must equal timeline duration (1:1), for image src must be 0
-                let (kind, file_dur_opt) = asset_kind_and_duration(&connection, &payload.project_id, &ins.asset_id)?;
+                let (kind, file_dur_opt) =
+                    asset_kind_and_duration(&connection, &payload.project_id, &ins.asset_id)?;
                 if kind == "video" {
                     if src_dur != dur {
                         return Err("插入视频片段源时长与时间线时长不一致".to_owned());
                     }
-                    if ins.source_start_ms < 0 || ins.source_end_ms > file_dur_opt.unwrap_or(i64::MAX) {
+                    if ins.source_start_ms < 0
+                        || ins.source_end_ms > file_dur_opt.unwrap_or(i64::MAX)
+                    {
                         return Err("插入片段超出素材时长".to_owned());
                     }
                 } else if kind == "image" {
@@ -326,12 +357,19 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
                     timeline_start_ms: 0, // will recompute
                     timeline_end_ms: dur, // duration placeholder
                     on_screen_text: ins.on_screen_text,
-                    clip_kind: if ins.derived_from_shot_index.is_some() { "derived".to_owned() } else { "source".to_owned() },
+                    clip_kind: if ins.derived_from_shot_index.is_some() {
+                        "derived".to_owned()
+                    } else {
+                        "source".to_owned()
+                    },
                     derived_from_shot_index: ins.derived_from_shot_index,
                     fit_reason: None,
                 };
                 // Insert after derived parent if found
-                if let Some(parent_idx) = ins.derived_from_shot_index.and_then(|p| clips.iter().position(|c| c.shot_index == p)) {
+                if let Some(parent_idx) = ins
+                    .derived_from_shot_index
+                    .and_then(|p| clips.iter().position(|c| c.shot_index == p))
+                {
                     clips.insert(parent_idx + 1, new_clip);
                 } else {
                     // Fallback: append in timelineStart order (sorted insert by timelineStartMs)
@@ -348,7 +386,8 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
     // text tracks
     if let Some(mut new_tracks) = payload.text_tracks {
         let duration_ms = clips.iter().map(|c| c.timeline_end_ms).max().unwrap_or(0);
-        validate_text_tracks(&mut new_tracks, duration_ms).map_err(|e| format!("字幕校验失败: {e}"))?;
+        validate_text_tracks(&mut new_tracks, duration_ms)
+            .map_err(|e| format!("字幕校验失败: {e}"))?;
         text_tracks = new_tracks;
         applied.push("text".to_owned());
     }
@@ -357,22 +396,56 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
     let mut voiceover_tracks = base.voiceover_tracks.clone();
     if let Some(new_tracks) = payload.music_tracks {
         for track in &new_tracks {
-            if track.cues.iter().any(|c| !(0.0..=2.0).contains(&c.volume)) { return Err("音乐音量需在 0–2 之间".to_owned()); }
+            if track.cues.iter().any(|c| !(0.0..=2.0).contains(&c.volume)) {
+                return Err("音乐音量需在 0–2 之间".to_owned());
+            }
         }
-        music_tracks = new_tracks.into_iter().map(|t| crate::models::MusicTrack { id: t.id, enabled: t.enabled, cues: t.cues }).collect();
+        music_tracks = new_tracks
+            .into_iter()
+            .map(|t| crate::models::MusicTrack {
+                id: t.id,
+                enabled: t.enabled,
+                cues: t.cues,
+            })
+            .collect();
         applied.push("audio_volume".to_owned());
     }
     if let Some(new_tracks) = payload.voiceover_tracks {
         for track in &new_tracks {
-            if track.cues.iter().any(|c| !(0.0..=2.0).contains(&c.volume)) { return Err("旁白音量需在 0–2 之间".to_owned()); }
+            if track.cues.iter().any(|c| !(0.0..=2.0).contains(&c.volume)) {
+                return Err("旁白音量需在 0–2 之间".to_owned());
+            }
         }
         // voiceoverTracks uses VoiceoverCue type; MusicCue and VoiceoverCue share volume field but need conversion
-        voiceover_tracks = new_tracks.into_iter().map(|t| {
-            let cues = t.cues.into_iter().map(|c| crate::models::VoiceoverCue {
-                id: c.id, asset_id: c.asset_id, generation_id: String::new(), source_start_ms: c.source_start_ms, source_end_ms: c.source_end_ms, timeline_start_ms: c.timeline_start_ms, timeline_end_ms: c.timeline_end_ms, volume: c.volume, fade_in_ms: c.fade_in_ms, fade_out_ms: c.fade_out_ms, provider: String::new(), voice_id: String::new(), voice_name: String::new(),
-            }).collect();
-            crate::models::VoiceoverTrack { id: t.id, enabled: t.enabled, cues }
-        }).collect();
+        voiceover_tracks = new_tracks
+            .into_iter()
+            .map(|t| {
+                let cues = t
+                    .cues
+                    .into_iter()
+                    .map(|c| crate::models::VoiceoverCue {
+                        id: c.id,
+                        asset_id: c.asset_id,
+                        generation_id: String::new(),
+                        source_start_ms: c.source_start_ms,
+                        source_end_ms: c.source_end_ms,
+                        timeline_start_ms: c.timeline_start_ms,
+                        timeline_end_ms: c.timeline_end_ms,
+                        volume: c.volume,
+                        fade_in_ms: c.fade_in_ms,
+                        fade_out_ms: c.fade_out_ms,
+                        provider: String::new(),
+                        voice_id: String::new(),
+                        voice_name: String::new(),
+                    })
+                    .collect();
+                crate::models::VoiceoverTrack {
+                    id: t.id,
+                    enabled: t.enabled,
+                    cues,
+                }
+            })
+            .collect();
         // preserve original generation/provider per cue if exists
         for vt in &mut voiceover_tracks {
             if let Some(orig) = base.voiceover_tracks.iter().find(|o| o.id == vt.id) {
@@ -386,16 +459,21 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
                 }
             }
         }
-        if !applied.contains(&"audio_volume".to_owned()) { applied.push("audio_volume".to_owned()); }
+        if !applied.contains(&"audio_volume".to_owned()) {
+            applied.push("audio_volume".to_owned());
+        }
     }
 
     // overlay
     let mut overlay_clips = base.overlay_clips.clone();
     if let Some(deleted) = payload.overlay_deleted_shot_indices {
         if !deleted.is_empty() {
-            let existing: std::collections::HashSet<i64> = overlay_clips.iter().map(|c| c.shot_index).collect();
+            let existing: std::collections::HashSet<i64> =
+                overlay_clips.iter().map(|c| c.shot_index).collect();
             for s in &deleted {
-                if !existing.contains(s) { return Err(format!("叠加待删除镜头 {s} 不存在")); }
+                if !existing.contains(s) {
+                    return Err(format!("叠加待删除镜头 {s} 不存在"));
+                }
             }
             let del_set: std::collections::HashSet<i64> = deleted.into_iter().collect();
             overlay_clips.retain(|c| !del_set.contains(&c.shot_index));
@@ -404,38 +482,73 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
     }
     if let Some(order) = payload.overlay_reorder {
         if !order.is_empty() {
-            if order.len() != overlay_clips.len() { return Err("叠加排序必须包含全部叠加镜头".to_owned()); }
+            if order.len() != overlay_clips.len() {
+                return Err("叠加排序必须包含全部叠加镜头".to_owned());
+            }
             let mut seen = std::collections::HashSet::new();
-            for s in &order { if !seen.insert(*s) { return Err(format!("叠加排序中镜头 {s} 重复")); } }
-            let existing: std::collections::HashSet<i64> = overlay_clips.iter().map(|c| c.shot_index).collect();
-            if order.iter().any(|s| !existing.contains(s)) { return Err("叠加排序包含不存在的镜头".to_owned()); }
-            let map: std::collections::HashMap<i64, TimelineClip> = overlay_clips.into_iter().map(|c| (c.shot_index, c)).collect();
-            overlay_clips = order.iter().map(|s| map.get(s).cloned().expect("existing overlay")).collect();
+            for s in &order {
+                if !seen.insert(*s) {
+                    return Err(format!("叠加排序中镜头 {s} 重复"));
+                }
+            }
+            let existing: std::collections::HashSet<i64> =
+                overlay_clips.iter().map(|c| c.shot_index).collect();
+            if order.iter().any(|s| !existing.contains(s)) {
+                return Err("叠加排序包含不存在的镜头".to_owned());
+            }
+            let map: std::collections::HashMap<i64, TimelineClip> = overlay_clips
+                .into_iter()
+                .map(|c| (c.shot_index, c))
+                .collect();
+            overlay_clips = order
+                .iter()
+                .map(|s| map.get(s).cloned().expect("existing overlay"))
+                .collect();
             applied.push("overlay_reorder".to_owned());
         }
     }
     if let Some(adjs) = payload.overlay_adjustments {
         if !adjs.is_empty() {
             let mut seen = std::collections::HashSet::new();
-            for a in &adjs { if !seen.insert(a.shot_index) { return Err(format!("叠加时长调整中镜头 {} 重复", a.shot_index)); } }
+            for a in &adjs {
+                if !seen.insert(a.shot_index) {
+                    return Err(format!("叠加时长调整中镜头 {} 重复", a.shot_index));
+                }
+            }
             for adj in &adjs {
-                let idx = overlay_clips.iter().position(|c| c.shot_index == adj.shot_index).ok_or_else(|| format!("叠加镜头 {} 不存在", adj.shot_index))?;
-                if adj.new_duration_ms < 200 || adj.new_duration_ms > 12000 { return Err("叠加片段时长需在 200–12000ms 之间".to_owned()); }
-                if adj.new_source_start_ms < 0 || adj.new_timeline_start_ms < 0 { return Err("叠加源/时间起点不能为负".to_owned()); }
+                let idx = overlay_clips
+                    .iter()
+                    .position(|c| c.shot_index == adj.shot_index)
+                    .ok_or_else(|| format!("叠加镜头 {} 不存在", adj.shot_index))?;
+                if adj.new_duration_ms < 200 || adj.new_duration_ms > 12000 {
+                    return Err("叠加片段时长需在 200–12000ms 之间".to_owned());
+                }
+                if adj.new_source_start_ms < 0 || adj.new_timeline_start_ms < 0 {
+                    return Err("叠加源/时间起点不能为负".to_owned());
+                }
                 let orig = overlay_clips[idx].clone();
-                let (kind, dur_opt) = asset_kind_and_duration(&connection, &payload.project_id, &orig.asset_id)?;
+                let (kind, dur_opt) =
+                    asset_kind_and_duration(&connection, &payload.project_id, &orig.asset_id)?;
                 if kind == "video" {
                     let dur = dur_opt.ok_or_else(|| "叠加视频素材无时长".to_owned())?;
-                    if adj.new_source_start_ms + adj.new_duration_ms > dur { return Err(format!("叠加镜头 {} 超出素材时长", adj.shot_index)); }
+                    if adj.new_source_start_ms + adj.new_duration_ms > dur {
+                        return Err(format!("叠加镜头 {} 超出素材时长", adj.shot_index));
+                    }
                     overlay_clips[idx].source_start_ms = adj.new_source_start_ms;
-                    overlay_clips[idx].source_end_ms = adj.new_source_start_ms + adj.new_duration_ms;
+                    overlay_clips[idx].source_end_ms =
+                        adj.new_source_start_ms + adj.new_duration_ms;
                 } else if kind == "image" {
-                    if adj.new_source_start_ms != 0 { return Err("叠加图片源起点必须为 0".to_owned()); }
+                    if adj.new_source_start_ms != 0 {
+                        return Err("叠加图片源起点必须为 0".to_owned());
+                    }
                     overlay_clips[idx].source_start_ms = 0;
                     overlay_clips[idx].source_end_ms = 0;
-                } else { return Err("不支持的叠加素材类型".to_owned()); }
+                } else {
+                    return Err("不支持的叠加素材类型".to_owned());
+                }
                 overlay_clips[idx].timeline_start_ms = adj.new_timeline_start_ms;
-                overlay_clips[idx].timeline_end_ms = adj.new_timeline_start_ms + adj.new_duration_ms;
+                overlay_clips[idx].timeline_end_ms =
+                    adj.new_timeline_start_ms + adj.new_duration_ms;
                 overlay_clips[idx].on_screen_text = orig.on_screen_text.clone();
             }
             applied.push("overlay_duration".to_owned());
@@ -443,21 +556,45 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
     }
     if let Some(inserted) = payload.overlay_inserted {
         if !inserted.is_empty() {
-            let mut next_shot_index = overlay_clips.iter().map(|c| c.shot_index).max().unwrap_or(10000 - 1) + 1;
-            if next_shot_index < 10000 { next_shot_index = 10000; }
+            let mut next_shot_index = overlay_clips
+                .iter()
+                .map(|c| c.shot_index)
+                .max()
+                .unwrap_or(10000 - 1)
+                + 1;
+            if next_shot_index < 10000 {
+                next_shot_index = 10000;
+            }
             for ins in inserted {
-                if ins.asset_id.is_empty() { return Err("叠加插入缺少 assetId".to_owned()); }
+                if ins.asset_id.is_empty() {
+                    return Err("叠加插入缺少 assetId".to_owned());
+                }
                 let dur = ins.timeline_end_ms - ins.timeline_start_ms;
-                if dur < 200 || dur > 12000 { return Err("叠加插入时长需在 200–12000ms 之间".to_owned()); }
-                if ins.timeline_start_ms < 0 { return Err("叠加插入起点不能为负".to_owned()); }
+                if dur < 200 || dur > 12000 {
+                    return Err("叠加插入时长需在 200–12000ms 之间".to_owned());
+                }
+                if ins.timeline_start_ms < 0 {
+                    return Err("叠加插入起点不能为负".to_owned());
+                }
                 let src_dur = ins.source_end_ms - ins.source_start_ms;
-                let (kind, file_dur_opt) = asset_kind_and_duration(&connection, &payload.project_id, &ins.asset_id)?;
+                let (kind, file_dur_opt) =
+                    asset_kind_and_duration(&connection, &payload.project_id, &ins.asset_id)?;
                 if kind == "video" {
-                    if src_dur != dur { return Err("叠加视频源时长与时间线时长不一致".to_owned()); }
-                    if ins.source_start_ms < 0 || ins.source_end_ms > file_dur_opt.unwrap_or(i64::MAX) { return Err("叠加插入超出素材时长".to_owned()); }
+                    if src_dur != dur {
+                        return Err("叠加视频源时长与时间线时长不一致".to_owned());
+                    }
+                    if ins.source_start_ms < 0
+                        || ins.source_end_ms > file_dur_opt.unwrap_or(i64::MAX)
+                    {
+                        return Err("叠加插入超出素材时长".to_owned());
+                    }
                 } else if kind == "image" {
-                    if ins.source_start_ms != 0 || ins.source_end_ms != 0 { return Err("叠加图片源必须为 0".to_owned()); }
-                } else { return Err("不支持的叠加素材类型".to_owned()); }
+                    if ins.source_start_ms != 0 || ins.source_end_ms != 0 {
+                        return Err("叠加图片源必须为 0".to_owned());
+                    }
+                } else {
+                    return Err("不支持的叠加素材类型".to_owned());
+                }
                 overlay_clips.push(TimelineClip {
                     shot_index: next_shot_index,
                     asset_id: ins.asset_id,
@@ -532,5 +669,8 @@ pub fn commit_studio_edits(app: AppHandle, payload: StudioCommitPayload) -> Resu
         params![Uuid::new_v4().to_string(), payload.project_id, payload.editing_task_id, conversation_id, new_id, before_json, after_json, created_at],
     ).map_err(|e| e.to_string())?;
 
-    Ok(StudioCommitResult { timeline: new_version, applied })
+    Ok(StudioCommitResult {
+        timeline: new_version,
+        applied,
+    })
 }

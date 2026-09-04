@@ -465,7 +465,7 @@ fn run_confirmation_sequence_pipeline(
 
     let message = if voiceover_failed.is_some() {
         format!(
-            "已确认 storyboard v{}，已创建时间线 v{} 并生成预览。配音未写入：ElevenLabs 拒绝了本次语音请求。可再说一次「配音」重试。",
+            "已确认 storyboard v{}，已创建时间线 v{} 并生成预览。配音服务拒绝了本次语音请求。可再说一次「配音」重试。",
             storyboard.version_number, timeline_version_number
         )
     } else {

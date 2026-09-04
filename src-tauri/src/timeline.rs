@@ -232,13 +232,8 @@ fn apply_text_template(cue: &mut TextCue, track_role: &str) -> Result<(), String
         return Ok(());
     };
     let expected_role = match template_id {
-        "subtitle_safe"
-        | "subtitle_douyin"
-        | "subtitle_variety"
-        | "subtitle_newsbar"
-        | "subtitle_karaoke"
-        | "subtitle_bubble"
-        | "subtitle_impact" => "subtitle",
+        "subtitle_safe" | "subtitle_douyin" | "subtitle_variety" | "subtitle_newsbar"
+        | "subtitle_karaoke" | "subtitle_bubble" | "subtitle_impact" => "subtitle",
         "headline_rise" => "headline",
         "headline_pop" => "headline",
         "headline_drop" => "headline",
@@ -435,40 +430,196 @@ fn apply_text_template(cue: &mut TextCue, track_role: &str) -> Result<(), String
             None,
         ),
         "subtitle_douyin" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.062, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#FFD400".to_owned()), stroke_width: 7.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 1, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.88, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 180, intensity: 0.65 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.062,
+                bold: true,
+                color: "#FFFFFF".to_owned(),
+                stroke_color: Some("#FFD400".to_owned()),
+                stroke_width: 7.0,
+                shadow: true,
+                background_color: None,
+                alignment: "center".to_owned(),
+                letter_spacing: 1,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.86,
+                max_width: 0.88,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "pop".to_owned(),
+                duration_ms: 180,
+                intensity: 0.65,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 140,
+                intensity: 0.5,
+            }),
         ),
         "subtitle_variety" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.068, bold: true, color: "#FFEB3B".to_owned(), stroke_color: Some("#FF4D00".to_owned()), stroke_width: 6.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 1, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.84, max_width: 0.86, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 180, intensity: 0.7 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.068,
+                bold: true,
+                color: "#FFEB3B".to_owned(),
+                stroke_color: Some("#FF4D00".to_owned()),
+                stroke_width: 6.0,
+                shadow: true,
+                background_color: None,
+                alignment: "center".to_owned(),
+                letter_spacing: 1,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.84,
+                max_width: 0.86,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "pop".to_owned(),
+                duration_ms: 180,
+                intensity: 0.7,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 140,
+                intensity: 0.5,
+            }),
         ),
         "subtitle_newsbar" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.05, bold: true, color: "#FFFFFF".to_owned(), stroke_color: None, stroke_width: 0.0, shadow: false, background_color: Some("#CC000000".to_owned()), alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.92, max_width: 1.0, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 160, intensity: 0.5 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 160, intensity: 0.5 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.05,
+                bold: true,
+                color: "#FFFFFF".to_owned(),
+                stroke_color: None,
+                stroke_width: 0.0,
+                shadow: false,
+                background_color: Some("#CC000000".to_owned()),
+                alignment: "center".to_owned(),
+                letter_spacing: 0,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.92,
+                max_width: 1.0,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 160,
+                intensity: 0.5,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 160,
+                intensity: 0.5,
+            }),
         ),
         "subtitle_karaoke" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.06, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#000000".to_owned()), stroke_width: 5.0, shadow: false, background_color: None, alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.88, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 120, intensity: 0.4 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 120, intensity: 0.4 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.06,
+                bold: true,
+                color: "#FFFFFF".to_owned(),
+                stroke_color: Some("#000000".to_owned()),
+                stroke_width: 5.0,
+                shadow: false,
+                background_color: None,
+                alignment: "center".to_owned(),
+                letter_spacing: 0,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.86,
+                max_width: 0.88,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 120,
+                intensity: 0.4,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 120,
+                intensity: 0.4,
+            }),
         ),
         "subtitle_bubble" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.06, bold: true, color: "#0F172A".to_owned(), stroke_color: None, stroke_width: 0.0, shadow: false, background_color: Some("#FFE600".to_owned()), alignment: "center".to_owned(), letter_spacing: 0, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.80, max_width: 0.80, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 200, intensity: 0.7 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.06,
+                bold: true,
+                color: "#0F172A".to_owned(),
+                stroke_color: None,
+                stroke_width: 0.0,
+                shadow: false,
+                background_color: Some("#FFE600".to_owned()),
+                alignment: "center".to_owned(),
+                letter_spacing: 0,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.80,
+                max_width: 0.80,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "pop".to_owned(),
+                duration_ms: 200,
+                intensity: 0.7,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 140,
+                intensity: 0.5,
+            }),
         ),
         "subtitle_impact" => (
-            TextStyle { font_key: "jianying_default".to_owned(), font_size: 0.068, bold: true, color: "#FFFFFF".to_owned(), stroke_color: Some("#00E5FF".to_owned()), stroke_width: 8.0, shadow: true, background_color: None, alignment: "center".to_owned(), letter_spacing: 2, line_spacing: 0 },
-            TextLayout { anchor: "bottom".to_owned(), x: 0.5, y: 0.86, max_width: 0.86, safe_area: "title_safe".to_owned() },
-            Some(TextAnimation { template_id: "pop".to_owned(), duration_ms: 200, intensity: 0.7 }),
-            Some(TextAnimation { template_id: "fade".to_owned(), duration_ms: 140, intensity: 0.5 }),
+            TextStyle {
+                font_key: "jianying_default".to_owned(),
+                font_size: 0.068,
+                bold: true,
+                color: "#FFFFFF".to_owned(),
+                stroke_color: Some("#00E5FF".to_owned()),
+                stroke_width: 8.0,
+                shadow: true,
+                background_color: None,
+                alignment: "center".to_owned(),
+                letter_spacing: 2,
+                line_spacing: 0,
+            },
+            TextLayout {
+                anchor: "bottom".to_owned(),
+                x: 0.5,
+                y: 0.86,
+                max_width: 0.86,
+                safe_area: "title_safe".to_owned(),
+            },
+            Some(TextAnimation {
+                template_id: "pop".to_owned(),
+                duration_ms: 200,
+                intensity: 0.7,
+            }),
+            Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 140,
+                intensity: 0.5,
+            }),
         ),
         _ => unreachable!("template role was checked above"),
     };
@@ -1074,7 +1225,9 @@ pub(crate) fn insert_clips(
                 .position(|clip| clip.shot_index == after)
                 .map(|index| index + 1)
                 .ok_or_else(|| {
-                    format!("insert_after_shot_index {after} does not exist on the current timeline.")
+                    format!(
+                        "insert_after_shot_index {after} does not exist on the current timeline."
+                    )
                 })?,
         };
         let clip = TimelineClip {
@@ -1099,7 +1252,10 @@ pub(crate) fn insert_clips(
 
     // Apply from the end so earlier insert indexes stay valid relative to the original list.
     let mut clips = timeline.clips.clone();
-    prepared.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.shot_index.cmp(&a.1.shot_index)));
+    prepared.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.shot_index.cmp(&a.1.shot_index))
+    });
     for (insert_at, clip) in prepared {
         let at = insert_at.min(clips.len());
         clips.insert(at, clip);

@@ -419,7 +419,10 @@ pub fn create_jianying_draft(
             return Err(format!("Overlay clip {} is not a video asset.", index + 1));
         }
         if !Path::new(&source_reference).is_file() {
-            return Err(format!("Overlay source media file {} is unavailable.", index + 1));
+            return Err(format!(
+                "Overlay source media file {} is unavailable.",
+                index + 1
+            ));
         }
         overlay_clips.push(serde_json::json!({
             "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,

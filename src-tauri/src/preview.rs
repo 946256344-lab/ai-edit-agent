@@ -286,7 +286,11 @@ fn composite_overlay_clips(
     let mut last_label = "0:v".to_owned();
     for (i, (_, start, end)) in overlays.iter().enumerate() {
         let idx = i + 1;
-        let out_label = if i + 1 == overlays.len() { "outv".to_owned() } else { format!("tmp{i}") };
+        let out_label = if i + 1 == overlays.len() {
+            "outv".to_owned()
+        } else {
+            format!("tmp{i}")
+        };
         let enable = format!("between(t,{start:.3},{end:.3})");
         filter_parts.push(format!(
             "[{last_label}][ov{idx}]overlay=W-w-16:16:enable='{enable}'[{out_label}]"
@@ -294,7 +298,19 @@ fn composite_overlay_clips(
         last_label = out_label;
     }
     let filter_complex = filter_parts.join(";");
-    cmd.args(["-filter_complex", &filter_complex, "-map", "[outv]", "-c:v", "libx264", "-preset", "veryfast", "-movflags", "+faststart", "-an"]);
+    cmd.args([
+        "-filter_complex",
+        &filter_complex,
+        "-map",
+        "[outv]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-movflags",
+        "+faststart",
+        "-an",
+    ]);
     cmd.arg(out);
     let status = cmd
         .status()

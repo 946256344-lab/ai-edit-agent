@@ -1,5 +1,5 @@
-//! ElevenLabs 配音领域：指纹缓存、alignment 字幕与时间线写入。
-//! 密钥和 HTTP 由 `music_provider` 拥有；本模块不访问 Credential Manager 或网络。
+//! 配音领域：Provider 选择、指纹缓存、alignment 字幕与时间线写入。
+//! 密钥和 HTTP 由各 Provider 模块拥有；本模块不访问 Credential Manager 或网络。
 
 use crate::assets::{store_downloaded_audio, wait_for_asset_ready};
 use crate::models::{TextAnimation, TextCue, TextLayout, TextStyle, TextTrack, TimelineVersion};
@@ -56,6 +56,8 @@ pub(crate) struct VoiceoverManifest {
     fingerprint: String,
     pub(crate) voice_id: String,
     pub(crate) voice_name: String,
+    #[serde(default = "default_provider_name")]
+    pub(crate) provider: String,
     model_id: String,
     duration_ms: i64,
     status: String,
@@ -79,6 +81,25 @@ pub(crate) struct AudioFirstPrepared {
 pub(crate) trait VoiceTransport {
     fn get_json(&self, path: &str) -> Result<Value, String>;
     fn post_json(&self, path: &str, body: Value) -> Result<Value, String>;
+    fn provider_name(&self) -> &'static str {
+        "ElevenLabs"
+    }
+    fn model_id(&self) -> &'static str {
+        DEFAULT_MODEL_ID
+    }
+    fn voice_settings(&self) -> &'static str {
+        DEFAULT_VOICE_SETTINGS
+    }
+    fn output_format(&self) -> &'static str {
+        OUTPUT_FORMAT
+    }
+    fn resolve_voice(
+        &self,
+        requested: Option<&str>,
+        voices: &[VoiceSummary],
+    ) -> Result<(String, String), String> {
+        resolve_voice_id(requested, voices)
+    }
 }
 
 struct ElevenLabsTransport;
@@ -90,6 +111,58 @@ impl VoiceTransport for ElevenLabsTransport {
 
     fn post_json(&self, path: &str, body: Value) -> Result<Value, String> {
         elevenlabs_json_request("POST", path, Some(body))
+    }
+}
+
+struct FishAudioTransport;
+
+impl VoiceTransport for FishAudioTransport {
+    fn get_json(&self, _path: &str) -> Result<Value, String> {
+        crate::music_provider::fish_audio::list_voices()
+    }
+
+    fn post_json(&self, _path: &str, body: Value) -> Result<Value, String> {
+        let text = body.get("text").and_then(Value::as_str).unwrap_or("");
+        let voice_id = body.get("voice_id").and_then(Value::as_str);
+        crate::music_provider::fish_audio::synthesize(text, voice_id)
+    }
+
+    fn provider_name(&self) -> &'static str {
+        "Fish Audio"
+    }
+    fn model_id(&self) -> &'static str {
+        "s2.1-pro-free"
+    }
+    fn voice_settings(&self) -> &'static str {
+        "default"
+    }
+    fn output_format(&self) -> &'static str {
+        "mp3_44100_128"
+    }
+    fn resolve_voice(
+        &self,
+        requested: Option<&str>,
+        _voices: &[VoiceSummary],
+    ) -> Result<(String, String), String> {
+        Ok(requested
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| (value.to_owned(), "Selected voice".to_owned()))
+            .unwrap_or_else(|| (String::new(), "Default".to_owned())))
+    }
+}
+
+fn default_provider_name() -> String {
+    "ElevenLabs".to_owned()
+}
+
+fn active_transport() -> Result<&'static dyn VoiceTransport, String> {
+    static FISH: FishAudioTransport = FishAudioTransport;
+    static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
+    if crate::music_provider::fish_audio::configured_for_snapshot()? {
+        Ok(&FISH)
+    } else {
+        Ok(&ELEVENLABS)
     }
 }
 
@@ -224,6 +297,24 @@ pub(crate) fn cues_from_alignment(
     alignment: &Value,
     voice_duration_ms: i64,
 ) -> Result<Vec<AlignmentCue>, String> {
+    if let Some(segments) = alignment.get("segments").and_then(Value::as_array) {
+        let cues = segments
+            .iter()
+            .filter_map(|segment| {
+                let text = segment.get("text")?.as_str()?.trim().to_owned();
+                let start_ms = (segment.get("start")?.as_f64()? * 1000.0).floor() as i64;
+                let end_ms = (segment.get("end")?.as_f64()? * 1000.0).ceil() as i64;
+                (!text.is_empty() && end_ms > start_ms).then_some(AlignmentCue {
+                    start_ms: start_ms.max(0),
+                    end_ms: end_ms.min(voice_duration_ms),
+                    text,
+                })
+            })
+            .collect::<Vec<_>>();
+        return (!cues.is_empty())
+            .then_some(cues)
+            .ok_or_else(|| "incomplete_alignment".to_owned());
+    }
     let characters = alignment
         .get("characters")
         .and_then(Value::as_array)
@@ -516,7 +607,7 @@ pub(crate) fn prepare_audio_first(
         .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
     let root = voiceover_root(app, project_id)?;
     let (cached, _audio, alignment, reused) =
-        synthesize_with_transport(&ElevenLabsTransport, &normalized, requested_voice_id, &root)?;
+        synthesize_with_transport(active_transport()?, &normalized, requested_voice_id, &root)?;
     let mp3_path = cached.directory.join("voiceover.mp3");
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
     cues_from_alignment(&alignment, duration_ms)?;
@@ -544,15 +635,15 @@ pub(crate) fn synthesize_with_transport(
     requested_voice_id: Option<&str>,
     root: &Path,
 ) -> Result<(CachedVoiceover, Vec<u8>, Value, bool), String> {
-    let text = validate_narration_text(text, DEFAULT_MODEL_ID)?;
+    let text = validate_narration_text(text, transport.model_id())?;
     let voices = voices_from_payload(&transport.get_json("/voices")?);
-    let (voice_id, voice_name) = resolve_voice_id(requested_voice_id, &voices)?;
+    let (voice_id, voice_name) = transport.resolve_voice(requested_voice_id, &voices)?;
     let fingerprint = generation_fingerprint(
         &text,
         &voice_id,
-        DEFAULT_MODEL_ID,
-        DEFAULT_VOICE_SETTINGS,
-        OUTPUT_FORMAT,
+        transport.model_id(),
+        transport.voice_settings(),
+        transport.output_format(),
     );
     if let Some(cached) = read_cached_generation(root, &fingerprint) {
         let audio = fs::read(cached.directory.join("voiceover.mp3"))
@@ -567,7 +658,11 @@ pub(crate) fn synthesize_with_transport(
         "/text-to-speech/{}/with-timestamps?output_format={OUTPUT_FORMAT}",
         urlencoding_minimal(&voice_id)
     );
-    let payload = transport.post_json(&path, tts_request_body(&text))?;
+    let mut request_body = tts_request_body(&text);
+    if !voice_id.is_empty() {
+        request_body["voice_id"] = json!(&voice_id);
+    }
+    let payload = transport.post_json(&path, request_body)?;
     let audio = decode_audio_payload(&payload)?;
     let alignment = alignment_payload(&payload)?.clone();
     let generation_id = Uuid::new_v4().to_string();
@@ -577,7 +672,8 @@ pub(crate) fn synthesize_with_transport(
         fingerprint,
         voice_id: voice_id.clone(),
         voice_name: voice_name.clone(),
-        model_id: DEFAULT_MODEL_ID.to_owned(),
+        provider: transport.provider_name().to_owned(),
+        model_id: transport.model_id().to_owned(),
         duration_ms: 0,
         status: "success".to_owned(),
     };
@@ -614,9 +710,8 @@ fn urlencoding_minimal(value: &str) -> String {
 }
 
 pub(crate) fn list_voices_for_agent() -> Result<Vec<VoiceSummary>, String> {
-    Ok(voices_from_payload(
-        &ElevenLabsTransport.get_json("/voices")?,
-    ))
+    let transport = active_transport()?;
+    Ok(voices_from_payload(&transport.get_json("/voices")?))
 }
 
 pub(crate) fn resolve_tool_narration_text(
@@ -666,7 +761,7 @@ pub(crate) fn synthesize_voiceover_for_timeline(
         .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
     let root = voiceover_root(app, project_id)?;
     let (cached, _audio, alignment, reused) =
-        synthesize_with_transport(&ElevenLabsTransport, text, voice_id, &root)?;
+        synthesize_with_transport(active_transport()?, text, voice_id, &root)?;
     let mp3_path = cached.directory.join("voiceover.mp3");
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
     let subtitle_track = match cues_from_alignment(&alignment, duration_ms) {
@@ -685,7 +780,10 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     let Some(subtitle_track) = subtitle_track else {
         return Err("Voiceover alignment is incomplete; subtitles were not committed.".to_owned());
     };
-    let display_name = format!("ElevenLabs: {} voiceover", cached.manifest.voice_name);
+    let display_name = format!(
+        "{}: {} voiceover",
+        cached.manifest.provider, cached.manifest.voice_name
+    );
     let asset = store_downloaded_audio(app, project_id, mp3_path.clone(), &display_name)?;
     let asset = wait_for_asset_ready(app, project_id, &asset.id)?;
     let cue_count = subtitle_track.cues.len();
@@ -739,24 +837,99 @@ pub fn synthesize_storyboard_voiceover(
     if timeline.project_id != project_id {
         return Err("Timeline does not belong to this project.".to_owned());
     }
-    let storyboard = crate::storyboard::load_storyboard_version(
-        &connection,
-        &timeline.storyboard_version_id,
-    )?;
-    let narration = storyboard_narration_text(Some(&storyboard))
-        .ok_or_else(|| "Storyboard has no narration text to synthesize.".to_owned())?;
-    let (_version, result) = synthesize_voiceover_for_timeline(
+    match auto_synthesize_storyboard_voiceover(
         &app,
-        &connection,
         &project_id,
         &editing_task_id,
         &conversation_id,
-        "",
         &timeline,
+    )? {
+        Some((_version, result)) => Ok(result),
+        None => {
+            // 已有旁白轨：对前端返回软成功，避免误报「配音不可用」。
+            if let Some(cue) = timeline
+                .voiceover_tracks
+                .iter()
+                .flat_map(|track| track.cues.iter())
+                .next()
+            {
+                let subtitle_cue_count = timeline
+                    .text_tracks
+                    .iter()
+                    .map(|track| track.cues.len())
+                    .sum();
+                return Ok(VoiceoverApplyResult {
+                    asset_id: cue.asset_id.clone(),
+                    generation_id: cue.generation_id.clone(),
+                    duration_ms: (cue.timeline_end_ms - cue.timeline_start_ms).max(0),
+                    timeline_version_id: timeline.id.clone(),
+                    subtitle_cue_count,
+                    reused_cache: true,
+                    quality_warnings: Vec::new(),
+                });
+            }
+            Err("Storyboard has no narration text to synthesize.".to_owned())
+        }
+    }
+}
+
+fn voice_provider_configured() -> Result<bool, String> {
+    Ok(crate::music_provider::fish_audio::configured_for_snapshot()?
+        || crate::music_provider::elevenlabs_configured_for_snapshot()?)
+}
+
+/// 时间线就绪后统一自动配音（Agent / 前端共用）。
+///
+/// - `Ok(Some)`：已合成并写出新 timeline 版本  
+/// - `Ok(None)`：已有旁白轨或无可朗读 narration，跳过  
+/// - `Err`：Provider 未配置或合成失败（调用方应提示，但不挡预览）
+pub(crate) fn auto_synthesize_storyboard_voiceover(
+    app: &AppHandle,
+    project_id: &str,
+    editing_task_id: &str,
+    conversation_id: &str,
+    timeline: &TimelineVersion,
+) -> Result<Option<(TimelineVersion, VoiceoverApplyResult)>, String> {
+    if !timeline.voiceover_tracks.is_empty() {
+        log::info!(
+            "Auto voiceover skipped: timeline {} already has voiceover tracks",
+            timeline.id
+        );
+        return Ok(None);
+    }
+    if !voice_provider_configured()? {
+        return Err(
+            "voice_provider_unconfigured: Voice Provider is not configured in settings."
+                .to_owned(),
+        );
+    }
+    let connection = crate::db::open_connection(app)?;
+    let storyboard =
+        crate::storyboard::load_storyboard_version(&connection, &timeline.storyboard_version_id)?;
+    let Some(narration) = storyboard_narration_text(Some(&storyboard)) else {
+        log::info!(
+            "Auto voiceover skipped: storyboard {} has no narrationText",
+            timeline.storyboard_version_id
+        );
+        return Ok(None);
+    };
+    log::info!(
+        "Auto voiceover: synthesizing for timeline {} (narration_chars={})",
+        timeline.id,
+        narration.chars().count()
+    );
+    let (version, result) = synthesize_voiceover_for_timeline(
+        app,
+        &connection,
+        project_id,
+        editing_task_id,
+        conversation_id,
+        "",
+        timeline,
         &narration,
         None,
     )?;
-    Ok(result)
+    Ok(Some((version, result)))
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ export type CustomApiStatus = {
 }
 
 export type ElevenLabsStatus = { keyStored: boolean; voicesReadable: boolean; ttsAuthorized: boolean | null; lastErrorCode: string | null; importable: boolean }
+export type FishAudioStatus = { keyStored: boolean; voicesReadable: boolean; lastErrorCode: string | null; importable: boolean }
 
 export type StoredProject = { id: string; name: string; createdAt: number; updatedAt: number }
 
@@ -339,6 +340,10 @@ export async function getElevenLabsStatus() { requireDesktopRuntime(); return in
 export async function saveElevenLabsApiKey(apiKey: string) { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('save_elevenlabs_api_key', { apiKey }) }
 export async function clearElevenLabsApiKey() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('clear_elevenlabs_api_key') }
 export async function importElevenLabsApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('import_elevenlabs_api_key_from_environment') }
+export async function getFishAudioStatus() { requireDesktopRuntime(); return invoke<FishAudioStatus>('get_fish_audio_status') }
+export async function saveFishAudioApiKey(apiKey: string) { requireDesktopRuntime(); return invoke<FishAudioStatus>('save_fish_audio_api_key', { apiKey }) }
+export async function clearFishAudioApiKey() { requireDesktopRuntime(); return invoke<FishAudioStatus>('clear_fish_audio_api_key') }
+export async function importFishAudioApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<FishAudioStatus>('import_fish_audio_api_key_from_environment') }
 
 export async function listProjects() { requireDesktopRuntime(); return invoke<StoredProject[]>('list_projects') }
 export async function createProject(name: string) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name }) }

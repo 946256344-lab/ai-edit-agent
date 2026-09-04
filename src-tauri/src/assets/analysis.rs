@@ -1145,23 +1145,26 @@ fn query_visual_failed_assets(
         })
         .map_err(|error| error.to_string())?
         .filter_map(|row| row.ok())
-        .filter_map(|(asset_id, display_name, source_reference, metadata_json)| {
-            if !asset_source_available(&source_reference) {
-                return None;
-            }
-            let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-            if representative_frame(&metadata, "video").is_some()
-                || representative_frame(&metadata, "image").is_some()
-            {
-                Some(FailedAssetRetryCandidate {
-                    asset_id,
-                    display_name,
-                    stage: "visual",
-                })
-            } else {
-                None
-            }
-        })
+        .filter_map(
+            |(asset_id, display_name, source_reference, metadata_json)| {
+                if !asset_source_available(&source_reference) {
+                    return None;
+                }
+                let metadata: TechnicalMetadata =
+                    serde_json::from_str(&metadata_json).unwrap_or_default();
+                if representative_frame(&metadata, "video").is_some()
+                    || representative_frame(&metadata, "image").is_some()
+                {
+                    Some(FailedAssetRetryCandidate {
+                        asset_id,
+                        display_name,
+                        stage: "visual",
+                    })
+                } else {
+                    None
+                }
+            },
+        )
         .collect::<Vec<_>>();
     Ok(rows)
 }
@@ -1249,12 +1252,16 @@ fn collect_failed_assets_for_retry(
 
     let mut candidates = Vec::new();
     if stage.includes_technical() {
-        candidates.extend(query_technical_failed_assets(connection, project_id, limit)?);
+        candidates.extend(query_technical_failed_assets(
+            connection, project_id, limit,
+        )?);
     }
     if stage.includes_visual() {
         let remaining = limit.saturating_sub(candidates.len());
         if remaining > 0 {
-            candidates.extend(query_visual_failed_assets(connection, project_id, remaining)?);
+            candidates.extend(query_visual_failed_assets(
+                connection, project_id, remaining,
+            )?);
         }
     }
     Ok(candidates)

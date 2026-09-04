@@ -436,8 +436,6 @@ type NativeRespond<'a> = dyn FnMut(&Value, Duration) -> Result<String, String> +
 type NativeExecute<'a> = dyn FnMut(&FunctionCall, usize) -> Result<Value, String> + 'a;
 type NativeRefreshSnapshot<'a> = dyn FnMut() -> Result<Option<Value>, String> + 'a;
 
-
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct NativeRunReceipt {
     requires_project_observation: bool,
@@ -1014,9 +1012,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "get_timeline" | "render_preview" | "create_jianying_draft" => {
             coerce_blank_strings_to_null(&mut value, &["timelineVersionId"]);
         }
-        "transcribe_asset" => {
-            coerce_blank_strings_to_null(&mut value, &["assetId", "language"])
-        }
+        "transcribe_asset" => coerce_blank_strings_to_null(&mut value, &["assetId", "language"]),
         "synthesize_voiceover" => {
             coerce_blank_strings_to_null(&mut value, &["text", "voiceId", "timelineVersionId"])
         }
@@ -1059,9 +1055,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1083,15 +1077,17 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             Ok(value)
         }
         "retry_failed_asset_analysis" => {
-            if object.iter().any(|(key, _)| !["stage", "assetIds", "limit"].contains(&key.as_str()))
+            if object
+                .iter()
+                .any(|(key, _)| !["stage", "assetIds", "limit"].contains(&key.as_str()))
             {
                 return Err(invalid_arguments());
             }
             if let Some(stage) = object.get("stage") {
                 if !(stage.is_null()
-                    || stage.as_str().is_some_and(|stage| {
-                        matches!(stage, "technical" | "visual" | "both")
-                    }))
+                    || stage
+                        .as_str()
+                        .is_some_and(|stage| matches!(stage, "technical" | "visual" | "both")))
                 {
                     return Err(invalid_arguments());
                 }
@@ -1149,9 +1145,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(shots) = object["shots"].as_array() else {
@@ -1169,9 +1163,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(clips) = object["clips"].as_array() else {
@@ -1189,9 +1181,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(adjustments) = object["adjustments"].as_array() else {
@@ -1209,9 +1199,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(order) = object["order"].as_array() else {
@@ -1312,9 +1300,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1336,22 +1322,16 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             Ok(value)
         }
         "create_jianying_draft" => {
-            if object.len() != 1
-                || !object.contains_key("timelineVersionId")
-            {
+            if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1363,9 +1343,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(tracks) = object["textTracks"].as_array() else {
@@ -1384,9 +1362,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(object["timelineVersionId"].is_null()
-                || object["timelineVersionId"].is_string())
-            {
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
                 return Err(invalid_arguments());
             }
             let Some(tracks) = object["musicTracks"].as_array() else {
@@ -1405,8 +1381,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             {
                 return Err(invalid_arguments());
             }
-            if !(required_non_empty_string(&object["assetId"]))
-            {
+            if !(required_non_empty_string(&object["assetId"])) {
                 return Err(invalid_arguments());
             }
             if !(object["language"].is_null() || object["language"].is_string()) {
@@ -1419,9 +1394,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
 }
 
 fn required_non_empty_string(value: &Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|text| !text.trim().is_empty())
+    value.as_str().is_some_and(|text| !text.trim().is_empty())
 }
 
 fn coerce_blank_strings_to_null(value: &mut Value, keys: &[&str]) {
@@ -1724,11 +1697,8 @@ mod tests {
 
     #[test]
     fn ordinary_chat_receives_the_complete_tool_directory() {
-        let (_message, requests, _calls) = fixture_driver_with_policy(
-            "你好",
-            vec![HELLO],
-            json!({}),
-        );
+        let (_message, requests, _calls) =
+            fixture_driver_with_policy("你好", vec![HELLO], json!({}));
         let names = tool_names(&requests[0]);
         assert!(names.contains("list_assets"));
         for name in [
@@ -1839,7 +1809,8 @@ mod tests {
 
     #[test]
     fn read_logs_is_an_observation_tool_always_allowed() {
-        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"] {
+        for request in ["检查当前项目", "读取运行日志", "不要读取日志", "只查看日志"]
+        {
             let policy = RequestToolPolicy::from_request(request);
             assert!(native_tool_call_allowed(READ_LOGS, &policy), "{request}");
         }
@@ -2167,7 +2138,11 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect::<std::collections::HashSet<_>>();
-        for name in ["generate_storyboard", "create_timeline_draft", "replace_clips"] {
+        for name in [
+            "generate_storyboard",
+            "create_timeline_draft",
+            "replace_clips",
+        ] {
             assert!(
                 visible_names.contains(name),
                 "full catalog stays visible while confirmation is pending: {name}"
@@ -2706,7 +2681,10 @@ mod tests {
         drop(respond);
 
         assert!(error.contains("HTTP 429"));
-        assert_eq!(response_attempts, 2, "there must be no automatic provider retry");
+        assert_eq!(
+            response_attempts, 2,
+            "there must be no automatic provider retry"
+        );
         assert_eq!(
             calls,
             ["list_assets"],
@@ -3200,8 +3178,7 @@ mod tests {
         invalid_text_tracks["textTracks"][0]["cues"][0]["jianyingCompatibility"] =
             json!("deliverable");
         assert!(
-            parse_native_arguments("replace_text_tracks", &invalid_text_tracks.to_string())
-                .is_ok()
+            parse_native_arguments("replace_text_tracks", &invalid_text_tracks.to_string()).is_ok()
         );
 
         let music_tracks = json!({
@@ -3456,12 +3433,18 @@ mod tests {
         for request in ["生成预览", "你好", "怎么生成预览？", "不要生成预览"] {
             let policy = RequestToolPolicy::from_request(request);
             assert!(!policy.read_only, "{request}");
-            assert!(native_tool_call_allowed("render_preview", &policy), "{request}");
+            assert!(
+                native_tool_call_allowed("render_preview", &policy),
+                "{request}"
+            );
         }
         for request in ["只查看", "只检查，不要生成"] {
             let policy = RequestToolPolicy::from_request(request);
             assert!(policy.read_only, "{request}");
-            assert!(!native_tool_call_allowed("render_preview", &policy), "{request}");
+            assert!(
+                !native_tool_call_allowed("render_preview", &policy),
+                "{request}"
+            );
         }
     }
 
@@ -3584,9 +3567,8 @@ mod tests {
             "{}\nstoryboard: v3",
             crate::agentloop::snapshot::STATE_SNAPSHOT_PREFIX
         );
-        let mut input =
-            initial_native_input(Vec::new(), request, "", Ok(initial_snapshot))
-                .expect("build snapshot fixture input");
+        let mut input = initial_native_input(Vec::new(), request, "", Ok(initial_snapshot))
+            .expect("build snapshot fixture input");
         let mut responses = [MAIN_CHAIN_STORYBOARD_CALL, MAIN_CHAIN_CONFIRMATION_REPLY].into_iter();
         let mut requests = Vec::new();
         let mut respond = |payload: &Value, _timeout: Duration| {
@@ -3856,9 +3838,6 @@ mod tests {
             assert!(names.contains(name), "{name}");
         }
         assert!(names.contains("synthesize_voiceover"));
-        assert!(native_tool_call_allowed(
-            "synthesize_voiceover",
-            &policy
-        ));
+        assert!(native_tool_call_allowed("synthesize_voiceover", &policy));
     }
 }

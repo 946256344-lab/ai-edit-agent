@@ -53,7 +53,11 @@ pub fn transcribe_asset(
         return Err("Asset has not finished analysis; retry after it is ready.".to_owned());
     }
     let lang = language.unwrap_or("zh").trim().to_lowercase();
-    let lang = if lang.is_empty() { "zh".to_owned() } else { lang };
+    let lang = if lang.is_empty() {
+        "zh".to_owned()
+    } else {
+        lang
+    };
 
     let chunk = 2500_i64;
     let count = ((duration_ms + chunk - 1) / chunk).min(40) as usize;
@@ -61,18 +65,26 @@ pub fn transcribe_asset(
     let mut segments: Vec<TranscriptionSegment> = Vec::with_capacity(count);
     for idx in 0..count {
         let start = idx as i64 * per;
-        let end = if idx == count - 1 { duration_ms } else { (idx as i64 + 1) * per };
+        let end = if idx == count - 1 {
+            duration_ms
+        } else {
+            (idx as i64 + 1) * per
+        };
         segments.push(TranscriptionSegment {
             id: format!("seg-{}-{}", asset_id, idx),
             start_ms: start,
             end_ms: end,
-            text: format!("自动识别占位句 {}（接入 whisper.cpp 后替换为真实 ASR）", idx + 1),
+            text: format!(
+                "自动识别占位句 {}（接入 whisper.cpp 后替换为真实 ASR）",
+                idx + 1
+            ),
             confidence: 0.55,
         });
     }
 
     let warnings = vec![
-        "当前为本地占位分句；安装 whisper.cpp 模型后自动升级为真实语音识别，无需改工具契约。".to_owned(),
+        "当前为本地占位分句；安装 whisper.cpp 模型后自动升级为真实语音识别，无需改工具契约。"
+            .to_owned(),
     ];
 
     Ok(TranscribeAssetResult {

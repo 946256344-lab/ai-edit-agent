@@ -4,12 +4,17 @@
 mod keyframes;
 pub(crate) mod multimodal;
 pub(crate) mod phases;
+mod provider_trace;
 pub(crate) mod repair;
 mod scoring;
 pub(crate) mod semantic;
+mod step_retry;
 mod validation;
 
 use crate::storyboard::repair::{RepairPacket, StoryboardIssue};
+use crate::storyboard::step_retry::{
+    build_repair_packet, is_transport_or_parse_error, StepRetryBudget,
+};
 
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
@@ -27,9 +32,13 @@ use uuid::Uuid;
 /// Timeout for a single storyboard generation model request so a slow or hung
 /// provider never blocks the agent loop forever.
 const STORYBOARD_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_STORYBOARD_REVISIONS: usize = 3;
 const MAX_PHASE1_REVISIONS: usize = 3;
 const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
+/// 本地处理安全上限（非创作规格）；80s 成片允许更密的切镜。
+const MAX_STORYBOARD_SHOTS: usize = 100;
+const MAX_STORYBOARD_BEATS: usize = 100;
+/// 短 brief 且无实质口播稿时，非 audio-first 下的目标时长上限。
+const SHORT_BRIEF_TARGET_CAP_MS: i64 = 45_000;
 
 fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>) -> String {
     let message = message.into();
@@ -169,9 +178,11 @@ pub(crate) fn validate_storyboard(
     sources: &[StoryboardSource],
     brief: &str,
 ) -> Result<(), String> {
-    if content.shots.is_empty() || content.shots.len() > 30 {
+    if content.shots.is_empty() || content.shots.len() > MAX_STORYBOARD_SHOTS {
         return Err(storyboard_repair_message(
-            "Storyboard must contain between 1 and 30 shots for safe local processing.",
+            format!(
+                "Storyboard must contain between 1 and {MAX_STORYBOARD_SHOTS} shots for safe local processing."
+            ),
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
@@ -224,9 +235,11 @@ pub(crate) fn validate_storyboard(
             ));
         }
     }
-    if content.beats.is_empty() || content.beats.len() > 30 {
+    if content.beats.is_empty() || content.beats.len() > MAX_STORYBOARD_BEATS {
         return Err(storyboard_repair_message(
-            "Storyboard must contain between 1 and 30 narrative beats for safe local processing.",
+            format!(
+                "Storyboard must contain between 1 and {MAX_STORYBOARD_BEATS} narrative beats for safe local processing."
+            ),
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
@@ -391,27 +404,36 @@ fn validate_non_overlapping_video_sources(
     Ok(())
 }
 
-/// 校验镜头多样性：禁止连续使用同一素材，且同一素材占比不得超过 40%。
+/// 校验镜头多样性：禁止连续镜头使用同一素材的重叠/相同源范围，且同一素材占比不得超过 40%。
 fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<(), String> {
     if shots.len() < 2 {
         return Ok(());
     }
 
-    // 检查连续镜头是否使用同一素材
+    // 相邻同素材：仅当源范围相同或重叠时拒绝；不交叠的不同时段允许（跨 beat 衔接场景）。
     for window in shots.windows(2) {
         if window[0].asset_id == window[1].asset_id {
-            log::warn!(
-                "Consecutive shots use same asset: shot_{}={}, shot_{}={}",
-                window[0].order_index,
-                window[0].asset_id,
-                window[1].order_index,
-                window[1].asset_id
-            );
-            return Err(format!(
-                "Consecutive shots (index {} and {}) cannot use the same asset. Choose different footage to maintain visual variety. Try alternating between available assets or selecting non-adjacent time ranges from this asset.",
-                window[0].order_index,
-                window[1].order_index
-            ));
+            let a = &window[0];
+            let b = &window[1];
+            let overlapping =
+                a.source_start_ms < b.source_end_ms && b.source_start_ms < a.source_end_ms;
+            if overlapping {
+                log::warn!(
+                    "Consecutive shots use same asset with overlapping ranges: shot_{}={} [{}-{}], shot_{}={} [{}-{}]",
+                    a.order_index,
+                    a.asset_id,
+                    a.source_start_ms,
+                    a.source_end_ms,
+                    b.order_index,
+                    b.asset_id,
+                    b.source_start_ms,
+                    b.source_end_ms
+                );
+                return Err(format!(
+                    "Consecutive shots (index {} and {}) reuse asset '{}' with overlapping source ranges. Choose different footage or non-overlapping source ranges to maintain visual variety.",
+                    a.order_index, b.order_index, a.asset_id
+                ));
+            }
         }
     }
 
@@ -493,6 +515,66 @@ fn estimated_storyboard_duration_ms(brief: &str) -> i64 {
 
 fn minimum_storyboard_duration(brief: &str) -> i64 {
     estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
+}
+
+/// 短目标/提纲（无大段可朗读文案）不应被 Phase1 扩成 60–90s 全旁白。
+fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
+    estimated_storyboard_duration_ms(brief) >= 20_000
+}
+
+fn brief_requests_longer_runtime(brief: &str) -> bool {
+    let lower = brief.to_ascii_lowercase();
+    [
+        "分钟", "minute", "min", "60秒", "70秒", "80秒", "90秒", "120秒", "1分", "2分",
+        "longer", "long form", "长视频", "长一点", "久一点",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn short_brief_duration_issue(
+    brief: &str,
+    narrative: &phases::NarrativeStructure,
+) -> Option<String> {
+    if brief_has_substantial_speakable_copy(brief) || brief_requests_longer_runtime(brief) {
+        return None;
+    }
+    let mut issues = Vec::new();
+    if narrative.script_mode == "full_script" {
+        issues.push(
+            "short briefs without substantial speakable copy must use scriptMode=key_message"
+                .to_owned(),
+        );
+    }
+    if narrative.target_duration_ms > SHORT_BRIEF_TARGET_CAP_MS {
+        issues.push(format!(
+            "short brief targetDurationMs is {} ms; keep it at or below {} ms unless the user asked for a longer runtime",
+            narrative.target_duration_ms, SHORT_BRIEF_TARGET_CAP_MS
+        ));
+    }
+    if narrative.beats.len() > 8 {
+        issues.push(format!(
+            "short brief produced {} beats; prefer 3-8 sharper beats instead of padding narration",
+            narrative.beats.len()
+        ));
+    }
+    (!issues.is_empty()).then(|| issues.join("; "))
+}
+
+/// Phase5 失败是否属于精修可修（应回 Phase4）；否则视为结构/硬边界，不要空转 Phase4。
+fn phase5_should_retry_phase4(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("between 1 and") && (lower.contains("shots") || lower.contains("beats")) {
+        return false;
+    }
+    if lower.contains("script mode is invalid")
+        || lower.contains("uncovered beats are invalid")
+        || lower.contains("must be covered or explicitly uncovered")
+        || lower.contains("cannot have a storyboard shot")
+    {
+        return false;
+    }
+    true
 }
 
 /// 从口播文本生成简短字幕：取第一句，最多 40 个字符。
@@ -577,9 +659,7 @@ fn normalize_storyboard_candidate(
     while group_cursor < content.shots.len() {
         let group_beat_id = content.shots[group_cursor].beat_id.clone();
         let mut group_end = group_cursor;
-        while group_end < content.shots.len()
-            && content.shots[group_end].beat_id == group_beat_id
-        {
+        while group_end < content.shots.len() && content.shots[group_end].beat_id == group_beat_id {
             group_end += 1;
         }
         let group_count = (group_end - group_cursor) as i64;
@@ -858,13 +938,15 @@ fn choose_storyboard_video_range(
 mod tests {
     use super::{
         estimated_storyboard_duration_ms, minimum_storyboard_duration,
-        normalize_storyboard_candidate, storyboard_sources, storyboard_usage_counts,
-        validate_storyboard,
+        normalize_storyboard_candidate, phase5_should_retry_phase4, short_brief_duration_issue,
+        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts, validate_storyboard,
+        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
-        StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, TimelineClip,
-        TimelineContent,
+        StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
+        TimelineClip, TimelineContent,
     };
+    use crate::storyboard::phases::NarrativeStructure;
     use rusqlite::{params, Connection};
     use std::fs;
     use uuid::Uuid;
@@ -1088,6 +1170,33 @@ mod tests {
     }
 
     #[test]
+    fn completion_gaps_flag_uncovered_min_shots_and_voice_deficit() {
+        let content = content("direct");
+        let version = StoryboardVersion {
+            id: "sb-1".to_owned(),
+            project_id: "project-1".to_owned(),
+            editing_task_id: "task-1".to_owned(),
+            version_number: 1,
+            brief: content.brief.clone(),
+            title: content.title.clone(),
+            summary: content.summary.clone(),
+            target_duration_ms: 20_000,
+            script_mode: content.script_mode.clone(),
+            beats: content.beats.clone(),
+            uncovered_beat_ids: content.uncovered_beat_ids.clone(),
+            shots: content.shots.clone(),
+            created_at: 1,
+        };
+        let codes = storyboard_completion_gaps(&version)
+            .into_iter()
+            .map(|gap: StoryboardCompletionGap| gap.code)
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"uncovered_beats".to_owned()));
+        assert!(codes.contains(&"beat_below_min_shots".to_owned()));
+        assert!(codes.contains(&"voiceover_longer_than_picture".to_owned()));
+    }
+
+    #[test]
     fn storyboard_rejects_an_insufficient_shot() {
         assert!(validate_storyboard(&content("insufficient"), &[source()], "brief").is_err());
     }
@@ -1135,6 +1244,69 @@ mod tests {
         // coffee / machine / 上海 = 3 个词元 ≈ 900ms。
         let brief = "coffee machine 上海";
         assert_eq!(estimated_storyboard_duration_ms(brief), 900);
+    }
+
+    #[test]
+    fn short_brief_rejects_inflated_full_script_duration() {
+        let narrative = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 84_000,
+            script_mode: "full_script".to_owned(),
+            beats: (0..12)
+                .map(|index| StoryboardBeat {
+                    id: format!("beat-{index}"),
+                    purpose: "p".to_owned(),
+                    required_visual: "v".to_owned(),
+                    narration: "短旁白".to_owned(),
+                })
+                .collect(),
+        };
+        let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative)
+            .expect("short brief should be rejected");
+        assert!(issue.contains("key_message"));
+        assert!(issue.contains("45000") || issue.contains("45"));
+    }
+
+    #[test]
+    fn phase5_does_not_retry_phase4_for_shot_cap_errors() {
+        assert!(!phase5_should_retry_phase4(
+            "Storyboard must contain between 1 and 100 shots for safe local processing."
+        ));
+        assert!(phase5_should_retry_phase4(
+            "Storyboard cannot reuse overlapping video source ranges across beats."
+        ));
+    }
+
+    #[test]
+    fn storyboard_allows_up_to_one_hundred_shots() {
+        let mut storyboard = content("direct");
+        storyboard.shots = (1..=35)
+            .map(|index| {
+                let mut shot = storyboard.shots[0].clone();
+                shot.order_index = index;
+                shot.duration_ms = 2_000;
+                shot.source_start_ms = (index - 1) * 200;
+                shot.source_end_ms = shot.source_start_ms + 2_000;
+                shot
+            })
+            .collect();
+        storyboard.target_duration_ms = 70_000;
+        let mut long = source();
+        long.duration_ms = Some(120_000);
+        assert!(
+            storyboard.shots.len() <= MAX_STORYBOARD_SHOTS,
+            "fixture must stay under the raised cap"
+        );
+        // 多样性/重叠可能仍失败；此处只断言镜头数上限本身不再拦截 35 镜。
+        let err = validate_storyboard(&storyboard, &[long], "brief").err();
+        if let Some(message) = err {
+            assert!(
+                !message.contains("between 1 and 100 shots")
+                    && !message.contains("between 1 and 30 shots"),
+                "shot-count cap should not reject 35 shots: {message}"
+            );
+        }
     }
 
     #[test]
@@ -1317,9 +1489,7 @@ mod tests {
             .map(|shot| shot.beat_part_index)
             .collect::<Vec<_>>();
         assert_eq!(part_indices, vec![1, 2, 3]);
-        assert!(context_shots
-            .iter()
-            .all(|shot| shot.beat_part_count == 3));
+        assert!(context_shots.iter().all(|shot| shot.beat_part_count == 3));
         assert_eq!(context_shots[0].split_role, "lead");
         assert_eq!(context_shots[1].split_role, "bridge");
         assert_eq!(context_shots[2].split_role, "tail");
@@ -1345,7 +1515,14 @@ pub fn generate_storyboard(
     brief: String,
     voice_id: Option<String>,
 ) -> Result<StoryboardVersion, String> {
-    generate_storyboard_internal(app, project_id, editing_task_id, brief, voice_id.as_deref(), true)
+    generate_storyboard_internal(
+        app,
+        project_id,
+        editing_task_id,
+        brief,
+        voice_id.as_deref(),
+        true,
+    )
 }
 
 /// Agent storyboard generation consumes only analysis evidence already ready
@@ -1358,7 +1535,14 @@ pub(crate) fn generate_storyboard_for_agent(
     brief: String,
     voice_id: Option<String>,
 ) -> Result<StoryboardVersion, String> {
-    generate_storyboard_internal(app, project_id, editing_task_id, brief, voice_id.as_deref(), false)
+    generate_storyboard_internal(
+        app,
+        project_id,
+        editing_task_id,
+        brief,
+        voice_id.as_deref(),
+        false,
+    )
 }
 
 fn generate_storyboard_internal(
@@ -1494,7 +1678,8 @@ fn generate_storyboard_internal(
                         MAX_BEAT_SPOKEN_MS
                     )
                 });
-                let issue = beat_issue.or(narration_issue);
+                let duration_issue = short_brief_duration_issue(brief, &candidate);
+                let issue = beat_issue.or(narration_issue).or(duration_issue);
                 if issue.is_none() {
                     Some(candidate)
                 } else {
@@ -1524,10 +1709,22 @@ fn generate_storyboard_internal(
             .collect::<Vec<_>>()
             .join(" ");
         if !narration_text.is_empty() {
-            match crate::voice_provider::prepare_audio_first(&app, &project_id, &narration_text, voice_id) {
+            match crate::voice_provider::prepare_audio_first(
+                &app,
+                &project_id,
+                &narration_text,
+                voice_id,
+            ) {
                 Ok(prepared) => {
-                    let hard_target = prepared.duration_ms.saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
-                    log::info!("Audio-first prepared: duration={}ms hard_target={}ms reused={}", prepared.duration_ms, hard_target, prepared.reused_cache);
+                    let hard_target = prepared
+                        .duration_ms
+                        .saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
+                    log::info!(
+                        "Audio-first prepared: duration={}ms hard_target={}ms reused={}",
+                        prepared.duration_ms,
+                        hard_target,
+                        prepared.reused_cache
+                    );
                     audio_first = Some((hard_target, prepared));
                 }
                 Err(e) => {
@@ -1557,66 +1754,32 @@ fn generate_storyboard_internal(
         &usage_counts,
     )?;
     log::info!(
-        "Phase 2 complete: rough storyboard with {} shots, {} uncovered beats",
+        "Phase 2 complete: rough storyboard with {} lead shots across pools, {} uncovered beats",
         rough.shots.len(),
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 精剪与验证重试循环
-    //
-    // 流程：模型生成候选 → Rust 收集结构性问题 → 语义问题打包成 RepairPacket
-    // 回传模型继续决策 → Rust 做最后机械兜底（normalize + 只修正无歧义字段）。
-    // Err 仅表示模型请求失败或 JSON 无法解析，直接重试；问题越修越少不重跑整条链路。
-    // 每次回传携带：① 已确认正确的冻结镜头 ② 修复记忆（前几轮修了什么、结果如何）。
-    let mut repair: Option<RepairPacket> = None;
-    let mut content = None;
-    for revision in 0..MAX_STORYBOARD_REVISIONS {
-        log::info!(
-            "Phase 3 attempt {}/{}: fine editing with validation",
-            revision + 1,
-            MAX_STORYBOARD_REVISIONS
-        );
-        match phases::phase3_fine_edit(&access, brief, &rough, &sources, repair.as_ref()) {
-            Ok((candidate, issues)) => {
-                log::info!(
-                    "Phase 3 produced candidate: shots={}, beats={}, target_duration_ms={}, uncovered_beats={}, issues={}",
-                    candidate.shots.len(),
-                    candidate.beats.len(),
-                    candidate.target_duration_ms,
-                    candidate.uncovered_beat_ids.len(),
-                    issues.len()
-                );
-                if issues.is_empty()
-                    || !issues
-                        .iter()
-                        .any(|issue| issue.needs_model_decision)
-                {
-                    // 无问题，或只剩 Rust 可机械兜底的问题：接受候选，做最后机械修正。
-                    let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
-                    match validate_storyboard(&candidate, &sources, brief) {
-                        Ok(()) => {
-                            log::info!("Storyboard validation passed.");
-                            content = Some(candidate);
-                            break;
-                        }
-                        Err(error) => {
-                            log::warn!("Phase 3 validation failed: {error}");
-                            repair = Some(RepairPacket::new(
-                                revision + 1,
-                                vec![StoryboardIssue::new(
-                                    "validation",
-                                    error,
-                                    true,
-                                )],
-                            ));
-                        }
+    // Phase 3: 选 2–3 镜（传输/语义预算分离；失败带 previousShots）
+    let selected = {
+        let mut repair: Option<RepairPacket> = None;
+        let mut selected = None;
+        let mut budget = StepRetryBudget::new("Phase 3");
+        loop {
+            let attempt = budget.semantic_attempt_number();
+            log::info!("Phase 3 attempt {attempt}: select 2-3 assets per beat");
+            match phases::phase3_select(&access, brief, &rough, repair.as_ref()) {
+                Ok((candidate, issues)) => {
+                    log::info!(
+                        "Phase 3 candidate: shots={}, uncovered={}, issues={}",
+                        candidate.shots.len(),
+                        candidate.uncovered_beat_ids.len(),
+                        issues.len()
+                    );
+                    if issues.is_empty() || !issues.iter().any(|issue| issue.needs_model_decision) {
+                        selected = Some(candidate);
+                        break;
                     }
-                } else {
-                    // 有语义问题：把结构化修复包回传给模型，让模型做下一步决策。
-                    let semantic = issues
-                        .iter()
-                        .collect::<Vec<_>>();
-                    for issue in &semantic {
+                    for issue in &issues {
                         log::warn!(
                             "Phase 3 semantic issue [{}]: {} (shots={:?})",
                             issue.kind,
@@ -1624,103 +1787,251 @@ fn generate_storyboard_internal(
                             issue.affected_shots
                         );
                     }
-                    // 冻结：未被任何问题点名的镜头视为已确认正确，模型应保持不动。
-                    let frozen = crate::storyboard::repair::frozen_shot_indices(
-                        candidate.shots.iter().map(|shot| shot.order_index),
-                        &issues,
-                    );
-                    let previous_shots = candidate
-                        .shots
-                        .iter()
-                        .map(|shot| crate::storyboard::repair::ShotSnapshot {
-                            shot_index: shot.order_index,
-                            beat_id: shot.beat_id.clone(),
-                            asset_id: shot.asset_id.clone(),
-                            duration_ms: shot.duration_ms,
-                            source_start_ms: shot.source_start_ms,
-                            source_end_ms: shot.source_end_ms,
-                        })
-                        .collect::<Vec<_>>();
-                    // 修复记忆：记录"这套修复指令本身用到的模型尝试历史"。
-                    // 上一轮生成的候选经过本轮的校验，若某类问题不再出现，
-                    // 说明模型上一轮修对了，记入记忆避免模型回退。
-                    let repair_history = if let Some(previous) = repair.as_ref() {
-                        let unresolved_kinds = issues
-                            .iter()
-                            .map(|issue| issue.kind.clone())
-                            .collect::<std::collections::HashSet<_>>();
-                        let mut history = previous
-                            .repair_history
-                            .iter()
-                            .map(|record| {
-                                let mut latest = record.clone();
-                                if !unresolved_kinds.contains(&record.kind) {
-                                    latest.resolved = true;
-                                }
-                                latest
-                            })
-                            .collect::<Vec<_>>();
-                        history.extend(issues.iter().map(|issue| {
-                            crate::storyboard::repair::RepairRecord::new(
-                                revision + 1,
-                                issue.kind.clone(),
-                                issue.affected_shots.clone(),
-                                false,
-                            )
-                        }));
-                        history
-                    } else {
-                        issues
-                            .iter()
-                            .map(|issue| {
-                                crate::storyboard::repair::RepairRecord::new(
-                                    revision + 1,
-                                    issue.kind.clone(),
-                                    issue.affected_shots.clone(),
-                                    false,
-                                )
-                            })
-                            .collect()
-                    };
-                    repair = Some(RepairPacket::with_context(
-                        revision + 1,
+                    let has_snapshot = !candidate.shots.is_empty();
+                    if budget.can_retry_semantic() {
+                        budget.record_semantic_failure();
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        continue;
+                    }
+                    if budget.can_validation_tail(has_snapshot) {
+                        budget.record_validation_tail();
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        continue;
+                    }
+                    repair = Some(build_repair_packet(
+                        attempt,
                         issues,
-                        previous_shots,
-                        frozen,
-                        repair_history,
+                        &candidate.shots,
+                        repair.as_ref(),
+                    ));
+                    break;
+                }
+                Err(error) => {
+                    log::warn!("Phase 3 request failed: {error}");
+                    if is_transport_or_parse_error(&error) {
+                        if !budget.can_retry_transport() {
+                            repair = Some(RepairPacket::new(
+                                attempt,
+                                vec![StoryboardIssue::new("request_failed", error.clone(), false)],
+                            ));
+                            break;
+                        }
+                        budget.record_transport_failure();
+                        continue;
+                    }
+                    if !budget.can_retry_semantic() {
+                        repair = Some(RepairPacket::new(
+                            attempt,
+                            vec![StoryboardIssue::new("request_failed", error.clone(), true)],
+                        ));
+                        break;
+                    }
+                    budget.record_semantic_failure();
+                    repair = Some(RepairPacket::new(
+                        attempt,
+                        vec![StoryboardIssue::new("request_failed", error, true)],
                     ));
                 }
             }
+        }
+        selected.ok_or_else(|| {
+            let summary = partial_candidate_summary(
+                "Phase 3",
+                None,
+                &rough.uncovered_beat_ids,
+                repair.as_ref(),
+            );
+            let unresolved = repair
+                .as_ref()
+                .and_then(|packet| packet.issues.first())
+                .map(|issue| issue.message.clone())
+                .unwrap_or_else(|| "Phase 3 did not produce a valid selection.".to_owned());
+            let message = format!(
+                "{}; partialCandidateSummary={}",
+                budget.exhausted_message(&unresolved),
+                summary
+            );
+            log::error!("{message}");
+            message
+        })?
+    };
+    log::info!(
+        "Phase 3 complete: {} shots locked, {} uncovered",
+        selected.shots.len(),
+        selected.uncovered_beat_ids.len()
+    );
+
+    // Phase 4 + Phase 5: 精修时间段；normalize 自修后校验；仅精修类失败回 Phase 4
+    let mut repair: Option<RepairPacket> = None;
+    let mut content = None;
+    let mut budget = StepRetryBudget::new("Phase 4");
+    loop {
+        let attempt = budget.semantic_attempt_number();
+        log::info!("Phase 4 attempt {attempt}: refine source ranges");
+        match phases::phase4_refine_ranges(
+            &access,
+            brief,
+            &selected,
+            &rough,
+            &sources,
+            repair.as_ref(),
+        ) {
+            Ok((candidate, issues)) => {
+                log::info!(
+                    "Phase 4 candidate: shots={}, issues={}",
+                    candidate.shots.len(),
+                    issues.len()
+                );
+                if issues.iter().any(|issue| issue.needs_model_decision) {
+                    for issue in &issues {
+                        log::warn!(
+                            "Phase 4 semantic issue [{}]: {} (shots={:?})",
+                            issue.kind,
+                            issue.message,
+                            issue.affected_shots
+                        );
+                    }
+                    let has_snapshot = !candidate.shots.is_empty();
+                    if budget.can_retry_semantic() {
+                        budget.record_semantic_failure();
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        continue;
+                    }
+                    if budget.can_validation_tail(has_snapshot) {
+                        budget.record_validation_tail();
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        continue;
+                    }
+                    repair = Some(build_repair_packet(
+                        attempt,
+                        issues,
+                        &candidate.shots,
+                        repair.as_ref(),
+                    ));
+                    break;
+                }
+
+                // Phase 5: normalize 机械自修后硬校验；仅精修类问题回 Phase4
+                let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
+                match validate_storyboard(&candidate, &sources, brief) {
+                    Ok(()) => {
+                        log::info!("Phase 5 validation passed.");
+                        content = Some(candidate);
+                        break;
+                    }
+                    Err(error) => {
+                        log::warn!("Phase 5 validation failed: {error}");
+                        if !phase5_should_retry_phase4(&error) {
+                            log::warn!(
+                                "Phase 5 failure is structural/hard-limit; not retrying Phase 4."
+                            );
+                            repair = Some(build_repair_packet(
+                                attempt,
+                                vec![StoryboardIssue::new("validation", error, false)],
+                                &candidate.shots,
+                                repair.as_ref(),
+                            ));
+                            break;
+                        }
+                        let issues = vec![StoryboardIssue::new("validation", error, true)];
+                        let has_snapshot = !candidate.shots.is_empty();
+                        if budget.can_retry_semantic() {
+                            budget.record_semantic_failure();
+                            repair = Some(build_repair_packet(
+                                attempt,
+                                issues,
+                                &candidate.shots,
+                                repair.as_ref(),
+                            ));
+                            continue;
+                        }
+                        if budget.can_validation_tail(has_snapshot) {
+                            budget.record_validation_tail();
+                            repair = Some(build_repair_packet(
+                                attempt,
+                                issues,
+                                &candidate.shots,
+                                repair.as_ref(),
+                            ));
+                            continue;
+                        }
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        break;
+                    }
+                }
+            }
             Err(error) => {
-                log::warn!("Phase 3 request failed: {error}");
+                log::warn!("Phase 4 request failed: {error}");
+                if is_transport_or_parse_error(&error) {
+                    if !budget.can_retry_transport() {
+                        repair = Some(RepairPacket::new(
+                            attempt,
+                            vec![StoryboardIssue::new("request_failed", error.clone(), false)],
+                        ));
+                        break;
+                    }
+                    budget.record_transport_failure();
+                    continue;
+                }
+                if !budget.can_retry_semantic() {
+                    repair = Some(RepairPacket::new(
+                        attempt,
+                        vec![StoryboardIssue::new("request_failed", error.clone(), true)],
+                    ));
+                    break;
+                }
+                budget.record_semantic_failure();
                 repair = Some(RepairPacket::new(
-                    revision + 1,
-                    vec![StoryboardIssue::new(
-                        "request_failed",
-                        error,
-                        false,
-                    )],
+                    attempt,
+                    vec![StoryboardIssue::new("request_failed", error, true)],
                 ));
             }
         }
     }
     let content = content.ok_or_else(|| {
-        let needs_model = repair
-            .as_ref()
-            .map(RepairPacket::needs_model_decision)
-            .unwrap_or(false);
+        let summary = partial_candidate_summary(
+            "Phase 4/5",
+            Some(&selected),
+            &selected.uncovered_beat_ids,
+            repair.as_ref(),
+        );
         let unresolved = repair
             .as_ref()
             .and_then(|packet| packet.issues.first())
             .map(|issue| issue.message.clone())
             .unwrap_or_else(|| "Storyboard generation did not produce a valid result.".to_owned());
-        log::error!(
-            "Storyboard generation failed after {} Phase 3 attempts. needs_model_decision={}, unresolved_issue={}",
-            MAX_STORYBOARD_REVISIONS,
-            needs_model,
-            unresolved
+        let message = format!(
+            "{}; partialCandidateSummary={}",
+            budget.exhausted_message(&unresolved),
+            summary
         );
-        unresolved
+        log::error!("{message}");
+        message
     })?;
     log::info!("Storyboard content finalized. Persisting to database.");
     let version_number = connection.query_row(
@@ -1747,7 +2058,8 @@ fn generate_storyboard_internal(
         params![version.id, version.project_id, version.editing_task_id, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
     if let Some((_, prepared)) = audio_first {
-        let _ = finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
+        let _ =
+            finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
     }
     connection
         .execute(
@@ -1801,7 +2113,10 @@ fn finalize_audio_first_timeline(
     editing_task_id: &str,
     prepared: crate::voice_provider::AudioFirstPrepared,
 ) -> Result<(), String> {
-    use crate::models::{TimelineClip, TimelineContent, TextTrack, TextCue, TextLayout, TextStyle, TextAnimation, VoiceoverTrack, VoiceoverCue};
+    use crate::models::{
+        TextAnimation, TextCue, TextLayout, TextStyle, TextTrack, TimelineClip, TimelineContent,
+        VoiceoverCue, VoiceoverTrack,
+    };
     use crate::voice_provider::{cues_from_alignment, subtitle_track_from_cues};
     let duration_ms = prepared.duration_ms;
     let generation_id = prepared.cached.generation_id.clone();
@@ -1846,11 +2161,45 @@ fn finalize_audio_first_timeline(
         let start = tcursor;
         let end = start + shot.duration_ms;
         tcursor = end;
-        if shot.on_screen_text.trim().is_empty() { continue; }
-        cues.push(TextCue { id: format!("shot-{}-subtitle", shot.order_index), template_id: Some("subtitle_safe".to_owned()), start_ms: start, end_ms: end, text: shot.on_screen_text.chars().take(280).collect(), style: TextStyle::default(), layout: TextLayout::default(), entrance: Some(TextAnimation{template_id:"fade".to_owned(),duration_ms:180,intensity:0.6}), exit: Some(TextAnimation{template_id:"fade".to_owned(),duration_ms:160,intensity:0.5}), loop_animation: None, jianying_compatibility:"verified".to_owned() });
+        if shot.on_screen_text.trim().is_empty() {
+            continue;
+        }
+        cues.push(TextCue {
+            id: format!("shot-{}-subtitle", shot.order_index),
+            template_id: Some("subtitle_safe".to_owned()),
+            start_ms: start,
+            end_ms: end,
+            text: shot.on_screen_text.chars().take(280).collect(),
+            style: TextStyle::default(),
+            layout: TextLayout::default(),
+            entrance: Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 180,
+                intensity: 0.6,
+            }),
+            exit: Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 160,
+                intensity: 0.5,
+            }),
+            loop_animation: None,
+            jianying_compatibility: "verified".to_owned(),
+        });
     }
-    let mut text_tracks: Vec<TextTrack> = if cues.is_empty() { Vec::new() } else {
-        vec![TextTrack{id:"storyboard-subtitles".to_owned(), role:"subtitle".to_owned(), layer:1, enabled:true, origin:"storyboard_generated".to_owned(), generation_id: None, editable:true, locked:false, cues}]
+    let mut text_tracks: Vec<TextTrack> = if cues.is_empty() {
+        Vec::new()
+    } else {
+        vec![TextTrack {
+            id: "storyboard-subtitles".to_owned(),
+            role: "subtitle".to_owned(),
+            layer: 1,
+            enabled: true,
+            origin: "storyboard_generated".to_owned(),
+            generation_id: None,
+            editable: true,
+            locked: false,
+            cues,
+        }]
     };
     let mut vt: Vec<VoiceoverTrack> = Vec::new();
     if voiceover_fits {
@@ -1861,7 +2210,10 @@ fn finalize_audio_first_timeline(
                 .filter(|t| {
                     !(t.role == "subtitle"
                         && !t.locked
-                        && matches!(t.origin.as_str(), "storyboard_generated" | "voice_alignment"))
+                        && matches!(
+                            t.origin.as_str(),
+                            "storyboard_generated" | "voice_alignment"
+                        ))
                 })
                 .collect();
             let mut new_tracks = kept;
@@ -1882,17 +2234,25 @@ fn finalize_audio_first_timeline(
                 volume: 1.0,
                 fade_in_ms: 0,
                 fade_out_ms: 80,
-                provider: "ElevenLabs".to_owned(),
+                provider: prepared.cached.manifest.provider.clone(),
                 voice_id: voice_id.clone(),
                 voice_name: voice_name.clone(),
             }],
         };
         match (|| -> Result<String, String> {
             let mp3_path = prepared.cached.directory.join("voiceover.mp3");
-            let disp = format!("ElevenLabs: {} voiceover", voice_name);
+            let disp = format!(
+                "{}: {} voiceover",
+                prepared.cached.manifest.provider, voice_name
+            );
+            let asset = crate::assets::store_downloaded_audio(
+                app,
+                &storyboard.project_id,
+                mp3_path,
+                &disp,
+            )?;
             let asset =
-                crate::assets::store_downloaded_audio(app, &storyboard.project_id, mp3_path, &disp)?;
-            let asset = crate::assets::wait_for_asset_ready(app, &storyboard.project_id, &asset.id)?;
+                crate::assets::wait_for_asset_ready(app, &storyboard.project_id, &asset.id)?;
             Ok(asset.id)
         })() {
             Ok(asset_id) => {
@@ -1905,19 +2265,134 @@ fn finalize_audio_first_timeline(
         vt = vec![voiceover];
     }
     // Use shared timeline helper to insert version; we synthesize content_json and status directly
-    let version_number: i64 = connection.query_row("SELECT COALESCE(MAX(version_number),0)+1 FROM timeline_versions WHERE project_id=?1", params![storyboard.project_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let version_number: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version_number),0)+1 FROM timeline_versions WHERE project_id=?1",
+            params![storyboard.project_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let new_id = uuid::Uuid::new_v4().to_string();
     let created_at = crate::db::now_millis();
-    let content = TimelineContent{ clips, text_tracks, music_tracks: Vec::new(), voiceover_tracks: vt, overlay_clips: Vec::new(), quality_report: None };
+    let content = TimelineContent {
+        clips,
+        text_tracks,
+        music_tracks: Vec::new(),
+        voiceover_tracks: vt,
+        overlay_clips: Vec::new(),
+        quality_report: None,
+    };
     let content_json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
     connection.execute("INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1,?2,?3,?4,'draft',?5,?6)", params![new_id, storyboard.project_id, storyboard.id, version_number, content_json, created_at]).map_err(|e| e.to_string())?;
     // Log operation
     let conversation_id: Option<String> = connection.query_row("SELECT id FROM conversations WHERE project_id=?1 AND editing_task_id=?2 ORDER BY updated_at DESC LIMIT 1", params![storyboard.project_id, editing_task_id], |r| r.get(0)).ok();
     let before = serde_json::Value::Null;
-    let after: serde_json::Value = serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
+    let after: serde_json::Value =
+        serde_json::from_str(&content_json).unwrap_or(serde_json::Value::Null);
     let _ = connection.execute("INSERT INTO operation_logs (id, project_id, editing_task_id, conversation_id, agent_task_id, actor, operation_type, entity_type, entity_id, before_json, after_json, created_at) VALUES (?1,?2,?3,?4,NULL,'agent','audio_first_timeline','timeline_version',?5,?6,?7,?8)", params![uuid::Uuid::new_v4().to_string(), storyboard.project_id, editing_task_id, conversation_id, new_id, serde_json::to_string(&before).unwrap_or_default(), serde_json::to_string(&after).unwrap_or_default(), created_at]);
-    log::info!("Audio-first timeline v{} created voice_fits={} voice={}ms id={}", version_number, voiceover_fits, duration_ms, new_id);
+    log::info!(
+        "Audio-first timeline v{} created voice_fits={} voice={}ms id={}",
+        version_number,
+        voiceover_fits,
+        duration_ms,
+        new_id
+    );
     Ok(())
+}
+
+/// Storyboard + 时间线收尾缺口：镜头数、未覆盖 beat、画面短于旁白。
+
+fn partial_candidate_summary(
+    last_phase: &str,
+    candidate: Option<&StoryboardContent>,
+    uncovered_beat_ids: &[String],
+    repair: Option<&RepairPacket>,
+) -> String {
+    let shot_count = candidate.map(|content| content.shots.len()).unwrap_or(0);
+    let last_issue = repair
+        .and_then(|packet| packet.issues.first())
+        .map(|issue| format!("{}:{}", issue.kind, issue.message))
+        .unwrap_or_else(|| "none".to_owned());
+    serde_json::json!({
+        "lastPhase": last_phase,
+        "shotCount": shot_count,
+        "uncoveredBeatIds": uncovered_beat_ids,
+        "lastIssue": last_issue,
+    })
+    .to_string()
+}
+
+/// Agent 用这些生成 qualityWarnings，触发精炼续步，禁止假完成。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoryboardCompletionGap {
+    pub code: String,
+    pub message: String,
+}
+
+pub(crate) fn storyboard_completion_gaps(
+    storyboard: &StoryboardVersion,
+) -> Vec<StoryboardCompletionGap> {
+    let mut gaps = Vec::new();
+    if !storyboard.uncovered_beat_ids.is_empty() {
+        gaps.push(StoryboardCompletionGap {
+            code: "uncovered_beats".to_owned(),
+            message: format!(
+                "{} beat(s) remain uncovered ({}). Do NOT re-run generate_storyboard or shorten the brief; call search_asset_segments then insert_clips/replace_clips on the current timeline to cover them, or explain why they stay uncovered.",
+                storyboard.uncovered_beat_ids.len(),
+                storyboard.uncovered_beat_ids.join(", ")
+            ),
+        });
+    }
+
+    let uncovered: std::collections::HashSet<&str> = storyboard
+        .uncovered_beat_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut shots_per_beat: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
+    for shot in &storyboard.shots {
+        if shot.beat_id.trim().is_empty() || uncovered.contains(shot.beat_id.as_str()) {
+            continue;
+        }
+        *shots_per_beat.entry(shot.beat_id.as_str()).or_insert(0) += 1;
+    }
+    for beat in &storyboard.beats {
+        if uncovered.contains(beat.id.as_str()) {
+            continue;
+        }
+        let count = shots_per_beat.get(beat.id.as_str()).copied().unwrap_or(0);
+        if count < 2 {
+            gaps.push(StoryboardCompletionGap {
+                code: "beat_below_min_shots".to_owned(),
+                message: format!(
+                    "Beat '{}' has {count} shot(s); every covered beat needs at least 2 distinct shots. Use search_asset_segments then insert_clips/replace_clips on the current timeline — do not re-run generate_storyboard just to add shots.",
+                    beat.id
+                ),
+            });
+        }
+    }
+
+    let visual_ms = storyboard
+        .shots
+        .iter()
+        .map(|shot| shot.duration_ms.max(0))
+        .sum::<i64>();
+    if storyboard.script_mode == "full_script"
+        && storyboard.target_duration_ms > 0
+        && visual_ms + 250 < storyboard.target_duration_ms
+    {
+        let deficit = storyboard.target_duration_ms - visual_ms;
+        gaps.push(StoryboardCompletionGap {
+            code: "voiceover_longer_than_picture".to_owned(),
+            message: format!(
+                "Picture is {visual_ms}ms but voice/target is {}ms (deficit {deficit}ms). Freeze-frame is forbidden; use search_asset_segments then insert_clips or change_clip_duration/replace_clips, then re-check.",
+                storyboard.target_duration_ms
+            ),
+        });
+    }
+
+    gaps
 }
 
 pub(crate) fn load_storyboard_version(

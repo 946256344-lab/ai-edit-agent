@@ -28,6 +28,18 @@ git switch -c fix/preview-recovery origin/master
 - 架构、公开契约、任务状态或机器规则变化时，同步长期文档和 `docs/changes/`。
 - 合并冲突由当前分支作者在更新到最新 `origin/master` 后解决，并重新运行完整验证。
 
+## AI 写测试
+
+默认不写新测试。
+
+仅在以下情况补测（且尽量少）：
+
+- 改了公开契约 / fixture
+- 修了真实 bug（只加能复现该 bug 的回归）
+- 用户或审查明确要求
+
+开发中与提交前：只跑已有测试与下方适用验证命令，不主动扩测。测试栈与布局见 `docs/codebase/TESTING.md`。
+
 ## 提交前
 
 先查看范围，再运行适用验证：
