@@ -19,7 +19,7 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -455,7 +455,7 @@ pub(crate) fn queue_visual_analysis_batch(
             )
             .map_err(|error| error.to_string())?;
     }
-    if let Some(project_id) = project_id.filter(|_| !visual_asset_ids.is_empty()) {
+    if let Some(project_id) = project_id.as_ref().filter(|_| !visual_asset_ids.is_empty()) {
         // Worker 只接受 <= VISUAL_ANALYSIS_BATCH_SIZE 的批次；多余时必须按
         // 批次上限拆分，否则整个任务会被直接判为 visual_task_input_invalid。
         for batch in visual_asset_ids.chunks(VISUAL_ANALYSIS_BATCH_SIZE) {
@@ -472,6 +472,9 @@ pub(crate) fn queue_visual_analysis_batch(
         }
     }
     transaction.commit().map_err(|error| error.to_string())?;
+    if let Some(project_id) = project_id {
+        let _ = app.emit("assets-changed", project_id);
+    }
     spawn_visual_analysis_worker(app.clone());
     Ok(())
 }

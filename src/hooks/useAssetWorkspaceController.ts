@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { listen } from '@tauri-apps/api/event'
 import type { AssetView } from '../components/asset-workspace/AssetBrowser'
 import type { EditingSessionView } from '../components/workspace-types'
 import {
@@ -18,6 +19,7 @@ import {
   startAssetHealthScan,
 } from '../lib/local-store'
 import type {
+  AgentEditEvent,
   AssetEvidence,
   AssetHealthScanSummary,
   AssetPage,
@@ -46,7 +48,7 @@ const EMPTY_PAGE: Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'co
   total: 0,
   directories: [],
   unfiledCount: 0,
-  counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0 },
+  counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0, visualPending: 0 },
 }
 
 function formatDuration(durationMs: number | null) {
@@ -86,6 +88,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
   const [assets, setAssets] = useState<AssetView[]>([])
   const [page, setPage] = useState(EMPTY_PAGE)
   const [pageRevision, setPageRevision] = useState(0)
+  const [healthRevision, setHealthRevision] = useState(0)
   const [health, setHealth] = useState<AssetHealthScanSummary | null>(null)
   const [relinkPreview, setRelinkPreview] = useState<AssetRelinkPreview | null>(null)
   const [relinkSourceDirectory, setRelinkSourceDirectory] = useState<string | null>(null)
@@ -96,6 +99,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     if (!options.desktopRuntime || !options.projectId) return
     const projectId = options.projectId
     let cancelled = false
+    let timer: number | undefined
     const refreshAssets = () => {
       void listAssetPage(projectId, {
         directoryKey: directoryKey === 'all' ? undefined : directoryKey,
@@ -103,36 +107,81 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
         limit: 100,
       }).then((nextPage) => {
         if (!cancelled && options.activeProjectRef.current === projectId) {
-          setAssets(nextPage.items.map(toAsset))
-          setPage({
+          const nextAssets = nextPage.items.map(toAsset)
+          setAssets((current) => JSON.stringify(current) === JSON.stringify(nextAssets) ? current : nextAssets)
+          const nextState = {
             total: nextPage.total,
             directories: nextPage.directories,
             unfiledCount: nextPage.unfiledCount,
             counts: nextPage.counts,
-          })
+          }
+          setPage((current) => JSON.stringify(current) === JSON.stringify(nextState) ? current : nextState)
+          if (nextPage.counts.queued + nextPage.counts.analyzing + nextPage.counts.visualPending > 0) {
+            timer = window.setTimeout(refreshAssets, 1500)
+          }
         }
       }).catch(() => undefined)
     }
     refreshAssets()
-    const intervalId = window.setInterval(refreshAssets, 1500)
     return () => {
       cancelled = true
-      window.clearInterval(intervalId)
+      window.clearTimeout(timer)
     }
   }, [directoryKey, options.activeProjectRef, options.desktopRuntime, options.projectId, pageRevision])
 
   useEffect(() => {
     if (!options.desktopRuntime || !options.projectId) return
     const projectId = options.projectId
+    let cancelled = false
+    let timer: number | undefined
+    // 只在健康计数或任务状态变化时刷新素材页；首次观察与空闲重复摘要不 bump。
+    let previousKey: string | null = null
     const refresh = () => void getAssetHealthScanSummary(projectId)
       .then((summary) => {
-        if (options.activeProjectRef.current === projectId) setHealth(summary)
+        if (cancelled || options.activeProjectRef.current !== projectId) return
+        setHealth((current) =>
+          JSON.stringify(current) === JSON.stringify(summary) ? current : summary,
+        )
+        const key = JSON.stringify({
+          unchecked: summary.unchecked,
+          online: summary.online,
+          missing: summary.missing,
+          changed: summary.changed,
+          unreadable: summary.unreadable,
+          checked: summary.checked,
+          activeTaskId: summary.activeTaskId,
+          activeTaskStatus: summary.activeTaskStatus,
+        })
+        if (previousKey !== null && previousKey !== key) {
+          setPageRevision((value) => value + 1)
+        }
+        previousKey = key
+        if (summary.activeTaskStatus === 'queued' || summary.activeTaskStatus === 'running') {
+          timer = window.setTimeout(refresh, 2000)
+        }
       })
       .catch(() => undefined)
     refresh()
-    const intervalId = window.setInterval(refresh, 2000)
-    return () => window.clearInterval(intervalId)
-  }, [options.activeProjectRef, options.desktopRuntime, options.projectId])
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [options.activeProjectRef, options.desktopRuntime, options.projectId, healthRevision])
+
+  useEffect(() => {
+    if (!options.desktopRuntime || !options.projectId) return
+    const listener = listen<AgentEditEvent>('agent-edit-completed', () => {
+      setPageRevision((value) => value + 1)
+      setHealthRevision((value) => value + 1)
+    })
+    const assetsListener = listen<string>('assets-changed', ({ payload }) => {
+      if (payload === options.projectId) setPageRevision((value) => value + 1)
+    })
+    return () => {
+      void listener.then((unlisten) => unlisten())
+      void assetsListener.then((unlisten) => unlisten())
+    }
+  }, [options.desktopRuntime, options.projectId])
 
   function reset() {
     setAssets([])
@@ -167,7 +216,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     if (!selected) return
     const sources = Array.isArray(selected) ? selected : [selected]
     const imported = await importAssets(context.projectId, sources)
-    if (options.activeProjectRef.current === context.projectId) setPageRevision((value) => value + 1)
+    if (options.activeProjectRef.current === context.projectId) {
+      setPageRevision((value) => value + 1)
+      setHealthRevision((value) => value + 1)
+    }
     await options.appendAgentMessage(
       context.conversationId,
       context.sessionId,
@@ -182,7 +234,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
     const imported = await importAssetFolder(context.projectId, selected)
-    if (options.activeProjectRef.current === context.projectId) setPageRevision((value) => value + 1)
+    if (options.activeProjectRef.current === context.projectId) {
+      setPageRevision((value) => value + 1)
+      setHealthRevision((value) => value + 1)
+    }
     await options.appendAgentMessage(
       context.conversationId,
       context.sessionId,
@@ -211,7 +266,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       relinkPreview.matches.map((match) => match.assetId),
       true,
     )
-    if (options.activeProjectRef.current === options.projectId) setPageRevision((value) => value + 1)
+    if (options.activeProjectRef.current === options.projectId) {
+      setPageRevision((value) => value + 1)
+      setHealthRevision((value) => value + 1)
+    }
     window.alert(`已重新链路 ${result.relinkedCount} 个素材并保留分析信息。`)
     cancelRelink()
   }
@@ -262,8 +320,8 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       closeEvidence: () => setEvidence(null),
       importFiles: () => void importSelectedAssets(),
       importFolder: () => void importSelectedFolder(),
-      startHealthScan: () => { if (options.projectId) void startAssetHealthScan(options.projectId) },
-      cancelHealthScan: (taskId: string) => { if (options.projectId) void cancelAssetHealthScan(options.projectId, taskId) },
+      startHealthScan: () => { if (options.projectId) void startAssetHealthScan(options.projectId).then(() => setHealthRevision((value) => value + 1)) },
+      cancelHealthScan: (taskId: string) => { if (options.projectId) void cancelAssetHealthScan(options.projectId, taskId).then(() => setHealthRevision((value) => value + 1)) },
       openRelink: () => void openRelink(),
       confirmRelink: () => void confirmRelink(),
       cancelRelink,

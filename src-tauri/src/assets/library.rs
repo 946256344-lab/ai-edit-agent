@@ -419,9 +419,9 @@ pub fn list_asset_page(
 
     let counts = connection
         .query_row(
-            "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed') FROM assets WHERE project_id = ?1",
+            "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')) FROM assets WHERE project_id = ?1",
             params![project_id],
-            |row| Ok(AssetStatusCounts { total: row.get::<_, i64>(0)? as usize, ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize }),
+            |row| Ok(AssetStatusCounts { total: row.get::<_, i64>(0)? as usize, ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize, visual_pending: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize }),
         )
         .map_err(|error| error.to_string())?;
     let directories = asset_directory_nodes(&asset_directories);

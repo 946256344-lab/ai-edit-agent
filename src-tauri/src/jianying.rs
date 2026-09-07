@@ -374,6 +374,7 @@ pub fn create_jianying_draft(
         clips.push(serde_json::json!({
             "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,
             "timelineStartMs": clip.timeline_start_ms, "timelineEndMs": clip.timeline_end_ms,
+            "cropFocus": clip.crop_focus,
         }));
     }
     let mut music_tracks = Vec::with_capacity(timeline.music_tracks.len());
@@ -428,6 +429,7 @@ pub fn create_jianying_draft(
             "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,
             "sourceEndMs": clip.source_end_ms,
             "timelineStartMs": clip.timeline_start_ms, "timelineEndMs": clip.timeline_end_ms,
+            "cropFocus": clip.crop_focus,
         }));
     }
     let draft_name = format!("Assembly Video Agent {}", Uuid::new_v4());

@@ -78,10 +78,15 @@ fn render_timeline_clip(
     } else {
         return Err("Timeline clip uses unsupported media.".to_owned());
     }
+    let [x, y] = clip.crop_focus.unwrap_or([0.5, 0.5]);
+    let filter = format!(
+        "scale=540:960:force_original_aspect_ratio=increase,crop=540:960:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
+        x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)
+    );
     let status = command
         .args([
             "-vf",
-            "scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=30,format=yuv420p",
+            &filter,
             "-an",
             "-c:v",
             "libx264",
@@ -263,46 +268,42 @@ fn ass_filter_path(path: &Path) -> String {
         .replace('\'', "\\'")
 }
 
-fn composite_overlay_clips(
+fn composite_preview_layers(
     base: &Path,
     overlays: &[(PathBuf, f64, f64)],
+    subtitles: Option<&Path>,
     out: &Path,
 ) -> Result<(), String> {
-    if overlays.is_empty() {
+    if overlays.is_empty() && subtitles.is_none() {
+        fs::copy(base, out).map_err(|error| error.to_string())?;
         return Ok(());
     }
     let mut cmd = hidden_command("ffmpeg");
-    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"]);
-    cmd.arg(base);
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+        .arg(base);
     for (path, _, _) in overlays {
-        cmd.arg("-i");
-        cmd.arg(path);
+        cmd.arg("-i").arg(path);
     }
-    let mut filter_parts: Vec<String> = Vec::new();
-    for (i, _) in overlays.iter().enumerate() {
-        let idx = i + 1;
-        filter_parts.push(format!("[{idx}:v]scale=180:320:flags=bicubic[ov{idx}]"));
+    let mut parts = Vec::new();
+    let mut last = "0:v".to_owned();
+    // 文字仍在主画面之上、叠加画面之下，与原来的分次渲染层序一致。
+    if let Some(path) = subtitles {
+        parts.push(format!("[{last}]ass='{}'[text]", ass_filter_path(path)));
+        last = "text".to_owned();
     }
-    let mut last_label = "0:v".to_owned();
     for (i, (_, start, end)) in overlays.iter().enumerate() {
-        let idx = i + 1;
-        let out_label = if i + 1 == overlays.len() {
-            "outv".to_owned()
-        } else {
-            format!("tmp{i}")
-        };
-        let enable = format!("between(t,{start:.3},{end:.3})");
-        filter_parts.push(format!(
-            "[{last_label}][ov{idx}]overlay=W-w-16:16:enable='{enable}'[{out_label}]"
+        let input = i + 1;
+        parts.push(format!(
+            "[{input}:v]scale=180:320:flags=bicubic,setpts=PTS-STARTPTS+{start:.3}/TB[ov{i}]"
         ));
-        last_label = out_label;
+        parts.push(format!("[{last}][ov{i}]overlay=W-w-16:16:eof_action=pass:enable='between(t,{start:.3},{end:.3})'[layer{i}]"));
+        last = format!("layer{i}");
     }
-    let filter_complex = filter_parts.join(";");
     cmd.args([
         "-filter_complex",
-        &filter_complex,
+        &parts.join(";"),
         "-map",
-        "[outv]",
+        &format!("[{last}]"),
         "-c:v",
         "libx264",
         "-preset",
@@ -310,16 +311,32 @@ fn composite_overlay_clips(
         "-movflags",
         "+faststart",
         "-an",
-    ]);
-    cmd.arg(out);
+    ])
+    .arg(out);
     let status = cmd
         .status()
         .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("FFmpeg could not composite overlay clips.".to_owned())
+    if !status.success() {
+        return Err("FFmpeg could not composite preview layers.".to_owned());
     }
+    Ok(())
+}
+
+/// 未完成的中间视频不进入缓存；每次写入使用独立临时文件。
+fn cached_timeline_clip(
+    cache: &Path,
+    source: &Path,
+    kind: &str,
+    clip: &TimelineClip,
+) -> Result<PathBuf, String> {
+    let key = crate::preview_cache::clip_key(source, kind, clip)?;
+    let destination = cache.join(format!("clip-{key}.mp4"));
+    if !destination.is_file() {
+        let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+        render_timeline_clip(source, kind, clip, &pending)?;
+        fs::rename(pending, &destination).map_err(|error| error.to_string())?;
+    }
+    Ok(destination)
 }
 
 fn inspect_preview_quality(
@@ -442,7 +459,16 @@ fn inspect_preview_quality(
 }
 
 #[tauri::command]
-pub fn render_preview(
+pub async fn render_preview(
+    app: AppHandle,
+    timeline_version_id: String,
+) -> Result<PreviewResult, String> {
+    tauri::async_runtime::spawn_blocking(move || render_preview_inner(app, timeline_version_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+pub(crate) fn render_preview_inner(
     app: AppHandle,
     timeline_version_id: String,
 ) -> Result<PreviewResult, String> {
@@ -453,8 +479,14 @@ pub fn render_preview(
         return Err("Timeline has no clips to render.".to_owned());
     }
     let directory = preview_directory(&app, &timeline.id)?;
+    let cache = directory
+        .parent()
+        .unwrap()
+        .join("cache")
+        .join(&timeline.project_id);
+    fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
     let mut rendered = Vec::with_capacity(timeline.clips.len());
-    for (index, clip) in timeline.clips.iter().enumerate() {
+    for (_index, clip) in timeline.clips.iter().enumerate() {
         let (source_reference, kind): (String, String) = connection
             .query_row(
                 "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
@@ -465,8 +497,7 @@ pub fn render_preview(
         if !Path::new(&source_reference).is_file() {
             return Err("Timeline source media is no longer available. Reconnect or replace the missing asset before rendering.".to_owned());
         }
-        let destination = directory.join(format!("clip_{index:03}.mp4"));
-        render_timeline_clip(Path::new(&source_reference), &kind, clip, &destination)?;
+        let destination = cached_timeline_clip(&cache, Path::new(&source_reference), &kind, clip)?;
         rendered.push(destination);
     }
     let list_path = directory.join("concat.txt");
@@ -484,59 +515,41 @@ pub fn render_preview(
         .join("\n");
     fs::write(&list_path, list).map_err(|_| "Could not prepare preview sequence.".to_owned())?;
     let preview_path = directory.join("preview.mp4");
-    let assembled_path = if timeline.text_tracks.is_empty() {
-        preview_path.clone()
-    } else {
-        directory.join("preview_video.mp4")
-    };
-    let status = hidden_command("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-        ])
-        .arg(&list_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
-        .arg(&assembled_path)
-        .status()
-        .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
-    if !status.success() {
-        return Err("FFmpeg could not assemble the preview.".to_owned());
-    }
-    if !timeline.text_tracks.is_empty() {
-        let ass_path = directory.join("text_tracks.ass");
-        write_text_tracks_ass(&ass_path, &timeline.text_tracks)?;
-        let filter = format!("ass='{}'", ass_filter_path(&ass_path));
+    let assembled_path = cache.join(format!("base-{}.mp4", crate::preview_cache::key(&rendered)));
+    if !assembled_path.is_file() {
+        let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
         let status = hidden_command("ffmpeg")
-            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
-            .arg(&assembled_path)
             .args([
-                "-vf",
-                &filter,
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-movflags",
-                "+faststart",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
             ])
-            .arg(&preview_path)
+            .arg(&list_path)
+            .args(["-c", "copy", "-movflags", "+faststart"])
+            .arg(&pending)
             .status()
             .map_err(|_| "FFmpeg is not available on this computer.".to_owned())?;
         if !status.success() {
-            return Err("FFmpeg could not render text tracks in the preview.".to_owned());
+            return Err("FFmpeg could not assemble the preview.".to_owned());
         }
+        fs::rename(pending, &assembled_path).map_err(|error| error.to_string())?;
     }
+    let subtitles = if timeline.text_tracks.is_empty() {
+        None
+    } else {
+        let path = directory.join("text_tracks.ass");
+        write_text_tracks_ass(&path, &timeline.text_tracks)?;
+        Some(path)
+    };
+    let mut overlay_renders: Vec<(PathBuf, f64, f64)> = Vec::new();
     if !timeline.overlay_clips.is_empty() {
-        let mut overlay_renders: Vec<(PathBuf, f64, f64)> = Vec::new();
-        for (index, clip) in timeline.overlay_clips.iter().enumerate() {
+        for clip in &timeline.overlay_clips {
             let (src, kind): (String, String) = connection
                 .query_row(
                     "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
@@ -547,17 +560,28 @@ pub fn render_preview(
             if !Path::new(&src).is_file() {
                 return Err("Timeline overlay source media is no longer available.".to_owned());
             }
-            let dest = directory.join(format!("overlay_{index:03}.mp4"));
-            render_timeline_clip(Path::new(&src), &kind, clip, &dest)?;
+            let dest = cached_timeline_clip(&cache, Path::new(&src), &kind, clip)?;
             let start = clip.timeline_start_ms as f64 / 1000.0;
             let end = clip.timeline_end_ms as f64 / 1000.0;
             overlay_renders.push((dest, start, end));
         }
-        let composited = directory.join("preview_composited.mp4");
-        composite_overlay_clips(&preview_path, &overlay_renders, &composited)?;
-        fs::rename(&composited, &preview_path)
-            .map_err(|_| "Could not finalize overlay preview.".to_owned())?;
     }
+    let layer_key = crate::preview_cache::key(&serde_json::json!({
+        "renderer": "layers-v2", "base": assembled_path,
+        "text": timeline.text_tracks, "overlays": overlay_renders,
+    }));
+    let layered = cache.join(format!("layers-{layer_key}.mp4"));
+    if !layered.is_file() {
+        let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+        composite_preview_layers(
+            &assembled_path,
+            &overlay_renders,
+            subtitles.as_deref(),
+            &pending,
+        )?;
+        fs::rename(pending, &layered).map_err(|error| error.to_string())?;
+    }
+    fs::copy(&layered, &preview_path).map_err(|error| error.to_string())?;
     if !timeline.music_tracks.is_empty() || !timeline.voiceover_tracks.is_empty() {
         let mixed_path = directory.join("preview_mixed.mp4");
         if mix_preview_audio(

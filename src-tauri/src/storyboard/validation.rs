@@ -86,6 +86,7 @@ mod tests {
             }],
             uncovered_beat_ids: vec![],
             shots: vec![StoryboardShot {
+                crop_focus: None,
                 order_index: 1,
                 duration_ms: 5_000,
                 purpose: "test shot".to_owned(),

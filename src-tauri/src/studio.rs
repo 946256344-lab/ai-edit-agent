@@ -264,6 +264,7 @@ pub fn commit_studio_edits(
                 } else {
                     return Err(format!("镜头 {} 不支持的素材类型", r.shot_index));
                 }
+                clips[idx].crop_focus = None;
                 clips[idx].asset_id = r.asset_id.clone();
                 clips[idx].source_start_ms = r.source_start_ms;
                 clips[idx].source_end_ms = r.source_end_ms;
@@ -350,6 +351,7 @@ pub fn commit_studio_edits(
                     }
                 }
                 let new_clip = TimelineClip {
+                    crop_focus: None,
                     shot_index: next_shot_index,
                     asset_id: ins.asset_id,
                     source_start_ms: ins.source_start_ms,
@@ -596,6 +598,7 @@ pub fn commit_studio_edits(
                     return Err("不支持的叠加素材类型".to_owned());
                 }
                 overlay_clips.push(TimelineClip {
+                    crop_focus: None,
                     shot_index: next_shot_index,
                     asset_id: ins.asset_id,
                     source_start_ms: ins.source_start_ms,

@@ -112,7 +112,7 @@ export type AssetPage = {
   limit: number
   directories: AssetDirectory[]
   unfiledCount: number
-  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number }
+  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number }
 }
 
 export type AssetTaskCenter = {
@@ -160,7 +160,7 @@ export type StoryboardVersion = {
   scriptMode: 'full_script' | 'key_message'
   beats: Array<{ id: string; purpose: string; requiredVisual: string }>
   uncoveredBeatIds: string[]
-  shots: Array<{ orderIndex: number; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual' }>
+  shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual' }>
   createdAt: number
 }
 
@@ -185,7 +185,7 @@ export type MusicTrackState = { id: string; enabled: boolean; cues: MusicCue[] }
 export type VoiceoverCue = { id: string; assetId: string; generationId?: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; volume: number; fadeInMs?: number; fadeOutMs?: number; provider?: string; voiceId?: string; voiceName?: string | null }
 export type VoiceoverTrackState = { id: string; enabled: boolean; cues: VoiceoverCue[] }
 
-export type TimelineClipDto = { shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string; clipKind?: string; derivedFromShotIndex?: number | null; fitReason?: string | null }
+export type TimelineClipDto = { cropFocus?: [number, number] | null; shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string; clipKind?: string; derivedFromShotIndex?: number | null; fitReason?: string | null }
 
 export type TimelineVersion = {
   id: string

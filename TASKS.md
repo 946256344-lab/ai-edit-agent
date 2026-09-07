@@ -3,6 +3,9 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] 后续：预览缓存 `previews/cache/<projectId>` 增加按项目清理或占用上限；合入 smooth-editing-pipeline 后另开分支，避免本机派生视频无限堆积。
+- [ ] 后续：合入后用 1–2 个真实项目抽检竖屏 `cropFocus`（预览裁剪与 Jianying 草稿主体是否一致）。
+- [x] 完成（2026-09-07，codex/smooth-editing-pipeline）：预览分层复用、空闲停止刷新、候选评分修正、配音/语义并行、句级对齐与镜头衔接/竖屏构图；健康摘要仅在计数/任务状态变化时 bump 素材页。见 `docs/changes/2026-09-07-smooth-editing-pipeline.md`。
 - [x] 完成（2026-09-07）：完整文案由模型标 full_script+spokenScript；TTS 照念原文不用改写 beats。见 `docs/changes/2026-09-07-full-script-verbatim-voiceover.md`。
 - [x] 完成（2026-09-07）：配音旁白必写（alignment 失败不挡写入）；Fish 传输类失败回退 ElevenLabs；快照 `voiceoverCues`/`配音能力` 与 `voiceoverApplied` 事实返回。见 `docs/changes/2026-09-07-voiceover-must-apply.md`。
 - [x] 完成（2026-09-07）：短对齐字幕动画钳制；字幕校验失败不挡旁白写入。见 `docs/changes/2026-09-07-voiceover-short-subtitle-animation.md`。

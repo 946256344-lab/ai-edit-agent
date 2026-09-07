@@ -1,5 +1,14 @@
 # API 与工具契约
 
+## 2026-09-07：剪辑流程与预览复用
+
+- `list_asset_page.counts.visualPending` 返回项目内视觉分析 `queued/running` 素材数，与技术分析计数共同决定前端是否继续刷新。`assets-changed` 事件的 payload 为项目 ID，在技术分析向视觉队列交接的事务提交后发出；空闲不再持续轮询素材或健康摘要，导入、重链路、健康扫描动作与 Agent 终态会主动刷新。健康摘要轮询仅在计数或活动任务状态变化时连带刷新素材页，首次观察与空闲重复摘要不触发。
+- Storyboard shot 与 `TimelineClipDto` 增加可选 `cropFocus: [x, y] | null`，坐标为源画面归一化主体中心。旧版本缺省居中；分镜生成时由已有视觉精修请求判断，创建时间线时保留，替换源片段时清除。预览按主体中心裁剪至 9:16，Jianying handoff 将焦点转换成现有 ClipSettings；不新增编辑命令。
+- `render_preview` 命令的参数和返回值不变，桌面调用通过阻塞工作线程运行媒体任务，Agent/确认流水线共用 `render_preview_inner`。源文件版本、源区间、画面参数确定镜头缓存；底片和文字/叠加画面分层复用，音轨修改不重新编码未变化的视频层。缓存位于本机 `previews/cache/<projectId>`，失败中的临时文件不会作为可复用结果。
+- 完整旁白模式在叙事确定后并行执行 TTS 与批量语义编码。仅当配音时间戳与各 beat 原文完整匹配、且 Provider 时间单元能够表达 beat 边界时，使用真实 beat 时段；不把单个时间片段均分成假字符时间戳。不满足条件时保持已有估计时长行为。已覆盖全部 beat 时，在选定源窗容量内按真实时长分配镜头，优先靠近停顿切点；标准化后再次确认 beat 时长，源范围不足进入既有 Phase 4 精修。
+
+实现与验证记录：`docs/changes/2026-09-07-smooth-editing-pipeline.md`。
+
 ## 状态
 
 桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 仅镜像当前内部 Agent 技能名称，前端通过 `src/lib/local-store.ts` 调用公开 Tauri 命令。

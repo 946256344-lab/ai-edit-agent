@@ -7,6 +7,88 @@ use rusqlite::Connection;
 use uuid::Uuid;
 
 #[test]
+fn preview_cache_reuses_text_only_edits_and_invalidates_source_or_crop_changes() {
+    let directory = std::env::temp_dir().join(format!("preview-cache-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("source.mp4");
+    let status = hidden_command("ffmpeg")
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:s=640x360:r=30,drawbox=x=320:y=0:w=320:h=360:color=blue:t=fill",
+            "-t",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut clip = TimelineClip {
+        source_end_ms: 1_000,
+        timeline_end_ms: 1_000,
+        ..Default::default()
+    };
+    let first = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    let modified = fs::metadata(&first).unwrap().modified().unwrap();
+    clip.on_screen_text = "new subtitle".to_owned();
+    clip.shot_index = 8;
+    clip.timeline_start_ms = 5_000;
+    clip.timeline_end_ms = 6_000;
+    let reused = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    assert_eq!(first, reused);
+    assert_eq!(modified, fs::metadata(&reused).unwrap().modified().unwrap());
+    let key = crate::preview_cache::clip_key(&source, "video", &clip).unwrap();
+    clip.crop_focus = Some([0.8, 0.5]);
+    assert_ne!(
+        key,
+        crate::preview_cache::clip_key(&source, "video", &clip).unwrap()
+    );
+    let focused = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    let pixel = hidden_command("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&focused)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=1:1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(pixel.status.success());
+    assert!(
+        pixel.stdout[2] > pixel.stdout[0] + 100,
+        "右侧主体应呈蓝色，不能仍然居中裁剪"
+    );
+    clip.crop_focus = None;
+    // 同路径源文件变更必须失效，避免跨版本拿到旧画面。
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&source)
+        .unwrap()
+        .write_all(b"changed")
+        .unwrap();
+    assert_ne!(
+        key,
+        crate::preview_cache::clip_key(&source, "video", &clip).unwrap()
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn visual_signature_comparison_distinguishes_similar_frames() {
     assert_eq!(
         mean_pixel_difference(&[10, 12, 14], &[11, 13, 15]),

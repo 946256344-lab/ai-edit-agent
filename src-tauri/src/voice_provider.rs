@@ -839,8 +839,7 @@ pub(crate) fn synthesize_voiceover_for_timeline(
         .lock()
         .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
     let root = voiceover_root(app, project_id)?;
-    let (cached, _audio, alignment, reused) =
-        synthesize_with_fallback(text, voice_id, &root)?;
+    let (cached, _audio, alignment, reused) = synthesize_with_fallback(text, voice_id, &root)?;
     let mp3_path = cached.directory.join("voiceover.mp3");
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
     let mut quality_warnings = Vec::new();
@@ -1243,6 +1242,7 @@ mod tests {
             uncovered_beat_ids: Vec::new(),
             shots: vec![
                 StoryboardShot {
+                    crop_focus: None,
                     order_index: 1,
                     duration_ms: 3_000,
                     purpose: "p".to_owned(),
@@ -1259,6 +1259,7 @@ mod tests {
                     split_role: "lead".to_owned(),
                 },
                 StoryboardShot {
+                    crop_focus: None,
                     order_index: 2,
                     duration_ms: 3_000,
                     purpose: "p".to_owned(),
@@ -1325,18 +1326,16 @@ mod tests {
             }],
         );
         let cue = &track.cues[0];
-        assert!(
-            cue.entrance
-                .as_ref()
-                .map(|animation: &TextAnimation| animation.duration_ms <= 80)
-                .unwrap_or(true)
-        );
-        assert!(
-            cue.exit
-                .as_ref()
-                .map(|animation: &TextAnimation| animation.duration_ms <= 80)
-                .unwrap_or(true)
-        );
+        assert!(cue
+            .entrance
+            .as_ref()
+            .map(|animation: &TextAnimation| animation.duration_ms <= 80)
+            .unwrap_or(true));
+        assert!(cue
+            .exit
+            .as_ref()
+            .map(|animation: &TextAnimation| animation.duration_ms <= 80)
+            .unwrap_or(true));
     }
 
     #[test]
@@ -1345,7 +1344,9 @@ mod tests {
         assert!(is_fallback_eligible_error("Fish Audio request timed out."));
         assert!(is_fallback_eligible_error("Fish Audio API error 503."));
         assert!(is_fallback_eligible_error("Fish Audio API error 429."));
-        assert!(!is_fallback_eligible_error("Fish Audio API key was rejected."));
+        assert!(!is_fallback_eligible_error(
+            "Fish Audio API key was rejected."
+        ));
         assert!(!is_fallback_eligible_error(
             "Fish Audio voice Provider is not configured."
         ));

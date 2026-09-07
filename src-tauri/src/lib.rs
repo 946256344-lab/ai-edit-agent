@@ -30,6 +30,8 @@ mod oauth;
 mod preview;
 /// Preview 旁白与 BGM 混音；禁止用 `-shortest` 截断口播。
 mod preview_audio;
+/// 跨时间线版本复用预览镜头与无字幕底片。
+mod preview_cache;
 /// 隐藏 Windows 子进程的创建与有界执行。
 mod process;
 /// Project/task/conversation/message 命令与启动恢复协调。

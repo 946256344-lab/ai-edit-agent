@@ -50,6 +50,8 @@ pub(crate) struct BeatCandidatePool {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoughStoryboard {
+    #[serde(default)]
+    pub(crate) speech_timing: super::timing::SpeechTiming,
     pub title: String,
     pub summary: String,
     pub target_duration_ms: i64,
@@ -121,12 +123,14 @@ pub(crate) fn phase1_generate_narrative(
 
 /// Phase 2: 本地短名单——排序 + 去同/去相似 + 补位到 Top-12；不调用模型选镜。
 pub(crate) fn phase2_rough_shot_selection(
-    app: &AppHandle,
+    _app: &AppHandle,
     _access: &ModelAccess,
     _brief: &str,
     narrative: &NarrativeStructure,
     sources: &[StoryboardSource],
     usage_counts: &HashMap<String, i32>,
+    embeddings: &[Vec<f32>],
+    speech_timing: super::timing::SpeechTiming,
 ) -> Result<RoughStoryboard, String> {
     log::info!(
         "Phase 2: Shortlisting Top-{} candidates for {} beats (local dedupe + backfill)",
@@ -141,31 +145,16 @@ pub(crate) fn phase2_rough_shot_selection(
     };
     let mut uncovered_beat_ids = Vec::new();
     let mut candidate_pools = Vec::new();
-    let mut prior_pool_assets: Vec<String> = Vec::new();
-    let mut semantic_fallback_logged = false;
-
-    for beat in &narrative.beats {
-        let beat_text = format!("{} {}", beat.required_visual, beat.purpose);
-        let beat_embedding =
-            match crate::storyboard::semantic::encode_beat_semantics(app, &beat_text) {
-                Ok(embedding) => Some(embedding),
-                Err(_) => {
-                    if !semantic_fallback_logged {
-                        log::warn!(
-                            "Local semantic ranking unavailable; using lexical storyboard ranking."
-                        );
-                        semantic_fallback_logged = true;
-                    }
-                    None
-                }
-            };
+    for (beat_index, beat) in narrative.beats.iter().enumerate() {
+        let beat_embedding = embeddings.get(beat_index);
+        let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
         let ranked = scoring::rank_segment_candidates(
-            candidates_within_diversity_limit(sources, &prior_pool_assets),
+            sources.to_vec(),
             beat,
             target_each,
-            &prior_pool_assets,
+            &[],
             usage_counts,
-            beat_embedding.as_deref(),
+            beat_embedding.map(Vec::as_slice),
         );
         let ranked_sources = ranked
             .into_iter()
@@ -192,9 +181,6 @@ pub(crate) fn phase2_rough_shot_selection(
             );
             uncovered_beat_ids.push(beat.id.clone());
             continue;
-        }
-        for candidate in pool.iter().take(3) {
-            prior_pool_assets.push(candidate.asset_id.clone());
         }
         candidate_pools.push(BeatCandidatePool {
             beat_id: beat.id.clone(),
@@ -223,12 +209,16 @@ pub(crate) fn phase2_rough_shot_selection(
             continue;
         };
         let beat = narrative.beats.iter().find(|beat| beat.id == pool.beat_id);
-        let duration = (target_each).clamp(1_500, 8_000);
+        let duration = speech_timing
+            .duration(&pool.beat_id)
+            .unwrap_or(target_each)
+            .max(1);
         let source_end = main
             .duration_ms
             .unwrap_or(duration)
             .clamp(duration, main.duration_ms.unwrap_or(duration).max(duration));
         shots.push(StoryboardShot {
+            crop_focus: None,
             order_index: (index as i64) + 1,
             duration_ms: duration.min(source_end),
             purpose: pool.beat_purpose.clone(),
@@ -247,6 +237,7 @@ pub(crate) fn phase2_rough_shot_selection(
     }
 
     Ok(RoughStoryboard {
+        speech_timing,
         title: narrative.title.clone(),
         summary: narrative.summary.clone(),
         target_duration_ms: narrative.target_duration_ms,
@@ -334,6 +325,7 @@ fn evidence_tag_set(source: &StoryboardSource) -> HashSet<String> {
     tags
 }
 
+#[cfg(test)]
 fn candidates_within_diversity_limit(
     sources: &[StoryboardSource],
     prior_selections: &[String],
@@ -530,6 +522,7 @@ mod tests {
 
     fn shot(asset_id: &str) -> StoryboardShot {
         StoryboardShot {
+            crop_focus: None,
             order_index: 1,
             duration_ms: 1_000,
             purpose: "purpose".to_owned(),
@@ -652,6 +645,7 @@ mod tests {
     #[test]
     fn phase3_cannot_replace_the_asset_selected_for_a_beat() {
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -688,6 +682,7 @@ mod tests {
         let mut rough_b = shot("selected-b");
         rough_b.beat_id = "beat-2".to_owned();
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -734,6 +729,7 @@ mod tests {
     fn phase3_can_split_a_beat_into_distinct_candidate_shots() {
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -769,6 +765,7 @@ mod tests {
     fn phase3_requires_at_least_two_shots_when_pool_has_alternates() {
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -802,6 +799,7 @@ mod tests {
     fn phase3_cannot_reuse_the_same_candidate_within_a_beat() {
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -836,6 +834,7 @@ mod tests {
         let mut rough_b = shot("selected-b");
         rough_b.beat_id = "beat-2".to_owned();
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -874,6 +873,7 @@ mod tests {
         let mut rough_b = shot("selected-b");
         rough_b.beat_id = "beat-2".to_owned();
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -906,6 +906,7 @@ mod tests {
     fn phase3_may_lead_with_any_pool_candidate() {
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -1043,6 +1044,7 @@ mod tests {
         uncovered_beat.id = "beat-2".to_owned();
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -1079,6 +1081,7 @@ mod tests {
         added_shot.beat_id = "beat-2".to_owned();
         let rough_shot = shot("selected");
         let rough = RoughStoryboard {
+            speech_timing: Default::default(),
             title: "title".to_owned(),
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
@@ -1204,10 +1207,14 @@ pub(crate) fn phase3_select(
         Script mode: {}\n\
         Covered beat ids in order: {}\n\
         Uncovered beat ids (do not create shots for these): {}\n\
+        Voice timing (milliseconds; empty means not available): {}\n\
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
         Keyframe grids are attached below for candidate assetIds (2x2 overview of each clip).\n\
         Use those frames to judge which assets best match each beat's purpose/requiredVisual.\n\
+        Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
+        Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
+        Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
         For EACH covered beat, choose 2 or 3 DISTINCT assetIds from that beat's candidates, in playback order.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then assetIds must be [].\n\
         Do NOT invent assetIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
@@ -1218,7 +1225,8 @@ pub(crate) fn phase3_select(
         rough.target_duration_ms,
         rough.script_mode,
         covered_ids.join(", "),
-        rough.uncovered_beat_ids.join(", ")
+        rough.uncovered_beat_ids.join(", "),
+        serde_json::to_string(&rough.speech_timing).unwrap()
     );
 
     let mut content_blocks = vec![json!({ "type": "input_text", "text": prompt })];
@@ -1390,6 +1398,10 @@ fn assemble_phase3_selection(
             continue;
         }
         let beat = rough.beats.iter().find(|beat| beat.id == beat_id);
+        let per_beat_budget = rough
+            .speech_timing
+            .duration(&beat_id)
+            .unwrap_or(per_beat_budget);
         let part_count = selection.asset_ids.len() as i64;
         for (part_offset, asset_id) in selection.asset_ids.iter().enumerate() {
             let source = pool
@@ -1418,6 +1430,7 @@ fn assemble_phase3_selection(
                 "bridge"
             };
             shots.push(StoryboardShot {
+                crop_focus: None,
                 order_index,
                 duration_ms: source_end,
                 purpose: beat
@@ -1636,18 +1649,21 @@ pub(crate) fn phase4_refine_ranges(
         "text": format!(
             "Brief: {brief}\n\
             Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
+            Voice timing: {}\n\
             Chosen windows: {}\n\
             {feedback_context}\n\n\
             Timed frames below are densified ONLY inside each shot's chosen content window.\n\
             Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
             Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
             Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
-            No overlapping ranges from the same asset. Approach targetDurationMs.\n\
+            No overlapping ranges from the same asset. When voice timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
             Divide beat narration across shots when needed.\n\
             Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
-            Each shot: orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
+            Each shot: cropFocus ([x,y], subject center in the original source frame, normalized 0..1), orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
+            Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
             matchLevel must be 'direct' or 'contextual'.",
             serde_json::to_string(&draft).unwrap_or_else(|_| "{}".to_owned()),
+            serde_json::to_string(&rough.speech_timing).unwrap(),
             serde_json::to_string(
                 &pick_map
                     .iter()
@@ -1819,9 +1835,12 @@ pub(crate) fn phase4_refine_ranges(
     }
 
     clamp_shots_to_chosen_windows(&mut refined, &pick_map);
-    apply_narration_phrase_duration_floor(&mut refined, &pick_map);
-
-    let issues = collect_phase4_issues(&mut refined, selected);
+    if rough.speech_timing.beats.is_empty() {
+        apply_narration_phrase_duration_floor(&mut refined, &pick_map);
+    }
+    refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
+    let mut issues = super::timing::fit_shots(&mut refined, &rough.speech_timing, &pick_map);
+    issues.extend(collect_phase4_issues(&mut refined, selected));
     refined.brief = brief.to_owned();
     refined.title = rough.title.clone();
     refined.summary = rough.summary.clone();

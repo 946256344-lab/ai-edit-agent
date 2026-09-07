@@ -125,9 +125,7 @@ pub(crate) fn apply_synthesized_voiceover(
             Ok(()) => tracks,
             Err(error) => {
                 // 字幕校验失败不得挡掉已合成旁白；保留原文本轨并继续写 voiceover。
-                log::warn!(
-                    "Voiceover subtitles skipped after synthesis (keeping audio): {error}"
-                );
+                log::warn!("Voiceover subtitles skipped after synthesis (keeping audio): {error}");
                 warnings.push(PreviewQualityCheck {
                     category: "voiceover_subtitles".to_owned(),
                     severity: "warning".to_owned(),

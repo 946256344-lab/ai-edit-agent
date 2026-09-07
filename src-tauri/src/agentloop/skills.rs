@@ -10,7 +10,7 @@ use crate::models::{
     MusicTrack, TextTrack, TimelineVersion,
 };
 use crate::music_provider::{attribution_for, download_track, eligible_track, search_tracks};
-use crate::preview::render_preview;
+use crate::preview::render_preview_inner as render_preview;
 use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use crate::timeline::{
     change_clip_duration, create_timeline_draft, insert_clips, reorder_clips, replace_clips,
@@ -209,7 +209,9 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     if code.starts_with("voice_provider_") {
         let retryable = code == "voice_provider_error";
         let fact = match code {
-            "voice_provider_unconfigured" => "Fish Audio / ElevenLabs 密钥均未写入 Credential Manager。",
+            "voice_provider_unconfigured" => {
+                "Fish Audio / ElevenLabs 密钥均未写入 Credential Manager。"
+            }
             "voice_provider_unauthorized" => "ElevenLabs API key was rejected.",
             "voice_provider_timeout" => "ElevenLabs request timed out.",
             _ => "ElevenLabs rejected the speech request.",

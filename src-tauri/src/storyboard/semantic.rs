@@ -237,11 +237,17 @@ pub(crate) fn backfill_project_embeddings(
     Ok(updated)
 }
 
-pub(crate) fn encode_beat_semantics(app: &AppHandle, beat_text: &str) -> Result<Vec<f32>, String> {
-    encode_texts(app, vec![beat_text.to_owned()])?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "semantic_model_inference_failed".to_owned())
+pub(crate) fn encode_beats(
+    app: &AppHandle,
+    beats: &[crate::models::StoryboardBeat],
+) -> Result<Vec<Vec<f32>>, String> {
+    encode_texts(
+        app,
+        beats
+            .iter()
+            .map(|beat| format!("{} {}", beat.required_visual, beat.purpose))
+            .collect(),
+    )
 }
 
 pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f64> {

@@ -144,6 +144,7 @@ pub struct AssetStatusCounts {
     pub analyzing: usize,
     pub queued: usize,
     pub failed: usize,
+    pub visual_pending: usize,
 }
 
 #[derive(Serialize)]
@@ -531,6 +532,9 @@ pub struct PreviewQualityCheck {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineClip {
+    /// 源画面中的主体中心，归一化坐标；旧版本默认居中。
+    #[serde(default)]
+    pub crop_focus: Option<[f64; 2]>,
     pub shot_index: i64,
     pub asset_id: String,
     pub source_start_ms: i64,
@@ -553,6 +557,7 @@ fn default_clip_kind() -> String {
 impl Default for TimelineClip {
     fn default() -> Self {
         Self {
+            crop_focus: None,
             shot_index: 0,
             asset_id: String::new(),
             source_start_ms: 0,
@@ -744,6 +749,9 @@ pub struct OperationLog {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardShot {
+    /// 源画面中的主体中心，归一化坐标；旧版本默认居中。
+    #[serde(default)]
+    pub crop_focus: Option<[f64; 2]>,
     pub order_index: i64,
     pub duration_ms: i64,
     pub purpose: String,

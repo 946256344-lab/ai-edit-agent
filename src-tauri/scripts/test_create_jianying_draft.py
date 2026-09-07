@@ -18,12 +18,21 @@ from create_jianying_draft import (
     jianying_is_running,
     main,
     new_draft_path,
+    portrait_clip_settings,
     register_draft,
     register_when_safe,
 )
 
 
 class SourceDurationBoundaryTests(unittest.TestCase):
+    def test_portrait_focus_keeps_the_right_hand_subject_in_frame(self):
+        material = Mock(width=640, height=360)
+        settings = portrait_clip_settings(material, [0.8, 0.5])
+        self.assertAlmostEqual(settings.scale_x, (960 / 360) / (540 / 640))
+        self.assertLess(settings.transform_x, 0)
+        self.assertAlmostEqual(settings.transform_y, 0)
+        self.assertIsNone(portrait_clip_settings(material, None))
+
     def test_keeps_a_source_range_that_fits(self):
         self.assertEqual(fit_source_duration(1_000_000, 2_000_000, 3_000_000), 2_000_000)
 

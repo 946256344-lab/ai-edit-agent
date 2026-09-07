@@ -9,6 +9,7 @@ pub(crate) mod repair;
 mod scoring;
 pub(crate) mod semantic;
 mod step_retry;
+mod timing;
 mod validation;
 
 use crate::storyboard::repair::{RepairPacket, StoryboardIssue};
@@ -614,10 +615,7 @@ fn key_message_narration_duration_issue(
 }
 
 /// 有大段可朗读文案时纠偏为 full_script，以便走 audio-first；口播原文优先用模型抽出的 spokenScript，否则回落 brief。
-fn upgrade_speakable_brief_to_full_script(
-    brief: &str,
-    narrative: &mut phases::NarrativeStructure,
-) {
+fn upgrade_speakable_brief_to_full_script(brief: &str, narrative: &mut phases::NarrativeStructure) {
     if !brief_has_substantial_speakable_copy(brief) || narrative.script_mode == "full_script" {
         // 已是 full_script 但未抽出 spokenScript 时，用 brief 托底，避免改写 beats 进 TTS。
         if narrative.script_mode == "full_script"
@@ -669,6 +667,9 @@ pub(crate) fn resolve_voiceover_script(
 
 /// Phase5 失败是否属于精修可修（应回 Phase4）；否则视为结构/硬边界，不要空转 Phase4。
 fn phase5_should_retry_phase4(error: &str) -> bool {
+    if error.starts_with("beat_audio_timing:") {
+        return true;
+    }
     let lower = error.to_ascii_lowercase();
     if lower.contains("between 1 and") && (lower.contains("shots") || lower.contains("beats")) {
         return false;
@@ -752,7 +753,11 @@ fn normalize_storyboard_candidate(
             }
         }
     }
-    resolve_overlapping_video_ranges(&mut content.shots, sources);
+    // 已判断主体构图的镜头不能机械搬到另一个未检查的源窗口。
+    // 交叠仍由现有校验报告，再交 Phase 4 重新选窗。
+    if content.shots.iter().all(|shot| shot.crop_focus.is_none()) {
+        resolve_overlapping_video_ranges(&mut content.shots, sources);
+    }
     content
         .uncovered_beat_ids
         .retain(|beat_id| !content.shots.iter().any(|shot| shot.beat_id == *beat_id));
@@ -1057,9 +1062,9 @@ mod tests {
     use super::{
         estimated_storyboard_duration_ms, key_message_narration_duration_issue,
         minimum_storyboard_duration, normalize_storyboard_candidate, phase5_should_retry_phase4,
-        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
-        storyboard_usage_counts, upgrade_speakable_brief_to_full_script, resolve_voiceover_script, validate_storyboard,
-        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        resolve_voiceover_script, short_brief_duration_issue, storyboard_completion_gaps,
+        storyboard_sources, storyboard_usage_counts, upgrade_speakable_brief_to_full_script,
+        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1109,6 +1114,7 @@ mod tests {
             ],
             uncovered_beat_ids: vec!["missing".to_owned()],
             shots: vec![StoryboardShot {
+                crop_focus: None,
                 order_index: 1,
                 duration_ms: 10_000,
                 purpose: "Set the scene".to_owned(),
@@ -1326,6 +1332,7 @@ mod tests {
     fn storyboard_rejects_overlapping_video_ranges() {
         let mut storyboard = content("direct");
         storyboard.shots.push(StoryboardShot {
+            crop_focus: None,
             order_index: 2,
             duration_ms: 5_000,
             purpose: "Repeat the same source".to_owned(),
@@ -1511,7 +1518,8 @@ mod tests {
         .expect("spoken");
         assert!(from_spoken.contains("Keep this exact spoken script"));
         assert!(!from_spoken.contains("paraphrased"));
-        let from_brief = resolve_voiceover_script(&brief, "full_script", "", &beats).expect("brief");
+        let from_brief =
+            resolve_voiceover_script(&brief, "full_script", "", &beats).expect("brief");
         assert_eq!(
             from_brief,
             crate::voice_provider::normalize_narration_text(&brief)
@@ -1584,6 +1592,7 @@ mod tests {
             let mut extra_source = source();
             extra_source.asset_id = asset_id.clone();
             storyboard.shots.push(StoryboardShot {
+                crop_focus: None,
                 order_index: index,
                 duration_ms: 8_000,
                 purpose: "Additional shot".to_owned(),
@@ -1644,6 +1653,7 @@ mod tests {
         storyboard.shots[0].source_end_ms = 20_000;
         storyboard.shots[0].duration_ms = 20_000;
         storyboard.shots.push(StoryboardShot {
+            crop_focus: None,
             order_index: 2,
             duration_ms: 20_000,
             purpose: "Show another beat".to_owned(),
@@ -1763,7 +1773,10 @@ mod tests {
             .iter()
             .filter(|shot| shot.beat_id == "context")
             .collect::<Vec<_>>();
-        assert_eq!(context_shots[0].narration_text, "This is the opening scene.");
+        assert_eq!(
+            context_shots[0].narration_text,
+            "This is the opening scene."
+        );
         assert!(context_shots[1].narration_text.is_empty());
         assert!(context_shots[2].narration_text.is_empty());
         assert!(!context_shots[1].on_screen_text.is_empty());
@@ -1989,33 +2002,45 @@ fn generate_storyboard_internal(
         &narrative.spoken_script,
         &narrative.beats,
     );
-    if narrative.script_mode == "full_script" {
-        if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty()) {
-            match crate::voice_provider::prepare_audio_first(
-                &app,
-                &project_id,
-                narration_text,
-                voice_id,
-            ) {
-                Ok(prepared) => {
-                    let hard_target = prepared
-                        .duration_ms
-                        .saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
-                    log::info!(
+    // 语义编码不依赖音频时长，与 TTS 同时执行；最终排序等待两者完成。
+    let embeddings = std::thread::scope(|scope| {
+        let embedding_job = scope.spawn(|| semantic::encode_beats(&app, &narrative.beats));
+        if narrative.script_mode == "full_script" {
+            if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty())
+            {
+                match crate::voice_provider::prepare_audio_first(
+                    &app,
+                    &project_id,
+                    narration_text,
+                    voice_id,
+                ) {
+                    Ok(prepared) => {
+                        let hard_target = prepared
+                            .duration_ms
+                            .saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
+                        log::info!(
                         "Audio-first prepared: duration={}ms hard_target={}ms reused={} chars={}",
                         prepared.duration_ms,
                         hard_target,
                         prepared.reused_cache,
                         narration_text.chars().count()
                     );
-                    audio_first = Some((hard_target, prepared));
-                }
-                Err(e) => {
-                    log::warn!("Audio-first prepare skipped (keeping estimate): {e}");
+                        audio_first = Some((hard_target, prepared));
+                    }
+                    Err(e) => {
+                        log::warn!("Audio-first prepare skipped (keeping estimate): {e}");
+                    }
                 }
             }
         }
-    }
+        embedding_job
+            .join()
+            .map_err(|_| "Semantic encoding worker failed.".to_owned())?
+    });
+    let embeddings = embeddings.unwrap_or_else(|error| {
+        log::warn!("Local semantic ranking unavailable: {error}");
+        Vec::new()
+    });
     if let Some((hard_target, _)) = &audio_first {
         narrative.target_duration_ms = (*hard_target).clamp(3_000, 120_000);
     }
@@ -2034,6 +2059,13 @@ fn generate_storyboard_internal(
         &narrative,
         &sources,
         &usage_counts,
+        &embeddings,
+        audio_first
+            .as_ref()
+            .and_then(|(target, prepared)| {
+                timing::from_alignment(&narrative.beats, &prepared.alignment, *target)
+            })
+            .unwrap_or_default(),
     )?;
     log::info!(
         "Phase 2 complete: rough storyboard with {} lead shots across pools, {} uncovered beats",
@@ -2216,7 +2248,11 @@ fn generate_storyboard_internal(
 
                 // Phase 5: normalize 机械自修后硬校验；仅精修类问题回 Phase4
                 let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
-                match validate_storyboard(&candidate, &sources, brief) {
+                match rough
+                    .speech_timing
+                    .validate(&candidate)
+                    .and_then(|()| validate_storyboard(&candidate, &sources, brief))
+                {
                     Ok(()) => {
                         log::info!("Phase 5 validation passed.");
                         content = Some(candidate);
@@ -2412,6 +2448,7 @@ fn finalize_audio_first_timeline(
         .map(|s| {
             let end = cursor + s.duration_ms;
             let clip = TimelineClip {
+                crop_focus: s.crop_focus,
                 shot_index: s.order_index,
                 asset_id: s.asset_id.clone(),
                 source_start_ms: s.source_start_ms,

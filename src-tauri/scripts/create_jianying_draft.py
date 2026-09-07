@@ -58,6 +58,23 @@ def fit_source_duration(source_start_us, requested_duration_us, material_duratio
     return available_duration_us
 
 
+def portrait_clip_settings(material, focus):
+    """以源主体中心填满 9:16 画布，与本地预览使用相同裁剪边界。"""
+    if focus is None:
+        return None
+    width, height = material.width, material.height
+    cover = max(540 / width, 960 / height)
+    contain = min(540 / width, 960 / height)
+    crop_width, crop_height = 540 / cover, 960 / cover
+    left = max(0, min(width - crop_width, width * focus[0] - crop_width / 2))
+    top = max(0, min(height - crop_height, height * focus[1] - crop_height / 2))
+    return ClipSettings(
+        scale_x=cover / contain, scale_y=cover / contain,
+        transform_x=(width / 2 - left - crop_width / 2) * cover / 270,
+        transform_y=(top + crop_height / 2 - height / 2) * cover / 480,
+    )
+
+
 def create_cover(source, source_start_ms, destination):
     subprocess.run(
         [
@@ -227,6 +244,7 @@ def add_overlay_tracks(script, clips):
             material,
             Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
             source_timerange=Timerange(source_start_us, source_duration_us),
+            clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
         )
         script.add_segment(segment, track_name="overlay-main")
 
@@ -444,6 +462,7 @@ def main():
                 material,
                 Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
                 source_timerange=Timerange(source_start_us, source_duration_us),
+                clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
             )
             script.add_segment(segment)
         add_overlay_tracks(script, payload.get("overlayClips", []))

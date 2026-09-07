@@ -1,5 +1,11 @@
 # 架构
 
+## 剪辑流程优化（2026-09-07）
+
+叙事确定后，TTS 与所有 beat 的本地向量编码并行；Phase 2 独立建立各 beat 候选池，不把候选当作已使用镜头提前扣分，时长项按可用源窗是否容纳目标镜头评分。Phase 3 在原有一次请求里结合整条序列判断景别、完整动作、方向与首尾表达；Phase 4 附带真实配音时段并判断 `cropFocus`，裁剪焦点随分镜进入时间线、预览和 Jianying handoff。带焦点的镜头不由标准化阶段机械移到未经检查的新窗口；交叠和声画时长缺口仍交已有精修流程处理。
+
+预览仍来自持久化时间线，新增 `preview_cache.rs` 管理跨版本复用键，镜头、无字幕底片、文字/叠加画面三层缓存留在本地。只有成功生成的临时视频才进入缓存；源大小或修改时间、源范围、裁剪变化会失效对应层。文字和叠加画面一次合成，音轨单独混合，桌面命令在工作线程执行。`useAssetWorkspaceController` 仅在分析/扫描活动期间继续刷新，由动作和队列交接事件唤醒；返回的 `visualPending` 覆盖当前页之外的视觉分析。健康摘要轮询仅在计数或任务状态变化时连带刷新素材页。
+
 ## 开发协作边界
 
 `CONTRIBUTING.md` 是分支、worktree、验证、提交与 PR 的唯一流程；`AGENTS.md`、`CLAUDE.md`、Cursor rule 和 `opencode.json` 只是薄入口。`.harness/branch-policy.json` 与 pre-commit 禁止直接在 `master`/`main` 提交、拒绝未知分支前缀，并要求当前任务分支包含本地 `origin/master`。检查不执行网络操作，远端基线由开发者先 `git fetch origin` 更新；GitHub 分支保护仍是独立的远端 TODO。

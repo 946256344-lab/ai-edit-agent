@@ -76,12 +76,15 @@ fn calculate_candidate_score(
     if candidate.kind == "video" {
         if let Some(duration) = candidate.duration_ms {
             let target = target_duration_ms.max(1) as f64;
-            let actual = duration.max(1) as f64;
-            let ratio = if actual >= target {
-                target / actual
-            } else {
-                actual / target
-            };
+            // 比较可用源窗口能否容纳镜头，长素材不会因总长度被降权。
+            let available = candidate
+                .scene_segments
+                .iter()
+                .map(|segment| segment.end_ms - segment.start_ms)
+                .max()
+                .unwrap_or(duration)
+                .max(0) as f64;
+            let ratio = (available / target).min(1.0);
             score += ratio * 15.0;
         }
     } else {
@@ -243,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn better_duration_match_scores_higher() {
+    fn long_source_with_usable_window_is_not_penalized() {
         let perfect = make_source("perfect", "video", Some(5_000), 0.5);
         let too_long = make_source("long", "video", Some(50_000), 0.5);
 
@@ -253,7 +256,10 @@ mod tests {
         let long_score =
             calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None);
 
-        assert!(perfect_score > long_score, "时长完美匹配应得分更高");
+        assert_eq!(
+            perfect_score, long_score,
+            "长素材能够容纳目标镜头时不应降权"
+        );
     }
 
     #[test]

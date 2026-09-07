@@ -81,6 +81,7 @@ pub fn create_timeline_draft(
         .map(|shot| {
             let end = cursor + shot.duration_ms;
             let clip = TimelineClip {
+                crop_focus: shot.crop_focus,
                 shot_index: shot.order_index,
                 asset_id: shot.asset_id.clone(),
                 source_start_ms: shot.source_start_ms,
@@ -1043,6 +1044,7 @@ pub(crate) fn replace_clips(
                 .iter()
                 .find(|replacement| replacement.shot_index == clip.shot_index)
             {
+                clip.crop_focus = None;
                 clip.asset_id = replacement.asset_id.clone();
                 clip.source_start_ms = replacement.source_start_ms;
                 clip.source_end_ms = replacement.source_end_ms;
@@ -1252,6 +1254,7 @@ pub(crate) fn insert_clips(
                 })?,
         };
         let clip = TimelineClip {
+            crop_focus: None,
             shot_index: next_shot_index,
             asset_id: insertion.asset_id.clone(),
             source_start_ms: insertion.source_start_ms,

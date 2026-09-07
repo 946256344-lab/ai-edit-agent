@@ -461,7 +461,7 @@ fn run_confirmation_sequence_pipeline(
     let timeline_version_number = timeline.version_number;
 
     // 步骤 2: render_preview
-    let preview = crate::preview::render_preview(app.clone(), timeline.id.clone())?;
+    let preview = crate::preview::render_preview_inner(app.clone(), timeline.id.clone())?;
 
     let message = if voiceover_failed.is_some() {
         format!(
