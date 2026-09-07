@@ -273,7 +273,9 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           await options.appendAgentMessage(
             conversationId,
             sessionId,
-            `已自动合成配音并生成对齐字幕（cue=${voiced.subtitleCueCount}）。`,
+            voiced.subtitleApplied
+              ? `已自动合成配音（${voiced.provider}）并写入对齐字幕（cue=${voiced.subtitleCueCount}）。`
+              : `已自动合成配音（${voiced.provider}）；对齐字幕未写入，旁白已保留。`,
           )
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
@@ -282,10 +284,14 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           const silent =
             /no narration text|already has voiceover|narration is missing/i.test(detail)
           if (!silent) {
+            const pictureTooShort = /voiceover_longer_than_picture/i.test(detail)
+            const brief = detail.length > 160 ? `${detail.slice(0, 160)}…` : detail
             await options.appendAgentMessage(
               conversationId,
               sessionId,
-              '自动配音暂不可用（检查 Fish Audio / ElevenLabs 配置），预览将不包含配音。',
+              pictureTooShort
+                ? '自动配音未写入：旁白长于画面（禁止冻帧）。请先补足画面时长后再配音；预览暂不含配音。'
+                : `自动配音未写入：${brief}。预览将不包含配音。`,
             )
           }
         }

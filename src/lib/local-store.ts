@@ -209,7 +209,10 @@ export type VoiceoverApplyResult = {
   generationId: string
   durationMs: number
   timelineVersionId: string
+  voiceoverApplied: boolean
+  subtitleApplied: boolean
   subtitleCueCount: number
+  provider: string
   reusedCache: boolean
   qualityWarnings: PreviewQualityReport['checks']
 }

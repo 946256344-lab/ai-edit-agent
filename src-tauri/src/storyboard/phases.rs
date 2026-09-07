@@ -32,6 +32,9 @@ pub struct NarrativeStructure {
     pub summary: String,
     pub target_duration_ms: i64,
     pub script_mode: String,
+    /// 完整口播原文（仅 full_script）。模型从 brief 抽出应照念的文案，不得改写。
+    #[serde(default)]
+    pub spoken_script: String,
     pub beats: Vec<StoryboardBeat>,
 }
 
@@ -76,15 +79,17 @@ pub(crate) fn phase1_generate_narrative(
 
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
-        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (full_script or key_message), and beats.\n\
+        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (full_script or key_message), spokenScript (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), narration (spoken voiceover for this beat).\n\
+        First decide whether the brief already contains a complete narration script the user wants spoken as written:\n\
+        - If YES: scriptMode=full_script. Put that exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions.\n\
+        - If NO (goal/outline/theme only): scriptMode=key_message, spokenScript=\"\", and write short punchy beat.narration lines in the user's language.\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn. If a beat contains more than two spoken clauses, split it further.\n\
         Keep beats short and specific: aim for about 4-8 seconds of spoken narration per beat.\n\
         Duration and scriptMode must follow the brief's real size:\n\
-        - If the brief is a short goal/outline without substantial speakable copy, use scriptMode=key_message: one punchy idea, concise narration, and targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime.\n\
-        - Use scriptMode=full_script only when the brief already contains substantial speakable copy that should be narrated largely as written; then split that copy across beats without inventing a much longer script.\n\
+        - key_message: one punchy idea, concise narration, targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime.\n\
+        - full_script: targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript.\n\
         - Never inflate a short brief into a 30-90s essay. Prefer a tight key_message cut over padded voiceover.\n\
-        If the brief already contains speakable copy, split it across beats without repeating. If the brief has no speakable copy, write a short spoken line in the user's language. narration is voiceover, never on-screen titles.\n\
         Determine the appropriate number of beats from distinct information points; a simple short goal / key_message cut often needs 2-5 beats, not 8+. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with the spoken narration length.\n\
         {feedback_context}"

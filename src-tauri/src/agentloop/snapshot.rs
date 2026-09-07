@@ -167,12 +167,12 @@ fn build_state_snapshot_with_capabilities(
         "无".to_owned()
     } else {
         format!(
-            "v{}, clips={}, text={}, music={}, voiceover={}",
+            "v{}, clips={}, text={}, music={}, voiceoverCues={}",
             timeline.version, timeline.clips, timeline.text, timeline.music, timeline.voiceover
         )
     };
     let snapshot = format!(
-        "{STATE_SNAPSHOT_PREFIX}\n任务: brief=\"{safe_brief}\"; 最近终态={terminal}\n素材: total={total_assets}; kind(video={},image={},audio={},other={})\n分析: technical(ready={},analyzing={},queued={},failed={},other={}); visual(ready={},running={},queued={},failed={},skipped={},other={})\n源健康: online={},missing={},changed={},unreadable={},unchecked={},other={}\nstoryboard: {storyboard_text}\ntimeline: {timeline_text}\npreview: {}(已探测磁盘)\nJianying: {jianying}\n外部能力: 模型={}; 配音={}; Jamendo={}",
+        "{STATE_SNAPSHOT_PREFIX}\n任务: brief=\"{safe_brief}\"; 最近终态={terminal}\n素材: total={total_assets}; kind(video={},image={},audio={},other={})\n分析: technical(ready={},analyzing={},queued={},failed={},other={}); visual(ready={},running={},queued={},failed={},skipped={},other={})\n源健康: online={},missing={},changed={},unreadable={},unchecked={},other={}\nstoryboard: {storyboard_text}\ntimeline: {timeline_text}\npreview: {}(已探测磁盘)\nJianying: {jianying}\n外部能力: 模型={}; 配音能力={}; Jamendo={}",
         kind_counts.get("video"),
         kind_counts.get("image"),
         kind_counts.get("audio"),
@@ -283,7 +283,17 @@ fn latest_timeline(
                     clips: parsed["clips"].as_array().map_or(0, Vec::len),
                     text: parsed["textTracks"].as_array().map_or(0, Vec::len),
                     music: parsed["musicTracks"].as_array().map_or(0, Vec::len),
-                    voiceover: parsed["voiceoverTracks"].as_array().map_or(0, Vec::len),
+                    voiceover: parsed["voiceoverTracks"]
+                        .as_array()
+                        .map(|tracks| {
+                            tracks
+                                .iter()
+                                .map(|track| {
+                                    track["cues"].as_array().map_or(0, Vec::len)
+                                })
+                                .sum()
+                        })
+                        .unwrap_or(0),
                 })
             },
         )
@@ -541,7 +551,7 @@ mod tests {
             INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, status, content_json, created_at)
             VALUES ('storyboard-secret-id', 'project-1', 'task-1', 3, 'draft', '{"shots":[{},{}],"uncoveredBeatIds":["beat-secret"]}', 2);
             INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at)
-            VALUES ('timeline-secret-id', 'project-1', 'storyboard-secret-id', 5, 'preview_ready', '{"clips":[{}],"textTracks":[{},{}],"musicTracks":[{}],"voiceoverTracks":[{}]}', 3);
+            VALUES ('timeline-secret-id', 'project-1', 'storyboard-secret-id', 5, 'preview_ready', '{"clips":[{}],"textTracks":[{},{}],"musicTracks":[{}],"voiceoverTracks":[{"cues":[{}]}]}', 3);
             INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
             VALUES ('conversation-secret-id', 'project-1', 'task-1', 'Conversation', 'ready', 1, 1);
             INSERT INTO agent_tasks (id, project_id, editing_task_id, conversation_id, tool_name, status, input_json, result_json, created_at, updated_at)
@@ -570,11 +580,11 @@ mod tests {
         .expect("build artifact snapshot");
 
         assert!(snapshot.contains("storyboard: v3, shots=2, uncovered=1, 待确认=是"));
-        assert!(snapshot.contains("timeline: v5, clips=1, text=2, music=1, voiceover=1"));
+        assert!(snapshot.contains("timeline: v5, clips=1, text=2, music=1, voiceoverCues=1"));
         assert!(snapshot.contains("preview: 存在(已探测磁盘)"));
         assert!(snapshot.contains("Jianying: 草稿=已创建; 注册=已注册"));
         assert!(snapshot.contains("最近终态=completed@4"));
-        assert!(snapshot.contains("外部能力: 模型=已配置; 配音=已配置; Jamendo=未配置"));
+        assert!(snapshot.contains("外部能力: 模型=已配置; 配音能力=已配置; Jamendo=未配置"));
         assert!(!snapshot.contains("storyboard-secret-id"));
         assert!(!snapshot.contains("timeline-secret-id"));
         let brief_value = snapshot.lines().nth(1).expect("task line");

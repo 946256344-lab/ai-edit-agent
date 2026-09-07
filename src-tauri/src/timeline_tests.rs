@@ -243,6 +243,46 @@ fn minimal_agent_text_cue_uses_safe_defaults_before_validation() {
 }
 
 #[test]
+fn short_subtitle_safe_cues_clamp_animation_to_cue_span() {
+    // 回归：Fish 对齐字幕常有 <180ms 的短 cue；模板默认 fade 180/160 会拒掉整次配音。
+    let mut tracks = vec![TextTrack {
+        id: "voice-alignment".to_owned(),
+        role: "subtitle".to_owned(),
+        layer: 1,
+        enabled: true,
+        origin: "voice_alignment".to_owned(),
+        generation_id: Some("gen-1".to_owned()),
+        editable: true,
+        locked: false,
+        cues: vec![TextCue {
+            id: "short-1".to_owned(),
+            template_id: Some("subtitle_safe".to_owned()),
+            start_ms: 0,
+            end_ms: 90,
+            text: "Hi".to_owned(),
+            style: TextStyle::default(),
+            layout: TextLayout::default(),
+            entrance: Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 180,
+                intensity: 0.6,
+            }),
+            exit: Some(TextAnimation {
+                template_id: "fade".to_owned(),
+                duration_ms: 160,
+                intensity: 0.5,
+            }),
+            loop_animation: None,
+            jianying_compatibility: "pending".to_owned(),
+        }],
+    }];
+    validate_text_tracks(&mut tracks, 1_000).expect("short alignment cue must validate");
+    let cue = &tracks[0].cues[0];
+    assert!(cue.entrance.as_ref().unwrap().duration_ms <= 90);
+    assert!(cue.exit.as_ref().unwrap().duration_ms <= 90);
+}
+
+#[test]
 fn every_advertised_text_recipe_is_accepted_by_the_text_track_validator() {
     for recipe in text_recipe_capabilities() {
         let template_id = recipe["templateId"].as_str().expect("recipe ID");

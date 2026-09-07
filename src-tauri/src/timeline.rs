@@ -628,7 +628,28 @@ fn apply_text_template(cue: &mut TextCue, track_role: &str) -> Result<(), String
     cue.entrance = entrance;
     cue.exit = exit;
     cue.loop_animation = None;
+    clamp_text_cue_animations(cue);
     Ok(())
+}
+
+/// 模板动画默认 140–240ms；对齐字幕 cue 可能更短，必须钳到 cue 时长，否则配音写入整段失败。
+fn clamp_text_cue_animations(cue: &mut TextCue) {
+    let span_ms = (cue.end_ms - cue.start_ms).max(0);
+    if span_ms < 40 {
+        cue.entrance = None;
+        cue.exit = None;
+        cue.loop_animation = None;
+        return;
+    }
+    if let Some(animation) = cue.entrance.as_mut() {
+        animation.duration_ms = animation.duration_ms.min(span_ms);
+    }
+    if let Some(animation) = cue.exit.as_mut() {
+        animation.duration_ms = animation.duration_ms.min(span_ms);
+    }
+    if let Some(animation) = cue.loop_animation.as_mut() {
+        animation.duration_ms = animation.duration_ms.min(span_ms);
+    }
 }
 
 pub(crate) fn text_recipe_capabilities() -> Vec<serde_json::Value> {

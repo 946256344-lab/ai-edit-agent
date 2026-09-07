@@ -72,6 +72,7 @@ pub(crate) fn apply_synthesized_voiceover(
     generation_id: &str,
     voice_id: &str,
     voice_name: &str,
+    provider: &str,
     audio_duration_ms: i64,
     subtitle_track: Option<TextTrack>,
 ) -> Result<(TimelineVersion, Vec<PreviewQualityCheck>), String> {
@@ -91,6 +92,14 @@ pub(crate) fn apply_synthesized_voiceover(
     if visual_duration < audio_duration_ms {
         return Err("Picture duration is shorter than the voiceover.".to_owned());
     }
+    let provider_label = {
+        let trimmed = provider.trim();
+        if trimmed.is_empty() {
+            "ElevenLabs"
+        } else {
+            trimmed
+        }
+    };
     let voiceover_tracks = vec![VoiceoverTrack {
         id: format!("voiceover-{generation_id}"),
         enabled: true,
@@ -105,15 +114,31 @@ pub(crate) fn apply_synthesized_voiceover(
             volume: 1.0,
             fade_in_ms: 0,
             fade_out_ms: 80,
-            provider: "ElevenLabs".to_owned(),
+            provider: provider_label.to_owned(),
             voice_id: voice_id.to_owned(),
             voice_name: voice_name.to_owned(),
         }],
     }];
     let text_tracks = if let Some(generated) = subtitle_track {
         let mut tracks = replace_generated_subtitle_tracks(timeline.text_tracks.clone(), generated);
-        validate_text_tracks(&mut tracks, visual_duration)?;
-        tracks
+        match validate_text_tracks(&mut tracks, visual_duration) {
+            Ok(()) => tracks,
+            Err(error) => {
+                // 字幕校验失败不得挡掉已合成旁白；保留原文本轨并继续写 voiceover。
+                log::warn!(
+                    "Voiceover subtitles skipped after synthesis (keeping audio): {error}"
+                );
+                warnings.push(PreviewQualityCheck {
+                    category: "voiceover_subtitles".to_owned(),
+                    severity: "warning".to_owned(),
+                    message: format!(
+                        "Voiceover audio was applied, but alignment subtitles were skipped: {error}"
+                    ),
+                    shot_indices: Vec::new(),
+                });
+                timeline.text_tracks.clone()
+            }
+        }
     } else {
         timeline.text_tracks.clone()
     };

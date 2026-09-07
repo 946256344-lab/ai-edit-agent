@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-07）：完整文案由模型标 full_script+spokenScript；TTS 照念原文不用改写 beats。见 `docs/changes/2026-09-07-full-script-verbatim-voiceover.md`。
+- [x] 完成（2026-09-07）：配音旁白必写（alignment 失败不挡写入）；Fish 传输类失败回退 ElevenLabs；快照 `voiceoverCues`/`配音能力` 与 `voiceoverApplied` 事实返回。见 `docs/changes/2026-09-07-voiceover-must-apply.md`。
+- [x] 完成（2026-09-07）：短对齐字幕动画钳制；字幕校验失败不挡旁白写入。见 `docs/changes/2026-09-07-voiceover-short-subtitle-animation.md`。
+- [x] 完成（2026-09-04）：可念稿强制 full_script+audio-first；normalize/join 去重旁白；key_message 旁白硬门；配音 fit 失败可见警告。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
 - [x] 完成（2026-09-04）：对话「处理中」改为可点「停止」；`cancel_agent_edit` + Cancelled 终态。见 `docs/changes/2026-09-04-cancel-agent-edit.md`。
 - [x] 完成（2026-09-04）：侧栏剪辑会话右键删除；级联清除对话/Agent/故事板/时间线/本地 preview，素材保留。见 `docs/changes/2026-09-04-delete-editing-session.md`。
 - [x] 完成（2026-09-04）：Phase 4 去掉每素材场景扫描，改用导入关键帧/三分段建粗窗；修 `clamp_shots_to_chosen_windows` 窗尾 panic。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。

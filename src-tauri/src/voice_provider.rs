@@ -45,7 +45,11 @@ pub struct VoiceoverApplyResult {
     pub generation_id: String,
     pub duration_ms: i64,
     pub timeline_version_id: String,
+    /// 旁白轨是否已写入（成功路径恒为 true；与「Provider 已配置」无关）。
+    pub voiceover_applied: bool,
+    pub subtitle_applied: bool,
     pub subtitle_cue_count: usize,
+    pub provider: String,
     pub reused_cache: bool,
     pub quality_warnings: Vec<crate::models::PreviewQualityCheck>,
 }
@@ -161,9 +165,63 @@ fn active_transport() -> Result<&'static dyn VoiceTransport, String> {
     static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
     if crate::music_provider::fish_audio::configured_for_snapshot()? {
         Ok(&FISH)
-    } else {
+    } else if crate::music_provider::elevenlabs_configured_for_snapshot()? {
         Ok(&ELEVENLABS)
+    } else {
+        Err("Voice Provider is not configured in settings.".to_owned())
     }
+}
+
+/// 仅对传输/服务端抖动回退；401/密钥/业务错误不静默换 Provider。
+fn is_fallback_eligible_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("api key was rejected")
+        || lower.contains("not configured")
+        || lower.contains("account cannot use")
+        || lower.contains("character limit")
+        || lower.contains("narration text is required")
+        || lower.contains("narration exceeds")
+    {
+        return false;
+    }
+    lower.contains("unavailable")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("interrupted")
+        || lower.contains("api error 429")
+        || lower.contains("api error 5")
+}
+
+/// 优先 Fish；传输类失败且 ElevenLabs 已配置时回退（回退时不用 Fish 音色 ID）。
+pub(crate) fn synthesize_with_fallback(
+    text: &str,
+    requested_voice_id: Option<&str>,
+    root: &Path,
+) -> Result<(CachedVoiceover, Vec<u8>, Value, bool), String> {
+    static FISH: FishAudioTransport = FishAudioTransport;
+    static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
+    let fish_ok = crate::music_provider::fish_audio::configured_for_snapshot()?;
+    let eleven_ok = crate::music_provider::elevenlabs_configured_for_snapshot()?;
+    if fish_ok {
+        match synthesize_with_transport(&FISH, text, requested_voice_id, root) {
+            Ok(result) => return Ok(result),
+            Err(error) if eleven_ok && is_fallback_eligible_error(&error) => {
+                log::warn!("Fish Audio TTS failed ({error}); falling back to ElevenLabs.");
+                return synthesize_with_transport(&ELEVENLABS, text, None, root).map_err(
+                    |fallback_error| {
+                        format!(
+                            "Fish Audio failed ({error}); ElevenLabs fallback also failed: {fallback_error}"
+                        )
+                    },
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if eleven_ok {
+        return synthesize_with_transport(&ELEVENLABS, text, requested_voice_id, root);
+    }
+    Err("Voice Provider is not configured in settings.".to_owned())
 }
 
 fn provider_char_limit(model_id: &str) -> usize {
@@ -431,26 +489,32 @@ pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue
         cues: cues
             .iter()
             .enumerate()
-            .map(|(index, cue)| TextCue {
-                id: format!("voice-alignment-{generation_id}-{index}"),
-                template_id: Some("subtitle_safe".to_owned()),
-                start_ms: cue.start_ms,
-                end_ms: cue.end_ms,
-                text: cue.text.chars().take(280).collect(),
-                style: TextStyle::default(),
-                layout: TextLayout::default(),
-                entrance: Some(TextAnimation {
+            .map(|(index, cue)| {
+                let span_ms = (cue.end_ms - cue.start_ms).max(0);
+                // 动画时长不得超过 cue 时长，否则 validate_text_tracks 会拒掉整次配音写入。
+                let entrance = (span_ms >= 40).then(|| TextAnimation {
                     template_id: "fade".to_owned(),
-                    duration_ms: 180,
+                    duration_ms: 180.min(span_ms),
                     intensity: 0.6,
-                }),
-                exit: Some(TextAnimation {
+                });
+                let exit = (span_ms >= 40).then(|| TextAnimation {
                     template_id: "fade".to_owned(),
-                    duration_ms: 160,
+                    duration_ms: 160.min(span_ms),
                     intensity: 0.5,
-                }),
-                loop_animation: None,
-                jianying_compatibility: "verified".to_owned(),
+                });
+                TextCue {
+                    id: format!("voice-alignment-{generation_id}-{index}"),
+                    template_id: Some("subtitle_safe".to_owned()),
+                    start_ms: cue.start_ms,
+                    end_ms: cue.end_ms,
+                    text: cue.text.chars().take(280).collect(),
+                    style: TextStyle::default(),
+                    layout: TextLayout::default(),
+                    entrance,
+                    exit,
+                    loop_animation: None,
+                    jianying_compatibility: "verified".to_owned(),
+                }
             })
             .collect(),
     }
@@ -607,7 +671,7 @@ pub(crate) fn prepare_audio_first(
         .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
     let root = voiceover_root(app, project_id)?;
     let (cached, _audio, alignment, reused) =
-        synthesize_with_transport(active_transport()?, &normalized, requested_voice_id, &root)?;
+        synthesize_with_fallback(&normalized, requested_voice_id, &root)?;
     let mp3_path = cached.directory.join("voiceover.mp3");
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
     cues_from_alignment(&alignment, duration_ms)?;
@@ -734,14 +798,29 @@ pub(crate) fn storyboard_narration_text(
     storyboard: Option<&crate::models::StoryboardVersion>,
 ) -> Option<String> {
     let storyboard = storyboard?;
-    let joined = storyboard
-        .shots
-        .iter()
-        .map(|shot| shot.narration_text.trim())
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    (!joined.is_empty()).then_some(joined)
+    // full_script：照念 brief（模型识别完整文案后的硬约束）；key_message：beats。
+    if let Some(text) = crate::storyboard::resolve_voiceover_script(
+        &storyboard.brief,
+        &storyboard.script_mode,
+        "",
+        &storyboard.beats,
+    ) {
+        return Some(text);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut parts = Vec::new();
+    for shot in &storyboard.shots {
+        let is_lead = shot.split_role == "lead" || shot.beat_part_index <= 1;
+        if !is_lead {
+            continue;
+        }
+        let text = shot.narration_text.trim();
+        if text.is_empty() || !seen.insert(text.to_owned()) {
+            continue;
+        }
+        parts.push(text.to_owned());
+    }
+    (!parts.is_empty()).then(|| normalize_narration_text(&parts.join(" ")))
 }
 
 pub(crate) fn synthesize_voiceover_for_timeline(
@@ -761,24 +840,30 @@ pub(crate) fn synthesize_voiceover_for_timeline(
         .map_err(|_| "Voiceover generation is already running for this project.".to_owned())?;
     let root = voiceover_root(app, project_id)?;
     let (cached, _audio, alignment, reused) =
-        synthesize_with_transport(active_transport()?, text, voice_id, &root)?;
+        synthesize_with_fallback(text, voice_id, &root)?;
     let mp3_path = cached.directory.join("voiceover.mp3");
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
+    let mut quality_warnings = Vec::new();
+    // 旁白必写；对齐字幕尽力。alignment 不完整不得挡掉已合成音频。
     let subtitle_track = match cues_from_alignment(&alignment, duration_ms) {
-        Ok(cues) => Some(subtitle_track_from_cues(&cached.generation_id, &cues)),
-        Err(_) if reused => {
-            return Err(
-                "Cached voiceover alignment is incomplete; subtitles were not committed."
-                    .to_owned(),
-            )
+        Ok(cues) if !cues.is_empty() => {
+            Some(subtitle_track_from_cues(&cached.generation_id, &cues))
         }
-        Err(_) => return Err(
-            "Voiceover audio was stored but alignment is incomplete; subtitles were not committed."
-                .to_owned(),
-        ),
-    };
-    let Some(subtitle_track) = subtitle_track else {
-        return Err("Voiceover alignment is incomplete; subtitles were not committed.".to_owned());
+        Ok(_) | Err(_) => {
+            let reason = if reused {
+                "Cached voiceover alignment is incomplete; subtitles were not committed."
+            } else {
+                "Voiceover audio was stored but alignment is incomplete; subtitles were not committed."
+            };
+            log::warn!("{reason}");
+            quality_warnings.push(crate::models::PreviewQualityCheck {
+                category: "voiceover_subtitles".to_owned(),
+                severity: "warning".to_owned(),
+                message: reason.to_owned(),
+                shot_indices: Vec::new(),
+            });
+            None
+        }
     };
     let display_name = format!(
         "{}: {} voiceover",
@@ -786,8 +871,11 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     );
     let asset = store_downloaded_audio(app, project_id, mp3_path.clone(), &display_name)?;
     let asset = wait_for_asset_ready(app, project_id, &asset.id)?;
-    let cue_count = subtitle_track.cues.len();
-    let (version, warnings) = apply_synthesized_voiceover(
+    let planned_subtitle_cues = subtitle_track
+        .as_ref()
+        .map(|track| track.cues.len())
+        .unwrap_or(0);
+    let (version, apply_warnings) = apply_synthesized_voiceover(
         connection,
         project_id,
         editing_task_id,
@@ -798,9 +886,20 @@ pub(crate) fn synthesize_voiceover_for_timeline(
         &cached.generation_id,
         &cached.manifest.voice_id,
         &cached.manifest.voice_name,
+        &cached.manifest.provider,
         duration_ms,
-        Some(subtitle_track),
+        subtitle_track,
     )?;
+    quality_warnings.extend(apply_warnings);
+    let subtitle_skipped = quality_warnings
+        .iter()
+        .any(|warning| warning.category == "voiceover_subtitles");
+    let subtitle_applied = planned_subtitle_cues > 0 && !subtitle_skipped;
+    let subtitle_cue_count = if subtitle_applied {
+        planned_subtitle_cues
+    } else {
+        0
+    };
     let mut manifest = cached.manifest;
     manifest.duration_ms = duration_ms;
     let _ = fs::write(
@@ -814,9 +913,12 @@ pub(crate) fn synthesize_voiceover_for_timeline(
             generation_id: cached.generation_id,
             duration_ms,
             timeline_version_id: version.id,
-            subtitle_cue_count: cue_count,
+            voiceover_applied: true,
+            subtitle_applied,
+            subtitle_cue_count,
+            provider: manifest.provider,
             reused_cache: reused,
-            quality_warnings: warnings,
+            quality_warnings,
         },
     ))
 }
@@ -863,7 +965,10 @@ pub fn synthesize_storyboard_voiceover(
                     generation_id: cue.generation_id.clone(),
                     duration_ms: (cue.timeline_end_ms - cue.timeline_start_ms).max(0),
                     timeline_version_id: timeline.id.clone(),
+                    voiceover_applied: true,
+                    subtitle_applied: subtitle_cue_count > 0,
                     subtitle_cue_count,
+                    provider: cue.provider.clone(),
                     reused_cache: true,
                     quality_warnings: Vec::new(),
                 });
@@ -1114,5 +1219,141 @@ mod tests {
             resolve_tool_narration_text(Some("Spoken copy"), Some("Shot narration")).expect("text");
         assert_eq!(resolved, "Spoken copy");
         assert!(resolve_tool_narration_text(None, None).is_err());
+    }
+
+    #[test]
+    fn storyboard_narration_prefers_beats_over_duplicated_shots() {
+        use crate::models::{StoryboardBeat, StoryboardShot, StoryboardVersion};
+        let version = StoryboardVersion {
+            id: "sb".to_owned(),
+            project_id: "p".to_owned(),
+            editing_task_id: "t".to_owned(),
+            version_number: 1,
+            brief: "short".to_owned(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 10_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![StoryboardBeat {
+                id: "b1".to_owned(),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                narration: "Once only.".to_owned(),
+            }],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![
+                StoryboardShot {
+                    order_index: 1,
+                    duration_ms: 3_000,
+                    purpose: "p".to_owned(),
+                    on_screen_text: String::new(),
+                    narration_text: "Once only.".to_owned(),
+                    asset_id: "a".to_owned(),
+                    source_start_ms: 0,
+                    source_end_ms: 3_000,
+                    reason: "r".to_owned(),
+                    beat_id: "b1".to_owned(),
+                    match_level: "direct".to_owned(),
+                    beat_part_index: 1,
+                    beat_part_count: 2,
+                    split_role: "lead".to_owned(),
+                },
+                StoryboardShot {
+                    order_index: 2,
+                    duration_ms: 3_000,
+                    purpose: "p".to_owned(),
+                    on_screen_text: String::new(),
+                    narration_text: "Once only.".to_owned(),
+                    asset_id: "a".to_owned(),
+                    source_start_ms: 3_000,
+                    source_end_ms: 6_000,
+                    reason: "r".to_owned(),
+                    beat_id: "b1".to_owned(),
+                    match_level: "direct".to_owned(),
+                    beat_part_index: 2,
+                    beat_part_count: 2,
+                    split_role: "tail".to_owned(),
+                },
+            ],
+            created_at: 1,
+        };
+        let text = storyboard_narration_text(Some(&version)).expect("narration");
+        assert_eq!(text, "Once only.");
+    }
+
+    #[test]
+    fn storyboard_narration_full_script_uses_brief_not_rewritten_beats() {
+        use crate::models::{StoryboardBeat, StoryboardVersion};
+        let brief = std::iter::repeat("word")
+            .take(80)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let version = StoryboardVersion {
+            id: "sb".to_owned(),
+            project_id: "p".to_owned(),
+            editing_task_id: "t".to_owned(),
+            version_number: 1,
+            brief: brief.clone(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 30_000,
+            script_mode: "full_script".to_owned(),
+            beats: vec![StoryboardBeat {
+                id: "b1".to_owned(),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                narration: "Model paraphrase should not be spoken.".to_owned(),
+            }],
+            uncovered_beat_ids: Vec::new(),
+            shots: Vec::new(),
+            created_at: 1,
+        };
+        let text = storyboard_narration_text(Some(&version)).expect("narration");
+        assert_eq!(text, normalize_narration_text(&brief));
+        assert!(!text.contains("paraphrase"));
+    }
+
+    #[test]
+    fn short_alignment_cues_keep_animation_within_span() {
+        use crate::models::TextAnimation;
+        let track = subtitle_track_from_cues(
+            "gen",
+            &[AlignmentCue {
+                start_ms: 0,
+                end_ms: 80,
+                text: "Hi".to_owned(),
+            }],
+        );
+        let cue = &track.cues[0];
+        assert!(
+            cue.entrance
+                .as_ref()
+                .map(|animation: &TextAnimation| animation.duration_ms <= 80)
+                .unwrap_or(true)
+        );
+        assert!(
+            cue.exit
+                .as_ref()
+                .map(|animation: &TextAnimation| animation.duration_ms <= 80)
+                .unwrap_or(true)
+        );
+    }
+
+    #[test]
+    fn fallback_eligible_only_for_transport_class_errors() {
+        assert!(is_fallback_eligible_error("Fish Audio is unavailable."));
+        assert!(is_fallback_eligible_error("Fish Audio request timed out."));
+        assert!(is_fallback_eligible_error("Fish Audio API error 503."));
+        assert!(is_fallback_eligible_error("Fish Audio API error 429."));
+        assert!(!is_fallback_eligible_error("Fish Audio API key was rejected."));
+        assert!(!is_fallback_eligible_error(
+            "Fish Audio voice Provider is not configured."
+        ));
+        assert!(!is_fallback_eligible_error(
+            "Fish Audio account cannot use the selected TTS model."
+        ));
+        assert!(!is_fallback_eligible_error(
+            "Narration text is required; on-screen titles are not spoken."
+        ));
     }
 }

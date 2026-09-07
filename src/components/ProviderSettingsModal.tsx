@@ -40,7 +40,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         <div className="provider-option chosen">
           <span>
             <strong>配音（Fish Audio）</strong>
-            <small>配置后优先用于配音；请求失败时不会切换到 ElevenLabs。API Key 只保存在 Windows 凭据库。</small>
+            <small>配置后优先用于配音；传输超时/服务不可用时可回退到已配置的 ElevenLabs（密钥错误不会切换）。API Key 只保存在 Windows 凭据库。</small>
           </span>
           <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已连接' : '密钥已存') : '未配置'}</b>
         </div>

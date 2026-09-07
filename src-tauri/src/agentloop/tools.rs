@@ -452,7 +452,7 @@ fn delivery_function_tools() -> Vec<Value> {
         ),
         function_tool(
             SYNTHESIZE_VOICEOVER,
-            "Synthesize narration with the configured voice Provider, fit picture duration to the voiceover, and replace generated subtitles using alignment. Pass narration text explicitly; do not speak on-screen titles.",
+            "Synthesize narration with the configured voice Provider (Fish preferred; transport failures may fall back to ElevenLabs), fit picture duration to the voiceover, and best-effort replace generated subtitles using alignment. Pass narration text explicitly; do not speak on-screen titles. Treat voiceoverApplied=true as the only proof of narration; subtitleApplied may be false.",
             json!({
                 "text": {
                     "type": ["string", "null"],

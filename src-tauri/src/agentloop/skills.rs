@@ -209,7 +209,7 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     if code.starts_with("voice_provider_") {
         let retryable = code == "voice_provider_error";
         let fact = match code {
-            "voice_provider_unconfigured" => "ElevenLabs 密钥未写入 Credential Manager。",
+            "voice_provider_unconfigured" => "Fish Audio / ElevenLabs 密钥均未写入 Credential Manager。",
             "voice_provider_unauthorized" => "ElevenLabs API key was rejected.",
             "voice_provider_timeout" => "ElevenLabs request timed out.",
             _ => "ElevenLabs rejected the speech request.",
@@ -221,8 +221,8 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "code": code,
             "facts": [fact],
             "retryable": retryable,
-            "recovery": "Ask the user to save or import the ElevenLabs API key in settings. Do not keep listing assets or searching music.",
-            "responseInstruction": "Explain that voiceover cannot run until ElevenLabs is configured in settings. Do not claim narration was synthesized."
+            "recovery": "Ask the user to save or import a Fish Audio or ElevenLabs API key in settings. Do not keep listing assets or searching music.",
+            "responseInstruction": "Explain that voiceover cannot run until a voice Provider is configured in settings. Do not claim narration was synthesized."
         });
     }
 
@@ -537,12 +537,26 @@ pub(super) fn apply_skill(
             )?;
             let timeline_version_id = timeline.id.clone();
             let version_number = timeline.version_number;
+            let voiceover_cue_count = timeline
+                .voiceover_tracks
+                .iter()
+                .map(|track| track.cues.len())
+                .sum::<usize>();
             upsert(&mut state.timelines, timeline.clone());
+            let subtitle_note = if applied.subtitle_applied {
+                format!("，对齐字幕 {} 条", applied.subtitle_cue_count)
+            } else {
+                "，对齐字幕未写入（旁白已保留）".to_owned()
+            };
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
                 message: format!(
-                    "已根据旁白生成配音并写入内部时间线 v{}。口播时长 {} ms，自动字幕 {} 条。",
-                    version_number, applied.duration_ms, applied.subtitle_cue_count
+                    "已根据旁白生成配音并写入内部时间线 v{}（provider={}，voiceoverCues={}）。口播时长 {} ms{}。",
+                    version_number,
+                    applied.provider,
+                    voiceover_cue_count,
+                    applied.duration_ms,
+                    subtitle_note
                 ),
                 storyboard: None,
                 timeline: Some(timeline),
@@ -552,6 +566,10 @@ pub(super) fn apply_skill(
             Ok(json!({
                 "tool": "synthesize_voiceover",
                 "status": "ok",
+                "voiceoverApplied": applied.voiceover_applied,
+                "subtitleApplied": applied.subtitle_applied,
+                "providerUsed": applied.provider,
+                "voiceoverCueCount": voiceover_cue_count,
                 "assetId": applied.asset_id,
                 "generationId": applied.generation_id,
                 "durationMs": applied.duration_ms,
@@ -850,7 +868,7 @@ pub(super) fn apply_skill(
             let version_number = generated.version_number;
             let summary = generated.summary.clone();
             let completion_gaps = crate::storyboard::storyboard_completion_gaps(&generated);
-            let quality_warnings = completion_gaps
+            let mut quality_warnings = completion_gaps
                 .iter()
                 .map(|gap| {
                     json!({
@@ -907,23 +925,42 @@ pub(super) fn apply_skill(
                     ) {
                         Ok(Some((voiced, applied))) => {
                             timeline = voiced;
-                            message.push_str(&format!(
-                                "\n已自动合成配音并生成对齐字幕（cue={}）。",
-                                applied.subtitle_cue_count
-                            ));
+                            if applied.subtitle_applied {
+                                message.push_str(&format!(
+                                    "\n已自动合成配音（provider={}，voiceoverApplied=true）并写入对齐字幕（cue={}）。",
+                                    applied.provider, applied.subtitle_cue_count
+                                ));
+                            } else {
+                                message.push_str(&format!(
+                                    "\n已自动合成配音（provider={}，voiceoverApplied=true）；对齐字幕未写入。",
+                                    applied.provider
+                                ));
+                            }
                         }
                         Ok(None) => {}
                         Err(error) => {
                             log::warn!("Automatic voiceover after storyboard skipped: {error}");
-                            message.push_str(
-                                "\n自动配音暂不可用（检查 Fish Audio / ElevenLabs 配置），预览将不包含配音。",
-                            );
+                            if error.starts_with("voiceover_longer_than_picture:") {
+                                quality_warnings.push(json!({
+                                    "category": "voiceover_longer_than_picture",
+                                    "severity": "warning",
+                                    "message": error,
+                                }));
+                                message.push_str(
+                                    "\n自动配音未写入：旁白长于画面（禁止冻帧）。请用 search_asset_segments 后 insert_clips/change_clip_duration 补画面再重试配音；预览暂不含配音。",
+                                );
+                            } else {
+                                let brief = error.chars().take(160).collect::<String>();
+                                message.push_str(&format!(
+                                    "\n自动配音未写入（voiceoverApplied=false）：{brief}。预览将不包含配音。"
+                                ));
+                            }
                         }
                     }
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
-                    // 有收尾缺口时仍可出预览，但 status=ok + qualityWarnings 会触发精炼续步。
-                    let preview_result = if quality_warnings.is_empty() {
+                    // 收尾缺口才推迟预览；自动配音 fit 失败只进 qualityWarnings，不挡预览。
+                    let preview_result = if completion_gaps.is_empty() {
                         render_preview(state.app.clone(), timeline_version_id.clone())
                     } else {
                         // 缺口未闭合时先跳过预览，避免把不完整时间线当作成片收据。
