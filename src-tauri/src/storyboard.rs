@@ -1389,6 +1389,36 @@ mod tests {
     }
 
     #[test]
+    fn completion_gaps_do_not_treat_audio_first_mix_tail_as_picture_deficit() {
+        let mut storyboard = content("direct");
+        storyboard.uncovered_beat_ids.clear();
+        storyboard.shots[0].duration_ms = 10_000;
+        storyboard.target_duration_ms = 10_500;
+        let codes = storyboard_completion_gaps(&StoryboardVersion {
+            id: "sb-1".to_owned(),
+            project_id: "project-1".to_owned(),
+            editing_task_id: "task-1".to_owned(),
+            version_number: 1,
+            brief: storyboard.brief.clone(),
+            title: storyboard.title.clone(),
+            summary: storyboard.summary.clone(),
+            target_duration_ms: storyboard.target_duration_ms,
+            script_mode: storyboard.script_mode.clone(),
+            beats: storyboard.beats.clone(),
+            uncovered_beat_ids: storyboard.uncovered_beat_ids.clone(),
+            shots: storyboard.shots.clone(),
+            created_at: 1,
+        })
+        .into_iter()
+        .map(|gap| gap.code)
+        .collect::<Vec<_>>();
+        assert!(
+            !codes.contains(&"voiceover_longer_than_picture".to_owned()),
+            "mix tail must not look like a voiceover deficit; codes={codes:?}"
+        );
+    }
+
+    #[test]
     fn storyboard_rejects_an_insufficient_shot() {
         assert!(validate_storyboard(&content("insufficient"), &[source()], "brief").is_err());
     }
@@ -2891,16 +2921,20 @@ pub(crate) fn storyboard_completion_gaps(
         .iter()
         .map(|shot| shot.duration_ms.max(0))
         .sum::<i64>();
+    // audio-first 把混音尾 VOICEOVER_TAIL_MS 写进 target；缺口应按口播时钟比画面，
+    // 否则半秒尾差会被当成必须重修，Agent 会再建一条丢掉旁白的时间线。
+    let voice_clock_ms = storyboard
+        .target_duration_ms
+        .saturating_sub(crate::timeline_voice::VOICEOVER_TAIL_MS);
     if storyboard.script_mode == "full_script"
-        && storyboard.target_duration_ms > 0
-        && visual_ms + 250 < storyboard.target_duration_ms
+        && voice_clock_ms > 0
+        && visual_ms + 250 < voice_clock_ms
     {
-        let deficit = storyboard.target_duration_ms - visual_ms;
+        let deficit = voice_clock_ms - visual_ms;
         gaps.push(StoryboardCompletionGap {
             code: "voiceover_longer_than_picture".to_owned(),
             message: format!(
-                "Picture is {visual_ms}ms but voice/target is {}ms (deficit {deficit}ms). Freeze-frame is forbidden; use search_asset_segments then insert_clips or change_clip_duration/replace_clips, then re-check.",
-                storyboard.target_duration_ms
+                "Picture is {visual_ms}ms but voice/target is {voice_clock_ms}ms (deficit {deficit}ms). Freeze-frame is forbidden; use search_asset_segments then insert_clips or change_clip_duration/replace_clips, then re-check.",
             ),
         });
     }

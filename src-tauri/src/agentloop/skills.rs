@@ -1052,6 +1052,20 @@ pub(super) fn apply_skill(
                 state.project_id.to_owned(),
                 storyboard.id.clone(),
             )?;
+            let mut created = created;
+            match crate::voice_provider::auto_synthesize_storyboard_voiceover(
+                &state.app,
+                state.project_id,
+                state.editing_task_id,
+                state.conversation_id,
+                &created,
+            ) {
+                Ok(Some((voiced, _))) => created = voiced,
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("Automatic voiceover after create_timeline_draft skipped: {error}");
+                }
+            }
             let timeline_version_id = created.id.clone();
             let version_number = created.version_number;
             upsert(&mut state.timelines, created.clone());

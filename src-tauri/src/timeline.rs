@@ -4,7 +4,7 @@ use crate::db::{now_millis, open_connection};
 use crate::models::{
     LatestTimeline, MusicTrack, PreviewQualityReport, PreviewResult, TechnicalMetadata,
     TextAnimation, TextCue, TextLayout, TextStyle, TextTrack, TimelineClip, TimelineContent,
-    TimelineVersion,
+    TimelineVersion, VoiceoverTrack,
 };
 use crate::storyboard::load_storyboard_version;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -114,6 +114,44 @@ fn storyboard_text_tracks(storyboard: &crate::models::StoryboardVersion) -> Vec<
     }
 }
 
+fn inherit_voiceover_from_prior(
+    connection: &Connection,
+    project_id: &str,
+    storyboard_version_id: &str,
+    text_tracks: Vec<TextTrack>,
+) -> (Vec<TextTrack>, Vec<VoiceoverTrack>) {
+    let Ok(mut statement) = connection.prepare(
+        "SELECT content_json FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC",
+    ) else {
+        return (text_tracks, Vec::new());
+    };
+    let Ok(rows) = statement.query_map(params![project_id, storyboard_version_id], |row| {
+        row.get::<_, String>(0)
+    }) else {
+        return (text_tracks, Vec::new());
+    };
+    for row in rows.flatten() {
+        let Ok(content) = serde_json::from_str::<TimelineContent>(&row) else {
+            continue;
+        };
+        if content.voiceover_tracks.is_empty() {
+            continue;
+        }
+        let Some(alignment) = content
+            .text_tracks
+            .into_iter()
+            .find(|track| track.origin == "voice_alignment" && track.role == "subtitle")
+        else {
+            return (text_tracks, content.voiceover_tracks);
+        };
+        return (
+            crate::timeline_voice::replace_generated_subtitle_tracks(text_tracks, alignment),
+            content.voiceover_tracks,
+        );
+    }
+    (text_tracks, Vec::new())
+}
+
 #[tauri::command]
 /// 从指定 storyboard 创建新的 timeline v1；镜头源范围来自 storyboard 证据，不从文件名推断。
 pub fn create_timeline_draft(
@@ -151,6 +189,12 @@ pub fn create_timeline_draft(
         })
         .collect::<Vec<_>>();
     let text_tracks = storyboard_text_tracks(&storyboard);
+    let (text_tracks, voiceover_tracks) = inherit_voiceover_from_prior(
+        &connection,
+        &project_id,
+        &storyboard_version_id,
+        text_tracks,
+    );
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM timeline_versions WHERE project_id = ?1",
         params![project_id], |row| row.get::<_, i64>(0),
@@ -163,7 +207,7 @@ pub fn create_timeline_draft(
         clips,
         text_tracks,
         music_tracks: Vec::new(),
-        voiceover_tracks: Vec::new(),
+        voiceover_tracks,
         overlay_clips: Vec::new(),
         quality_report: None,
         created_at: now_millis(),
