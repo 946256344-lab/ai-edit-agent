@@ -1003,14 +1003,21 @@ pub(crate) fn auto_synthesize_storyboard_voiceover(
         );
         return Ok(None);
     }
+    let connection = crate::db::open_connection(app)?;
+    let storyboard =
+        crate::storyboard::load_storyboard_version(&connection, &timeline.storyboard_version_id)?;
+    if storyboard.script_mode == "key_message" {
+        log::info!(
+            "Auto voiceover skipped: storyboard {} is key_message (on-screen markers only)",
+            timeline.storyboard_version_id
+        );
+        return Ok(None);
+    }
     if !voice_provider_configured()? {
         return Err(
             "voice_provider_unconfigured: Voice Provider is not configured in settings.".to_owned(),
         );
     }
-    let connection = crate::db::open_connection(app)?;
-    let storyboard =
-        crate::storyboard::load_storyboard_version(&connection, &timeline.storyboard_version_id)?;
     let Some(narration) = storyboard_narration_text(Some(&storyboard)) else {
         log::info!(
             "Auto voiceover skipped: storyboard {} has no narrationText",
@@ -1238,6 +1245,7 @@ mod tests {
                 purpose: "p".to_owned(),
                 required_visual: "v".to_owned(),
                 narration: "Once only.".to_owned(),
+                on_screen_text: String::new(),
             }],
             uncovered_beat_ids: Vec::new(),
             shots: vec![
@@ -1304,6 +1312,7 @@ mod tests {
                 purpose: "p".to_owned(),
                 required_visual: "v".to_owned(),
                 narration: "Model paraphrase should not be spoken.".to_owned(),
+                on_screen_text: String::new(),
             }],
             uncovered_beat_ids: Vec::new(),
             shots: Vec::new(),

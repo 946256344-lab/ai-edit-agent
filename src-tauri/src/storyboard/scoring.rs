@@ -230,6 +230,7 @@ mod tests {
             purpose: "test".to_owned(),
             required_visual: "factory line".to_owned(),
             narration: String::new(),
+            on_screen_text: String::new(),
         }
     }
 
@@ -320,6 +321,7 @@ mod tests {
             purpose: "show the factory visit".to_owned(),
             required_visual: "factory production line inspection".to_owned(),
             narration: String::new(),
+            on_screen_text: String::new(),
         };
         let ranked = rank_segment_candidates(
             vec![office, factory],
@@ -345,6 +347,7 @@ mod tests {
             purpose: "test".to_owned(),
             required_visual: "test".to_owned(),
             narration: String::new(),
+            on_screen_text: String::new(),
         };
 
         let ranked = rank_segment_candidates(

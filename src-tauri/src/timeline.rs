@@ -13,36 +13,89 @@ use uuid::Uuid;
 
 fn storyboard_text_tracks(storyboard: &crate::models::StoryboardVersion) -> Vec<TextTrack> {
     let mut cues = Vec::new();
-    let mut cursor = 0_i64;
-    for shot in &storyboard.shots {
-        let start_ms = cursor;
-        let end_ms = start_ms + shot.duration_ms;
-        cursor = end_ms;
-        let text = shot.on_screen_text.trim();
-        if text.is_empty() {
-            continue;
+    if storyboard.script_mode == "key_message" {
+        // key_message：每 beat 一条标记 cue，跨该 beat 全部连续镜头。
+        let mut cursor = 0_i64;
+        let mut index = 0usize;
+        while index < storyboard.shots.len() {
+            let beat_id = storyboard.shots[index].beat_id.clone();
+            let start_ms = cursor;
+            let mut end_ms = cursor;
+            while index < storyboard.shots.len() && storyboard.shots[index].beat_id == beat_id {
+                end_ms += storyboard.shots[index].duration_ms;
+                index += 1;
+            }
+            cursor = end_ms;
+            let beat = storyboard.beats.iter().find(|beat| beat.id == beat_id);
+            let text = beat
+                .map(|beat| beat.on_screen_text.trim())
+                .filter(|text| !text.is_empty())
+                .or_else(|| {
+                    storyboard
+                        .shots
+                        .iter()
+                        .find(|shot| shot.beat_id == beat_id)
+                        .map(|shot| shot.on_screen_text.trim())
+                        .filter(|text| !text.is_empty())
+                })
+                .unwrap_or("");
+            if text.is_empty() || end_ms <= start_ms {
+                continue;
+            }
+            cues.push(TextCue {
+                id: format!("beat-{beat_id}-marker"),
+                template_id: Some("subtitle_safe".to_owned()),
+                start_ms,
+                end_ms,
+                text: text.chars().take(280).collect(),
+                style: TextStyle::default(),
+                layout: TextLayout::default(),
+                entrance: Some(TextAnimation {
+                    template_id: "fade".to_owned(),
+                    duration_ms: 180,
+                    intensity: 0.6,
+                }),
+                exit: Some(TextAnimation {
+                    template_id: "fade".to_owned(),
+                    duration_ms: 160,
+                    intensity: 0.5,
+                }),
+                loop_animation: None,
+                jianying_compatibility: "verified".to_owned(),
+            });
         }
-        cues.push(TextCue {
-            id: format!("shot-{}-subtitle", shot.order_index),
-            template_id: Some("subtitle_safe".to_owned()),
-            start_ms,
-            end_ms,
-            text: text.chars().take(280).collect(),
-            style: TextStyle::default(),
-            layout: TextLayout::default(),
-            entrance: Some(TextAnimation {
-                template_id: "fade".to_owned(),
-                duration_ms: 180,
-                intensity: 0.6,
-            }),
-            exit: Some(TextAnimation {
-                template_id: "fade".to_owned(),
-                duration_ms: 160,
-                intensity: 0.5,
-            }),
-            loop_animation: None,
-            jianying_compatibility: "verified".to_owned(),
-        });
+    } else {
+        let mut cursor = 0_i64;
+        for shot in &storyboard.shots {
+            let start_ms = cursor;
+            let end_ms = start_ms + shot.duration_ms;
+            cursor = end_ms;
+            let text = shot.on_screen_text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            cues.push(TextCue {
+                id: format!("shot-{}-subtitle", shot.order_index),
+                template_id: Some("subtitle_safe".to_owned()),
+                start_ms,
+                end_ms,
+                text: text.chars().take(280).collect(),
+                style: TextStyle::default(),
+                layout: TextLayout::default(),
+                entrance: Some(TextAnimation {
+                    template_id: "fade".to_owned(),
+                    duration_ms: 180,
+                    intensity: 0.6,
+                }),
+                exit: Some(TextAnimation {
+                    template_id: "fade".to_owned(),
+                    duration_ms: 160,
+                    intensity: 0.5,
+                }),
+                loop_animation: None,
+                jianying_compatibility: "verified".to_owned(),
+            });
+        }
     }
     if cues.is_empty() {
         Vec::new()
