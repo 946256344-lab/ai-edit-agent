@@ -492,7 +492,8 @@ mod tests {
         apply_narration_phrase_duration_floor, candidates_within_diversity_limit,
         clamp_shots_to_chosen_windows, collect_phase3_issues, collect_phase4_issues,
         dedupe_and_backfill_pool, parse_beat_pick, phase3_candidate_cards, phase3_pool_cards,
-        BeatCandidatePool, RoughStoryboard, PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
+        resolve_overlaps_within_chosen_windows, BeatCandidatePool, RoughStoryboard,
+        PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
     };
     use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
     use std::collections::HashMap;
@@ -824,6 +825,59 @@ mod tests {
     }
 
     #[test]
+    fn phase3_rejects_consecutive_same_asset_across_beats() {
+        // 回归：跨 beat 衔接也不得相邻同片；否则 Phase 4 易切出交叠源窗。
+        let mut beat_one = beat();
+        beat_one.id = "beat-1".to_owned();
+        let mut beat_two = beat();
+        beat_two.id = "beat-2".to_owned();
+        let mut shot_a = shot("alt-a");
+        shot_a.order_index = 1;
+        shot_a.beat_id = "beat-1".to_owned();
+        let mut shot_b = shot("shared");
+        shot_b.order_index = 2;
+        shot_b.beat_id = "beat-1".to_owned();
+        let mut shot_c = shot("shared");
+        shot_c.order_index = 3;
+        shot_c.beat_id = "beat-2".to_owned();
+        let mut shot_d = shot("alt-b");
+        shot_d.order_index = 4;
+        shot_d.beat_id = "beat-2".to_owned();
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one.clone(), beat_two.clone()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_b.clone(), shot_c.clone()],
+            candidate_pools: vec![
+                candidate_pool("beat-1", &["shared", "alt-a", "alt-c"]),
+                candidate_pool("beat-2", &["shared", "alt-b", "alt-d"]),
+            ],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one, beat_two],
+            uncovered_beat_ids: Vec::new(),
+            // beat-1 以 shared 收尾，beat-2 以 shared 开头 → 相邻同片。
+            shots: vec![shot_a, shot_b, shot_c, shot_d],
+        };
+        let issues = collect_phase3_issues(&mut final_content, &rough);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.kind == "consecutive_duplicate_asset"),
+            "adjacent same asset across beats must be rejected; issues={issues:?}"
+        );
+    }
+
+    #[test]
     fn phase3_cannot_reuse_another_beats_candidate() {
         let mut beat_one = beat();
         beat_one.id = "beat-1".to_owned();
@@ -1039,6 +1093,60 @@ mod tests {
     }
 
     #[test]
+    fn resolve_overlaps_packs_identical_cuts_inside_shared_window() {
+        // 回归：Pass B 两镜同素材同切点时，窗内机械拆开，避免 Phase 5 因交叠整轮重跑 Phase 4。
+        use crate::storyboard::multimodal::Phase4ContentWindow;
+
+        let mut content = StoryboardContent {
+            brief: String::new(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 10_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![
+                {
+                    let mut item = shot("shared");
+                    item.order_index = 1;
+                    item.crop_focus = Some([0.4, 0.5]);
+                    item.source_start_ms = 12_082;
+                    item.source_end_ms = 16_915;
+                    item.duration_ms = 4_833;
+                    item
+                },
+                {
+                    let mut item = shot("shared");
+                    item.order_index = 2;
+                    item.beat_id = "beat-2".to_owned();
+                    item.crop_focus = Some([0.6, 0.5]);
+                    item.source_start_ms = 12_082;
+                    item.source_end_ms = 16_915;
+                    item.duration_ms = 4_833;
+                    item
+                },
+            ],
+        };
+        let window = Phase4ContentWindow {
+            window_id: "shared:w0".to_owned(),
+            asset_id: "shared".to_owned(),
+            start_ms: 12_082,
+            end_ms: 16_915,
+        };
+        let mut pick_map = HashMap::new();
+        pick_map.insert(1, (window.clone(), false));
+        pick_map.insert(2, (window, false));
+        resolve_overlaps_within_chosen_windows(&mut content, &pick_map);
+        assert!(
+            content.shots[0].source_end_ms <= content.shots[1].source_start_ms
+                || content.shots[1].source_end_ms <= content.shots[0].source_start_ms
+        );
+        assert!(content.shots[0].source_start_ms >= 12_082);
+        assert!(content.shots[1].source_end_ms <= 16_915);
+        assert!(content.shots.iter().all(|shot| shot.crop_focus.is_none()));
+    }
+
+    #[test]
     fn phase3_keeps_covered_shots_without_filling_uncovered_beats() {
         let mut uncovered_beat = beat();
         uncovered_beat.id = "beat-2".to_owned();
@@ -1215,6 +1323,7 @@ pub(crate) fn phase3_select(
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
+        Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries). Non-adjacent reuse is allowed only within the existing diversity limit.\n\
         For EACH covered beat, choose 2 or 3 DISTINCT assetIds from that beat's candidates, in playback order.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then assetIds must be [].\n\
         Do NOT invent assetIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
@@ -1480,8 +1589,9 @@ pub(crate) fn phase4_refine_ranges(
     repair: Option<&RepairPacket>,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     use crate::storyboard::multimodal::{
-        build_phase4_windows_from_keyframes, densify_times_in_range, extract_frames_at_times,
-        read_input_image, Phase4ContentWindow, PHASE4_REFINE_FRAMES, PHASE4_UNCERTAIN_FRAMES,
+        build_phase4_windows_from_keyframes, compose_timed_frame_grid, densify_times_in_range,
+        extract_frames_at_times, read_input_image, Phase4ContentWindow, PHASE4_REFINE_FRAMES,
+        PHASE4_REFINE_SHOTS_PER_BATCH, PHASE4_UNCERTAIN_FRAMES,
     };
     use std::path::Path;
 
@@ -1623,7 +1733,7 @@ pub(crate) fn phase4_refine_ranges(
     let picks = parse_phase4_window_picks(&pass_a_text);
     let pick_map = apply_phase4_window_picks(selected, &windows_by_asset, &picks);
 
-    // —— Pass B：只在选中窗内加密抽帧，精修起止 ——
+    // —— Pass B：选中窗内仍抽满 PHASE4_REFINE_FRAMES，每镜拼成 1 张网格，再按镜批请求 ——
     let mut draft = selected.clone();
     for shot in &mut draft.shots {
         if let Some((window, uncertain)) = pick_map.get(&shot.order_index) {
@@ -1644,106 +1754,157 @@ pub(crate) fn phase4_refine_ranges(
         }
     }
 
-    let mut pass_b_blocks = vec![json!({
-        "type": "input_text",
-        "text": format!(
-            "Brief: {brief}\n\
-            Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
-            Voice timing: {}\n\
-            Chosen windows: {}\n\
-            {feedback_context}\n\n\
-            Timed frames below are densified ONLY inside each shot's chosen content window.\n\
-            Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
-            Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
-            Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
-            No overlapping ranges from the same asset. When voice timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
-            Divide beat narration across shots when needed.\n\
-            Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
-            Each shot: cropFocus ([x,y], subject center in the original source frame, normalized 0..1), orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
-            Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
-            matchLevel must be 'direct' or 'contextual'.",
-            serde_json::to_string(&draft).unwrap_or_else(|_| "{}".to_owned()),
-            serde_json::to_string(&rough.speech_timing).unwrap(),
-            serde_json::to_string(
-                &pick_map
-                    .iter()
-                    .map(|(order, (window, uncertain))| json!({
-                        "orderIndex": order,
-                        "windowId": window.window_id,
-                        "startMs": window.start_ms,
-                        "endMs": window.end_ms,
-                        "uncertain": uncertain
-                    }))
-                    .collect::<Vec<_>>()
-            )
-            .unwrap_or_else(|_| "[]".to_owned())
-        )
-    })];
-    let mut pass_b_frames = 0usize;
-    for (order_index, (window, _)) in &pick_map {
-        let Some(source) = selected_sources
+    let mut ordered_picks = pick_map.iter().collect::<Vec<_>>();
+    ordered_picks.sort_by_key(|(order, _)| *order);
+    let mut refined = draft.clone();
+    let mut pass_b_grids = 0usize;
+    let mut pass_b_sample_frames = 0usize;
+    for (batch_index, batch) in ordered_picks.chunks(PHASE4_REFINE_SHOTS_PER_BATCH).enumerate() {
+        let batch_orders = batch
             .iter()
-            .find(|source| source.asset_id == window.asset_id)
-        else {
-            continue;
-        };
-        let Some(path) = source.source_path.as_deref() else {
-            continue;
-        };
-        let times = densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
-        let frames = extract_frames_at_times(
-            app,
-            &window.asset_id,
-            Path::new(path),
-            &times,
-            &format!("passB_{order_index}"),
-        );
-        for (time_ms, frame_path) in frames {
-            let Some(image) = read_input_image(&frame_path) else {
+            .map(|(order, _)| **order)
+            .collect::<HashSet<_>>();
+        let mut pass_b_blocks = vec![json!({
+            "type": "input_text",
+            "text": format!(
+                "Brief: {brief}\n\
+                Batch {}/{} — refine ONLY these orderIndex values: {:?}. Copy every other shot unchanged from the locked draft.\n\
+                Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
+                Voice timing: {}\n\
+                Chosen windows for this batch: {}\n\
+                {feedback_context}\n\n\
+                Each attached image is ONE shot's densified window as a left-to-right, top-to-bottom frame grid. Caption lists timesMs in the same order — temporal sample count is unchanged.\n\
+                Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
+                Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
+                Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
+                No overlapping ranges from the same asset. When voice timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
+                Divide beat narration across shots when needed.\n\
+                Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
+                Each shot: cropFocus ([x,y], subject center in the original source frame, normalized 0..1), orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
+                Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
+                matchLevel must be 'direct' or 'contextual'.",
+                batch_index + 1,
+                ordered_picks.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
+                batch.iter().map(|(order, _)| **order).collect::<Vec<_>>(),
+                serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned()),
+                serde_json::to_string(&rough.speech_timing).unwrap(),
+                serde_json::to_string(
+                    &batch
+                        .iter()
+                        .map(|(order, (window, uncertain))| json!({
+                            "orderIndex": order,
+                            "windowId": window.window_id,
+                            "startMs": window.start_ms,
+                            "endMs": window.end_ms,
+                            "uncertain": uncertain
+                        }))
+                        .collect::<Vec<_>>()
+                )
+                .unwrap_or_else(|_| "[]".to_owned())
+            )
+        })];
+        for (order_index, (window, _)) in batch {
+            let Some(source) = selected_sources
+                .iter()
+                .find(|source| source.asset_id == window.asset_id)
+            else {
+                continue;
+            };
+            let Some(path) = source.source_path.as_deref() else {
+                continue;
+            };
+            let times = densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
+            let frames = extract_frames_at_times(
+                app,
+                &window.asset_id,
+                Path::new(path),
+                &times,
+                &format!("passB_{order_index}"),
+            );
+            if frames.is_empty() {
+                continue;
+            }
+            pass_b_sample_frames += frames.len();
+            let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
+            let frame_paths = frames.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+            let grid_path = frames[0]
+                .1
+                .parent()
+                .map(|parent| parent.join(format!("grid_shot_{order_index}.jpg")));
+            let Some(grid_path) = grid_path else {
+                continue;
+            };
+            let Some(grid) = compose_timed_frame_grid(&frame_paths, &grid_path, 3) else {
+                continue;
+            };
+            let Some(image) = read_input_image(&grid) else {
                 continue;
             };
             pass_b_blocks.push(json!({
                 "type": "input_text",
                 "text": format!(
-                    "shotOrderIndex={} windowId={} sourceTimeMs={}",
-                    order_index, window.window_id, time_ms
+                    "shotOrderIndex={} windowId={} gridColumns=3 timesMs={:?} (read cells L→R, T→B)",
+                    order_index, window.window_id, times_ms
                 )
             }));
             pass_b_blocks.push(image);
-            pass_b_frames += 1;
+            pass_b_grids += 1;
         }
+        let batch_images = pass_b_blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("input_image"))
+            .count();
+        if batch_images == 0 {
+            return Err(format!(
+                "Phase 4b batch {} had no readable in-window frame grids.",
+                batch_index + 1
+            ));
+        }
+        log::info!(
+            "Phase 4 pass B batch {}/{}: refining {} shot(s) as {} grid image(s)",
+            batch_index + 1,
+            ordered_picks
+                .len()
+                .div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH)
+                .max(1),
+            batch_orders.len(),
+            batch_images
+        );
+        let pass_b_request = json!({
+            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
+            "store": false,
+            "stream": true,
+            "input": [{ "role": "user", "content": pass_b_blocks }],
+            "text": { "format": { "type": "json_object" } }
+        });
+        crate::storyboard::provider_trace::append_storyboard_trace(
+            "Phase 4b",
+            None,
+            repair.map(|packet| packet.attempt).unwrap_or(1),
+            "request",
+            &pass_b_request,
+        );
+        let pass_b_body = post_model_payload(access, &pass_b_request, Some(STORYBOARD_TIMEOUT))?;
+        crate::storyboard::provider_trace::append_storyboard_trace(
+            "Phase 4b",
+            None,
+            repair.map(|packet| packet.attempt).unwrap_or(1),
+            "response",
+            &serde_json::from_str::<Value>(&pass_b_body)
+                .unwrap_or_else(|_| json!({ "raw": pass_b_body })),
+        );
+        let pass_b_text = model_response_json_text(access, &pass_b_body)
+            .ok_or_else(|| "Phase 4b response did not contain JSON.".to_owned())?;
+        let batch_refined: StoryboardContent = serde_json::from_str(&pass_b_text)
+            .map_err(|_| "Phase 4b JSON did not match StoryboardContent schema.".to_owned())?;
+        merge_phase4_batch_shots(&mut refined, &batch_refined, &batch_orders, selected);
     }
-    log::info!("Phase 4 pass B attached {pass_b_frames} in-window frame(s)");
-
-    let pass_b_request = json!({
-        "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-        "store": false,
-        "stream": true,
-        "input": [{ "role": "user", "content": pass_b_blocks }],
-        "text": { "format": { "type": "json_object" } }
-    });
-    crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4b",
-        None,
-        repair.map(|packet| packet.attempt).unwrap_or(1),
-        "request",
-        &pass_b_request,
+    log::info!(
+        "Phase 4 pass B attached {pass_b_grids} shot-grid image(s) covering {pass_b_sample_frames} timed sample frame(s) across {} batch(es)",
+        ordered_picks.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1)
     );
-    let pass_b_body = post_model_payload(access, &pass_b_request, Some(STORYBOARD_TIMEOUT))?;
-    crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4b",
-        None,
-        repair.map(|packet| packet.attempt).unwrap_or(1),
-        "response",
-        &serde_json::from_str::<Value>(&pass_b_body)
-            .unwrap_or_else(|_| json!({ "raw": pass_b_body })),
-    );
-    let pass_b_text = model_response_json_text(access, &pass_b_body)
-        .ok_or_else(|| "Phase 4b response did not contain JSON.".to_owned())?;
-    let mut refined: StoryboardContent = serde_json::from_str(&pass_b_text)
-        .map_err(|_| "Phase 4b JSON did not match StoryboardContent schema.".to_owned())?;
 
-    // —— Pass C：仅 uncertain 镜头在窗内再加密 ——
+    // —— Pass C：仅 uncertain 镜头在窗内再加密；同样拼网格并按批请求 ——
     let uncertain_orders = pick_map
         .iter()
         .filter(|(_, (_, uncertain))| *uncertain)
@@ -1754,81 +1915,102 @@ pub(crate) fn phase4_refine_ranges(
             "Phase 4 pass C densifying {} uncertain shot(s)",
             uncertain_orders.len()
         );
-        let mut pass_c_blocks = vec![json!({
-            "type": "input_text",
-            "text": format!(
-                "Re-check ONLY these uncertain shots with denser in-window frames.\n\
-                Current storyboard: {}\n\
-                Keep every other shot unchanged. assetIds stay FINAL.\n\
-                Return the complete Storyboard JSON after refining only the uncertain shots' source ranges.\n\
-                Avoid cutting mid spoken phrase.",
-                serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned())
-            )
-        })];
-        for order_index in &uncertain_orders {
-            let Some((window, _)) = pick_map.get(order_index) else {
-                continue;
-            };
-            let Some(source) = selected_sources
-                .iter()
-                .find(|source| source.asset_id == window.asset_id)
-            else {
-                continue;
-            };
-            let Some(path) = source.source_path.as_deref() else {
-                continue;
-            };
-            let times =
-                densify_times_in_range(window.start_ms, window.end_ms, PHASE4_UNCERTAIN_FRAMES);
-            let frames = extract_frames_at_times(
-                app,
-                &window.asset_id,
-                Path::new(path),
-                &times,
-                &format!("passC_{order_index}"),
-            );
-            for (time_ms, frame_path) in frames {
-                let Some(image) = read_input_image(&frame_path) else {
+        for (batch_index, batch_orders) in uncertain_orders.chunks(PHASE4_REFINE_SHOTS_PER_BATCH).enumerate() {
+            let allowed = batch_orders.iter().copied().collect::<HashSet<_>>();
+            let mut pass_c_blocks = vec![json!({
+                "type": "input_text",
+                "text": format!(
+                    "Re-check ONLY these uncertain shots with denser in-window frame grids: {:?}.\n\
+                    Batch {}/{}.\n\
+                    Current storyboard: {}\n\
+                    Keep every other shot unchanged. assetIds stay FINAL.\n\
+                    Each image is one shot's denser window grid; caption lists timesMs L→R, T→B.\n\
+                    Return the complete Storyboard JSON after refining only the uncertain shots' source ranges.\n\
+                    Avoid cutting mid spoken phrase.",
+                    batch_orders,
+                    batch_index + 1,
+                    uncertain_orders.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
+                    serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned())
+                )
+            })];
+            for order_index in batch_orders {
+                let Some((window, _)) = pick_map.get(order_index) else {
+                    continue;
+                };
+                let Some(source) = selected_sources
+                    .iter()
+                    .find(|source| source.asset_id == window.asset_id)
+                else {
+                    continue;
+                };
+                let Some(path) = source.source_path.as_deref() else {
+                    continue;
+                };
+                let times =
+                    densify_times_in_range(window.start_ms, window.end_ms, PHASE4_UNCERTAIN_FRAMES);
+                let frames = extract_frames_at_times(
+                    app,
+                    &window.asset_id,
+                    Path::new(path),
+                    &times,
+                    &format!("passC_{order_index}"),
+                );
+                if frames.is_empty() {
+                    continue;
+                }
+                let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
+                let frame_paths = frames.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+                let grid_path = frames[0]
+                    .1
+                    .parent()
+                    .map(|parent| parent.join(format!("grid_uncertain_{order_index}.jpg")));
+                let Some(grid_path) = grid_path else {
+                    continue;
+                };
+                let Some(grid) = compose_timed_frame_grid(&frame_paths, &grid_path, 5) else {
+                    continue;
+                };
+                let Some(image) = read_input_image(&grid) else {
                     continue;
                 };
                 pass_c_blocks.push(json!({
                     "type": "input_text",
                     "text": format!(
-                        "UNCERTAIN shotOrderIndex={} windowId={} sourceTimeMs={}",
-                        order_index, window.window_id, time_ms
+                        "UNCERTAIN shotOrderIndex={} windowId={} gridColumns=5 timesMs={:?} (read cells L→R, T→B)",
+                        order_index, window.window_id, times_ms
                     )
                 }));
                 pass_c_blocks.push(image);
             }
-        }
-        let pass_c_request = json!({
-            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-            "store": false,
-            "stream": true,
-            "input": [{ "role": "user", "content": pass_c_blocks }],
-            "text": { "format": { "type": "json_object" } }
-        });
-        crate::storyboard::provider_trace::append_storyboard_trace(
-            "Phase 4c",
-            None,
-            repair.map(|packet| packet.attempt).unwrap_or(1),
-            "request",
-            &pass_c_request,
-        );
-        if let Ok(pass_c_body) =
-            post_model_payload(access, &pass_c_request, Some(STORYBOARD_TIMEOUT))
-        {
+            let pass_c_request = json!({
+                "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
+                "store": false,
+                "stream": true,
+                "input": [{ "role": "user", "content": pass_c_blocks }],
+                "text": { "format": { "type": "json_object" } }
+            });
             crate::storyboard::provider_trace::append_storyboard_trace(
                 "Phase 4c",
                 None,
                 repair.map(|packet| packet.attempt).unwrap_or(1),
-                "response",
-                &serde_json::from_str::<Value>(&pass_c_body)
-                    .unwrap_or_else(|_| json!({ "raw": pass_c_body })),
+                "request",
+                &pass_c_request,
             );
-            if let Some(text) = model_response_json_text(access, &pass_c_body) {
-                if let Ok(updated) = serde_json::from_str::<StoryboardContent>(&text) {
-                    refined = updated;
+            if let Ok(pass_c_body) =
+                post_model_payload(access, &pass_c_request, Some(STORYBOARD_TIMEOUT))
+            {
+                crate::storyboard::provider_trace::append_storyboard_trace(
+                    "Phase 4c",
+                    None,
+                    repair.map(|packet| packet.attempt).unwrap_or(1),
+                    "response",
+                    &serde_json::from_str::<Value>(&pass_c_body)
+                        .unwrap_or_else(|_| json!({ "raw": pass_c_body })),
+                );
+                if let Some(text) = model_response_json_text(access, &pass_c_body) {
+                    if let Ok(updated) = serde_json::from_str::<StoryboardContent>(&text) {
+                        merge_phase4_batch_shots(&mut refined, &updated, &allowed, selected);
+                    }
                 }
             }
         }
@@ -1840,6 +2022,7 @@ pub(crate) fn phase4_refine_ranges(
     }
     refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
     let mut issues = super::timing::fit_shots(&mut refined, &rough.speech_timing, &pick_map);
+    resolve_overlaps_within_chosen_windows(&mut refined, &pick_map);
     issues.extend(collect_phase4_issues(&mut refined, selected));
     refined.brief = brief.to_owned();
     refined.title = rough.title.clone();
@@ -1911,6 +2094,47 @@ fn apply_phase4_window_picks(
     map
 }
 
+fn merge_phase4_batch_shots(
+    target: &mut StoryboardContent,
+    batch: &StoryboardContent,
+    allowed_orders: &HashSet<i64>,
+    locked: &StoryboardContent,
+) {
+    for patch in &batch.shots {
+        if !allowed_orders.contains(&patch.order_index) {
+            continue;
+        }
+        let Some(original) = locked
+            .shots
+            .iter()
+            .find(|shot| shot.order_index == patch.order_index)
+        else {
+            continue;
+        };
+        if patch.asset_id != original.asset_id {
+            continue;
+        }
+        let Some(slot) = target
+            .shots
+            .iter_mut()
+            .find(|shot| shot.order_index == patch.order_index)
+        else {
+            continue;
+        };
+        slot.crop_focus = patch.crop_focus;
+        slot.source_start_ms = patch.source_start_ms;
+        slot.source_end_ms = patch.source_end_ms;
+        slot.duration_ms = patch.duration_ms;
+        slot.purpose = patch.purpose.clone();
+        slot.on_screen_text = patch.on_screen_text.clone();
+        slot.narration_text = patch.narration_text.clone();
+        slot.reason = patch.reason.clone();
+        slot.match_level = patch.match_level.clone();
+        slot.beat_part_index = patch.beat_part_index;
+        slot.beat_part_count = patch.beat_part_count;
+    }
+}
+
 fn clamp_shots_to_chosen_windows(
     content: &mut StoryboardContent,
     pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
@@ -1950,6 +2174,224 @@ fn clamp_shots_to_chosen_windows(
         shot.source_start_ms = start;
         shot.source_end_ms = end;
         shot.duration_ms = (end - start).max(1);
+    }
+}
+
+/// 同素材源范围交叠时，只在 Phase 4 已选内容窗内挪切点；挪过的清 cropFocus。
+fn resolve_overlaps_within_chosen_windows(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+) {
+    let mut by_asset: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, shot) in content.shots.iter().enumerate() {
+        by_asset
+            .entry(shot.asset_id.clone())
+            .or_default()
+            .push(index);
+    }
+    for indices in by_asset.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        let mut ordered = indices.clone();
+        ordered.sort_by_key(|&index| content.shots[index].order_index);
+        let mut occupied: Vec<(i64, i64)> = Vec::new();
+        for &index in &ordered {
+            let (asset_id, order_index, preferred_start, preferred_end, need, window_bounds) = {
+                let shot = &content.shots[index];
+                let bounds = pick_map.get(&shot.order_index).and_then(|(window, _)| {
+                    if window.asset_id != shot.asset_id {
+                        return None;
+                    }
+                    let win_start = window.start_ms.min(window.end_ms);
+                    let win_end = window.end_ms.max(window.start_ms);
+                    if win_end <= win_start {
+                        None
+                    } else {
+                        Some((win_start, win_end))
+                    }
+                });
+                (
+                    shot.asset_id.clone(),
+                    shot.order_index,
+                    shot.source_start_ms,
+                    shot.source_end_ms,
+                    shot.duration_ms.max(1),
+                    bounds,
+                )
+            };
+            let Some((win_start, win_end)) = window_bounds else {
+                occupied.push((preferred_start, preferred_end.max(preferred_start + 1)));
+                continue;
+            };
+            let need = need.clamp(1, (win_end - win_start).max(1));
+            let mut start = preferred_start.clamp(win_start, win_end.saturating_sub(1));
+            let mut end = preferred_end.min(win_end).max(start + 1);
+            if end - start > need {
+                end = start + need;
+            }
+            if ranges_overlap_ms(start, end, &occupied) {
+                if let Some((free_start, free_end)) =
+                    find_free_in_bounds(win_start, win_end, need, &occupied, start)
+                {
+                    start = free_start;
+                    end = free_end;
+                } else if let Some((free_start, free_end)) =
+                    find_free_in_bounds(win_start, win_end, 1, &occupied, start)
+                {
+                    start = free_start;
+                    end = free_end;
+                }
+            }
+            let shot = &mut content.shots[index];
+            if shot.source_start_ms != start || shot.source_end_ms != end {
+                if shot.crop_focus.take().is_some() {
+                    log::info!(
+                        "Cleared cropFocus for shot_{} after in-window overlap resolve on asset {}",
+                        order_index,
+                        asset_id
+                    );
+                }
+            }
+            shot.source_start_ms = start;
+            shot.source_end_ms = end;
+            shot.duration_ms = (end - start).max(1);
+            occupied.push((start, end));
+        }
+        // 窗内仍交叠（例如多镜争同一满窗）：按 window 均分，仍不越窗。
+        if window_constrained_ranges_overlap(content, indices) {
+            pack_overlapping_shots_within_windows(content, indices, pick_map);
+        }
+    }
+}
+
+fn ranges_overlap_ms(start: i64, end: i64, used: &[(i64, i64)]) -> bool {
+    used.iter()
+        .any(|(used_start, used_end)| start < *used_end && *used_start < end)
+}
+
+fn find_free_in_bounds(
+    bound_start: i64,
+    bound_end: i64,
+    need: i64,
+    used: &[(i64, i64)],
+    preferred_start: i64,
+) -> Option<(i64, i64)> {
+    let span = bound_end - bound_start;
+    if span <= 1 {
+        return None;
+    }
+    let mut intervals = used
+        .iter()
+        .filter_map(|(start, end)| {
+            let start = (*start).max(bound_start);
+            let end = (*end).min(bound_end);
+            (end > start).then_some((start, end))
+        })
+        .collect::<Vec<_>>();
+    intervals.sort_by_key(|item| item.0);
+    let mut cursor = bound_start;
+    let mut gaps = Vec::new();
+    for (start, end) in intervals {
+        if start > cursor {
+            gaps.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < bound_end {
+        gaps.push((cursor, bound_end));
+    }
+    let need = need.clamp(1, span);
+    gaps.iter()
+        .filter(|(start, end)| end - start >= need)
+        .min_by_key(|(start, _)| (*start - preferred_start).abs())
+        .map(|(start, end)| {
+            let placed = preferred_start.clamp(*start, end - need);
+            (placed, placed + need)
+        })
+        .or_else(|| {
+            gaps.iter()
+                .max_by_key(|(start, end)| end - start)
+                .filter(|(start, end)| end - start > 1)
+                .map(|(start, end)| (*start, *end))
+        })
+}
+
+fn window_constrained_ranges_overlap(
+    content: &StoryboardContent,
+    indices: &[usize],
+) -> bool {
+    let ranges = indices
+        .iter()
+        .map(|&index| {
+            let shot = &content.shots[index];
+            (shot.source_start_ms, shot.source_end_ms)
+        })
+        .collect::<Vec<_>>();
+    ranges.iter().enumerate().any(|(index, (start, end))| {
+        ranges
+            .iter()
+            .skip(index + 1)
+            .any(|(other_start, other_end)| start < other_end && other_start < end)
+    })
+}
+
+fn pack_overlapping_shots_within_windows(
+    content: &mut StoryboardContent,
+    indices: &[usize],
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+) {
+    let mut by_window: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for &index in indices {
+        let shot = &content.shots[index];
+        let Some((window, _)) = pick_map.get(&shot.order_index) else {
+            continue;
+        };
+        if window.asset_id != shot.asset_id {
+            continue;
+        }
+        let win_start = window.start_ms.min(window.end_ms);
+        let win_end = window.end_ms.max(window.start_ms);
+        if win_end <= win_start {
+            continue;
+        }
+        by_window
+            .entry((win_start, win_end))
+            .or_default()
+            .push(index);
+    }
+    for ((win_start, win_end), mut group) in by_window {
+        if group.len() < 2 {
+            continue;
+        }
+        group.sort_by_key(|&index| content.shots[index].order_index);
+        let span = win_end - win_start;
+        let slice = (span / group.len() as i64).max(1);
+        let last = group.len() - 1;
+        for (offset, &index) in group.iter().enumerate() {
+            let start = win_start + offset as i64 * slice;
+            let end = if offset == last {
+                win_end
+            } else {
+                (start + slice).min(win_end)
+            };
+            let shot = &mut content.shots[index];
+            let next_start = start.min(win_end.saturating_sub(1));
+            let next_end = end.max(next_start + 1).min(win_end);
+            if shot.source_start_ms != next_start || shot.source_end_ms != next_end {
+                if shot.crop_focus.take().is_some() {
+                    log::info!(
+                        "Cleared cropFocus for shot_{} after packing overlapping cuts inside window [{}-{}]",
+                        shot.order_index,
+                        win_start,
+                        win_end
+                    );
+                }
+            }
+            shot.source_start_ms = next_start;
+            shot.source_end_ms = next_end;
+            shot.duration_ms = (next_end - next_start).max(1);
+        }
     }
 }
 
@@ -2251,6 +2693,29 @@ fn collect_phase3_issues(
             .for_shots(extra_shots)
             .allowing(vec!["remove any shot that is not part of a covered beat"]),
         );
+    }
+
+    // 相邻同片硬拒（含跨 beat 衔接）；非相邻复用仍受 40% 上限约束。
+    for index in 0..final_content.shots.len().saturating_sub(1) {
+        let left = &final_content.shots[index];
+        let right = &final_content.shots[index + 1];
+        if left.asset_id == right.asset_id {
+            issues.push(
+                StoryboardIssue::new(
+                    "consecutive_duplicate_asset",
+                    format!(
+                        "Consecutive shots {} and {} both use asset '{}'; adjacent shots must use different assets.",
+                        left.order_index, right.order_index, left.asset_id
+                    ),
+                    true,
+                )
+                .for_shots(vec![left.order_index, right.order_index])
+                .allowing(vec![
+                    "replace one of the adjacent shots with a different assetId from its beat pool",
+                    "keep non-adjacent reuse only within the diversity limit",
+                ]),
+            );
+        }
     }
 
     final_content.title = rough.title.clone();

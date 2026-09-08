@@ -1,5 +1,21 @@
 # API 与工具契约
 
+## 2026-09-08：Phase 3 相邻同片硬拒
+
+最终播放序相邻镜头不得共用同一 `assetId`（含跨 beat）；Phase 3 以 `consecutive_duplicate_asset` 打回，Phase 5 diversity 同步拒绝。非相邻复用仍受 40% 上限。不新增 Tauri 命令。见 `docs/changes/2026-09-08-phase3-consecutive-asset-ban.md`。
+
+## 2026-09-07：Phase 4/normalize 窗内消交叠
+
+同素材源范围交叠时，Phase 4 在已选内容窗内机械拆开；normalize 仍消交叠但不对带 `cropFocus` 的素材做整段 pack，被挪切点的镜头清构图。不新增 Tauri 命令。见 `docs/changes/2026-09-07-phase4-overlap-resolve.md`。
+
+## 2026-09-07：Phase 4 精修拆批
+
+Phase 4 Pass B/C 不减少每镜抽帧数；同一镜定时帧拼成一张网格，并按最多 10 镜一批请求，合并时锁定 `assetId`。不新增 Tauri 命令。见 `docs/changes/2026-09-07-phase4-refine-batch.md`。
+
+## 2026-09-07：配音出站代理
+
+Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`（与本机用户环境一致）。不新增 Tauri 命令；设置页区分「已连接」与「密钥已存·未探通」。传输失败会把中文 Windows 连接超时（os error 10060）归类为 timed out，并写日志细节。实现见 `docs/changes/2026-09-07-voice-http-proxy.md`。
+
 ## 2026-09-07：剪辑流程与预览复用
 
 - `list_asset_page.counts.visualPending` 返回项目内视觉分析 `queued/running` 素材数，与技术分析计数共同决定前端是否继续刷新。`assets-changed` 事件的 payload 为项目 ID，在技术分析向视觉队列交接的事务提交后发出；空闲不再持续轮询素材或健康摘要，导入、重链路、健康扫描动作与 Agent 终态会主动刷新。健康摘要轮询仅在计数或活动任务状态变化时连带刷新素材页，首次观察与空闲重复摘要不触发。
@@ -139,7 +155,7 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 **Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s、约 2–5 beat；有大段可朗读文案时 Rust 纠偏为 `full_script` 并可先 TTS 再锁定 `targetDurationMs`；`key_message` 旁白估计时长不得超过目标的约 1.2 倍且不超过 15s）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试。Phase 4 **先选内容窗再段内精修**：导入关键帧（或三分段）建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；旁白时长托底减轻半句切断，**禁止换片**（不做每素材全片场景扫描）。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（normalize 仅 lead 回填旁白，避免多镜倍增）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
-`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
+`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 

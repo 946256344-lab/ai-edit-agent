@@ -419,30 +419,26 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
         return Ok(());
     }
 
-    // 相邻同素材：仅当源范围相同或重叠时拒绝；不交叠的不同时段允许（跨 beat 衔接场景）。
+    // 相邻同素材一律拒绝（与 Phase 3 硬门一致）；非相邻复用仍允许，交叠由源范围校验处理。
     for window in shots.windows(2) {
         if window[0].asset_id == window[1].asset_id {
             let a = &window[0];
             let b = &window[1];
-            let overlapping =
-                a.source_start_ms < b.source_end_ms && b.source_start_ms < a.source_end_ms;
-            if overlapping {
-                log::warn!(
-                    "Consecutive shots use same asset with overlapping ranges: shot_{}={} [{}-{}], shot_{}={} [{}-{}]",
-                    a.order_index,
-                    a.asset_id,
-                    a.source_start_ms,
-                    a.source_end_ms,
-                    b.order_index,
-                    b.asset_id,
-                    b.source_start_ms,
-                    b.source_end_ms
-                );
-                return Err(format!(
-                    "Consecutive shots (index {} and {}) reuse asset '{}' with overlapping source ranges. Choose different footage or non-overlapping source ranges to maintain visual variety.",
-                    a.order_index, b.order_index, a.asset_id
-                ));
-            }
+            log::warn!(
+                "Consecutive shots reuse the same asset: shot_{}={} [{}-{}], shot_{}={} [{}-{}]",
+                a.order_index,
+                a.asset_id,
+                a.source_start_ms,
+                a.source_end_ms,
+                b.order_index,
+                b.asset_id,
+                b.source_start_ms,
+                b.source_end_ms
+            );
+            return Err(format!(
+                "Consecutive shots (index {} and {}) reuse asset '{}'. Choose different footage for adjacent shots to maintain visual variety.",
+                a.order_index, b.order_index, a.asset_id
+            ));
         }
     }
 
@@ -753,10 +749,39 @@ fn normalize_storyboard_candidate(
             }
         }
     }
-    // 已判断主体构图的镜头不能机械搬到另一个未检查的源窗口。
-    // 交叠仍由现有校验报告，再交 Phase 4 重新选窗。
-    if content.shots.iter().all(|shot| shot.crop_focus.is_none()) {
-        resolve_overlapping_video_ranges(&mut content.shots, sources);
+    // 有 cropFocus 时仍消交叠，但不动整段 pack；被挪源范围的镜头清掉构图，避免未检查窗上的假主体。
+    let range_before = content
+        .shots
+        .iter()
+        .map(|shot| {
+            (
+                shot.order_index,
+                shot.source_start_ms,
+                shot.source_end_ms,
+            )
+        })
+        .collect::<Vec<_>>();
+    resolve_overlapping_video_ranges(&mut content.shots, sources);
+    for shot in &mut content.shots {
+        let Some((_, before_start, before_end)) = range_before
+            .iter()
+            .find(|(order, _, _)| *order == shot.order_index)
+        else {
+            continue;
+        };
+        if shot.source_start_ms == *before_start && shot.source_end_ms == *before_end {
+            continue;
+        }
+        if shot.crop_focus.take().is_some() {
+            log::info!(
+                "Cleared cropFocus for shot_{} after overlap resolve moved source range [{}-{}] -> [{}-{}]",
+                shot.order_index,
+                before_start,
+                before_end,
+                shot.source_start_ms,
+                shot.source_end_ms
+            );
+        }
     }
     content
         .uncovered_beat_ids
@@ -902,6 +927,13 @@ fn resolve_overlapping_video_ranges(
             .unwrap_or(0)
             .max(1);
         if video_asset_ranges_overlap(shots, &asset_id) {
+            let has_crop_focus = shots
+                .iter()
+                .any(|shot| shot.asset_id == asset_id && shot.crop_focus.is_some());
+            if has_crop_focus {
+                // 已验构图的镜头禁止整段均分到未检查源窗；残留交叠交校验/Phase4。
+                continue;
+            }
             pack_video_asset_shots(shots, &asset_id, duration);
         }
     }
@@ -1675,6 +1707,58 @@ mod tests {
             normalized.shots[0].source_end_ms <= normalized.shots[1].source_start_ms
                 || normalized.shots[1].source_end_ms <= normalized.shots[0].source_start_ms
         );
+    }
+
+    #[test]
+    fn normalize_clears_crop_focus_when_overlap_resolve_moves_range() {
+        // 有 cropFocus 时仍消交叠；被挪源范围的镜头清构图，且不做整段 pack 乱跳窗。
+        let mut long = source();
+        long.duration_ms = Some(20_000);
+        let mut storyboard = content("direct");
+        storyboard.beats.push(StoryboardBeat {
+            id: "second".to_owned(),
+            purpose: "Show another beat".to_owned(),
+            required_visual: "A second verified view".to_owned(),
+            narration: String::new(),
+        });
+        storyboard.uncovered_beat_ids.clear();
+        storyboard.shots[0].crop_focus = Some([0.3, 0.4]);
+        storyboard.shots[0].source_start_ms = 0;
+        storyboard.shots[0].source_end_ms = 8_000;
+        storyboard.shots[0].duration_ms = 8_000;
+        storyboard.shots.push(StoryboardShot {
+            crop_focus: Some([0.7, 0.4]),
+            order_index: 2,
+            duration_ms: 8_000,
+            purpose: "Show another beat".to_owned(),
+            on_screen_text: String::new(),
+            narration_text: String::new(),
+            asset_id: "asset-1".to_owned(),
+            source_start_ms: 2_000,
+            source_end_ms: 10_000,
+            reason: "Overlapping inspected cut.".to_owned(),
+            beat_id: "second".to_owned(),
+            match_level: "direct".to_owned(),
+            beat_part_index: 1,
+            beat_part_count: 1,
+            split_role: "lead".to_owned(),
+        });
+        let before_second = (
+            storyboard.shots[1].source_start_ms,
+            storyboard.shots[1].source_end_ms,
+        );
+        let normalized = normalize_storyboard_candidate(storyboard, &[long.clone()], "brief");
+        assert!(validate_non_overlapping_after(&normalized, &[long]));
+        let moved = normalized.shots[1].source_start_ms != before_second.0
+            || normalized.shots[1].source_end_ms != before_second.1;
+        assert!(moved);
+        assert!(normalized.shots[1].crop_focus.is_none());
+        // 第一镜未挪则保留构图；若也被挪则清掉。
+        if normalized.shots[0].source_start_ms == 0 && normalized.shots[0].source_end_ms == 8_000 {
+            assert_eq!(normalized.shots[0].crop_focus, Some([0.3, 0.4]));
+        } else {
+            assert!(normalized.shots[0].crop_focus.is_none());
+        }
     }
 
     #[test]

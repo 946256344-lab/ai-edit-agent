@@ -24,6 +24,8 @@ mod jianying;
 mod models;
 /// Jamendo 凭据、搜索、授权资格与有界下载适配器。
 mod music_provider;
+/// 出站 HTTP（配音等）：环境代理与传输失败分类。
+mod outbound_http;
 /// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;
 /// FFmpeg preview 渲染、文字/音乐合成与质量检查。

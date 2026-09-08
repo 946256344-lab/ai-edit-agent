@@ -19,6 +19,8 @@ const PHASE4_MAX_WINDOWS_PER_ASSET: usize = 12;
 /// 段内精修默认抽帧数 / 不确定时加密码。
 pub(crate) const PHASE4_REFINE_FRAMES: usize = 6;
 pub(crate) const PHASE4_UNCERTAIN_FRAMES: usize = 10;
+/// Pass B/C 每批最多精修多少镜；每镜仍抽满上列帧数，再拼成一张网格，避免单次 100+ 图断连。
+pub(crate) const PHASE4_REFINE_SHOTS_PER_BATCH: usize = 10;
 /// Phase 3 单次请求最多附带多少张候选网格，避免体量失控。
 pub(crate) const PHASE3_MAX_GRID_IMAGES: usize = 36;
 
@@ -140,6 +142,40 @@ pub(crate) fn read_input_image(path: &Path) -> Option<Value> {
         "type": "input_image",
         "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))
     }))
+}
+
+/// 把同一镜的多张定时帧拼成一张网格，时间采样点数不变，只减少请求里的 image 块数量。
+pub(crate) fn compose_timed_frame_grid(
+    frame_paths: &[PathBuf],
+    output_path: &Path,
+    columns: u32,
+) -> Option<PathBuf> {
+    if frame_paths.is_empty() || columns == 0 {
+        return None;
+    }
+    const CELL_W: u32 = 320;
+    const CELL_H: u32 = 180;
+    let rows = ((frame_paths.len() as u32) + columns - 1) / columns;
+    let mut grid: RgbImage =
+        ImageBuffer::from_pixel(columns * CELL_W, rows * CELL_H, Rgb([0, 0, 0]));
+    for (index, path) in frame_paths.iter().enumerate() {
+        let img = image::open(path).ok()?.to_rgb8();
+        let resized =
+            image::imageops::resize(&img, CELL_W, CELL_H, image::imageops::FilterType::Triangle);
+        let col = (index as u32) % columns;
+        let row = (index as u32) / columns;
+        image::imageops::replace(
+            &mut grid,
+            &resized,
+            (col * CELL_W).into(),
+            (row * CELL_H).into(),
+        );
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    grid.save(output_path).ok()?;
+    output_path.is_file().then(|| output_path.to_path_buf())
 }
 
 /// 按边界时刻生成内容候选窗（合并过短段，数量封顶）；无边界时退回整段。
@@ -401,5 +437,34 @@ mod tests {
         let times = densify_times_in_range(1_000, 5_000, 4);
         assert_eq!(times.len(), 4);
         assert!(times.iter().all(|time| (1_000..5_000).contains(time)));
+    }
+
+    #[test]
+    fn compose_timed_frame_grid_keeps_all_cells() {
+        use image::{Rgb, RgbImage};
+        let directory = std::env::temp_dir().join(format!(
+            "phase4-grid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut paths = Vec::new();
+        for index in 0..6 {
+            let path = directory.join(format!("cell_{index}.jpg"));
+            let mut img = RgbImage::new(40, 40);
+            for pixel in img.pixels_mut() {
+                *pixel = Rgb([index as u8 * 40, 20, 20]);
+            }
+            img.save(&path).unwrap();
+            paths.push(path);
+        }
+        let out = directory.join("grid.jpg");
+        let grid = compose_timed_frame_grid(&paths, &out, 3).expect("grid");
+        let composed = image::open(&grid).unwrap();
+        assert_eq!(composed.width(), 960);
+        assert_eq!(composed.height(), 360);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

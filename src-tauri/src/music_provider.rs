@@ -282,10 +282,11 @@ pub(crate) fn elevenlabs_json_request(
 ) -> Result<serde_json::Value, String> {
     let api_key = elevenlabs_stored_key()?;
     let url = format!("{ELEVENLABS_API_ROOT}{path}");
+    let agent = crate::outbound_http::voice_agent();
     let mut request = if method == "POST" {
-        ureq::post(&url)
+        agent.post(&url)
     } else {
-        ureq::get(&url)
+        agent.get(&url)
     };
     request = request
         .set("xi-api-key", &api_key)
@@ -310,14 +311,10 @@ pub(crate) fn elevenlabs_json_request(
             let detail = response.into_string().unwrap_or_default();
             Err(classify_elevenlabs_http_error(code, &detail))
         }
-        Err(ureq::Error::Transport(transport)) => {
-            let message = transport.to_string().to_ascii_lowercase();
-            if message.contains("timed out") || message.contains("timeout") {
-                Err("ElevenLabs request timed out.".to_owned())
-            } else {
-                Err("ElevenLabs is unavailable.".to_owned())
-            }
-        }
+        Err(ureq::Error::Transport(transport)) => Err(crate::outbound_http::classify_voice_transport(
+            "ElevenLabs",
+            &transport,
+        )),
     }
 }
 
@@ -515,10 +512,11 @@ pub(crate) mod fish_audio {
     fn request(method: &str, path: &str, body: Option<Value>) -> Result<ureq::Response, String> {
         let key = stored_key()?;
         let url = format!("{API_ROOT}{path}");
+        let agent = crate::outbound_http::voice_agent();
         let mut request = if method == "POST" {
-            ureq::post(&url)
+            agent.post(&url)
         } else {
-            ureq::get(&url)
+            agent.get(&url)
         };
         request = request
             .set("Authorization", &format!("Bearer {key}"))
@@ -539,12 +537,7 @@ pub(crate) mod fish_audio {
             }
             ureq::Error::Status(code, _) => format!("Fish Audio API error {code}."),
             ureq::Error::Transport(transport) => {
-                let message = transport.to_string().to_ascii_lowercase();
-                if message.contains("timed out") || message.contains("timeout") {
-                    "Fish Audio request timed out.".to_owned()
-                } else {
-                    "Fish Audio is unavailable.".to_owned()
-                }
+                crate::outbound_http::classify_voice_transport("Fish Audio", &transport)
             }
         })
     }

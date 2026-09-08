@@ -42,9 +42,9 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
             <strong>配音（Fish Audio）</strong>
             <small>配置后优先用于配音；传输超时/服务不可用时可回退到已配置的 ElevenLabs（密钥错误不会切换）。API Key 只保存在 Windows 凭据库。</small>
           </span>
-          <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已连接' : '密钥已存') : '未配置'}</b>
+          <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已连接' : '密钥已存·未探通') : '未配置'}</b>
         </div>
-        <p className="oauth-status">{model.fishAudioStatus.lastErrorCode ? `配音状态：${model.fishAudioStatus.lastErrorCode}` : model.fishAudioStatus.keyStored ? '已保存密钥，将使用 s2.1-pro-free。' : '尚未配置。'}</p>
+        <p className="oauth-status">{model.fishAudioStatus.lastErrorCode ? `配音状态：${model.fishAudioStatus.lastErrorCode}（常见原因：本机代理未启动，或进程未读到 HTTPS_PROXY）` : model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已保存密钥，将使用 s2.1-pro-free。' : '密钥已存，但当前无法访问 Fish Audio；请确认本地代理可用。') : '尚未配置。'}</p>
         <form className="custom-api-form" onSubmit={actions.saveFishAudioKey}>
           <label><span>Fish Audio API Key</span><input type="password" value={model.form.fishAudioKey} onChange={(event) => actions.setFishAudioKey(event.target.value)} placeholder="Fish API Key" autoComplete="off" /></label>
           <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.fishAudioKey.trim()}>{model.isSavingVoice ? '保存中' : '保存 Fish Audio 密钥'}</button>
@@ -99,13 +99,13 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
             <strong>配音（ElevenLabs）</strong>
             <small>API Key 只保存在 Windows 凭据库。保存后只探测音色列表，不会合成扣费。</small>
           </span>
-          <b>{model.elevenLabsStatus.keyStored ? (model.elevenLabsStatus.voicesReadable ? '已连接' : '密钥已存') : '未配置'}</b>
+          <b>{model.elevenLabsStatus.keyStored ? (model.elevenLabsStatus.voicesReadable ? '已连接' : '密钥已存·未探通') : '未配置'}</b>
         </div>
         <p className="oauth-status">
           {model.elevenLabsStatus.lastErrorCode
             ? `配音状态：${model.elevenLabsStatus.lastErrorCode}`
             : model.elevenLabsStatus.keyStored
-              ? '已保存密钥。'
+              ? (model.elevenLabsStatus.voicesReadable ? '已保存密钥。' : '密钥已存，但当前无法读取音色列表。')
               : model.elevenLabsStatus.importable
                 ? '检测到本机环境变量，可以导入。'
                 : '尚未配置。'}

@@ -1,8 +1,16 @@
 # 架构
 
+## Phase 4 精修拆批（2026-09-07）
+
+Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 10 镜一批调用模型，避免单次上百张图触发网关断连；批结果只回写允许的 `orderIndex`。
+
+## 配音出站代理（2026-09-07）
+
+配音 HTTP 不走系统 WinINET 自动代理配置，只读进程环境中的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`。本机若只能经本地代理访问 `api.fish.audio`，旧版裸 `ureq` 直连会稳定超时；模型自定义 API 仍用独立 Agent，不受本次改动强制代理。
+
 ## 剪辑流程优化（2026-09-07）
 
-叙事确定后，TTS 与所有 beat 的本地向量编码并行；Phase 2 独立建立各 beat 候选池，不把候选当作已使用镜头提前扣分，时长项按可用源窗是否容纳目标镜头评分。Phase 3 在原有一次请求里结合整条序列判断景别、完整动作、方向与首尾表达；Phase 4 附带真实配音时段并判断 `cropFocus`，裁剪焦点随分镜进入时间线、预览和 Jianying handoff。带焦点的镜头不由标准化阶段机械移到未经检查的新窗口；交叠和声画时长缺口仍交已有精修流程处理。
+叙事确定后，TTS 与所有 beat 的本地向量编码并行；Phase 2 独立建立各 beat 候选池，不把候选当作已使用镜头提前扣分，时长项按可用源窗是否容纳目标镜头评分。Phase 3 在原有一次请求里结合整条序列判断景别、完整动作、方向与首尾表达；Phase 4 附带真实配音时段并判断 `cropFocus`，裁剪焦点随分镜进入时间线、预览和 Jianying handoff。带焦点的镜头禁止整段 pack 到未检查源窗；Phase 4 钳窗后先在已选内容窗内机械消交叠，normalize 仍消交叠但仅清掉被挪源范围的 `cropFocus`。窗内仍无法拆开时才交校验回 Phase 4。
 
 预览仍来自持久化时间线，新增 `preview_cache.rs` 管理跨版本复用键，镜头、无字幕底片、文字/叠加画面三层缓存留在本地。只有成功生成的临时视频才进入缓存；源大小或修改时间、源范围、裁剪变化会失效对应层。文字和叠加画面一次合成，音轨单独混合，桌面命令在工作线程执行。`useAssetWorkspaceController` 仅在分析/扫描活动期间继续刷新，由动作和队列交接事件唤醒；返回的 `visualPending` 覆盖当前页之外的视觉分析。健康摘要轮询仅在计数或任务状态变化时连带刷新素材页。
 
@@ -290,7 +298,7 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s 短视频；有大段可朗读文案则纠偏 `full_script` 并可先 TTS 锁定时长；`key_message` 旁白有估计时长硬门）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格）。Phase 4 **先选内容窗、再段内精修切点**（导入关键帧建窗，不做全片场景扫描；不确定局部加密；旁白时长托底），禁止换片。Phase 5 Rust `normalize` 自修后硬校验（仅 lead 回填旁白）；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 由模型把 brief 拆成包含 `id`、`purpose` 和 `requiredVisual` 的 beats（短 brief 偏 `key_message`/≤15s 短视频；有大段可朗读文案则纠偏 `full_script` 并可先 TTS 锁定时长；`key_message` 旁白有估计时长硬门）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格；最终序相邻镜不得同 `assetId`，含跨 beat）。Phase 4 **先选内容窗、再段内精修切点**（导入关键帧建窗，不做全片场景扫描；不确定局部加密；旁白时长托底），禁止换片。Phase 5 Rust `normalize` 自修后硬校验（仅 lead 回填旁白；交叠在 Phase 4 窗内优先拆开，normalize 不清未挪镜的构图）；精修类失败回 Phase 4，结构/硬上限不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 
