@@ -579,11 +579,11 @@ fn short_brief_duration_issue(
     (!issues.is_empty()).then(|| issues.join("; "))
 }
 
-/// key_message 旁白合计不得明显超过目标时长（也不得超过短视频硬帽）。
+/// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
 /// 有大段可朗读文案时不拦：交由 `upgrade_speakable_brief_to_full_script` 纠偏。
-fn key_message_narration_duration_issue(
+fn key_message_marker_issue(
     brief: &str,
-    narrative: &phases::NarrativeStructure,
+    narrative: &mut phases::NarrativeStructure,
 ) -> Option<String> {
     if narrative.script_mode != "key_message" {
         return None;
@@ -591,23 +591,48 @@ fn key_message_narration_duration_issue(
     if brief_has_substantial_speakable_copy(brief) || brief_requests_longer_runtime(brief) {
         return None;
     }
-    let spoken_ms = narrative
-        .beats
-        .iter()
-        .map(|beat| estimated_storyboard_duration_ms(&beat.narration))
-        .sum::<i64>();
-    if spoken_ms <= 0 {
-        return None;
+    let mut issues = Vec::new();
+    let mut floor_sum = 0_i64;
+    for beat in &mut narrative.beats {
+        if beat.on_screen_text.trim().is_empty() {
+            let fallback = subtitle_text_from_narration(&beat.narration);
+            if !fallback.is_empty() {
+                beat.on_screen_text = fallback.chars().take(24).collect();
+            }
+        }
+        let marker = beat.on_screen_text.trim();
+        if marker.is_empty() {
+            issues.push(format!(
+                "Beat '{}' is missing onScreenText; key_message beats need a short on-screen marker (≤24 visible characters).",
+                beat.id
+            ));
+            continue;
+        }
+        let visible = marker.chars().filter(|ch| !ch.is_whitespace()).count();
+        if visible > 24 {
+            issues.push(format!(
+                "Beat '{}' onScreenText has {visible} visible characters; keep markers at most 24.",
+                beat.id
+            ));
+        }
+        floor_sum += crate::storyboard::timing::marker_readability_floor_ms(marker);
+    }
+    if !issues.is_empty() {
+        return Some(issues.join("; "));
     }
     let soft_limit = ((narrative.target_duration_ms.max(1) as f64) * 1.2).round() as i64;
-    let limit = soft_limit.min(SHORT_BRIEF_TARGET_CAP_MS);
-    if spoken_ms <= limit {
-        return None;
+    let limit = if brief_requests_longer_runtime(brief) {
+        soft_limit
+    } else {
+        soft_limit.min(SHORT_BRIEF_TARGET_CAP_MS)
+    };
+    if floor_sum > limit {
+        return Some(format!(
+            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {limit} ms); shorten onScreenText markers or reduce beats",
+            narrative.target_duration_ms
+        ));
     }
-    Some(format!(
-        "key_message narration estimates about {spoken_ms} ms but targetDurationMs is {} ms (limit {limit} ms); compress spoken lines so they fit the short cut, or use scriptMode=full_script when the brief already has substantial speakable copy",
-        narrative.target_duration_ms
-    ))
+    None
 }
 
 /// 有大段可朗读文案时纠偏为 full_script，以便走 audio-first；口播原文优先用模型抽出的 spokenScript，否则回落 brief。
@@ -817,39 +842,58 @@ fn normalize_storyboard_candidate(
         }
         group_cursor = group_end;
     }
-    let beat_narration = content
+    let beat_markers: std::collections::HashMap<String, String> = content
         .beats
         .iter()
         .map(|beat| {
-            let spoken = if !beat.narration.trim().is_empty() {
-                beat.narration.trim().to_owned()
+            let marker = if !beat.on_screen_text.trim().is_empty() {
+                beat.on_screen_text.trim().to_owned()
+            } else if !beat.narration.trim().is_empty() {
+                subtitle_text_from_narration(&beat.narration)
             } else {
-                beat.purpose.trim().to_owned()
+                String::new()
             };
-            (beat.id.clone(), spoken)
+            (beat.id.clone(), marker)
         })
+        .collect();
+    let beat_narration = content
+        .beats
+        .iter()
+        .map(|beat| (beat.id.clone(), beat.narration.trim().to_owned()))
         .collect::<std::collections::HashMap<_, _>>();
+    let is_key_message = content.script_mode == "key_message";
     for shot in &mut content.shots {
-        // 只给 lead 回填旁白；bridge/tail 保持空，避免自动配音 join 全镜时倍增朗读。
         let is_lead = shot.split_role == "lead" || shot.beat_part_index <= 1;
-        if is_lead && shot.narration_text.trim().is_empty() {
-            shot.narration_text = beat_narration
-                .get(&shot.beat_id)
-                .cloned()
-                .filter(|text| !text.is_empty())
-                .unwrap_or_else(|| shot.purpose.trim().to_owned());
-        }
-        if shot.on_screen_text.trim().is_empty() {
-            let subtitle_source = if !shot.narration_text.trim().is_empty() {
-                shot.narration_text.as_str()
-            } else {
-                beat_narration
+        if is_key_message {
+            // key_message 不配音：不从 purpose 回填 narration；lead 镜写入 beat 屏幕标记。
+            if is_lead && shot.on_screen_text.trim().is_empty() {
+                if let Some(marker) = beat_markers.get(&shot.beat_id) {
+                    if !marker.is_empty() {
+                        shot.on_screen_text = marker.clone();
+                    }
+                }
+            }
+        } else {
+            // 只给 lead 回填旁白；bridge/tail 保持空，避免自动配音 join 全镜时倍增朗读。
+            if is_lead && shot.narration_text.trim().is_empty() {
+                shot.narration_text = beat_narration
                     .get(&shot.beat_id)
-                    .map(String::as_str)
-                    .unwrap_or(shot.purpose.as_str())
-            };
-            if !subtitle_source.trim().is_empty() {
-                shot.on_screen_text = subtitle_text_from_narration(subtitle_source);
+                    .cloned()
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or_else(|| shot.purpose.trim().to_owned());
+            }
+            if shot.on_screen_text.trim().is_empty() {
+                let subtitle_source = if !shot.narration_text.trim().is_empty() {
+                    shot.narration_text.as_str()
+                } else {
+                    beat_narration
+                        .get(&shot.beat_id)
+                        .map(String::as_str)
+                        .unwrap_or(shot.purpose.as_str())
+                };
+                if !subtitle_source.trim().is_empty() {
+                    shot.on_screen_text = subtitle_text_from_narration(subtitle_source);
+                }
             }
         }
     }
@@ -1090,11 +1134,11 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        estimated_storyboard_duration_ms, key_message_narration_duration_issue,
-        minimum_storyboard_duration, normalize_storyboard_candidate, phase5_should_retry_phase4,
-        resolve_voiceover_script, short_brief_duration_issue, storyboard_completion_gaps,
-        storyboard_sources, storyboard_usage_counts, upgrade_speakable_brief_to_full_script,
-        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
+        normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
+        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
+        storyboard_usage_counts, upgrade_speakable_brief_to_full_script, validate_storyboard,
+        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1134,12 +1178,14 @@ mod tests {
                     purpose: "Set the scene".to_owned(),
                     required_visual: "A verified product view".to_owned(),
                     narration: "This is the opening scene.".to_owned(),
+                    on_screen_text: String::new(),
                 },
                 StoryboardBeat {
                     id: "missing".to_owned(),
                     purpose: "Explain a hidden technical value".to_owned(),
                     required_visual: "Measured technical data".to_owned(),
                     narration: String::new(),
+                    on_screen_text: String::new(),
                 },
             ],
             uncovered_beat_ids: vec!["missing".to_owned()],
@@ -1418,6 +1464,7 @@ mod tests {
                     purpose: "p".to_owned(),
                     required_visual: "v".to_owned(),
                     narration: "短旁白".to_owned(),
+                    on_screen_text: String::new(),
                 })
                 .collect(),
         };
@@ -1428,41 +1475,35 @@ mod tests {
     }
 
     #[test]
-    fn key_message_rejects_narration_longer_than_short_cap() {
-        let long = std::iter::repeat("word")
-            .take(30)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let narrative = NarrativeStructure {
+    fn key_message_rejects_markers_longer_than_short_cap() {
+        // 5 个合法长度标记的可读性下限之和会超过 15s 硬帽。
+        let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
-            beats: vec![
-                StoryboardBeat {
-                    id: "a".to_owned(),
+            beats: (0..5)
+                .map(|index| StoryboardBeat {
+                    id: format!("b{index}"),
                     purpose: "p".to_owned(),
                     required_visual: "v".to_owned(),
-                    narration: long.clone(),
-                },
-                StoryboardBeat {
-                    id: "b".to_owned(),
-                    purpose: "p".to_owned(),
-                    required_visual: "v".to_owned(),
-                    narration: long,
-                },
-            ],
+                    narration: String::new(),
+                    on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWX".to_owned(),
+                })
+                .collect(),
         };
-        let issue = key_message_narration_duration_issue("帮我做个短片", &narrative)
-            .expect("overlong key_message narration should be rejected");
-        assert!(issue.contains("key_message"));
-        assert!(issue.contains("compress") || issue.contains("full_script"));
+        let issue = key_message_marker_issue("帮我做个短片", &mut narrative)
+            .expect("overlong key_message markers should be rejected");
+        assert!(
+            issue.contains("readability") || issue.contains("shorten") || issue.contains("marker"),
+            "issue={issue}"
+        );
     }
 
     #[test]
-    fn key_message_accepts_narration_within_target() {
-        let narrative = NarrativeStructure {
+    fn key_message_accepts_markers_within_target() {
+        let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
             target_duration_ms: 12_000,
@@ -1472,20 +1513,17 @@ mod tests {
                 id: "a".to_owned(),
                 purpose: "p".to_owned(),
                 required_visual: "v".to_owned(),
-                narration: "Short punchy line.".to_owned(),
+                narration: String::new(),
+                on_screen_text: "工厂实力".to_owned(),
             }],
         };
-        assert!(key_message_narration_duration_issue("帮我做个短片", &narrative).is_none());
+        assert!(key_message_marker_issue("帮我做个短片", &mut narrative).is_none());
     }
 
     #[test]
-    fn speakable_brief_skips_key_message_narration_gate() {
+    fn speakable_brief_skips_key_message_marker_gate() {
         let brief = std::iter::repeat("word")
             .take(80)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let long = std::iter::repeat("word")
-            .take(30)
             .collect::<Vec<_>>()
             .join(" ");
         let mut narrative = NarrativeStructure {
@@ -1499,17 +1537,19 @@ mod tests {
                     id: "a".to_owned(),
                     purpose: "p".to_owned(),
                     required_visual: "v".to_owned(),
-                    narration: long.clone(),
+                    narration: String::new(),
+                    on_screen_text: String::new(),
                 },
                 StoryboardBeat {
                     id: "b".to_owned(),
                     purpose: "p".to_owned(),
                     required_visual: "v".to_owned(),
-                    narration: long,
+                    narration: String::new(),
+                    on_screen_text: String::new(),
                 },
             ],
         };
-        assert!(key_message_narration_duration_issue(&brief, &narrative).is_none());
+        assert!(key_message_marker_issue(&brief, &mut narrative).is_none());
         upgrade_speakable_brief_to_full_script(&brief, &mut narrative);
         assert_eq!(narrative.script_mode, "full_script");
         assert!(narrative.target_duration_ms >= 20_000);
@@ -1538,6 +1578,7 @@ mod tests {
             purpose: "p".to_owned(),
             required_visual: "v".to_owned(),
             narration: "Completely paraphrased narration that should not be spoken.".to_owned(),
+            on_screen_text: String::new(),
         }];
         let from_spoken = resolve_voiceover_script(
             &brief,
@@ -1683,6 +1724,7 @@ mod tests {
             purpose: "Show another beat".to_owned(),
             required_visual: "A second verified view".to_owned(),
             narration: String::new(),
+            on_screen_text: String::new(),
         });
         storyboard.uncovered_beat_ids.clear();
         storyboard.shots[0].source_start_ms = 0;
@@ -1724,6 +1766,7 @@ mod tests {
             purpose: "Show another beat".to_owned(),
             required_visual: "A second verified view".to_owned(),
             narration: String::new(),
+            on_screen_text: String::new(),
         });
         storyboard.uncovered_beat_ids.clear();
         storyboard.shots[0].crop_focus = Some([0.3, 0.4]);
@@ -2045,19 +2088,23 @@ fn generate_storyboard_internal(
                             minimum_shot_count, estimated_duration, candidate.beats.len()
                         )
                     });
-                let narration_issue = candidate.beats.iter().find(|beat| {
-                    let beat_duration = estimated_storyboard_duration_ms(&beat.narration);
-                    beat_duration > MAX_BEAT_SPOKEN_MS
-                }).map(|beat| {
-                    format!(
-                        "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
-                        beat.id,
-                        estimated_storyboard_duration_ms(&beat.narration),
-                        MAX_BEAT_SPOKEN_MS
-                    )
-                });
+                let narration_issue = (candidate.script_mode == "full_script")
+                    .then(|| {
+                        candidate.beats.iter().find(|beat| {
+                            estimated_storyboard_duration_ms(&beat.narration) > MAX_BEAT_SPOKEN_MS
+                        })
+                    })
+                    .flatten()
+                    .map(|beat| {
+                        format!(
+                            "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
+                            beat.id,
+                            estimated_storyboard_duration_ms(&beat.narration),
+                            MAX_BEAT_SPOKEN_MS
+                        )
+                    });
                 let duration_issue = short_brief_duration_issue(brief, &candidate);
-                let key_message_issue = key_message_narration_duration_issue(brief, &candidate);
+                let key_message_issue = key_message_marker_issue(brief, &mut candidate);
                 let issue = beat_issue
                     .or(narration_issue)
                     .or(duration_issue)
@@ -2140,7 +2187,20 @@ fn generate_storyboard_internal(
     );
 
     // Phase 2: 逐 beat 粗选镜
-    let rough = phases::phase2_rough_shot_selection(
+    let initial_timing = audio_first
+        .as_ref()
+        .and_then(|(target, prepared)| {
+            timing::from_alignment(&narrative.beats, &prepared.alignment, *target)
+        })
+        .unwrap_or_else(|| {
+            if narrative.script_mode == "key_message" {
+                let covered: Vec<String> = narrative.beats.iter().map(|b| b.id.clone()).collect();
+                timing::from_pacing_plan(&narrative.beats, &covered, narrative.target_duration_ms)
+            } else {
+                timing::SpeechTiming::default()
+            }
+        });
+    let mut rough = phases::phase2_rough_shot_selection(
         &app,
         &access,
         brief,
@@ -2148,13 +2208,19 @@ fn generate_storyboard_internal(
         &sources,
         &usage_counts,
         &embeddings,
-        audio_first
-            .as_ref()
-            .and_then(|(target, prepared)| {
-                timing::from_alignment(&narrative.beats, &prepared.alignment, *target)
-            })
-            .unwrap_or_default(),
+        initial_timing,
     )?;
+    if narrative.script_mode == "key_message" {
+        let covered: Vec<String> = rough
+            .shots
+            .iter()
+            .map(|shot| shot.beat_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        rough.speech_timing =
+            timing::from_pacing_plan(&narrative.beats, &covered, narrative.target_duration_ms);
+    }
     log::info!(
         "Phase 2 complete: rough storyboard with {} lead shots across pools, {} uncovered beats",
         rough.shots.len(),
@@ -2272,6 +2338,16 @@ fn generate_storyboard_internal(
         selected.shots.len(),
         selected.uncovered_beat_ids.len()
     );
+    if narrative.script_mode == "key_message" {
+        let covered: Vec<String> = selected
+            .beats
+            .iter()
+            .map(|beat| beat.id.clone())
+            .filter(|id| !selected.uncovered_beat_ids.iter().any(|u| u == id))
+            .collect();
+        rough.speech_timing =
+            timing::from_pacing_plan(&selected.beats, &covered, selected.target_duration_ms);
+    }
 
     // Phase 4 + Phase 5: 精修时间段；normalize 自修后校验；仅精修类失败回 Phase 4
     let mut repair: Option<RepairPacket> = None;

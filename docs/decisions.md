@@ -1,4 +1,4 @@
-# 当前技术决策
+﻿# 当前技术决策
 
 本文只记录今天仍然影响开发的决定；历史 ADR 仍可在仓库历史中查阅，不再作为必读规则。
 
@@ -42,7 +42,11 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 早期产品优先简单的本地分析、固定关键帧和可解释的素材排序。遇到质量问题，先增加复现和测试，再决定是否引入新的模型、索引或复杂策略。
 
-## 11. 当前未完成事项
+## 11. key_message 只出字幕标记不配音（2026-09-08）
+
+`key_message` 是短目标/提纲成片：Phase 1 为每个 beat 写屏幕标记 `onScreenText`（≤24 可见字符），`narration` 留空；镜头时长按标记可读性与目标时长分配（`SpeechTiming.kind=pacing`）。时间线为每个 beat 写一条跨该 beat 镜头的标记字幕，**不自动配音**。显式 `synthesize_voiceover` 仍可用，但不得朗读 `onScreenText`，仅在 beats 仍有 narration 时合成。`full_script` 继续走口播 + audio-first + 自动配音。
+
+## 12. 当前未完成事项
 
 - 安装包还没有完整捆绑 FFmpeg、Tesseract、Python 和 Jianying 适配器运行时。
 - 最终视频导出尚未实现。

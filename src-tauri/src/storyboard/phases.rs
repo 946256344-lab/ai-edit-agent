@@ -82,18 +82,17 @@ pub(crate) fn phase1_generate_narrative(
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (full_script or key_message), spokenScript (string), and beats.\n\
-        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), narration (spoken voiceover for this beat).\n\
+        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), narration (string), onScreenText (string).\n\
         First decide whether the brief already contains a complete narration script the user wants spoken as written:\n\
-        - If YES: scriptMode=full_script. Put that exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions.\n\
-        - If NO (goal/outline/theme only): scriptMode=key_message, spokenScript=\"\", and write short punchy beat.narration lines in the user's language.\n\
-        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn. If a beat contains more than two spoken clauses, split it further.\n\
-        Keep beats short and specific: aim for about 4-8 seconds of spoken narration per beat.\n\
+        - If YES: scriptMode=full_script. Put that exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
+        - If NO (goal/outline/theme only): scriptMode=key_message, spokenScript=\"\", set every beat.narration to \"\", and write a short on-screen marker in beat.onScreenText in the user's language (one idea per beat, at most 24 visible characters, no emoji).\n\
+        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn.\n\
         Duration and scriptMode must follow the brief's real size:\n\
-        - key_message: one punchy idea, concise narration, targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime.\n\
-        - full_script: targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript.\n\
+        - key_message: punchy on-screen markers only (no voiceover), targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime. Prefer 2-5 beats.\n\
+        - full_script: targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further.\n\
         - Never inflate a short brief into a 30-90s essay. Prefer a tight key_message cut over padded voiceover.\n\
-        Determine the appropriate number of beats from distinct information points; a simple short goal / key_message cut often needs 2-5 beats, not 8+. Do not select any media yet — this stage is pure story structure.\n\
-        targetDurationMs is your creative proposal for the final video duration and must stay consistent with the spoken narration length.\n\
+        Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
+        targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or readable marker pacing (key_message).\n\
         {feedback_context}"
     );
 
@@ -561,6 +560,7 @@ mod tests {
             purpose: "purpose".to_owned(),
             required_visual: "vehicle".to_owned(),
             narration: "narration".to_owned(),
+            on_screen_text: String::new(),
         }
     }
 
@@ -1395,7 +1395,7 @@ pub(crate) fn phase3_select(
         Script mode: {}\n\
         Covered beat ids in order: {}\n\
         Uncovered beat ids (do not create shots for these): {}\n\
-        Voice timing (milliseconds; empty means not available): {}\n\
+        Beat timing plan (milliseconds; Voice=TTS alignment or Pacing=marker readability; empty means not available): {}\n\
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
         Keyframe grids are attached below for some candidate assetIds (2x2 overview). Candidates with keyframeGridAttached=false have no image in this request — judge them from visualTags only.\n\
@@ -1641,7 +1641,18 @@ fn assemble_phase3_selection(
                 purpose: beat
                     .map(|item| item.purpose.clone())
                     .unwrap_or_else(|| pool.map(|p| p.beat_purpose.clone()).unwrap_or_default()),
-                on_screen_text: String::new(),
+                on_screen_text: if part_offset == 0 {
+                    beat.map(|item| {
+                        if !item.on_screen_text.trim().is_empty() {
+                            item.on_screen_text.clone()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .unwrap_or_default()
+                } else {
+                    String::new()
+                },
                 narration_text: if part_offset == 0 {
                     beat.map(|item| item.narration.clone()).unwrap_or_default()
                 } else {
@@ -1947,15 +1958,16 @@ pub(crate) fn phase4_refine_ranges(
                 "Brief: {brief}\n\
                 Batch {}/{} — refine ONLY these orderIndex values: {:?}. Copy every other shot unchanged from the locked draft.\n\
                 Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
-                Voice timing: {}\n\
+                Beat timing (milliseconds; empty means not available): {}\n\
                 Chosen windows for this batch: {}\n\
                 {feedback_context}\n\n\
                 Each attached image is ONE shot's densified window as a left-to-right, top-to-bottom frame grid. Caption lists timesMs in the same order — temporal sample count is unchanged.\n\
                 Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
                 Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
                 Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
-                No overlapping ranges from the same asset. When voice timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
+                No overlapping ranges from the same asset. When beat timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
                 Divide beat narration across shots when needed.\n\
+                For scriptMode=key_message, keep lead-shot onScreenText equal to that beat's onScreenText marker; leave narrationText empty.\n\
                 Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
                 Each shot: cropFocus ([x,y], subject center in the original source frame, normalized 0..1), orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
                 Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\

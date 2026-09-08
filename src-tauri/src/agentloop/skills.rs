@@ -939,7 +939,11 @@ pub(super) fn apply_skill(
                                 ));
                             }
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            if generated.script_mode == "key_message" {
+                                message.push_str("\nkey_message 不配音，已写入字幕标记。");
+                            }
+                        }
                         Err(error) => {
                             log::warn!("Automatic voiceover after storyboard skipped: {error}");
                             if error.starts_with("voiceover_longer_than_picture:") {

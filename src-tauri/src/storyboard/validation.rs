@@ -83,6 +83,7 @@ mod tests {
                 purpose: "test".to_owned(),
                 required_visual: "test visual".to_owned(),
                 narration: String::new(),
+                on_screen_text: String::new(),
             }],
             uncovered_beat_ids: vec![],
             shots: vec![StoryboardShot {

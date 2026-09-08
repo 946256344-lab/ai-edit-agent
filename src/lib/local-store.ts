@@ -158,7 +158,7 @@ export type StoryboardVersion = {
   summary: string
   targetDurationMs: number
   scriptMode: 'full_script' | 'key_message'
-  beats: Array<{ id: string; purpose: string; requiredVisual: string }>
+  beats: Array<{ id: string; purpose: string; requiredVisual: string; narration?: string; onScreenText?: string }>
   uncoveredBeatIds: string[]
   shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual' }>
   createdAt: number

@@ -793,9 +793,12 @@ pub struct StoryboardBeat {
     pub id: String,
     pub purpose: String,
     pub required_visual: String,
-    /// 该 beat 的口播文案。用户没给文案时由 Phase 1 撰写；不得用 onScreenText 代替。
+    /// 该 beat 的口播文案（full_script）。key_message 通常为空；不得用 onScreenText 代替。
     #[serde(default)]
     pub narration: String,
+    /// 屏幕标记文案（key_message 主产物；full_script 可空）。
+    #[serde(default)]
+    pub on_screen_text: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
