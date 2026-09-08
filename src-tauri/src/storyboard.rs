@@ -206,21 +206,27 @@ pub(crate) fn validate_storyboard(
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
-    let target_tolerance = (content.target_duration_ms / 5).clamp(1_000, 8_000);
-    if (total_duration - content.target_duration_ms).abs() > target_tolerance {
-        return Err(storyboard_repair_message(
-            "Storyboard shot durations must stay close to the model-proposed target duration.",
-            content.shots.iter().map(|shot| shot.order_index).collect(),
-        ));
-    }
     if content.script_mode != "full_script" && content.script_mode != "key_message" {
         return Err(storyboard_repair_message(
             "Storyboard script mode is invalid.",
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
+    let target_tolerance = (content.target_duration_ms / 5).clamp(1_000, 8_000);
+    // key_message：画面须贴近目标（节奏计划保证可读）。full_script：只拦画面过长；
+    // 画面不足留给 storyboard_completion_gaps / voiceover_longer_than_picture + insert_clips。
+    let duration_out_of_range = if content.script_mode == "key_message" {
+        (total_duration - content.target_duration_ms).abs() > target_tolerance
+    } else {
+        total_duration > content.target_duration_ms + target_tolerance
+    };
+    if duration_out_of_range {
+        return Err(storyboard_repair_message(
+            "Storyboard shot durations must stay close to the model-proposed target duration.",
+            content.shots.iter().map(|shot| shot.order_index).collect(),
+        ));
+    }
     if content.script_mode == "full_script" {
-        let estimated_duration = minimum_storyboard_duration(brief);
         // 镜头数下限按未截断的朗读时长计算，避免短文案被强制拆成多个镜头。
         let raw_estimated_duration = estimated_storyboard_duration_ms(brief);
         let minimum_shot_count = ((raw_estimated_duration + 7_999) / 8_000).max(1) as usize;
@@ -230,15 +236,6 @@ pub(crate) fn validate_storyboard(
                     "Storyboard has too few shots for the supplied full-script narration. Estimated narration duration is about {} ms, so the storyboard should contain at least {} shots to keep each shot near 8 seconds or less.",
                     raw_estimated_duration,
                     minimum_shot_count
-                ),
-                content.shots.iter().map(|shot| shot.order_index).collect(),
-            ));
-        }
-        if total_duration < estimated_duration {
-            return Err(storyboard_repair_message(
-                format!(
-                    "Storyboard is too short for the supplied full-script narration. Estimated narration duration is about {} ms.",
-                    estimated_duration
                 ),
                 content.shots.iter().map(|shot| shot.order_index).collect(),
             ));
@@ -723,7 +720,7 @@ fn subtitle_text_from_narration(narration: &str) -> String {
 fn normalize_storyboard_candidate(
     mut content: StoryboardContent,
     sources: &[StoryboardSource],
-    brief: &str,
+    _brief: &str,
 ) -> StoryboardContent {
     log::info!(
         "Normalizing storyboard candidate: shots={}, initial_target_duration_ms={}",
@@ -902,21 +899,12 @@ fn normalize_storyboard_candidate(
         .iter()
         .map(|shot| shot.duration_ms.max(1))
         .sum();
-    if total_duration > 0 {
-        content.target_duration_ms = total_duration;
-    }
-    if content.script_mode == "full_script" && total_duration < minimum_storyboard_duration(brief) {
-        content.script_mode = "key_message".to_owned();
-        log::info!(
-            "Downgraded script mode: full_script -> key_message (total_duration={}ms < minimum={}ms)",
-            total_duration,
-            minimum_storyboard_duration(brief)
-        );
-    }
+    // 保留 Phase 1 / audio-first 的 targetDurationMs 与 scriptMode，不在 normalize 里改写或降级。
     log::info!(
-        "Normalization complete: corrections={}, final_duration={}ms, script_mode={}",
+        "Normalization complete: corrections={}, final_duration={}ms, target_duration_ms={}, script_mode={}",
         corrections,
         total_duration,
+        content.target_duration_ms,
         content.script_mode
     );
     content
@@ -1838,8 +1826,12 @@ mod tests {
     fn normalize_drops_uncovered_ids_that_already_have_shots() {
         let mut storyboard = content("direct");
         storyboard.uncovered_beat_ids = vec!["context".to_owned(), "missing".to_owned()];
+        storyboard.target_duration_ms = 12_000;
         let normalized = normalize_storyboard_candidate(storyboard, &[source()], "brief");
         assert_eq!(normalized.uncovered_beat_ids, ["missing"]);
+        // normalize 不得把 target 改成镜头总和，否则 completion gaps 永远看不到画面短于目标。
+        assert_eq!(normalized.target_duration_ms, 12_000);
+        assert_eq!(normalized.script_mode, "full_script");
         assert!(validate_storyboard(&normalized, &[source()], "brief").is_ok());
     }
 

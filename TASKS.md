@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-08，fix/phase5-target-visibility）：normalize 保留 target/scriptMode；validate 按模式时长容差；画面不足走 completion gaps。见 docs/changes/2026-09-08-phase5-target-visibility.md。
 - [x] 完成（2026-09-08，feat/key-message-markers）：key_message 改为屏幕标记 + 可读性节奏、不自动配音。见 docs/changes/2026-09-08-key-message-markers.md。
 - [x] 完成（2026-09-08，fix/phase4-long-window-narrowing）：Pass B 后帧间距 >1.5s 的镜进 Pass C 围绕精修子区间收窄。见 docs/changes/2026-09-08-phase4-long-window-narrowing.md。
 - [x] 完成（2026-09-08，fix/phase4-request-budget）：Phase 4 Pass A 按素材拆批（≤40 图）；过短头窗并入后窗；Phase 3 关键帧跨池轮询。见 docs/changes/2026-09-08-phase4-request-budget.md。
