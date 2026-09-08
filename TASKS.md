@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-08，fix/phase4-request-budget）：Phase 4 Pass A 按素材拆批（≤40 图）；过短头窗并入后窗；Phase 3 关键帧跨池轮询。见 docs/changes/2026-09-08-phase4-request-budget.md。
 - [x] 完成（2026-09-08，fix/phase3-diversity-cap）：Phase 3 补 40% 复用上限 issue + prompt 数值；Phase 5 diversity/相邻同片失败不回 Phase 4。见 docs/changes/2026-09-08-phase3-diversity-cap.md。
 - [x] 完成（2026-09-08，fix/phase4-overlap-resolve）：Phase 3 相邻同片硬拒（含跨 beat）；Phase 5 diversity 对齐。见 docs/changes/2026-09-08-phase3-consecutive-asset-ban.md。
 - [x] 完成（2026-09-07，fix/phase4-overlap-resolve）：Phase 4 钳窗后窗内机械消交叠；normalize 保留消交叠但清被挪镜的 cropFocus，有构图不做整段 pack。见 docs/changes/2026-09-07-phase4-overlap-resolve.md。

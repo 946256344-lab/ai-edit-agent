@@ -382,7 +382,11 @@ fn parse_beat_pick(text: &str) -> Result<Option<LooseShot>, String> {
     Ok(Some(shot))
 }
 
-fn compact_candidate_card(index: usize, source: &StoryboardSource) -> Value {
+fn compact_candidate_card(
+    index: usize,
+    source: &StoryboardSource,
+    keyframe_grid_attached: bool,
+) -> Value {
     let visual_tags: Vec<String> = source
         .visual_evidence
         .iter()
@@ -403,6 +407,7 @@ fn compact_candidate_card(index: usize, source: &StoryboardSource) -> Value {
         "kind": source.kind,
         "durationMs": source.duration_ms,
         "hasKeyframeGrid": source.keyframe_grid_path.is_some(),
+        "keyframeGridAttached": keyframe_grid_attached,
         "keyframeTimesMs": source.keyframes.iter().map(|frame| frame.time_ms).collect::<Vec<_>>(),
         "sceneSegments": source.scene_segments.iter().take(8).map(|segment| {
             json!({"startMs": segment.start_ms, "endMs": segment.end_ms})
@@ -418,7 +423,10 @@ fn compact_candidate_card(index: usize, source: &StoryboardSource) -> Value {
 const PHASE3_MAX_ALTERNATES: usize = 3;
 
 /// 每个 beat 的完整短名单卡片（目标 Top-12），供 Phase 3 选片。
-fn phase3_pool_cards(pools: &[BeatCandidatePool]) -> Vec<Value> {
+fn phase3_pool_cards(
+    pools: &[BeatCandidatePool],
+    attached_asset_ids: &HashSet<String>,
+) -> Vec<Value> {
     pools
         .iter()
         .filter_map(|pool| {
@@ -429,7 +437,13 @@ fn phase3_pool_cards(pools: &[BeatCandidatePool]) -> Vec<Value> {
                 .candidates
                 .iter()
                 .enumerate()
-                .map(|(index, candidate)| compact_candidate_card(index, candidate))
+                .map(|(index, candidate)| {
+                    compact_candidate_card(
+                        index,
+                        candidate,
+                        attached_asset_ids.contains(&candidate.asset_id),
+                    )
+                })
                 .collect::<Vec<_>>();
             Some(json!({
                 "beatId": pool.beat_id,
@@ -463,7 +477,7 @@ fn phase3_candidate_cards(
                 .candidates
                 .iter()
                 .enumerate()
-                .map(|(index, candidate)| compact_candidate_card(index, candidate))
+                .map(|(index, candidate)| compact_candidate_card(index, candidate, false))
                 .collect::<Vec<_>>();
             let main_shot = cards.remove(main_position);
             cards.truncate(PHASE3_MAX_ALTERNATES);
@@ -496,7 +510,7 @@ mod tests {
         PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
     };
     use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn dedupe_backfill_skips_duplicate_asset_ids_and_fills_to_target() {
@@ -1340,12 +1354,13 @@ mod tests {
             beat_purpose: "purpose".to_owned(),
             candidates: (0..12).map(|i| source(&format!("a{i}"))).collect(),
         };
-        let cards = phase3_pool_cards(&[pool]);
+        let cards = phase3_pool_cards(&[pool], &HashSet::new());
         assert_eq!(cards.len(), 1);
         assert_eq!(
             cards[0]["candidates"].as_array().map(|items| items.len()),
             Some(12)
         );
+        assert_eq!(cards[0]["candidates"][0]["keyframeGridAttached"], false);
     }
 }
 
@@ -1363,8 +1378,12 @@ pub(crate) fn phase3_select(
         rough.candidate_pools.len()
     );
 
-    let candidate_cards_json = serde_json::to_string(&phase3_pool_cards(&rough.candidate_pools))
-        .unwrap_or_else(|_| "[]".to_owned());
+    let (keyframe_blocks, attached_asset_ids) = phase3_keyframe_image_blocks(rough);
+    let candidate_cards_json = serde_json::to_string(&phase3_pool_cards(
+        &rough.candidate_pools,
+        &attached_asset_ids,
+    ))
+    .unwrap_or_else(|_| "[]".to_owned());
     let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
     let covered_ids = covered_beat_ids(rough);
     let covered_n = covered_ids.len();
@@ -1379,7 +1398,7 @@ pub(crate) fn phase3_select(
         Voice timing (milliseconds; empty means not available): {}\n\
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
-        Keyframe grids are attached below for candidate assetIds (2x2 overview of each clip).\n\
+        Keyframe grids are attached below for some candidate assetIds (2x2 overview). Candidates with keyframeGridAttached=false have no image in this request — judge them from visualTags only.\n\
         Use those frames to judge which assets best match each beat's purpose/requiredVisual.\n\
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
@@ -1401,7 +1420,7 @@ pub(crate) fn phase3_select(
     );
 
     let mut content_blocks = vec![json!({ "type": "input_text", "text": prompt })];
-    content_blocks.extend(phase3_keyframe_image_blocks(rough));
+    content_blocks.extend(keyframe_blocks);
 
     let request = serde_json::json!({
         "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
@@ -1462,19 +1481,33 @@ pub(crate) fn phase3_select(
     Ok((selected, issues))
 }
 
-/// 为 Phase 3 附上候选素材的导入期关键帧网格（去重、有上限）。
-fn phase3_keyframe_image_blocks(rough: &RoughStoryboard) -> Vec<Value> {
+/// 为 Phase 3 附上候选素材的导入期关键帧网格：按名次跨池轮询，避免后排 beat 饿死。
+fn phase3_keyframe_image_blocks(rough: &RoughStoryboard) -> (Vec<Value>, HashSet<String>) {
     use crate::storyboard::multimodal::{read_input_image, PHASE3_MAX_GRID_IMAGES};
     use std::path::Path;
 
     let mut blocks = Vec::new();
-    let mut seen = HashSet::new();
-    for pool in &rough.candidate_pools {
-        for candidate in &pool.candidates {
+    let mut attached = HashSet::new();
+    let max_rank = rough
+        .candidate_pools
+        .iter()
+        .map(|pool| pool.candidates.len())
+        .max()
+        .unwrap_or(0);
+    for rank in 0..max_rank {
+        for pool in &rough.candidate_pools {
             if blocks.len() / 2 >= PHASE3_MAX_GRID_IMAGES {
-                return blocks;
+                log::info!(
+                    "Phase 3 attached {} keyframe grid image(s) (round-robin, cap {})",
+                    blocks.len() / 2,
+                    PHASE3_MAX_GRID_IMAGES
+                );
+                return (blocks, attached);
             }
-            if !seen.insert(candidate.asset_id.clone()) {
+            let Some(candidate) = pool.candidates.get(rank) else {
+                continue;
+            };
+            if attached.contains(&candidate.asset_id) {
                 continue;
             }
             let Some(grid_path) = candidate.keyframe_grid_path.as_deref() else {
@@ -1483,6 +1516,7 @@ fn phase3_keyframe_image_blocks(rough: &RoughStoryboard) -> Vec<Value> {
             let Some(image) = read_input_image(Path::new(grid_path)) else {
                 continue;
             };
+            attached.insert(candidate.asset_id.clone());
             blocks.push(json!({
                 "type": "input_text",
                 "text": format!("Keyframe grid (2x2) for assetId={}", candidate.asset_id)
@@ -1491,10 +1525,10 @@ fn phase3_keyframe_image_blocks(rough: &RoughStoryboard) -> Vec<Value> {
         }
     }
     log::info!(
-        "Phase 3 attached {} keyframe grid image(s)",
+        "Phase 3 attached {} keyframe grid image(s) (round-robin)",
         blocks.len() / 2
     );
-    blocks
+    (blocks, attached)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1696,12 +1730,54 @@ pub(crate) fn phase4_refine_ranges(
         return Err("Phase 4 could not build content windows.".to_owned());
     }
 
-    let window_cards = serde_json::to_string(&all_windows)
-        .map_err(|_| "Could not serialize Phase 4 windows.".to_owned())?;
-    let shot_cards = serde_json::to_string(
-        &selected
+    let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
+
+    // —— Pass A：按素材贪心拆批，每批 ≤ PHASE4_PASS_A_MAX_IMAGES 张窗中点帧 ——
+    use crate::storyboard::multimodal::PHASE4_PASS_A_MAX_IMAGES;
+    let mut asset_order = selected_sources
+        .iter()
+        .map(|source| source.asset_id.clone())
+        .collect::<Vec<_>>();
+    asset_order.sort();
+    let mut pass_a_batches: Vec<Vec<String>> = Vec::new();
+    let mut current_batch: Vec<String> = Vec::new();
+    let mut current_images = 0usize;
+    for asset_id in &asset_order {
+        let window_count = windows_by_asset
+            .get(asset_id)
+            .map(|windows| windows.len())
+            .unwrap_or(0);
+        if window_count == 0 {
+            continue;
+        }
+        if !current_batch.is_empty() && current_images + window_count > PHASE4_PASS_A_MAX_IMAGES {
+            pass_a_batches.push(std::mem::take(&mut current_batch));
+            current_images = 0;
+        }
+        // 单素材窗数超过上限时仍独占一批（无法再拆）。
+        current_batch.push(asset_id.clone());
+        current_images += window_count;
+    }
+    if !current_batch.is_empty() {
+        pass_a_batches.push(current_batch);
+    }
+    if pass_a_batches.is_empty() {
+        return Err("Phase 4 pass A had no assets with content windows.".to_owned());
+    }
+
+    let mut all_picks: Vec<Phase4WindowPick> = Vec::new();
+    let mut pass_a_frames = 0usize;
+    for (batch_index, batch_assets) in pass_a_batches.iter().enumerate() {
+        let batch_asset_set = batch_assets.iter().cloned().collect::<HashSet<_>>();
+        let batch_windows = all_windows
+            .iter()
+            .filter(|window| batch_asset_set.contains(&window.asset_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let batch_shots = selected
             .shots
             .iter()
+            .filter(|shot| batch_asset_set.contains(&shot.asset_id))
             .map(|shot| {
                 json!({
                     "orderIndex": shot.order_index,
@@ -1712,87 +1788,122 @@ pub(crate) fn phase4_refine_ranges(
                     "durationMs": shot.duration_ms,
                 })
             })
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| "Could not serialize Phase 4 shots.".to_owned())?;
-    let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
-
-    // —— Pass A：每窗 1 张代表帧，只选 windowId ——
-    let mut pass_a_blocks = vec![json!({
-        "type": "input_text",
-        "text": format!(
-            "Brief: {brief}\n\
-            Locked shots (assetIds FINAL): {shot_cards}\n\
-            Content windows from scene changes: {window_cards}\n\
-            {feedback_context}\n\n\
-            Each attached image is the midpoint of one windowId (windows come from import keyframes / head-mid-tail thirds, not a fresh full-clip scene scan).\n\
-            For EVERY locked shot, pick exactly one windowId that belongs to that shot's assetId.\n\
-            Prefer actionable/on-brief content over setup/prelude/idle when both exist.\n\
-            Set uncertain=true when the best window is ambiguous or you may cut mid spoken phrase.\n\
-            Return JSON only: {{\"picks\":[{{\"orderIndex\":1,\"windowId\":\"asset:w0\",\"uncertain\":false}}]}}"
-        )
-    })];
-    let mut pass_a_frames = 0usize;
-    for window in &all_windows {
-        let Some(source) = selected_sources
-            .iter()
-            .find(|source| source.asset_id == window.asset_id)
-        else {
-            continue;
-        };
-        let Some(path) = source.source_path.as_deref() else {
-            continue;
-        };
-        let frames = extract_frames_at_times(
-            app,
-            &window.asset_id,
-            Path::new(path),
-            &[window.mid_ms()],
-            &format!("passA_{}", window.window_id.replace(':', "_")),
-        );
-        for (time_ms, frame_path) in frames {
-            let Some(image) = read_input_image(&frame_path) else {
+            .collect::<Vec<_>>();
+        let window_cards = serde_json::to_string(&batch_windows)
+            .map_err(|_| "Could not serialize Phase 4 windows.".to_owned())?;
+        let shot_cards = serde_json::to_string(&batch_shots)
+            .map_err(|_| "Could not serialize Phase 4 shots.".to_owned())?;
+        let mut pass_a_blocks = vec![json!({
+            "type": "input_text",
+            "text": format!(
+                "Brief: {brief}\n\
+                Pass A batch {}/{} — refine window picks ONLY for these assetIds: {:?}.\n\
+                Locked shots for this batch (assetIds FINAL): {shot_cards}\n\
+                Content windows for this batch: {window_cards}\n\
+                {feedback_context}\n\n\
+                Each attached image is the midpoint of one windowId (windows come from import keyframes / head-mid-tail thirds, not a fresh full-clip scene scan).\n\
+                For EVERY locked shot in this batch, pick exactly one windowId that belongs to that shot's assetId.\n\
+                Prefer actionable/on-brief content over setup/prelude/idle when both exist.\n\
+                Set uncertain=true when the best window is ambiguous or you may cut mid spoken phrase.\n\
+                Return JSON only: {{\"picks\":[{{\"orderIndex\":1,\"windowId\":\"asset:w0\",\"uncertain\":false}}]}}",
+                batch_index + 1,
+                pass_a_batches.len(),
+                batch_assets
+            )
+        })];
+        let mut batch_frame_count = 0usize;
+        for window in &batch_windows {
+            let Some(source) = selected_sources
+                .iter()
+                .find(|source| source.asset_id == window.asset_id)
+            else {
                 continue;
             };
-            pass_a_blocks.push(json!({
-                "type": "input_text",
-                "text": format!(
-                    "windowId={} assetId={} [{},{}] midTimeMs={}",
-                    window.window_id, window.asset_id, window.start_ms, window.end_ms, time_ms
-                )
-            }));
-            pass_a_blocks.push(image);
-            pass_a_frames += 1;
+            let Some(path) = source.source_path.as_deref() else {
+                continue;
+            };
+            let frames = extract_frames_at_times(
+                app,
+                &window.asset_id,
+                Path::new(path),
+                &[window.mid_ms()],
+                &format!(
+                    "passA_b{}_{}",
+                    batch_index + 1,
+                    window.window_id.replace(':', "_")
+                ),
+            );
+            for (time_ms, frame_path) in frames {
+                let Some(image) = read_input_image(&frame_path) else {
+                    continue;
+                };
+                pass_a_blocks.push(json!({
+                    "type": "input_text",
+                    "text": format!(
+                        "windowId={} assetId={} [{},{}] midTimeMs={}",
+                        window.window_id, window.asset_id, window.start_ms, window.end_ms, time_ms
+                    )
+                }));
+                pass_a_blocks.push(image);
+                batch_frame_count += 1;
+            }
         }
-    }
-    log::info!("Phase 4 pass A attached {pass_a_frames} window midpoint frame(s)");
+        if batch_frame_count == 0 {
+            return Err(format!(
+                "Phase 4a batch {} had no readable window midpoint frames.",
+                batch_index + 1
+            ));
+        }
+        pass_a_frames += batch_frame_count;
+        log::info!(
+            "Phase 4 pass A batch {}/{}: {} asset(s), {} midpoint frame(s)",
+            batch_index + 1,
+            pass_a_batches.len(),
+            batch_assets.len(),
+            batch_frame_count
+        );
 
-    let pass_a_request = json!({
-        "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-        "store": false,
-        "stream": true,
-        "input": [{ "role": "user", "content": pass_a_blocks }],
-        "text": { "format": { "type": "json_object" } }
-    });
-    crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4a",
-        None,
-        repair.map(|packet| packet.attempt).unwrap_or(1),
-        "request",
-        &pass_a_request,
+        let pass_a_request = json!({
+            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
+            "store": false,
+            "stream": true,
+            "input": [{ "role": "user", "content": pass_a_blocks }],
+            "text": { "format": { "type": "json_object" } }
+        });
+        crate::storyboard::provider_trace::append_storyboard_trace(
+            "Phase 4a",
+            None,
+            repair.map(|packet| packet.attempt).unwrap_or(1),
+            "request",
+            &pass_a_request,
+        );
+        let pass_a_body = post_model_payload(access, &pass_a_request, Some(STORYBOARD_TIMEOUT))?;
+        crate::storyboard::provider_trace::append_storyboard_trace(
+            "Phase 4a",
+            None,
+            repair.map(|packet| packet.attempt).unwrap_or(1),
+            "response",
+            &serde_json::from_str::<Value>(&pass_a_body)
+                .unwrap_or_else(|_| json!({ "raw": pass_a_body })),
+        );
+        let pass_a_text = model_response_json_text(access, &pass_a_body)
+            .ok_or_else(|| "Phase 4a response did not contain JSON.".to_owned())?;
+        let batch_picks = parse_phase4_window_picks(&pass_a_text);
+        let allowed_orders = batch_shots
+            .iter()
+            .filter_map(|shot| shot.get("orderIndex").and_then(Value::as_i64))
+            .collect::<HashSet<_>>();
+        all_picks.extend(
+            batch_picks
+                .into_iter()
+                .filter(|pick| allowed_orders.contains(&pick.order_index)),
+        );
+    }
+    log::info!(
+        "Phase 4 pass A attached {pass_a_frames} window midpoint frame(s) across {} batch(es)",
+        pass_a_batches.len()
     );
-    let pass_a_body = post_model_payload(access, &pass_a_request, Some(STORYBOARD_TIMEOUT))?;
-    crate::storyboard::provider_trace::append_storyboard_trace(
-        "Phase 4a",
-        None,
-        repair.map(|packet| packet.attempt).unwrap_or(1),
-        "response",
-        &serde_json::from_str::<Value>(&pass_a_body)
-            .unwrap_or_else(|_| json!({ "raw": pass_a_body })),
-    );
-    let pass_a_text = model_response_json_text(access, &pass_a_body)
-        .ok_or_else(|| "Phase 4a response did not contain JSON.".to_owned())?;
-    let picks = parse_phase4_window_picks(&pass_a_text);
+    let picks = all_picks;
     let pick_map = apply_phase4_window_picks(selected, &windows_by_asset, &picks);
 
     // —— Pass B：选中窗内仍抽满 PHASE4_REFINE_FRAMES，每镜拼成 1 张网格，再按镜批请求 ——
