@@ -578,6 +578,7 @@ fn short_brief_duration_issue(
 
 /// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
 /// 有大段可朗读文案时不拦：交由 `upgrade_speakable_brief_to_full_script` 纠偏。
+/// 用户要求更长成片时仍校验标记，只放开 15s 时长硬帽。
 fn key_message_marker_issue(
     brief: &str,
     narrative: &mut phases::NarrativeStructure,
@@ -585,7 +586,7 @@ fn key_message_marker_issue(
     if narrative.script_mode != "key_message" {
         return None;
     }
-    if brief_has_substantial_speakable_copy(brief) || brief_requests_longer_runtime(brief) {
+    if brief_has_substantial_speakable_copy(brief) {
         return None;
     }
     let mut issues = Vec::new();
@@ -1506,6 +1507,42 @@ mod tests {
             }],
         };
         assert!(key_message_marker_issue("帮我做个短片", &mut narrative).is_none());
+    }
+
+    #[test]
+    fn longer_runtime_brief_still_requires_key_message_markers() {
+        let mut narrative = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 60_000,
+            spoken_script: String::new(),
+            script_mode: "key_message".to_owned(),
+            beats: vec![StoryboardBeat {
+                id: "a".to_owned(),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                narration: String::new(),
+                on_screen_text: String::new(),
+            }],
+        };
+        let missing = key_message_marker_issue("帮我做个长一点的短片", &mut narrative)
+            .expect("longer runtime must not skip empty-marker checks");
+        assert!(
+            missing.contains("onScreenText") || missing.contains("marker"),
+            "issue={missing}"
+        );
+
+        // 5×24 字标记的可读性下限约 16.7s，超过 15s 硬帽但低于 1.2×60s。
+        narrative.beats = (0..5)
+            .map(|index| StoryboardBeat {
+                id: format!("b{index}"),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                narration: String::new(),
+                on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWX".to_owned(),
+            })
+            .collect();
+        assert!(key_message_marker_issue("帮我做个长一点的短片", &mut narrative).is_none());
     }
 
     #[test]
