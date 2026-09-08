@@ -474,7 +474,7 @@ fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<()
     Ok(())
 }
 
-fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
+pub(crate) fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
     (shot_count * 2 / 5).max(1)
 }
 
@@ -677,6 +677,10 @@ fn phase5_should_retry_phase4(error: &str) -> bool {
     {
         return false;
     }
+    // Phase 4 禁止换片，diversity / 相邻同片失败回 Phase 4 只会空转。
+    if lower.contains("diversity limit") || lower.contains("reuse asset") {
+        return false;
+    }
     true
 }
 
@@ -753,13 +757,7 @@ fn normalize_storyboard_candidate(
     let range_before = content
         .shots
         .iter()
-        .map(|shot| {
-            (
-                shot.order_index,
-                shot.source_start_ms,
-                shot.source_end_ms,
-            )
-        })
+        .map(|shot| (shot.order_index, shot.source_start_ms, shot.source_end_ms))
         .collect::<Vec<_>>();
     resolve_overlapping_video_ranges(&mut content.shots, sources);
     for shot in &mut content.shots {
@@ -1563,6 +1561,12 @@ mod tests {
     fn phase5_does_not_retry_phase4_for_shot_cap_errors() {
         assert!(!phase5_should_retry_phase4(
             "Storyboard must contain between 1 and 100 shots for safe local processing."
+        ));
+        assert!(!phase5_should_retry_phase4(
+            "Asset 'a1' appears in 2 of 4 shots (50%), exceeding the 40% diversity limit. Recommended: use this asset for at most 1 shots."
+        ));
+        assert!(!phase5_should_retry_phase4(
+            "Consecutive shots (index 1 and 2) reuse asset 'a1'. Choose different footage for adjacent shots to maintain visual variety."
         ));
         assert!(phase5_should_retry_phase4(
             "Storyboard cannot reuse overlapping video source ranges across beats."

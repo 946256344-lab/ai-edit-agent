@@ -878,6 +878,64 @@ mod tests {
     }
 
     #[test]
+    fn phase3_rejects_asset_over_diversity_limit_even_when_non_adjacent() {
+        // 4 镜上限为 1：非相邻复用同一 asset 也必须在 Phase 3 拦下，避免 Phase 5→4 空转。
+        let mut beat_one = beat();
+        beat_one.id = "beat-1".to_owned();
+        let mut beat_two = beat();
+        beat_two.id = "beat-2".to_owned();
+        let mut shot_a = shot("shared");
+        shot_a.order_index = 1;
+        shot_a.beat_id = "beat-1".to_owned();
+        let mut shot_b = shot("alt-a");
+        shot_b.order_index = 2;
+        shot_b.beat_id = "beat-1".to_owned();
+        let mut shot_c = shot("alt-b");
+        shot_c.order_index = 3;
+        shot_c.beat_id = "beat-2".to_owned();
+        let mut shot_d = shot("shared");
+        shot_d.order_index = 4;
+        shot_d.beat_id = "beat-2".to_owned();
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one.clone(), beat_two.clone()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_a.clone(), shot_c.clone()],
+            candidate_pools: vec![
+                candidate_pool("beat-1", &["shared", "alt-a", "alt-c"]),
+                candidate_pool("beat-2", &["shared", "alt-b", "alt-d"]),
+            ],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one, beat_two],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_a, shot_b, shot_c, shot_d],
+        };
+        let issues = collect_phase3_issues(&mut final_content, &rough);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.kind == "asset_over_diversity_limit"),
+            "non-adjacent reuse above 40% must be rejected; issues={issues:?}"
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.kind == "consecutive_duplicate_asset"),
+            "fixture must remain non-adjacent; issues={issues:?}"
+        );
+    }
+
+    #[test]
     fn phase3_cannot_reuse_another_beats_candidate() {
         let mut beat_one = beat();
         beat_one.id = "beat-1".to_owned();
@@ -1309,6 +1367,9 @@ pub(crate) fn phase3_select(
         .unwrap_or_else(|_| "[]".to_owned());
     let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
     let covered_ids = covered_beat_ids(rough);
+    let covered_n = covered_ids.len();
+    let max_uses_if_two = super::max_asset_uses_for_shot_count(covered_n.saturating_mul(2));
+    let max_uses_if_three = super::max_asset_uses_for_shot_count(covered_n.saturating_mul(3));
     let prompt = format!(
         "Brief: {brief}\n\
         Narrative title/summary/target: {} / {} / {}ms\n\
@@ -1323,7 +1384,8 @@ pub(crate) fn phase3_select(
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
-        Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries). Non-adjacent reuse is allowed only within the existing diversity limit.\n\
+        Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries).\n\
+        Hard rule: no single assetId may appear in more than 40% of the final shot list. With {covered_n} covered beats, that means at most {max_uses_if_two} uses if every beat has 2 shots, or at most {max_uses_if_three} uses if every beat has 3 shots. Prefer marking the weakest beat uncovered=true over violating this limit when the pools cannot supply enough distinct assets.\n\
         For EACH covered beat, choose 2 or 3 DISTINCT assetIds from that beat's candidates, in playback order.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then assetIds must be [].\n\
         Do NOT invent assetIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
@@ -1759,7 +1821,10 @@ pub(crate) fn phase4_refine_ranges(
     let mut refined = draft.clone();
     let mut pass_b_grids = 0usize;
     let mut pass_b_sample_frames = 0usize;
-    for (batch_index, batch) in ordered_picks.chunks(PHASE4_REFINE_SHOTS_PER_BATCH).enumerate() {
+    for (batch_index, batch) in ordered_picks
+        .chunks(PHASE4_REFINE_SHOTS_PER_BATCH)
+        .enumerate()
+    {
         let batch_orders = batch
             .iter()
             .map(|(order, _)| **order)
@@ -1813,7 +1878,8 @@ pub(crate) fn phase4_refine_ranges(
             let Some(path) = source.source_path.as_deref() else {
                 continue;
             };
-            let times = densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
+            let times =
+                densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
             let frames = extract_frames_at_times(
                 app,
                 &window.asset_id,
@@ -1826,7 +1892,10 @@ pub(crate) fn phase4_refine_ranges(
             }
             pass_b_sample_frames += frames.len();
             let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
-            let frame_paths = frames.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+            let frame_paths = frames
+                .iter()
+                .map(|(_, path)| path.clone())
+                .collect::<Vec<_>>();
             let grid_path = frames[0]
                 .1
                 .parent()
@@ -1915,7 +1984,10 @@ pub(crate) fn phase4_refine_ranges(
             "Phase 4 pass C densifying {} uncertain shot(s)",
             uncertain_orders.len()
         );
-        for (batch_index, batch_orders) in uncertain_orders.chunks(PHASE4_REFINE_SHOTS_PER_BATCH).enumerate() {
+        for (batch_index, batch_orders) in uncertain_orders
+            .chunks(PHASE4_REFINE_SHOTS_PER_BATCH)
+            .enumerate()
+        {
             let allowed = batch_orders.iter().copied().collect::<HashSet<_>>();
             let mut pass_c_blocks = vec![json!({
                 "type": "input_text",
@@ -1959,7 +2031,10 @@ pub(crate) fn phase4_refine_ranges(
                     continue;
                 }
                 let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
-                let frame_paths = frames.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+                let frame_paths = frames
+                    .iter()
+                    .map(|(_, path)| path.clone())
+                    .collect::<Vec<_>>();
                 let grid_path = frames[0]
                     .1
                     .parent()
@@ -2317,10 +2392,7 @@ fn find_free_in_bounds(
         })
 }
 
-fn window_constrained_ranges_overlap(
-    content: &StoryboardContent,
-    indices: &[usize],
-) -> bool {
+fn window_constrained_ranges_overlap(content: &StoryboardContent, indices: &[usize]) -> bool {
     let ranges = indices
         .iter()
         .map(|&index| {
@@ -2715,6 +2787,42 @@ fn collect_phase3_issues(
                     "keep non-adjacent reuse only within the diversity limit",
                 ]),
             );
+        }
+    }
+
+    // 全序列 40% 复用上限：在 Phase 3 就拦，避免 Phase 5 失败后空转 Phase 4。
+    if final_content.shots.len() >= 2 {
+        let max_allowed = super::max_asset_uses_for_shot_count(final_content.shots.len());
+        let mut asset_usage: HashMap<&str, Vec<i64>> = HashMap::new();
+        for shot in &final_content.shots {
+            asset_usage
+                .entry(shot.asset_id.as_str())
+                .or_default()
+                .push(shot.order_index);
+        }
+        for (asset_id, shot_indices) in asset_usage {
+            let count = shot_indices.len();
+            if count > max_allowed {
+                let percentage = count * 100 / final_content.shots.len();
+                let excess = count - max_allowed;
+                issues.push(
+                    StoryboardIssue::new(
+                        "asset_over_diversity_limit",
+                        format!(
+                            "Asset '{asset_id}' appears in {count} of {} shots ({percentage}%), exceeding the 40% diversity limit of {max_allowed} shots.",
+                            final_content.shots.len()
+                        ),
+                        true,
+                    )
+                    .for_shots(shot_indices)
+                    .allowing(vec![
+                        format!(
+                            "replace {excess} of these shots with different assetIds from their beat pools so '{asset_id}' is used at most {max_allowed} times"
+                        ),
+                        "or mark the weakest beat uncovered=true when pools cannot supply enough distinct assets".to_owned(),
+                    ]),
+                );
+            }
         }
     }
 
