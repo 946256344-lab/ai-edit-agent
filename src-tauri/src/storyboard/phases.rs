@@ -1686,8 +1686,9 @@ pub(crate) fn phase4_refine_ranges(
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     use crate::storyboard::multimodal::{
         build_phase4_windows_from_keyframes, compose_timed_frame_grid, densify_times_in_range,
-        extract_frames_at_times, read_input_image, Phase4ContentWindow, PHASE4_REFINE_FRAMES,
-        PHASE4_REFINE_SHOTS_PER_BATCH, PHASE4_UNCERTAIN_FRAMES,
+        extract_frames_at_times, read_input_image, Phase4ContentWindow,
+        PHASE4_MAX_FRAME_SPACING_MS, PHASE4_REFINE_FRAMES, PHASE4_REFINE_SHOTS_PER_BATCH,
+        PHASE4_UNCERTAIN_FRAMES,
     };
     use std::path::Path;
 
@@ -2084,39 +2085,64 @@ pub(crate) fn phase4_refine_ranges(
         ordered_picks.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1)
     );
 
-    // —— Pass C：仅 uncertain 镜头在窗内再加密；同样拼网格并按批请求 ——
-    let uncertain_orders = pick_map
-        .iter()
-        .filter(|(_, (_, uncertain))| *uncertain)
-        .map(|(order, _)| *order)
-        .collect::<Vec<_>>();
-    if !uncertain_orders.is_empty() {
+    // —— Pass C：uncertain 整窗加密；长窗（Pass B 帧间距 >1.5s）围绕精修子区间收窄 ——
+    #[derive(Clone, Copy)]
+    enum PassCMode {
+        Uncertain,
+        Narrow,
+    }
+    let mut pass_c_targets: Vec<(i64, PassCMode)> = Vec::new();
+    for (order, (window, uncertain)) in &pick_map {
+        if *uncertain {
+            pass_c_targets.push((*order, PassCMode::Uncertain));
+            continue;
+        }
+        let spacing = window.span_ms() / PHASE4_REFINE_FRAMES.max(1) as i64;
+        if spacing > PHASE4_MAX_FRAME_SPACING_MS {
+            pass_c_targets.push((*order, PassCMode::Narrow));
+        }
+    }
+    pass_c_targets.sort_by_key(|(order, _)| *order);
+    if !pass_c_targets.is_empty() {
+        let uncertain_count = pass_c_targets
+            .iter()
+            .filter(|(_, mode)| matches!(mode, PassCMode::Uncertain))
+            .count();
+        let narrow_count = pass_c_targets.len() - uncertain_count;
         log::info!(
-            "Phase 4 pass C densifying {} uncertain shot(s)",
-            uncertain_orders.len()
+            "Phase 4 pass C densifying {} shot(s) (uncertain={}, narrow={})",
+            pass_c_targets.len(),
+            uncertain_count,
+            narrow_count
         );
-        for (batch_index, batch_orders) in uncertain_orders
+        for (batch_index, batch) in pass_c_targets
             .chunks(PHASE4_REFINE_SHOTS_PER_BATCH)
             .enumerate()
         {
-            let allowed = batch_orders.iter().copied().collect::<HashSet<_>>();
+            let allowed = batch
+                .iter()
+                .map(|(order, _)| *order)
+                .collect::<HashSet<_>>();
+            let batch_orders = batch.iter().map(|(order, _)| *order).collect::<Vec<_>>();
             let mut pass_c_blocks = vec![json!({
                 "type": "input_text",
                 "text": format!(
-                    "Re-check ONLY these uncertain shots with denser in-window frame grids: {:?}.\n\
+                    "Re-check ONLY these shots with denser frame grids: {:?}.\n\
                     Batch {}/{}.\n\
                     Current storyboard: {}\n\
                     Keep every other shot unchanged. assetIds stay FINAL.\n\
-                    Each image is one shot's denser window grid; caption lists timesMs L→R, T→B.\n\
-                    Return the complete Storyboard JSON after refining only the uncertain shots' source ranges.\n\
+                    Captions mark UNCERTAIN (full chosen window) or NARROW (tighten inside the listed range only).\n\
+                    For NARROW shots, keep sourceStartMs/sourceEndMs inside the NARROW range; prefer complete actions and natural phrase boundaries.\n\
+                    Each image is one shot's denser grid; caption lists timesMs L→R, T→B.\n\
+                    Return the complete Storyboard JSON after refining only the listed shots' source ranges.\n\
                     Avoid cutting mid spoken phrase.",
                     batch_orders,
                     batch_index + 1,
-                    uncertain_orders.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
+                    pass_c_targets.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
                     serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned())
                 )
             })];
-            for order_index in batch_orders {
+            for (order_index, mode) in batch {
                 let Some((window, _)) = pick_map.get(order_index) else {
                     continue;
                 };
@@ -2129,8 +2155,45 @@ pub(crate) fn phase4_refine_ranges(
                 let Some(path) = source.source_path.as_deref() else {
                     continue;
                 };
+                let (sample_start, sample_end, caption_prefix) = match mode {
+                    PassCMode::Uncertain => (
+                        window.start_ms,
+                        window.end_ms,
+                        format!(
+                            "UNCERTAIN shotOrderIndex={} windowId={}",
+                            order_index, window.window_id
+                        ),
+                    ),
+                    PassCMode::Narrow => {
+                        let shot = refined
+                            .shots
+                            .iter()
+                            .find(|shot| shot.order_index == *order_index);
+                        let Some(shot) = shot else {
+                            continue;
+                        };
+                        let span = (shot.source_end_ms - shot.source_start_ms).max(1);
+                        let pad = (span / 4).max(500);
+                        let sample_start = shot
+                            .source_start_ms
+                            .saturating_sub(pad)
+                            .max(window.start_ms);
+                        let sample_end = (shot.source_end_ms + pad).min(window.end_ms);
+                        (
+                            sample_start,
+                            sample_end.max(sample_start + 1),
+                            format!(
+                                "NARROW shotOrderIndex={} windowId={} narrowRangeMs=[{},{}]",
+                                order_index,
+                                window.window_id,
+                                sample_start,
+                                sample_end.max(sample_start + 1)
+                            ),
+                        )
+                    }
+                };
                 let times =
-                    densify_times_in_range(window.start_ms, window.end_ms, PHASE4_UNCERTAIN_FRAMES);
+                    densify_times_in_range(sample_start, sample_end, PHASE4_UNCERTAIN_FRAMES);
                 let frames = extract_frames_at_times(
                     app,
                     &window.asset_id,
@@ -2149,7 +2212,7 @@ pub(crate) fn phase4_refine_ranges(
                 let grid_path = frames[0]
                     .1
                     .parent()
-                    .map(|parent| parent.join(format!("grid_uncertain_{order_index}.jpg")));
+                    .map(|parent| parent.join(format!("grid_passC_{order_index}.jpg")));
                 let Some(grid_path) = grid_path else {
                     continue;
                 };
@@ -2162,8 +2225,8 @@ pub(crate) fn phase4_refine_ranges(
                 pass_c_blocks.push(json!({
                     "type": "input_text",
                     "text": format!(
-                        "UNCERTAIN shotOrderIndex={} windowId={} gridColumns=5 timesMs={:?} (read cells L→R, T→B)",
-                        order_index, window.window_id, times_ms
+                        "{caption_prefix} gridColumns=5 timesMs={:?} (read cells L→R, T→B)",
+                        times_ms
                     )
                 }));
                 pass_c_blocks.push(image);
@@ -2218,10 +2281,10 @@ pub(crate) fn phase4_refine_ranges(
     refined.beats = rough.beats.clone();
     refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
     log::info!(
-        "Phase 4 refine complete: shots={}, issues={}, uncertain={}",
+        "Phase 4 refine complete: shots={}, issues={}, passC={}",
         refined.shots.len(),
         issues.len(),
-        uncertain_orders.len()
+        pass_c_targets.len()
     );
     Ok((refined, issues))
 }
