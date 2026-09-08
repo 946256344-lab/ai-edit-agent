@@ -16,6 +16,8 @@ use tauri::{AppHandle, Manager};
 const PHASE4_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 /// 单素材最多保留多少个内容候选窗（每窗 1 张代表帧给选段）。
 const PHASE4_MAX_WINDOWS_PER_ASSET: usize = 12;
+/// Pass A 单次请求最多附带多少张窗中点帧，避免与 Pass B 同类的网关断连。
+pub(crate) const PHASE4_PASS_A_MAX_IMAGES: usize = 40;
 /// 段内精修默认抽帧数 / 不确定时加密码。
 pub(crate) const PHASE4_REFINE_FRAMES: usize = 6;
 pub(crate) const PHASE4_UNCERTAIN_FRAMES: usize = 10;
@@ -232,6 +234,12 @@ pub(crate) fn phase4_content_windows(
         merged[best_i].1 = right.1;
     }
 
+    // 导入关键帧常在 1s 处切出 [0,1s) 头窗；过短首窗并入后窗，避免整镜被钳进 1s。
+    if merged.len() >= 2 && merged[0].1 - merged[0].0 < 1_200 {
+        merged[1].0 = merged[0].0;
+        merged.remove(0);
+    }
+
     merged
         .into_iter()
         .enumerate()
@@ -417,6 +425,17 @@ mod tests {
         assert_eq!(windows[0].end_ms, 5_000);
         assert_eq!(windows[2].start_ms, 12_000);
         assert_eq!(windows[2].end_ms, 20_000);
+    }
+
+    #[test]
+    fn content_windows_merge_short_head_into_following() {
+        // 导入关键帧常在 1s 切出 [0,1s)；应并入后窗，避免陷阱头窗。
+        let windows = phase4_content_windows("a1", 30_000, &[1_000, 10_000]);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].start_ms, 0);
+        assert_eq!(windows[0].end_ms, 10_000);
+        assert_eq!(windows[1].start_ms, 10_000);
+        assert_eq!(windows[1].end_ms, 30_000);
     }
 
     #[test]
