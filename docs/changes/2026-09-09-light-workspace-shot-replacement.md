@@ -18,3 +18,7 @@ Rust 在生成 storyboard 的事务中持久化原 Top-12。老版本可主动�
 - `npm run tauri:verify` 真实 WebView 检查通过：双栏、素材打开/返回、模型设置、无水平溢出、无运行错误。已更新旧版单页切换断言。
 - 用隔离桥接数据在浏览器验证真实 React controller：12 候选、取消不写、保存、撤销/重做、预览失败保留已保存版本、交付使用新版本、三种未保存继续选择，均通过且无控制台错误。临时页面未纳入产品。
 - 未用真实模型执行候选精修，也未对用户项目创建剪映草稿；真实媒体精修及剪映内最终打开仍需发行验收。
+
+## 交付状态
+
+实现与片段适配已提交并推送到 `codex/light-workspace-shot-replacement`。创建草稿 PR 时 GitHub 集成返回 `403 Resource not accessible by integration`，本机 gh 也未登录，因此尚未建立 PR；未合并 master。独立审查仍待额度恢复后执行。
