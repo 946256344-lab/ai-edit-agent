@@ -89,17 +89,17 @@ export function useShotReplacementController(options: Options) {
     }
   }
 
-  async function select(assetId: string) {
+  async function select(candidateId: string) {
     if (!shot) return
     const target = scope(shot)
     if (!target) return
     const token = ++request.current
-    setSelectedId(assetId)
+    setSelectedId(candidateId)
     setPrepared(null)
     setNotice(null)
     setPhase('preparing')
     try {
-      const result = await prepareShotReplacement(target, assetId)
+      const result = await prepareShotReplacement(target, candidateId)
       if (isCurrent(target, token)) setPrepared(result)
     } catch {
       if (isCurrent(target, token)) setNotice('此候选的画面预览未能准备完成，请检查模型配置和素材，或选择其他镜头。原剪辑未改变。')
@@ -172,7 +172,7 @@ export function useShotReplacementController(options: Options) {
     actions: {
       open: (clip: TimelineClipDto) => requestAction(() => void open(clip)),
       generate: () => { if (shot) void open(shot, true) },
-      select: (assetId: string) => void select(assetId),
+      select: (candidateId: string) => void select(candidateId),
       cancel: close,
       save: () => void save(),
       requestAction,

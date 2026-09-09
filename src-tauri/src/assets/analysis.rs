@@ -17,7 +17,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 pub(crate) const MAX_INITIAL_OCR_FRAMES: usize = 2;
@@ -26,7 +26,6 @@ pub(crate) const STARTUP_ANALYSIS_BATCH: usize = 4;
 pub(crate) const DRAIN_ANALYSIS_BATCH: usize = 4;
 const FFPROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const THUMBNAIL_FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
-const FALLBACK_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 const TESSERACT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) static ANALYSIS_WORKER_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -185,6 +184,8 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         visual_evidence: Vec::new(),
         visual_analysis_note: None,
         visual_analysis_status: "queued".to_owned(),
+        analysis_version: 0,
+        visual_analysis_version: 0,
         visual_quality_score: None,
         evidence_embedding: None,
         embedding_model: None,
@@ -247,83 +248,7 @@ fn generate_video_keyframes(
     duration_ms: Option<i64>,
 ) -> Result<(Vec<KeyframeMetadata>, Vec<SceneSegment>), String> {
     let directory = derived_directory(app, asset_id)?;
-    let duration_seconds = duration_ms.unwrap_or(0) as f64 / 1000.0;
-
-    // 固定采样 4 帧：第 1 秒、1/3 处、2/3 处、最后 1 秒
-    let times = if duration_seconds > 2.0 {
-        vec![
-            1.0,                               // 第 1 秒
-            duration_seconds / 3.0,            // 1/3 处
-            duration_seconds * 2.0 / 3.0,      // 2/3 处
-            (duration_seconds - 1.0).max(1.5), // 最后 1 秒（不小于 1.5s）
-        ]
-    } else if duration_seconds > 0.0 {
-        // 短视频回退：开头和中间
-        vec![0.0, duration_seconds * 0.5]
-    } else {
-        vec![0.0]
-    };
-
-    // 提取每一帧
-    for (index, time) in times.iter().enumerate() {
-        let destination = directory.join(format!("keyframe_{:03}.jpg", index + 1));
-        let mut command = hidden_command("ffmpeg");
-        command
-            .args([
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-ss",
-                &format!("{time:.3}"),
-                "-i",
-            ])
-            .arg(source)
-            .args(["-frames:v", "1", "-vf", "scale=320:-2"])
-            .arg(destination);
-        run_hidden_command_with_timeout(&mut command, FALLBACK_FRAME_FFMPEG_TIMEOUT).map_err(
-            |error| match error {
-                HiddenCommandError::TimedOut => "Keyframe extraction timed out.".to_owned(),
-                HiddenCommandError::Failed => "Keyframe extraction could not start.".to_owned(),
-            },
-        )?;
-    }
-
-    let keyframes = times
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, time)| {
-            let image_path = directory.join(format!("keyframe_{:03}.jpg", index + 1));
-            image_path.is_file().then(|| KeyframeMetadata {
-                time_ms: (time * 1000.0).round() as i64,
-                image_path: image_path.to_string_lossy().into_owned(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut boundaries = keyframes
-        .iter()
-        .map(|frame| frame.time_ms)
-        .collect::<Vec<_>>();
-    boundaries.sort_unstable();
-    boundaries.dedup();
-    if boundaries.first().copied() != Some(0) {
-        boundaries.insert(0, 0);
-    }
-    if let Some(duration_ms) = duration_ms.filter(|duration| *duration > 0) {
-        if boundaries.last().copied() != Some(duration_ms) {
-            boundaries.push(duration_ms);
-        }
-    }
-    let scenes = boundaries
-        .windows(2)
-        .map(|pair| SceneSegment {
-            start_ms: pair[0],
-            end_ms: pair[1],
-            scene_duration_ms: Some(pair[1] - pair[0]),
-            visual_quality_score: None,
-        })
-        .collect();
-    Ok((keyframes, scenes))
+    super::segments::analyze_video_segments(source, &directory, duration_ms)
 }
 
 fn laplacian_variance(image: &image::GrayImage) -> Option<f64> {
@@ -601,8 +526,11 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
                 generate_video_keyframes(&app, &asset_id, &source, metadata.duration_ms)?;
             metadata.visual_quality_score = keyframe_visual_quality_score(&metadata.keyframes);
             for segment in &mut metadata.scene_segments {
-                segment.visual_quality_score = metadata.visual_quality_score;
+                if segment.visual_quality_score.is_none() {
+                    segment.visual_quality_score = metadata.visual_quality_score;
+                }
             }
+            metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
 
             // 生成关键帧网格图
             if !metadata.keyframes.is_empty() {
@@ -932,6 +860,8 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
         tasks.truncate(STARTUP_ANALYSIS_BATCH);
         log::info!("[PERF] resume_incomplete_analysis: will spawn {} analysis tasks (STARTUP_ANALYSIS_BATCH={})", tasks.len(), STARTUP_ANALYSIS_BATCH);
         spawn_technical_analysis_tasks(app.clone(), tasks);
+        // 技术队列排空后，顺带补跑旧格式分段。
+        let _ = enqueue_and_spawn_segment_reanalysis(app, None);
         Ok(())
     })();
     log::info!(
@@ -1389,32 +1319,392 @@ pub(crate) fn drain_pending_analysis(app: &AppHandle, project_id: &str) -> Resul
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     drop(statement);
-    if rows.is_empty() {
+    if !rows.is_empty() {
+        let mut tasks = Vec::with_capacity(rows.len());
+        for (task_id, input_json) in rows {
+            let asset_id = serde_json::from_str::<serde_json::Value>(&input_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("assetId")
+                        .and_then(|asset_id| asset_id.as_str())
+                        .map(str::to_owned)
+                });
+            if let Some(asset_id) = asset_id {
+                tasks.push((asset_id, task_id));
+            } else {
+                connection
+                    .execute(
+                        "UPDATE agent_tasks SET status = 'failed', error_message = 'Stored analysis input is invalid.', updated_at = ?1 WHERE id = ?2",
+                        params![now_millis(), task_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        spawn_technical_analysis_tasks(app.clone(), tasks);
         return Ok(());
     }
-    let mut tasks = Vec::with_capacity(rows.len());
-    for (task_id, input_json) in rows {
-        let asset_id = serde_json::from_str::<serde_json::Value>(&input_json)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("assetId")
-                    .and_then(|asset_id| asset_id.as_str())
-                    .map(str::to_owned)
-            });
-        if let Some(asset_id) = asset_id {
-            tasks.push((asset_id, task_id));
-        } else {
+    drop(connection);
+    enqueue_and_spawn_segment_reanalysis(app, Some(project_id))?;
+    Ok(())
+}
+
+/// 在技术分析队列空闲时，为 analysis_version < 2 的就绪视频补跑真实分段。
+/// 保持 analysis_status=ready，不触发视觉请求，保留已有 visual_evidence。
+pub(crate) fn enqueue_and_spawn_segment_reanalysis(
+    app: &AppHandle,
+    preferred_project_id: Option<&str>,
+) -> Result<(), String> {
+    if ANALYSIS_WORKER_COUNT.load(Ordering::Acquire) >= MAX_TECHNICAL_ANALYSIS_WORKERS {
+        return Ok(());
+    }
+    let connection = open_connection(app)?;
+    let active: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_tasks WHERE tool_name IN ('analyze_asset', 'reanalyze_asset_segments') AND status IN ('queued', 'running')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if active > 0 {
+        // 仍有技术任务时，只继续已排队的 reanalyze。
+        let mut statement = connection
+            .prepare(
+                "
+                SELECT id, input_json
+                FROM agent_tasks
+                WHERE tool_name = 'reanalyze_asset_segments' AND status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT ?1
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(params![DRAIN_ANALYSIS_BATCH as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        drop(statement);
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tasks = Vec::new();
+        for (task_id, input_json) in rows {
+            if let Some(asset_id) =
+                serde_json::from_str::<Value>(&input_json)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("assetId")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_owned)
+                    })
+            {
+                tasks.push((asset_id, task_id));
+            }
+        }
+        spawn_segment_reanalysis_tasks(app.clone(), tasks);
+        return Ok(());
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(project_id) = preferred_project_id {
+        candidates.extend(select_segment_reanalysis_candidates(
+            &connection,
+            Some(project_id),
+            DRAIN_ANALYSIS_BATCH,
+        )?);
+    }
+    if candidates.len() < DRAIN_ANALYSIS_BATCH {
+        let remaining = DRAIN_ANALYSIS_BATCH - candidates.len();
+        let extra = select_segment_reanalysis_candidates(&connection, None, remaining)?;
+        for (asset_id, project_id) in extra {
+            if !candidates.iter().any(|(id, _)| id == &asset_id) {
+                candidates.push((asset_id, project_id));
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let timestamp = now_millis();
+    let mut tasks = Vec::new();
+    for (asset_id, project_id) in candidates {
+        let already_queued: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_tasks WHERE tool_name = 'reanalyze_asset_segments' AND status IN ('queued', 'running') AND json_extract(input_json, '$.assetId') = ?1",
+                params![asset_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if already_queued > 0 {
+            continue;
+        }
+        let task_id = Uuid::new_v4().to_string();
+        connection
+            .execute(
+                "INSERT INTO agent_tasks (id, project_id, tool_name, status, input_json, created_at, updated_at) VALUES (?1, ?2, 'reanalyze_asset_segments', 'queued', ?3, ?4, ?4)",
+                params![
+                    task_id,
+                    project_id,
+                    json!({ "assetId": asset_id }).to_string(),
+                    timestamp
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        tasks.push((asset_id, task_id));
+    }
+    drop(connection);
+    spawn_segment_reanalysis_tasks(app.clone(), tasks);
+    Ok(())
+}
+
+fn select_segment_reanalysis_candidates(
+    connection: &Connection,
+    project_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<(String, String)>, String> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let current_version = super::segments::CURRENT_ANALYSIS_VERSION as i64;
+    let rows = if let Some(project_id) = project_id {
+        let mut statement = connection
+            .prepare(
+                "
+                SELECT id, project_id
+                FROM assets
+                WHERE project_id = ?1
+                  AND kind = 'video'
+                  AND analysis_status = 'ready'
+                  AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < ?2
+                ORDER BY updated_at ASC
+                LIMIT ?3
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        let mapped = statement
+            .query_map(params![project_id, current_version, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    } else {
+        let mut statement = connection
+            .prepare(
+                "
+                SELECT id, project_id
+                FROM assets
+                WHERE kind = 'video'
+                  AND analysis_status = 'ready'
+                  AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < ?1
+                ORDER BY updated_at ASC
+                LIMIT ?2
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+        let mapped = statement
+            .query_map(params![current_version, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    let mut rows = rows;
+    rows.truncate(limit);
+    Ok(rows)
+}
+
+fn spawn_segment_reanalysis_tasks(app: AppHandle, tasks: Vec<(String, String)>) {
+    if tasks.is_empty() {
+        return;
+    }
+    let claimed_tasks = open_connection(&app)
+        .ok()
+        .map(|connection| {
+            tasks
+                .into_iter()
+                .filter(|(_, task_id)| {
+                    connection
+                        .execute(
+                            "UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND tool_name = 'reanalyze_asset_segments' AND status = 'queued'",
+                            params![now_millis(), task_id],
+                        )
+                        .map(|updated| updated == 1)
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if claimed_tasks.is_empty() {
+        return;
+    }
+    let slots = (0..claimed_tasks.len().min(MAX_TECHNICAL_ANALYSIS_WORKERS))
+        .filter_map(|_| reserve_technical_analysis_worker())
+        .collect::<Vec<_>>();
+    if slots.is_empty() {
+        if let Ok(connection) = open_connection(&app) {
+            for (_, task_id) in &claimed_tasks {
+                let _ = connection.execute(
+                    "UPDATE agent_tasks SET status = 'queued', updated_at = ?1 WHERE id = ?2 AND tool_name = 'reanalyze_asset_segments' AND status = 'running'",
+                    params![now_millis(), task_id],
+                );
+            }
+        }
+        return;
+    }
+    let mut assignments = (0..slots.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+    let worker_count = assignments.len();
+    for (index, task) in claimed_tasks.into_iter().enumerate() {
+        assignments[index % worker_count].push(task);
+    }
+    for (slot, tasks) in slots.into_iter().zip(assignments) {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _slot = slot;
+            for (asset_id, task_id) in tasks {
+                run_segment_reanalysis(app.clone(), asset_id, task_id);
+            }
+        });
+    }
+}
+
+fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
+    log::info!("Starting segment reanalysis for asset {asset_id}.");
+    let result = (|| -> Result<(), String> {
+        let connection = open_connection(&app)?;
+        let row = connection
+            .query_row(
+                "SELECT source_reference, kind, metadata_json, analysis_status FROM assets WHERE id = ?1",
+                params![asset_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .map_err(|_| "The media asset is no longer available.".to_owned())?;
+        let (source_reference, kind, original_json, analysis_status) = row;
+        if analysis_status != "ready" || kind != "video" {
             connection
                 .execute(
-                    "UPDATE agent_tasks SET status = 'failed', error_message = 'Stored analysis input is invalid.', updated_at = ?1 WHERE id = ?2",
+                    "UPDATE agent_tasks SET status = 'cancelled', error_message = 'Segment reanalysis skipped for non-ready video.', updated_at = ?1 WHERE id = ?2",
                     params![now_millis(), task_id],
                 )
                 .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        let mut metadata: TechnicalMetadata =
+            serde_json::from_str(&original_json).unwrap_or_default();
+        if metadata.analysis_version >= super::segments::CURRENT_ANALYSIS_VERSION {
+            connection
+                .execute(
+                    "UPDATE agent_tasks SET status = 'completed', result_json = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![
+                        json!({ "assetId": asset_id, "skipped": true, "reason": "already_versioned" })
+                            .to_string(),
+                        now_millis(),
+                        task_id
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        let source = PathBuf::from(&source_reference);
+        let directory = derived_directory(&app, &asset_id)?;
+        let (keyframes, scene_segments) =
+            super::segments::analyze_video_segments(&source, &directory, metadata.duration_ms)?;
+        // 保留视觉证据与状态；只替换分段/关键帧/网格。
+        metadata.keyframes = keyframes;
+        metadata.scene_segments = scene_segments;
+        metadata.visual_quality_score =
+            keyframe_visual_quality_score(&metadata.keyframes).or(metadata.visual_quality_score);
+        for segment in &mut metadata.scene_segments {
+            if segment.visual_quality_score.is_none() {
+                segment.visual_quality_score = metadata.visual_quality_score;
+            }
+        }
+        metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
+        if !metadata.keyframes.is_empty() {
+            use crate::storyboard::multimodal::{generate_keyframe_grid, KeyframeGridConfig};
+            let keyframe_paths: Vec<String> = metadata
+                .keyframes
+                .iter()
+                .map(|kf| kf.image_path.clone())
+                .collect();
+            if let Ok(Some(grid_path)) = generate_keyframe_grid(
+                &asset_id,
+                &keyframe_paths,
+                &directory,
+                &KeyframeGridConfig::default(),
+            ) {
+                metadata.keyframe_grid_path = Some(grid_path.to_string_lossy().into_owned());
+            }
+        }
+        let next_json = serde_json::to_string(&metadata).map_err(|error| error.to_string())?;
+        let updated = connection
+            .execute(
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND analysis_status = 'ready' AND metadata_json = ?4",
+                params![next_json, now_millis(), asset_id, original_json],
+            )
+            .map_err(|error| error.to_string())?;
+        if updated != 1 {
+            connection
+                .execute(
+                    "UPDATE agent_tasks SET status = 'cancelled', error_message = 'Segment reanalysis lost the CAS race.', updated_at = ?1 WHERE id = ?2",
+                    params![now_millis(), task_id],
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        connection
+            .execute(
+                "UPDATE agent_tasks SET status = 'completed', result_json = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    json!({
+                        "assetId": asset_id,
+                        "segmentCount": metadata.scene_segments.len(),
+                        "analysisVersion": metadata.analysis_version
+                    })
+                    .to_string(),
+                    now_millis(),
+                    task_id
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        let project_id: String = connection
+            .query_row(
+                "SELECT project_id FROM assets WHERE id = ?1",
+                params![asset_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        if !project_id.is_empty() {
+            let _ = app.emit("assets-changed", project_id);
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => log::info!("Completed segment reanalysis for asset {asset_id}."),
+        Err(error) => {
+            log::warn!("Segment reanalysis failed for asset {asset_id}: {error}");
+            if let Ok(connection) = open_connection(&app) {
+                let _ = connection.execute(
+                    "UPDATE agent_tasks SET status = 'failed', error_message = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![error, now_millis(), task_id],
+                );
+            }
         }
     }
-    spawn_technical_analysis_tasks(app.clone(), tasks);
-    Ok(())
 }
 
 #[tauri::command]

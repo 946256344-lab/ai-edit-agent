@@ -82,6 +82,7 @@ mod tests {
                 id: "beat-1".to_owned(),
                 purpose: "test".to_owned(),
                 required_visual: "test visual".to_owned(),
+                visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: String::new(),
             }],
@@ -102,6 +103,7 @@ mod tests {
                 beat_part_index: 1,
                 beat_part_count: 1,
                 split_role: "lead".to_owned(),
+                segment_id: None,
             }],
         };
 

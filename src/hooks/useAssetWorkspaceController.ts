@@ -48,7 +48,7 @@ const EMPTY_PAGE: Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'co
   total: 0,
   directories: [],
   unfiledCount: 0,
-  counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0, visualPending: 0 },
+  counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0, visualPending: 0, segmentPending: 0 },
 }
 
 function formatDuration(durationMs: number | null) {

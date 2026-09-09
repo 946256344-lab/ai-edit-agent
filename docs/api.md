@@ -6,11 +6,11 @@
 
 | 命令 | 参数 | 返回与副作用 |
 | --- | --- | --- |
-| `list_shot_recommendations` | `projectId, editingTaskId, timelineVersionId, shotIndex` | 只读已保存候选，返回 `saved, beatPurpose, candidates`。候选含素材 ID、名称、缩略图、时长、当前/已使用标记及不可用原因；最多 12 个，不补假数据。 |
+| `list_shot_recommendations` | `projectId, editingTaskId, timelineVersionId, shotIndex` | 只读已保存候选，返回 `saved, beatPurpose, candidates`。候选含唯一 `candidateId`（素材＋片段）、素材 ID、源起止、名称、片段缩略图、时长、当前/已使用标记及不可用原因；最多 12 个，不补假数据。 |
 | `generate_shot_recommendations` | 同上 | 老版本用户主动生成；复用已分析证据的本地排序并保存候选，不改粗剪、不重新识别素材。 |
-| `prepare_shot_replacement` | 同上及 `assetId` | 为一个候选复用 Phase 4 精修并渲染静音画面，返回原版本 ID、镜头索引、素材 ID、源起止、`cropFocus`、`previewPath`；不写时间线。依赖已配置模型，失败直接返回。 |
+| `prepare_shot_replacement` | 同上及 `candidateId` | 为一个候选复用 Phase 4 精修并渲染静音画面，返回原版本 ID、镜头索引、素材 ID、源起止、`cropFocus`、`previewPath`；不写时间线。依赖已配置模型，失败直接返回。 |
 
-Schema 16 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-12，删除原 storyboard 时级联删除。候选池按 beat 保存，当前镜头经 `derivedFromShotIndex` 关联原始分镜。
+Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-12，删除原 storyboard 时级联删除。候选池按 beat 保存，当前镜头经 `derivedFromShotIndex` 关联原始分镜。
 
 「保存修改」复用 `commit_studio_edits`，`clipReplacements[]` 新增可选 `cropFocus`；只替换源镜头及构图，槽位时长、其他镜头与音文轨道不变。时间线与操作记录原子提交。随后 `render_preview` 更新整片预览，失败仍保留已保存版本和旧预览；`create_jianying_draft` 使用最新已保存时间线。手动撤销/重做创建新版本，切换会话或 Agent 产生其他版本后清空手动历史。
 
@@ -95,7 +95,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `update_asset_user_metadata_batch` | `{ projectId, assetIds, favorite?, rating?, note?, excluded? }` | `BatchAssetActionResult` | 批量设置收藏、0–5 评分、最多 2000 字符备注和禁止使用；用户字段与分析证据分表保存，审计不保存正文。 |
 | `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
-| `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs` 和独立 `visualAnalysisStatus`；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
+| `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧与可选视觉标签）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
 | `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 召回并去同/去相似补位到最多 12 个候选，模型从池中选出 2–3 个互异素材后再精修源时间范围，本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
@@ -184,7 +184,7 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 **Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再让模型只在该模式下拆 beats（短 brief 偏 ≤15s、约 2–5 beat；`full_script` 可先 TTS 锁定 `targetDurationMs`；`key_message` 每 beat 写 ≤24 字 `onScreenText`、`narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽，标记规则仍生效）。Phase 2 **仅本地**：硬过滤就绪视频后按语义/词面排序，去同 `assetId` 与相似证据后**强制补位到目标 12**（库耗尽才停）；仅当补位后仍 &lt;2 才标 uncovered；`key_message` 写入可读性节奏计划。Phase 3 模型从该池选出 **2–3 个互异 assetId（含顺序）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试；选片后重建节奏计划。Phase 4 **先选内容窗再段内精修**：导入关键帧（或三分段）建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；`full_script` 旁白托底 / `key_message` 节奏 fit，**禁止换片**（不做每素材全片场景扫描）。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（保留 P1/audio-first 的 `targetDurationMs`/`scriptMode`；`full_script` 仅 lead 回填旁白且只拦画面过长，画面不足走 `qualityWarnings`；`key_message` lead 写 beat 标记且对称校验总时长）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 镜数 / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
-`storyboard/scoring.rs` 的语义分为 0–30：有效的 512 维 `bge-small-zh-v1.5` 向量使用余弦相似度；否则英文按连续字母数字词元、中文按相邻双字做词面匹配。另加画面质量 0–25、时长匹配 0–15、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–10。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12；Phase 3 从该池选 2–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。上一镜头的素材直接排除，40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
+`storyboard/scoring.rs` 的语义分为 0–50：有效的 512 维 `bge-small-zh-v1.5` 向量与词面命中各最多 25 分（缺一侧时另一侧放大到 50）；词面查询优先使用 Phase 1 产出的英文 `visualKeywords`，并与素材英文标签对齐；中文双字仅在证据含 CJK 时参与。另加画面质量 0–10、时长匹配 0–10、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–5。无视觉证据且无有效 OCR 的素材排在有证据候选之后。OCR 乱码在向量文本、词面 blob 与相似去重中过滤。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果去同/去相似并补位到最多 12，候选池携带分数分解；Phase 3 池卡片含 `requiredVisual`/`visualKeywords`/`narration`/`onScreenText` 与 `retrievalScore`，关键帧网格上限 60；从该池选 2–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。40% 次数上限按已经实际选中的镜头数动态计算。向量连同模型名、维度、版本（当前 2）和证据文本 SHA-256 保存在本地 `metadata_json`，不序列化进 Provider payload。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 
@@ -224,7 +224,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
-| `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `sourceStartMs/sourceEndMs`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
+| `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `segmentId`、`sourceStartMs/sourceEndMs`、`shotType`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。对命中素材可按需触发片段视觉（预算有限）；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |

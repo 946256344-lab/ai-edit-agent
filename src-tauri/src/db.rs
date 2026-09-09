@@ -11,7 +11,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 16;
+pub(crate) const SCHEMA_VERSION: i64 = 17;
 
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
@@ -407,6 +407,18 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS agent_tasks_project_editing_updated_idx ON agent_tasks(project_id, editing_task_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS operation_logs_project_editing_created_idx ON operation_logs(project_id, editing_task_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS operation_logs_agent_task_created_idx ON operation_logs(agent_task_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS asset_segment_embeddings (
+          asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          segment_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          source_hash TEXT NOT NULL,
+          vector BLOB NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (asset_id, segment_id, model, version)
+        );
+        CREATE INDEX IF NOT EXISTS asset_segment_embeddings_asset_idx
+          ON asset_segment_embeddings(asset_id);
         ",
     ).map_err(|error| error.to_string())?;
     Ok(())

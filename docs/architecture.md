@@ -39,7 +39,7 @@ Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保
 | Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
-| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 安装包内置中文向量模型；不可用时词面降级 |
+| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 安装包内置中文向量模型；`visualKeywords` 跨语言词面；不可用时词面降级 |
 | 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
 | Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
 | Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
@@ -132,7 +132,7 @@ Windows 桌面应用（Tauri + React）
 导入本地文件或文件夹
   -> SQLite 保存源文件引用
   -> 后台 FFprobe 提取时长、尺寸、帧率和音频轨信息
-  -> FFmpeg 生成缩略图、关键帧和启发式场景片段
+  -> FFmpeg 低分辨率场景检测生成真实片段（预算 60s，失败则均匀切分），每片段抽 1–3 帧
   -> Tesseract 提取图片/关键帧英文 OCR
   -> 技术分析完成后，后台将最多六条素材的代表帧批量发送给实验性 Provider
   -> 保存按素材 ID 与源时间校验的视觉建议；每批请求 30 秒超时，失败原因随素材证据返回
@@ -189,7 +189,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次；Phase 3 查看候选关键帧网格选片，Phase 4 用导入关键帧（或三分段）建粗窗再在窗内精修源区间。
+当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实场景分段与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 仍对中间代表帧跑 1 帧标签（粗召回）。片段级 `analyze_asset_segments_batch` **按需**入队：仅当素材进入 storyboard 粗召回或片段检索时由 `ensure_segment_visual_evidence` 触发，完成后写 `visualAnalysisVersion=2` 与 `asset_segment_embeddings` 永久缓存。单一 worker 共用熔断；任务 payload 仅保存素材 ID。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
 
 ### Agent 编程上下文架构
 
@@ -294,11 +294,11 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows Credential Manager；`search_music` 仅返回 API 明示可下载且为 CC0/CC-BY 的曲目，CC-BY 的曲名、作者和许可 URL 会随 music cue 保存。`download_music` 才按需将单曲写入当前 local project 并交给既有本地分析队列；`use_online_music` 在一个具名、受限且可审计的调用内下载一首、等待分析完成并新建含循环背景音乐的时间线版本。每个下载副本使用唯一文件名，绝不覆盖既有本地副本。不会抓取网页、批量缓存曲库或把未验证的远程 URL 写入时间线/Jianying draft。
 
-场景检测当前覆盖前述历史滤镜描述：固定时间采样（第 1 秒、1/3、2/3、最后 1 秒）替代旧的前 30 秒场景检测，精确提取 4 帧关键帧并拼接为 2×2 网格（640×360 JPEG）供多模态选镜使用。关键帧提取路径记录到 `TechnicalMetadata.keyframe_grid_path`，素材导入时自动生成，网格生成失败只记录警告不阻塞导入。
+场景检测：FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 解析切点；单素材硬预算 60s，长片可先 keyframe 粗扫；超时或无切点时均匀切分（段长 clamp(duration/8, 3s, 8s)），最短 1.5s、最多 24 段。`TechnicalMetadata.analysisVersion=2`；旧就绪视频由 `reanalyze_asset_segments` 在技术队列空闲时后台补跑，保持 `ready` 且不触发视觉请求。关键帧网格改为片段中点帧拼图。
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再让模型只在该模式下拆 beats（短 brief 偏 ≤15s；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽；`full_script` 可先 TTS 锁定时长）。Phase 2 **仅本地**：硬过滤就绪视频后语义/词面排序，去同与相似后**补位到目标 12**；仅库耗尽且 &lt;2 才 uncovered；`key_message` 写入可读性节奏计划（`SpeechTiming.kind=pacing`）。Phase 3 模型从池中选 **2–3 互异 asset**（看候选关键帧网格；最终序相邻镜不得同 `assetId`，含跨 beat；全序列任一 `assetId` 不得超过约 40% 上限，prompt 给出 2 镜/3 镜情形的数值；池不足时优先将最弱 beat 标 uncovered）；选片后再按最终 covered 重建节奏计划。Phase 4 **先选内容窗、再段内精修切点**（导入关键帧建窗，不做全片场景扫描；不确定或长窗局部加密；`full_script` 旁白时长托底 / `key_message` 走节奏 fit），禁止换片。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`，不改写成镜头总和、不降级模式；`full_script` 仅 lead 回填旁白且只拦画面过长；`key_message` lead 写入 beat 标记、对称校验总时长；交叠在 Phase 4 窗内优先拆开，normalize 不清未挪镜的构图）；精修类失败回 Phase 4，结构/硬上限与 diversity/相邻同片失败不空转 Phase 4。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再让模型只在该模式下拆 beats（短 brief 偏 ≤15s；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽；`full_script` 可先 TTS 锁定时长；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **两级本地召回**：2a 素材级 Top-20/beat 并集 ≤48 → `ensure_segment_visual_evidence`（预算 150s）→ 2b 片段级语义/词面排序补位到 Top-12（同素材最多 3 段；重叠段判重）；未就绪片段以整条参与。Phase 3 模型从池中选 **2–3 候选**（优先 `picks:[{assetId,segmentId}]`，兼容旧 `assetIds`；池卡片含 segment 时间/景别；最终序相邻镜不得同 `assetId`；40% 上限按素材）。Phase 4 **有片段锁定则跳过 Pass A**，窗口=真实场景片段；否则用片段/关键帧建窗再段内精修。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；精修类失败回 Phase 4，结构/硬上限与 diversity/相邻同片失败不空转 Phase 4）。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 

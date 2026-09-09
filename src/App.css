@@ -153,6 +153,8 @@
 .asset-evidence-section strong { color: #d2d4ca; font-size: 9px; }
 .asset-evidence-section p { margin: 0; border-top: 1px solid #2d3029; padding-top: 6px; color: #d1d2c8; font-size: 9px; line-height: 1.45; }
 .asset-evidence-section span { display: block; color: #a8bd62; font-family: "DM Mono", monospace; font-size: 8px; margin-bottom: 2px; }
+.asset-evidence-segment { border: 1px solid #353832; border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
+.asset-evidence-segment .asset-evidence-frames { grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: none; }
 .asset-evidence-empty { align-items: start; }
 .asset-workbench__footer { margin-top: auto; border-top: 1px solid #30322e; display: flex; gap: 8px; align-items: start; padding: 12px 0 0; }
 .asset-workbench__footer p { color: #888a82; font-size: 9px; line-height: 1.45; margin: 0; }

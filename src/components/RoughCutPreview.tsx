@@ -18,7 +18,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   const clips = artifact.timeline?.clips ?? []
   const currentClip = clips.find((clip) => playhead >= clip.timelineStartMs && playhead < clip.timelineEndMs) ?? clips[0]
   const stalePreview = artifact.preview && artifact.preview.timelineVersionId !== artifact.timeline?.id
-  const selected = recommendations?.candidates.find((candidate) => candidate.assetId === selectedId)
+  const selected = recommendations?.candidates.find((candidate) => candidate.candidateId === selectedId)
   useEffect(() => {
     if (replacement.pending) pendingDialog.current?.showModal()
     else pendingDialog.current?.close()
@@ -42,9 +42,9 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
           {recommendations?.saved && !recommendations.candidates.length && <p className="workspace-notice">当前没有可用候选。请补充素材，或通过对话调整这一段。</p>}
           <div className="candidate-grid">
             {recommendations?.candidates.map((candidate, index) => (
-              <button key={candidate.assetId} className={`candidate-card ${candidate.assetId === selectedId ? 'selected' : ''}`} disabled={busy || phase === 'preparing' || candidate.current || Boolean(candidate.unavailableReason)} onClick={() => actions.replacement.select(candidate.assetId)} aria-pressed={candidate.assetId === selectedId} title={candidate.unavailableReason ?? candidate.displayName}>
+              <button key={candidate.candidateId} className={`candidate-card ${candidate.candidateId === selectedId ? 'selected' : ''}`} disabled={busy || phase === 'preparing' || candidate.current || Boolean(candidate.unavailableReason)} onClick={() => actions.replacement.select(candidate.candidateId)} aria-pressed={candidate.candidateId === selectedId} title={candidate.unavailableReason ?? candidate.displayName}>
                 <div className="candidate-image">{candidate.thumbnailPath ? <img src={convertFileSrc(candidate.thumbnailPath)} alt="" /> : <span>暂无缩略图</span>}<b>{String(index + 1).padStart(2, '0')}</b><small>{candidate.current ? '当前镜头' : candidate.usedInTimeline ? '其他镜头已用' : `${((candidate.durationMs ?? 0) / 1000).toFixed(1)}s`}</small></div>
-                <span>{candidate.displayName}</span>{candidate.unavailableReason && <small>{candidate.unavailableReason}</small>}
+                <span>{candidate.displayName}</span><small>{(candidate.sourceStartMs / 1000).toFixed(1)}–{(candidate.sourceEndMs / 1000).toFixed(1)} 秒</small>{candidate.unavailableReason && <small>{candidate.unavailableReason}</small>}
               </button>
             ))}
           </div>

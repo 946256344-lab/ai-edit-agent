@@ -4,23 +4,51 @@
 //! 并按分数降序排序，供 storyboard 生成时优先选择高质量镜头。
 
 use crate::models::{StoryboardBeat, StoryboardSource};
+use crate::storyboard::semantic::ocr_is_meaningful;
+use serde::{Deserialize, Serialize};
 
 /// 候选片段评分结果，用于排序。
 #[derive(Debug, Clone)]
 pub(crate) struct ScoredCandidate {
     pub source: StoryboardSource,
-    pub score: f64,
+    pub score: CandidateScore,
+}
+
+/// 分数分解：便于日志与 Phase 3 卡片展示；可随候选池持久化。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CandidateScore {
+    pub total: f64,
+    pub semantic: f64,
+    pub lexical: f64,
+    pub quality: f64,
+    pub duration: f64,
+    pub freshness: f64,
+    /// 景别与 beat 要求的轻量匹配加分；只有片段候选带景别时才非 0。
+    #[serde(default)]
+    pub shot_type: f64,
+    pub has_evidence: bool,
+    #[serde(default)]
+    pub matched_keywords: Vec<String>,
+}
+
+impl CandidateScore {
+    pub(crate) fn retrieval_score_pct(&self) -> i64 {
+        (self.total.clamp(0.0, 100.0)).round() as i64
+    }
 }
 
 /// 为所有候选片段打分并排序（降序）。
 ///
 /// 评分维度：
-/// - 语义相关性（0-30分）：优先使用本地向量相似度，无向量时使用词面重合
-/// - 画面质量（0-25分）：来自 visual_quality_score
-/// - 时长匹配度（0-15分）：候选时长与目标时长的适配度
+/// - 语义相关性（0-50分）：余弦与词面各最多 25；缺一侧时另一侧放大到 50
+/// - 画面质量（0-10分）：来自 visual_quality_score
+/// - 时长匹配度（0-10分）：候选时长与目标时长的适配度
 /// - 当前 Storyboard 复用惩罚（每次 -15 分）：已经选过的素材累计降权
 /// - 连续复用惩罚（额外 -30 分）：避免相邻镜头继续使用同一视频
-/// - 新鲜度（0-10分）：根据项目内使用次数降权
+/// - 新鲜度（0-5分）：根据项目内使用次数降权
+///
+/// 无视觉证据且无有效 OCR 的素材排在有证据候选之后。
 pub(crate) fn rank_segment_candidates(
     candidates: Vec<StoryboardSource>,
     beat: &StoryboardBeat,
@@ -47,11 +75,16 @@ pub(crate) fn rank_segment_candidates(
         })
         .collect();
 
-    scored.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    scored.sort_by(
+        |a, b| match b.score.has_evidence.cmp(&a.score.has_evidence) {
+            std::cmp::Ordering::Equal => b
+                .score
+                .total
+                .partial_cmp(&a.score.total)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            other => other,
+        },
+    );
     scored
 }
 
@@ -62,83 +95,202 @@ fn calculate_candidate_score(
     prior_selections: &[String],
     usage_counts: &std::collections::HashMap<String, i32>,
     beat_embedding: Option<&[f32]>,
-) -> f64 {
-    let mut score = 0.0;
+) -> CandidateScore {
+    let has_evidence = candidate_has_evidence(candidate);
+    let (semantic, lexical, matched_keywords) =
+        semantic_match_parts(candidate, beat, beat_embedding);
 
-    // 1. 语义相关性（0-30分）：本地向量优先，缺失或不兼容时保留词面降级。
-    score += semantic_match_score(candidate, beat, beat_embedding);
+    let quality = candidate.visual_quality_score.unwrap_or(0.5) * 10.0;
 
-    // 2. 画面质量（0-25分）
-    let quality = candidate.visual_quality_score.unwrap_or(0.5);
-    score += quality * 25.0;
+    let duration = duration_score(candidate, target_duration_ms);
+    let shot_type = shot_type_score(candidate, beat);
 
-    // 3. 时长匹配度（0-15分）
-    if candidate.kind == "video" {
-        if let Some(duration) = candidate.duration_ms {
-            let target = target_duration_ms.max(1) as f64;
-            // 比较可用源窗口能否容纳镜头，长素材不会因总长度被降权。
-            let available = candidate
+    let usage_count = usage_counts.get(&candidate.asset_id).copied().unwrap_or(0);
+    let freshness = 5.0 / (1.0 + usage_count.max(0) as f64);
+
+    let mut total = semantic + lexical + quality + duration + freshness + shot_type;
+
+    let current_storyboard_uses = prior_selections
+        .iter()
+        .filter(|asset_id| *asset_id == &candidate.asset_id)
+        .count();
+    total -= current_storyboard_uses as f64 * 15.0;
+
+    if let Some(last_asset) = prior_selections.last() {
+        if last_asset == &candidate.asset_id {
+            total -= 30.0;
+        }
+    }
+
+    CandidateScore {
+        total,
+        semantic,
+        lexical,
+        quality,
+        duration,
+        freshness,
+        shot_type,
+        has_evidence,
+        matched_keywords,
+    }
+}
+
+/// 时长匹配：片段候选按片段跨度衡量，整素材候选沿用最长场景段/整片时长。
+/// 跨度不足目标的 60% 时额外扣分，避免选出撑不满 beat 的碎片。
+fn duration_score(candidate: &StoryboardSource, target_duration_ms: i64) -> f64 {
+    if candidate.kind != "video" {
+        return 10.0;
+    }
+    let target = target_duration_ms.max(1) as f64;
+    let available = match candidate.segment.as_ref() {
+        Some(segment) => segment.span_ms() as f64,
+        None => {
+            let Some(duration) = candidate.duration_ms else {
+                return 0.0;
+            };
+            candidate
                 .scene_segments
                 .iter()
                 .map(|segment| segment.end_ms - segment.start_ms)
                 .max()
                 .unwrap_or(duration)
-                .max(0) as f64;
-            let ratio = (available / target).min(1.0);
-            score += ratio * 15.0;
+                .max(0) as f64
         }
+    };
+    let ratio = available / target;
+    let score = ratio.min(1.0) * 10.0;
+    if ratio < 0.6 {
+        (score - 3.0).max(0.0)
     } else {
-        // 图片素材时长灵活，给满分
-        score += 15.0;
+        score
     }
-
-    // 4. 当前 Storyboard 内的累计复用惩罚。历史新鲜度描述跨任务使用，
-    // 这里单独避免同一次选镜被少数高语义分素材垄断。
-    let current_storyboard_uses = prior_selections
-        .iter()
-        .filter(|asset_id| *asset_id == &candidate.asset_id)
-        .count();
-    score -= current_storyboard_uses as f64 * 15.0;
-
-    // 相邻镜头的视觉重复最明显，因此在累计惩罚之外再扣 30 分。
-    if let Some(last_asset) = prior_selections.last() {
-        if last_asset == &candidate.asset_id {
-            score -= 30.0;
-        }
-    }
-
-    // 5. 新鲜度（0-10分）：每个剪辑任务只计一次，使用越多分数越低。
-    let usage_count = usage_counts.get(&candidate.asset_id).copied().unwrap_or(0);
-    score += 10.0 / (1.0 + usage_count.max(0) as f64);
-
-    score
 }
 
-fn semantic_match_score(
+/// 景别轻量匹配：beat 要求特写/细节时偏向 close-up/detail，要求全景时偏向 wide。
+fn shot_type_score(candidate: &StoryboardSource, beat: &StoryboardBeat) -> f64 {
+    let Some(shot_type) = candidate
+        .segment
+        .as_ref()
+        .and_then(|segment| segment.shot_type.as_deref())
+    else {
+        return 0.0;
+    };
+    let shot_type = shot_type.trim().to_ascii_lowercase();
+    if shot_type.is_empty() {
+        return 0.0;
+    }
+    let request = format!("{} {}", beat.required_visual, beat.purpose).to_ascii_lowercase();
+    let wants_detail = request.contains("detail") || request.contains("特写");
+    let wants_wide =
+        request.contains("establishing") || request.contains("全景") || request.contains("wide");
+    if wants_detail && (shot_type.contains("close") || shot_type.contains("detail")) {
+        return 3.0;
+    }
+    if wants_wide && shot_type.contains("wide") {
+        return 3.0;
+    }
+    0.0
+}
+
+fn candidate_has_evidence(candidate: &StoryboardSource) -> bool {
+    let has_visual = candidate.visual_evidence.iter().any(|evidence| {
+        !evidence.subjects.is_empty()
+            || !evidence.actions.is_empty()
+            || !evidence.products.is_empty()
+            || evidence
+                .scene
+                .as_ref()
+                .is_some_and(|scene| !scene.trim().is_empty())
+    });
+    let has_ocr = candidate
+        .ocr_evidence
+        .iter()
+        .any(|item| ocr_is_meaningful(&item.text));
+    has_visual || has_ocr
+}
+
+fn semantic_match_parts(
     candidate: &StoryboardSource,
     beat: &StoryboardBeat,
     beat_embedding: Option<&[f32]>,
-) -> f64 {
-    if let (Some(query), Some(candidate_embedding)) =
-        (beat_embedding, candidate.evidence_embedding.as_deref())
-    {
-        if let Some(similarity) =
-            crate::storyboard::semantic::cosine_similarity(query, candidate_embedding)
-        {
-            return similarity.max(0.0) * 30.0;
+) -> (f64, f64, Vec<String>) {
+    // 片段候选优先用片段向量；片段向量缺失时回退素材级向量。
+    let candidate_embedding = candidate
+        .segment_embedding
+        .as_deref()
+        .or(candidate.evidence_embedding.as_deref());
+    let cosine_available =
+        beat_embedding
+            .zip(candidate_embedding)
+            .and_then(|(query, candidate_embedding)| {
+                crate::storyboard::semantic::cosine_similarity(query, candidate_embedding)
+            });
+
+    let blob = evidence_blob(candidate);
+    let evidence_has_cjk = blob
+        .chars()
+        .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch));
+    let query = lexical_query_terms(beat, evidence_has_cjk);
+    let matched_keywords = matched_lexical_terms(&query, &blob);
+    let lexical_available = !query.is_empty();
+    let hit_ratio = if lexical_available {
+        matched_keywords.len() as f64 / query.len() as f64
+    } else {
+        0.0
+    };
+
+    match (cosine_available, lexical_available) {
+        (Some(similarity), true) => (
+            similarity.max(0.0) * 25.0,
+            hit_ratio * 25.0,
+            matched_keywords,
+        ),
+        (Some(similarity), false) => (similarity.max(0.0) * 50.0, 0.0, matched_keywords),
+        (None, true) => (0.0, hit_ratio * 50.0, matched_keywords),
+        (None, false) => {
+            let fallback = ((candidate.visual_evidence.len()
+                + candidate
+                    .ocr_evidence
+                    .iter()
+                    .filter(|item| ocr_is_meaningful(&item.text))
+                    .count()) as f64)
+                .min(10.0)
+                * 1.2;
+            (fallback, 0.0, matched_keywords)
         }
     }
-    let query = query_terms(&format!("{} {}", beat.required_visual, beat.purpose));
-    if query.is_empty() {
-        return ((candidate.visual_evidence.len() + candidate.ocr_evidence.len()) as f64).min(10.0)
-            * 1.2;
+}
+
+fn lexical_query_terms(beat: &StoryboardBeat, evidence_has_cjk: bool) -> Vec<String> {
+    let mut terms = Vec::new();
+    for keyword in &beat.visual_keywords {
+        terms.extend(ascii_terms(keyword));
     }
-    let blob = evidence_blob(candidate);
-    let hits = query
+    // requiredVisual / purpose：ASCII 词元始终参与；中文双字仅在证据含 CJK 时参与。
+    let narrative = format!("{} {}", beat.required_visual, beat.purpose);
+    for term in query_terms(&narrative) {
+        let is_cjk = term
+            .chars()
+            .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch));
+        if is_cjk {
+            if evidence_has_cjk {
+                terms.push(term);
+            }
+        } else {
+            terms.push(term);
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn matched_lexical_terms(query: &[String], blob: &str) -> Vec<String> {
+    query
         .iter()
         .filter(|term| blob.contains(term.as_str()))
-        .count();
-    (hits as f64 / query.len() as f64) * 30.0
+        .cloned()
+        .collect()
 }
 
 fn evidence_blob(candidate: &StoryboardSource) -> String {
@@ -151,8 +303,35 @@ fn evidence_blob(candidate: &StoryboardSource) -> String {
             parts.push(scene.clone());
         }
     }
-    parts.extend(candidate.ocr_evidence.iter().map(|item| item.text.clone()));
+    parts.extend(
+        candidate
+            .ocr_evidence
+            .iter()
+            .filter(|item| ocr_is_meaningful(&item.text))
+            .map(|item| item.text.clone()),
+    );
     parts.join(" ").to_lowercase()
+}
+
+fn ascii_terms(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut ascii = String::new();
+    let flush = |value: &mut String, terms: &mut Vec<String>| {
+        if value.len() >= 2 {
+            terms.push(std::mem::take(value));
+        } else {
+            value.clear();
+        }
+    };
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() {
+            ascii.push(character.to_ascii_lowercase());
+        } else {
+            flush(&mut ascii, &mut terms);
+        }
+    }
+    flush(&mut ascii, &mut terms);
+    terms
 }
 
 fn query_terms(text: &str) -> Vec<String> {
@@ -221,6 +400,8 @@ mod tests {
             keyframe_grid_path: None,
             keyframes: Vec::new(),
             source_path: None,
+            segment: None,
+            segment_embedding: None,
         }
     }
 
@@ -229,6 +410,7 @@ mod tests {
             id: "beat-1".to_owned(),
             purpose: "test".to_owned(),
             required_visual: "factory line".to_owned(),
+            visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
         }
@@ -243,7 +425,7 @@ mod tests {
         let high_score = calculate_candidate_score(&high, &test_beat(), 10_000, &[], &usage, None);
         let low_score = calculate_candidate_score(&low, &test_beat(), 10_000, &[], &usage, None);
 
-        assert!(high_score > low_score, "高质量素材应得分更高");
+        assert!(high_score.total > low_score.total, "高质量素材应得分更高");
     }
 
     #[test]
@@ -258,7 +440,7 @@ mod tests {
             calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None);
 
         assert_eq!(
-            perfect_score, long_score,
+            perfect_score.total, long_score.total,
             "长素材能够容纳目标镜头时不应降权"
         );
     }
@@ -273,9 +455,9 @@ mod tests {
             calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None);
         let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
 
-        assert!(penalized < normal, "连续使用同一素材应被降权");
+        assert!(penalized.total < normal.total, "连续使用同一素材应被降权");
         assert!(
-            (normal - penalized - 45.0).abs() < 0.1,
+            (normal.total - penalized.total - 45.0).abs() < 0.1,
             "连续复用应包含累计 -15 分和额外 -30 分"
         );
     }
@@ -291,7 +473,7 @@ mod tests {
         let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
 
         assert!(
-            (normal - penalized - 15.0).abs() < 0.1,
+            (normal.total - penalized.total - 15.0).abs() < 0.1,
             "非连续的第二次使用也应累计扣 15 分"
         );
     }
@@ -306,6 +488,11 @@ mod tests {
             actions: vec!["inspecting materials".to_owned()],
             products: vec![],
             quality_notes: vec![],
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
@@ -315,11 +502,17 @@ mod tests {
             actions: vec!["talking".to_owned()],
             products: vec![],
             quality_notes: vec![],
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-factory".to_owned(),
             purpose: "show the factory visit".to_owned(),
             required_visual: "factory production line inspection".to_owned(),
+            visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
         };
@@ -335,6 +528,99 @@ mod tests {
     }
 
     #[test]
+    fn chinese_beat_with_english_keywords_ranks_matching_asset_first() {
+        let mut forklift = make_source("forklift", "video", Some(10_000), 0.4);
+        forklift.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["forklift operator".to_owned()],
+            scene: Some("outdoor loading area".to_owned()),
+            actions: vec!["operating forklift".to_owned()],
+            products: vec!["yellow forklift".to_owned()],
+            quality_notes: vec![],
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
+        let mut office = make_source("office", "video", Some(10_000), 0.95);
+        office.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["staff".to_owned()],
+            scene: Some("office meeting".to_owned()),
+            actions: vec!["talking".to_owned()],
+            products: vec![],
+            quality_notes: vec![],
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
+        let beat = StoryboardBeat {
+            id: "beat-logistics".to_owned(),
+            purpose: "展示物流发货效率".to_owned(),
+            required_visual: "叉车装卸货物".to_owned(),
+            visual_keywords: vec![
+                "forklift".to_owned(),
+                "pallet".to_owned(),
+                "loading dock".to_owned(),
+                "cargo".to_owned(),
+            ],
+            narration: String::new(),
+            on_screen_text: String::new(),
+        };
+        let ranked = rank_segment_candidates(
+            vec![office, forklift],
+            &beat,
+            10_000,
+            &[],
+            &std::collections::HashMap::new(),
+            None,
+        );
+        assert_eq!(ranked[0].source.asset_id, "forklift");
+        assert!(!ranked[0].score.matched_keywords.is_empty());
+    }
+
+    #[test]
+    fn assets_without_evidence_rank_after_evidenced_candidates() {
+        let bare = make_source("bare", "video", Some(10_000), 0.9);
+        let mut evidenced = make_source("evidenced", "video", Some(10_000), 0.2);
+        evidenced.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["battery modules".to_owned()],
+            scene: Some("battery testing rack".to_owned()),
+            actions: vec![],
+            products: vec!["battery".to_owned()],
+            quality_notes: vec![],
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
+        let beat = StoryboardBeat {
+            id: "beat-battery".to_owned(),
+            purpose: "展示电池测试".to_owned(),
+            required_visual: "电池模组检测".to_owned(),
+            visual_keywords: vec!["battery".to_owned(), "modules".to_owned()],
+            narration: String::new(),
+            on_screen_text: String::new(),
+        };
+        let ranked = rank_segment_candidates(
+            vec![bare, evidenced],
+            &beat,
+            10_000,
+            &[],
+            &std::collections::HashMap::new(),
+            None,
+        );
+        assert_eq!(ranked[0].source.asset_id, "evidenced");
+        assert!(ranked[0].score.has_evidence);
+        assert!(!ranked[1].score.has_evidence);
+    }
+
+    #[test]
     fn rank_sorts_by_score_descending() {
         let candidates = vec![
             make_source("low", "video", Some(10_000), 0.3),
@@ -346,6 +632,7 @@ mod tests {
             id: "beat-1".to_owned(),
             purpose: "test".to_owned(),
             required_visual: "test".to_owned(),
+            visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
         };

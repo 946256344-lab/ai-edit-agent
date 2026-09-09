@@ -112,7 +112,7 @@ export type AssetPage = {
   limit: number
   directories: AssetDirectory[]
   unfiledCount: number
-  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number }
+  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number; segmentPending?: number }
 }
 
 export type AssetTaskCenter = {
@@ -142,10 +142,28 @@ export type AssetEvidence = {
   analysisStatus: string
   durationMs: number | null
   visualAnalysisStatus: 'queued' | 'running' | 'ready' | 'failed' | 'skipped'
+  analysisVersion?: number
   keyframes: Array<{ timeMs: number; imagePath: string }>
   ocrEvidence: Array<{ timeMs: number | null; text: string }>
-  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[] }>
+  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null }>
   visualAnalysisNote: string | null
+  segments?: Array<{
+    id: string
+    startMs: number
+    endMs: number
+    frames: Array<{ timeMs: number; imagePath: string }>
+    visualEvidence?: {
+      timeMs: number | null
+      subjects: string[]
+      scene: string | null
+      actions: string[]
+      products: string[]
+      qualityNotes: string[]
+      shotType?: string | null
+      cameraMotion?: string | null
+      segmentId?: string | null
+    } | null
+  }>
 }
 
 export type StoryboardVersion = {
@@ -158,9 +176,9 @@ export type StoryboardVersion = {
   summary: string
   targetDurationMs: number
   scriptMode: 'full_script' | 'key_message'
-  beats: Array<{ id: string; purpose: string; requiredVisual: string; narration?: string; onScreenText?: string }>
+  beats: Array<{ id: string; purpose: string; requiredVisual: string; visualKeywords?: string[]; narration?: string; onScreenText?: string }>
   uncoveredBeatIds: string[]
-  shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual' }>
+  shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual'; segmentId?: string | null }>
   createdAt: number
 }
 
@@ -527,7 +545,7 @@ export async function commitStudioEdits(payload: StudioCommitPayload) {
 }
 
 export type ShotScope = { projectId: string; editingTaskId: string; timelineVersionId: string; shotIndex: number }
-export type ShotRecommendation = { assetId: string; displayName: string; thumbnailPath: string | null; durationMs: number | null; current: boolean; usedInTimeline: boolean; unavailableReason: string | null }
+export type ShotRecommendation = { candidateId: string; assetId: string; sourceStartMs: number; sourceEndMs: number; displayName: string; thumbnailPath: string | null; durationMs: number | null; current: boolean; usedInTimeline: boolean; unavailableReason: string | null }
 export type ShotRecommendations = { saved: boolean; beatPurpose: string; candidates: ShotRecommendation[] }
 export type PreparedShotReplacement = { timelineVersionId: string; shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; cropFocus: [number, number] | null; previewPath: string }
 
@@ -541,7 +559,7 @@ export async function generateShotRecommendations(scope: ShotScope) {
   return invoke<ShotRecommendations>('generate_shot_recommendations', scope)
 }
 
-export async function prepareShotReplacement(scope: ShotScope, assetId: string) {
+export async function prepareShotReplacement(scope: ShotScope, candidateId: string) {
   requireDesktopRuntime()
-  return invoke<PreparedShotReplacement>('prepare_shot_replacement', { ...scope, assetId })
+  return invoke<PreparedShotReplacement>('prepare_shot_replacement', { ...scope, candidateId })
 }
