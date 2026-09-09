@@ -1,4 +1,4 @@
-// 只读展示所选素材的技术元数据、关键帧、OCR 和视觉证据。
+// 只读展示所选素材的技术元数据、场景片段、关键帧、OCR 和视觉证据。
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { AssetEvidence } from '../../lib/local-store'
 
@@ -18,6 +18,24 @@ function visualStatusLabel(status: AssetEvidence['visualAnalysisStatus']) {
   }
 }
 
+function evidenceLabel(item: {
+  subjects: string[]
+  scene: string | null
+  actions: string[]
+  products: string[]
+  shotType?: string | null
+  cameraMotion?: string | null
+}) {
+  return [
+    ...item.subjects,
+    item.scene ?? '',
+    ...item.actions,
+    ...item.products,
+    item.shotType ? `景别:${item.shotType}` : '',
+    item.cameraMotion ? `运镜:${item.cameraMotion}` : '',
+  ].filter(Boolean).join(' · ') || '未返回可用视觉标签'
+}
+
 export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetEvidence | null; onClose: () => void }) {
   if (!evidence) {
     return (
@@ -28,6 +46,8 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
       </section>
     )
   }
+
+  const segments = evidence.segments ?? []
 
   return (
     <section className="asset-evidence-card">
@@ -41,11 +61,36 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
       <p>{evidence.visualAnalysisNote ?? visualStatusLabel(evidence.visualAnalysisStatus)}</p>
       <div className="asset-evidence-grid">
         <article><b>{evidence.durationMs !== null ? formatTimeMs(evidence.durationMs) : '—'}</b><span>时长</span></article>
-        <article><b>{evidence.keyframes.length}</b><span>关键帧</span></article>
+        <article><b>{segments.length || evidence.keyframes.length}</b><span>{segments.length > 0 ? '片段' : '关键帧'}</span></article>
         <article><b>{evidence.ocrEvidence.length}</b><span>OCR</span></article>
         <article><b>{evidence.visualEvidence.length}</b><span>视觉</span></article>
       </div>
-      {evidence.keyframes.length > 0 && (
+      {segments.length > 0 ? (
+        <div className="asset-evidence-section">
+          <strong>场景片段</strong>
+          {segments.map((segment) => (
+            <div key={segment.id} className="asset-evidence-segment">
+              <p>
+                <span>{segment.id}</span>
+                {formatTimeMs(segment.startMs)} – {formatTimeMs(segment.endMs)}
+              </p>
+              {segment.frames.length > 0 && (
+                <div className="asset-evidence-frames">
+                  {segment.frames.map((frame) => (
+                    <figure key={frame.imagePath}>
+                      <img src={convertFileSrc(frame.imagePath)} alt="" />
+                      <figcaption>{formatTimeMs(frame.timeMs)}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              )}
+              {segment.visualEvidence && (
+                <p>{evidenceLabel(segment.visualEvidence)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : evidence.keyframes.length > 0 ? (
         <div className="asset-evidence-frames">
           {evidence.keyframes.map((frame) => (
             <figure key={frame.imagePath}>
@@ -54,20 +99,20 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
             </figure>
           ))}
         </div>
-      )}
+      ) : null}
       {evidence.ocrEvidence.length > 0 && (
         <div className="asset-evidence-section">
           <strong>OCR 文本</strong>
           {evidence.ocrEvidence.map((item) => <p key={`${item.timeMs}-${item.text}`}><span>{formatTimeMs(item.timeMs)}</span>{item.text}</p>)}
         </div>
       )}
-      {evidence.visualEvidence.length > 0 && (
+      {segments.length === 0 && evidence.visualEvidence.length > 0 && (
         <div className="asset-evidence-section">
           <strong>视觉标签</strong>
           {evidence.visualEvidence.map((item, index) => (
             <p key={`${item.timeMs}-${index}`}>
               <span>{formatTimeMs(item.timeMs)}</span>
-              {[...item.subjects, item.scene ?? '', ...item.actions, ...item.products].filter(Boolean).join(' · ') || '未返回可用视觉标签'}
+              {evidenceLabel(item)}
             </p>
           ))}
         </div>

@@ -20,7 +20,8 @@ use crate::storyboard::step_retry::{
 use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
 use crate::db::{now_millis, open_connection};
 use crate::models::{
-    StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata, TimelineContent,
+    CandidateSegment, StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata,
+    TimelineContent,
 };
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -58,9 +59,22 @@ fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>)
     }
 }
 
+/// 相邻双段候选：首段短于该值时才考虑与下一段合并，避免无意义的组合爆炸。
+const DUAL_SEGMENT_SHORT_MS: i64 = 3_000;
+/// 双段候选合并后的跨度上限；超过则单段已足够覆盖任何 beat。
+const DUAL_SEGMENT_MAX_SPAN_MS: i64 = 12_000;
+/// 单条素材最多产出多少个双段候选。
+const DUAL_SEGMENT_MAX_PER_ASSET: usize = 6;
+
+/// 加载 storyboard 候选源。
+///
+/// `expand_segments_for` 为 `Some(set)` 时，集合内且已有真实场景分段的视频会展开成
+/// 每片段一条候选（含相邻双段组合）；其余素材保持整条素材候选（`segment = None`）。
+/// 传 `None` 表示全部按整条素材加载，用于 Phase 2a 的素材级粗排与 Phase 4/校验。
 pub(crate) fn storyboard_sources(
     connection: &Connection,
     project_id: &str,
+    expand_segments_for: Option<&HashSet<String>>,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
         // Top-12 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
@@ -69,73 +83,250 @@ pub(crate) fn storyboard_sources(
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
-            let metadata: TechnicalMetadata =
-                serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_default();
-            let visual_ready =
-                metadata.visual_analysis_status == "ready" && !metadata.visual_evidence.is_empty();
-            let source_available = Path::new(&row.get::<_, String>(3)?).is_file();
-
-            let visual_quality_score = metadata.visual_quality_score.or_else(|| {
-                let scores = metadata
-                    .scene_segments
-                    .iter()
-                    .filter_map(|segment| segment.visual_quality_score)
-                    .collect::<Vec<_>>();
-                (!scores.is_empty()).then(|| scores.iter().sum::<f64>() / scores.len() as f64)
-            });
-            let evidence_embedding = semantic::embedding_is_current(&metadata)
-                .then(|| metadata.evidence_embedding.clone())
-                .flatten();
-
-            // 从元数据中提取关键帧网格图路径与单帧时间戳（供 Phase 3/4 多模态）
-            let keyframe_grid_path = metadata.keyframe_grid_path.clone();
-            let keyframes = metadata.keyframes.clone();
-            let source_path = row
-                .get::<_, String>(3)
-                .ok()
-                .filter(|path| Path::new(path).is_file());
-
             Ok((
-                StoryboardSource {
-                    asset_id: row.get(0)?,
-                    kind: row.get(1)?,
-                    duration_ms: metadata.duration_ms,
-                    scene_segments: metadata
-                        .scene_segments
-                        .into_iter()
-                        .map(|mut seg| {
-                            // 场景段时长从端点推算
-                            seg.scene_duration_ms = Some(seg.end_ms - seg.start_ms);
-                            seg
-                        })
-                        .collect(),
-                    ocr_evidence: metadata.ocr_evidence,
-                    visual_evidence: metadata.visual_evidence,
-                    visual_quality_score,
-                    evidence_embedding,
-                    keyframe_grid_path,
-                    keyframes,
-                    source_path,
-                },
-                visual_ready,
-                source_available,
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
-        .map_err(|error| error.to_string())?;
-    let candidates = rows
+        .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let visual_ready_count = candidates
+    drop(statement);
+
+    let mut visual_ready_count = 0usize;
+    let mut sources = Vec::new();
+    for (asset_id, kind, metadata_json, source_reference) in rows {
+        let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+        if metadata.visual_analysis_status == "ready" && !metadata.visual_evidence.is_empty() {
+            visual_ready_count += 1;
+        }
+        if !Path::new(&source_reference).is_file() {
+            continue;
+        }
+
+        let visual_quality_score = metadata.visual_quality_score.or_else(|| {
+            let scores = metadata
+                .scene_segments
+                .iter()
+                .filter_map(|segment| segment.visual_quality_score)
+                .collect::<Vec<_>>();
+            (!scores.is_empty()).then(|| scores.iter().sum::<f64>() / scores.len() as f64)
+        });
+        let evidence_embedding = semantic::embedding_is_current(&metadata)
+            .then(|| metadata.evidence_embedding.clone())
+            .flatten();
+        let scene_segments = metadata
+            .scene_segments
+            .iter()
+            .cloned()
+            .map(|mut segment| {
+                // 场景段时长从端点推算
+                segment.scene_duration_ms = Some(segment.end_ms - segment.start_ms);
+                segment
+            })
+            .collect::<Vec<_>>();
+
+        let whole_asset = StoryboardSource {
+            asset_id: asset_id.clone(),
+            kind: kind.clone(),
+            duration_ms: metadata.duration_ms,
+            scene_segments: scene_segments.clone(),
+            ocr_evidence: metadata.ocr_evidence.clone(),
+            visual_evidence: metadata.visual_evidence.clone(),
+            visual_quality_score,
+            evidence_embedding,
+            keyframe_grid_path: metadata.keyframe_grid_path.clone(),
+            keyframes: metadata.keyframes.clone(),
+            source_path: Some(source_reference.clone()),
+            segment: None,
+            segment_embedding: None,
+        };
+
+        let expand = expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
+            && scene_segments.iter().any(|segment| !segment.id.is_empty());
+        if !expand {
+            sources.push(whole_asset);
+            continue;
+        }
+        sources.extend(expand_segment_sources(
+            connection,
+            &whole_asset,
+            &scene_segments,
+        ));
+    }
+    Ok((sources, visual_ready_count))
+}
+
+/// 把一条整素材候选展开成片段候选：单段 + 短段与后继的双段组合。
+fn expand_segment_sources(
+    connection: &Connection,
+    whole_asset: &StoryboardSource,
+    scene_segments: &[crate::models::SceneSegment],
+) -> Vec<StoryboardSource> {
+    let indexed = scene_segments
         .iter()
-        .filter(|(_, visual_ready, _)| *visual_ready)
-        .count();
-    Ok((
-        candidates
-            .into_iter()
-            .filter_map(|(source, _, source_available)| source_available.then_some(source))
-            .collect(),
-        visual_ready_count,
-    ))
+        .filter(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms)
+        .collect::<Vec<_>>();
+    if indexed.is_empty() {
+        return vec![whole_asset.clone()];
+    }
+    let mut expanded = Vec::with_capacity(indexed.len() + DUAL_SEGMENT_MAX_PER_ASSET);
+    for segment in &indexed {
+        let candidate = CandidateSegment {
+            id: segment.id.clone(),
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            frame_paths: segment
+                .frames
+                .iter()
+                .map(|frame| frame.image_path.clone())
+                .collect(),
+            shot_type: segment
+                .visual_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.shot_type.clone()),
+            camera_motion: segment
+                .visual_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.camera_motion.clone()),
+        };
+        let evidence = segment
+            .visual_evidence
+            .clone()
+            .map(|item| vec![item])
+            .unwrap_or_default();
+        expanded.push(segment_source(
+            connection,
+            whole_asset,
+            candidate,
+            evidence,
+            &[segment.id.clone()],
+        ));
+    }
+
+    let mut dual_count = 0usize;
+    for pair in indexed.windows(2) {
+        if dual_count >= DUAL_SEGMENT_MAX_PER_ASSET {
+            break;
+        }
+        let (first, second) = (pair[0], pair[1]);
+        let combined = second.end_ms - first.start_ms;
+        // 只在首段过短、合并后仍在可用镜头长度内时才补双段候选。
+        if first.end_ms - first.start_ms >= DUAL_SEGMENT_SHORT_MS
+            || combined <= 0
+            || combined > DUAL_SEGMENT_MAX_SPAN_MS
+        {
+            continue;
+        }
+        let mut frame_paths = Vec::new();
+        for segment in [first, second] {
+            if let Some(frame) = segment.frames.get(segment.frames.len() / 2) {
+                frame_paths.push(frame.image_path.clone());
+            }
+        }
+        let candidate = CandidateSegment {
+            id: format!("{}+{}", first.id, second.id),
+            start_ms: first.start_ms,
+            end_ms: second.end_ms,
+            frame_paths,
+            shot_type: first
+                .visual_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.shot_type.clone())
+                .or_else(|| {
+                    second
+                        .visual_evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.shot_type.clone())
+                }),
+            camera_motion: first
+                .visual_evidence
+                .as_ref()
+                .and_then(|evidence| evidence.camera_motion.clone())
+                .or_else(|| {
+                    second
+                        .visual_evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.camera_motion.clone())
+                }),
+        };
+        let evidence = [first, second]
+            .iter()
+            .filter_map(|segment| segment.visual_evidence.clone())
+            .collect::<Vec<_>>();
+        expanded.push(segment_source(
+            connection,
+            whole_asset,
+            candidate,
+            evidence,
+            &[first.id.clone(), second.id.clone()],
+        ));
+        dual_count += 1;
+    }
+    expanded
+}
+
+/// 由整素材候选派生一条片段候选：素材字段照抄，证据与向量收敛到片段范围。
+fn segment_source(
+    connection: &Connection,
+    whole_asset: &StoryboardSource,
+    segment: CandidateSegment,
+    mut visual_evidence: Vec<crate::models::VisualEvidence>,
+    member_ids: &[String],
+) -> StoryboardSource {
+    if visual_evidence.is_empty() {
+        // 片段证据尚未就绪时退回素材级证据，保持召回而不是把候选打成无证据。
+        visual_evidence = whole_asset
+            .visual_evidence
+            .iter()
+            .filter(|evidence| {
+                evidence
+                    .time_ms
+                    .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
+            })
+            .cloned()
+            .collect();
+        if visual_evidence.is_empty() {
+            visual_evidence = whole_asset.visual_evidence.clone();
+        }
+    }
+    let mut ocr_evidence = whole_asset
+        .ocr_evidence
+        .iter()
+        .filter(|item| {
+            item.time_ms
+                .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if ocr_evidence.is_empty() {
+        ocr_evidence = whole_asset
+            .ocr_evidence
+            .iter()
+            .filter(|item| item.time_ms.is_none())
+            .cloned()
+            .collect();
+    }
+    let segment_embedding = member_ids
+        .iter()
+        .filter_map(|segment_id| {
+            semantic::load_segment_embedding(connection, &whole_asset.asset_id, segment_id)
+        })
+        .reduce(|mut left, right| {
+            for (slot, value) in left.iter_mut().zip(right) {
+                *slot = (*slot + value) / 2.0;
+            }
+            left
+        });
+    StoryboardSource {
+        visual_evidence,
+        ocr_evidence,
+        segment: Some(segment),
+        segment_embedding,
+        ..whole_asset.clone()
+    }
 }
 
 fn storyboard_usage_counts(
@@ -1162,6 +1353,8 @@ mod tests {
             keyframe_grid_path: None,
             keyframes: Vec::new(),
             source_path: None,
+            segment: None,
+            segment_embedding: None,
         }
     }
 
@@ -1207,6 +1400,7 @@ mod tests {
                 beat_part_index: 1,
                 beat_part_count: 1,
                 split_role: "lead".to_owned(),
+                segment_id: None,
             }],
         }
     }
@@ -1290,7 +1484,7 @@ mod tests {
             .expect("exclude source fixture");
 
         let (sources, visual_ready_count) =
-            storyboard_sources(&connection, "project-1").expect("load storyboard sources");
+            storyboard_sources(&connection, "project-1", None).expect("load storyboard sources");
 
         assert_eq!(
             sources
@@ -1455,6 +1649,7 @@ mod tests {
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
+            segment_id: None,
         });
         assert!(validate_storyboard(&storyboard, &[source()], "brief").is_err());
     }
@@ -1789,6 +1984,7 @@ mod tests {
                 beat_part_index: 1,
                 beat_part_count: 1,
                 split_role: "lead".to_owned(),
+                segment_id: None,
             });
             sources.push(extra_source);
         }
@@ -1852,6 +2048,7 @@ mod tests {
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
+            segment_id: None,
         });
         let normalized = normalize_storyboard_candidate(storyboard, &[long.clone()], "brief");
         assert!(validate_non_overlapping_after(&normalized, &[long]));
@@ -1896,6 +2093,7 @@ mod tests {
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
+            segment_id: None,
         });
         let before_second = (
             storyboard.shots[1].source_start_ms,
@@ -2128,7 +2326,7 @@ fn generate_storyboard_internal(
             log::warn!("Local semantic embedding backfill unavailable; lexical storyboard ranking remains active.");
         }
     }
-    let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id)?;
+    let (sources, visual_ready_count) = storyboard_sources(&connection, &project_id, None)?;
     let usage_counts = storyboard_usage_counts(&connection, &project_id)?;
     let video_count = sources.iter().filter(|s| s.kind == "video").count();
     let image_count = sources.iter().filter(|s| s.kind == "image").count();
@@ -2303,7 +2501,57 @@ fn generate_storyboard_internal(
         audio_first.is_some()
     );
 
-    // Phase 2: 逐 beat 粗选镜
+    // Phase 2a：素材级粗召回 Top-20/beat，并集 ≤48 → ensure 片段视觉 → 展开片段
+    let mut coarse_best: HashMap<String, f64> = HashMap::new();
+    for (beat_index, beat) in narrative.beats.iter().enumerate() {
+        let beat_embedding = embeddings.get(beat_index).map(|item| item.as_slice());
+        let ranked = scoring::rank_segment_candidates(
+            sources.clone(),
+            beat,
+            (narrative.target_duration_ms / narrative.beats.len().max(1) as i64).max(1_200),
+            &[],
+            &usage_counts,
+            beat_embedding,
+        );
+        for candidate in ranked.into_iter().take(20) {
+            let entry = coarse_best
+                .entry(candidate.source.asset_id.clone())
+                .or_insert(0.0);
+            *entry = entry.max(candidate.score.total);
+        }
+    }
+    let mut coarse_ranked = coarse_best.into_iter().collect::<Vec<_>>();
+    coarse_ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    coarse_ranked.truncate(48);
+    let coarse_ids = coarse_ranked
+        .into_iter()
+        .map(|(asset_id, _)| asset_id)
+        .collect::<Vec<_>>();
+    let ensure = crate::assets::ensure_segment_visual_evidence(
+        &app,
+        &project_id,
+        &coarse_ids,
+        crate::assets::DEFAULT_ENSURE_BUDGET,
+    )
+    .unwrap_or_default();
+    log::info!(
+        "Phase 2a ensure_segment_visual: requested={}, ready={}, pending={}",
+        coarse_ids.len(),
+        ensure.ready.len(),
+        ensure.pending.len()
+    );
+    let expand_set = ensure.ready.iter().cloned().collect::<HashSet<_>>();
+    let connection = open_connection(&app)?;
+    let (sources, visual_ready_count) =
+        storyboard_sources(&connection, &project_id, Some(&expand_set))?;
+    log::info!(
+        "Phase 2b sources after segment expand: total={}, visual_ready={}, expanded_assets={}",
+        sources.len(),
+        visual_ready_count,
+        expand_set.len()
+    );
+
+    // Phase 2b: 片段级 Top-12
     let initial_timing = audio_first
         .as_ref()
         .and_then(|(target, prepared)| {

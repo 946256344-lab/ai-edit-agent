@@ -40,19 +40,24 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 ## 10. 低成本优先
 
-早期产品优先简单的本地分析、固定关键帧和可解释的素材排序。遇到质量问题，先增加复现和测试，再决定是否引入新的模型、索引或复杂策略。
+早期产品优先简单的本地分析与可解释排序。片段级视觉证据采用**按需 + 永久缓存**：本地场景分段整库后台补跑（不花钱），视觉模型只对进入粗召回的素材调用。遇到质量问题，先增加复现和测试，再决定是否扩大模型调用。
 
-## 11. key_message 只出字幕标记不配音（2026-09-08）
+## 11. 片段级分析取代固定 4 帧（2026-09-09）
+
+技术分析以 FFmpeg 低分辨率场景检测生成真实片段（`analysisVersion=2`）；选镜候选单位为片段。Phase 3 返回 `assetId+segmentId`，Phase 4 有片段时跳过 Pass A。未分段或片段视觉未就绪时行为等同整条素材。
+
+## 12. key_message 只出字幕标记不配音（2026-09-08）
 
 `key_message` 是短目标/提纲成片：Phase 1 为每个 beat 写屏幕标记 `onScreenText`（≤24 可见字符），`narration` 留空；镜头时长按标记可读性与目标时长分配（`SpeechTiming.kind=pacing`）。时间线为每个 beat 写一条跨该 beat 镜头的标记字幕，**不自动配音**。显式 `synthesize_voiceover` 仍可用，但不得朗读 `onScreenText`，仅在 beats 仍有 narration 时合成。`full_script` 继续走口播 + audio-first + 自动配音。
 
-## 12. scriptMode 由系统在 Phase 1 前锁定（2026-09-08）
+## 13. scriptMode 由系统在 Phase 1 前锁定（2026-09-08）
 
 `scriptMode` 是旁白/字幕产品路径的开关，不得交给模型自选。Rust 用 brief 朗读估算（≥约 20s → `full_script`，否则 `key_message`）写入 Phase 1 必选约束；响应后再强制钉死。模型只负责在锁定模式下拆 beat 结构。
 
-## 13. 当前未完成事项
+## 14. 当前未完成事项
 
 - 安装包还没有完整捆绑 FFmpeg、Tesseract、Python 和 Jianying 适配器运行时。
 - 最终视频导出尚未实现。
 - 多轨媒体能力仍在迭代。
 - 官方模型 OAuth 契约和部分外部 Provider 能力仍需真实环境验证。
+- 浅色工作区替换面板尚未适配片段候选卡（`shot_replacement.rs`）。

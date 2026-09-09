@@ -103,6 +103,7 @@ mod tests {
                 beat_part_index: 1,
                 beat_part_count: 1,
                 split_role: "lead".to_owned(),
+                segment_id: None,
             }],
         };
 
