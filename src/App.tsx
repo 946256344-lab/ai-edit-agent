@@ -1,11 +1,12 @@
-// 应用组合根：选择当前项目/任务/会话并装配各领域 controller 与互斥工作区。
+// 应用组合根：选择项目/会话，装配领域 controller 与并排对话、粗剪预览。
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
+import './light-workspace.css'
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { AnalysisActivity } from './components/AnalysisActivity'
 import { AppSidebar } from './components/AppSidebar'
-import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
+import { RoughCutPreview } from './components/RoughCutPreview'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
@@ -13,7 +14,8 @@ import { WorkspaceHeader } from './components/WorkspaceHeader'
 import type { ConversationMessage, EditingSessionView, WorkspaceView } from './components/workspace-types'
 import { useAgentRunReconciliation } from './hooks/useAgentRunReconciliation'
 import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
-import { getTimelineLabel, useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceController'
+import { useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceController'
+import { useShotReplacementController } from './hooks/useShotReplacementController'
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
 import {
@@ -115,6 +117,14 @@ function App() {
       appendStoredMessage(conversationId, sessionId, 'agent', content)
     ),
     refreshEditingSessions,
+  })
+  const shotReplacement = useShotReplacementController({
+    projectId: activeProjectId,
+    sessionId: activeEditingSessionId,
+    timeline: artifactWorkspace.timeline,
+    activeProjectRef,
+    activeSessionRef: activeEditingSessionRef,
+    applyCommit: artifactWorkspace.applyStudioCommit,
   })
 
   async function applyAgentEditCompletion(pending: PendingAgentEdit, event?: AgentEditEvent) {
@@ -518,10 +528,10 @@ function App() {
           activeProjectName: activeProject?.name ?? null,
         }}
         actions={{
-          createSession: () => void createEditingSessionWorkspace(),
-          createProject: () => void createProjectWorkspace(),
-          selectProject: (projectId) => void selectProject(projectId),
-          selectSession: (sessionId) => { if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) },
+          createSession: () => shotReplacement.actions.requestAction(() => void createEditingSessionWorkspace()),
+          createProject: () => shotReplacement.actions.requestAction(() => void createProjectWorkspace()),
+          selectProject: (projectId) => shotReplacement.actions.requestAction(() => void selectProject(projectId)),
+          selectSession: (sessionId) => shotReplacement.actions.requestAction(() => { if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) }),
           deleteSession: (sessionId) => void deleteEditingSessionWorkspace(sessionId),
           openProvider: provider.actions.open,
         }}
@@ -536,17 +546,12 @@ function App() {
             storeReady: storeState === 'ready',
             view: activeView,
             assetCount: assetWorkspace.page.counts.total,
-            shotCount: artifactWorkspace.storyboard?.shots.length ?? 0,
-            hasStoryboard: Boolean(artifactWorkspace.storyboard),
-            timelineLabel: getTimelineLabel(artifactWorkspace.timelineState, artifactWorkspace.timeline),
           }}
-          selectView={setActiveView}
+          selectView={(view) => shotReplacement.actions.requestAction(() => setActiveView(view))}
         />
 
-        {activeView === 'assets' && (
-          <AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} />
-        )}
-        {activeView === 'chat' && (
+        {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
+        <div className="paired-workspace">
           <AgentWorkspace
             model={{
               session: activeEditingSession,
@@ -555,6 +560,7 @@ function App() {
               tasks: agentTasks,
               input,
               isSending,
+              editBusy: shotReplacement.model.phase === 'saving',
               listenerReady: agentReconciliation.listenerReady,
               composerNotice,
               routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
@@ -565,29 +571,15 @@ function App() {
                 if (composerNotice) setComposerNotice(null)
               },
               openArtifacts: () => setActiveView('artifacts'),
-              sendMessage,
+              sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage(event)) },
               stopAgentRun,
             }}
           />
-        )}
-        {activeView === 'artifacts' && (
-          <ArtifactsWorkspace
-            model={{
-              ...artifactWorkspace.model,
-              assetCounts: assetWorkspace.page.counts,
-              assets: assetWorkspace.assets.map((asset) => ({ id: asset.id, name: asset.name })),
-              tasks: agentTasks,
-            }}
-            actions={{
-              ...artifactWorkspace.actions,
-              adjustShot: (orderIndex) => {
-                setActiveView('chat')
-                setInput(`调整第 ${orderIndex} 个镜头：`)
-              },
-              continueAdjust: () => setActiveView('chat'),
-            }}
+          <RoughCutPreview
+            model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending }}
+            actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
           />
-        )}
+        </div>
       </section>
 
       <AnalysisActivity

@@ -42,9 +42,9 @@ pub struct NarrativeStructure {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BeatCandidatePool {
-    beat_id: String,
-    beat_purpose: String,
-    candidates: Vec<StoryboardSource>,
+    pub(crate) beat_id: String,
+    pub(crate) beat_purpose: String,
+    pub(crate) candidates: Vec<StoryboardSource>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -129,9 +129,6 @@ pub(crate) fn phase1_generate_narrative(
 
 /// Phase 2: 本地短名单——排序 + 去同/去相似 + 补位到 Top-12；不调用模型选镜。
 pub(crate) fn phase2_rough_shot_selection(
-    _app: &AppHandle,
-    _access: &ModelAccess,
-    _brief: &str,
     narrative: &NarrativeStructure,
     sources: &[StoryboardSource],
     usage_counts: &HashMap<String, i32>,

@@ -504,7 +504,7 @@ export type StudioCommitPayload = {
   timelineVersionId: string
   reorder?: number[] | null
   adjustments?: Array<{ shotIndex: number; newDurationMs: number; newSourceStartMs: number }> | null
-  clipReplacements?: Array<{ shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number }> | null
+  clipReplacements?: Array<{ shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; cropFocus?: [number, number] | null }> | null
   textTracks?: TextTrack[] | null
   inserted?: Array<{ assetId: string; sourceStartMs: number; sourceEndMs: number; timelineStartMs: number; timelineEndMs: number; onScreenText: string; derivedFromShotIndex: number | null }> | null
   deletedShotIndices?: number[] | null
@@ -524,4 +524,24 @@ export type StudioCommitResult = {
 export async function commitStudioEdits(payload: StudioCommitPayload) {
   requireDesktopRuntime()
   return invoke<StudioCommitResult>('commit_studio_edits', { payload })
+}
+
+export type ShotScope = { projectId: string; editingTaskId: string; timelineVersionId: string; shotIndex: number }
+export type ShotRecommendation = { assetId: string; displayName: string; thumbnailPath: string | null; durationMs: number | null; current: boolean; usedInTimeline: boolean; unavailableReason: string | null }
+export type ShotRecommendations = { saved: boolean; beatPurpose: string; candidates: ShotRecommendation[] }
+export type PreparedShotReplacement = { timelineVersionId: string; shotIndex: number; assetId: string; sourceStartMs: number; sourceEndMs: number; cropFocus: [number, number] | null; previewPath: string }
+
+export async function listShotRecommendations(scope: ShotScope) {
+  requireDesktopRuntime()
+  return invoke<ShotRecommendations>('list_shot_recommendations', scope)
+}
+
+export async function generateShotRecommendations(scope: ShotScope) {
+  requireDesktopRuntime()
+  return invoke<ShotRecommendations>('generate_shot_recommendations', scope)
+}
+
+export async function prepareShotReplacement(scope: ShotScope, assetId: string) {
+  requireDesktopRuntime()
+  return invoke<PreparedShotReplacement>('prepare_shot_replacement', { ...scope, assetId })
 }

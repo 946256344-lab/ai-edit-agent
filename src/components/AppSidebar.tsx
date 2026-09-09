@@ -1,5 +1,5 @@
-// 应用侧栏：切换 local project、剪辑任务与顶层工作区，不拥有数据加载逻辑。
-import { useEffect, useRef, useState } from 'react'
+// 窄侧栏：项目/会话选择折叠在菜单内，保留设置入口。
+import { useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
 import type { EditingSessionView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
@@ -13,7 +13,6 @@ export type AppSidebarModel = {
   providerLabel: string
   storeState: 'browser' | 'ready' | 'unavailable'
 }
-
 export type AppSidebarActions = {
   createSession: () => void
   createProject: () => void
@@ -22,113 +21,23 @@ export type AppSidebarActions = {
   deleteSession: (sessionId: string) => void
   openProvider: () => void
 }
-
-type AppSidebarProps = {
-  model: AppSidebarModel
-  actions: AppSidebarActions
-}
-
-type SessionMenu = {
-  sessionId: string
-  x: number
-  y: number
-}
-
-export function AppSidebar({ model, actions }: AppSidebarProps) {
-  const [menu, setMenu] = useState<SessionMenu | null>(null)
+export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions: AppSidebarActions }) {
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!menu) return
-    const close = (event: MouseEvent) => {
-      if (menuRef.current?.contains(event.target as Node)) return
-      setMenu(null)
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenu(null)
-    }
-    window.addEventListener('mousedown', close)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', close)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [menu])
-
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark">A</span><span>ASSEMBLY</span><small>VIDEO AGENT</small>
-      </div>
-      <button className="new-chat" onClick={actions.createSession}>+ 新建剪辑会话</button>
-      <div className="side-label side-label-row">
-        <span>项目</span>
-        <button className="add-project" onClick={actions.createProject} aria-label="新建项目">+</button>
-      </div>
-      <nav className="project-list" aria-label="本地项目">
-        {model.projects.map((project) => (
-          <button
-            key={project.id}
-            className={`project-card ${project.id === model.activeProjectId ? 'active' : ''}`}
-            onClick={() => actions.selectProject(project.id)}
-          >
-            <span className="project-dot" />
-            <span><strong>{project.name}</strong><small>本地项目</small></span>
-          </button>
-        ))}
-        {!model.projects.length && <p className="empty-projects">新建会话即可开始本地项目。</p>}
-      </nav>
-      <div className="side-label side-label-row"><span>剪辑会话</span><span>{model.sessions.length}</span></div>
-      <nav className="conversation-list" aria-label="剪辑会话">
-        {model.sessions.map((session) => (
-          <button
-            key={session.id}
-            className={`conversation ${session.id === model.activeSessionId ? 'active' : ''}`}
-            onClick={() => actions.selectSession(session.id)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              setMenu({ sessionId: session.id, x: event.clientX, y: event.clientY })
-            }}
-          >
-            <span className={`state-dot ${session.state}`} />
-            <span><strong>{session.title}</strong><small>{session.preview}</small></span>
-            <time>{session.updated}</time>
-          </button>
-        ))}
-      </nav>
-      {menu && (
-        <div
-          ref={menuRef}
-          className="session-context-menu"
-          style={{ left: menu.x, top: menu.y }}
-          role="menu"
-        >
-          <button
-            role="menuitem"
-            onClick={() => {
-              const sessionId = menu.sessionId
-              setMenu(null)
-              actions.deleteSession(sessionId)
-            }}
-          >
-            删除会话…
-          </button>
+    <aside className="sidebar icon-rail">
+      <span className="brand-mark" title="Assembly">A</span>
+      <button className="rail-button" title="新建剪辑会话" aria-label="新建剪辑会话" onClick={actions.createSession}>＋</button>
+      <details className="project-switcher">
+        <summary className="rail-button" title="项目与会话" aria-label="项目与会话">▤</summary>
+        <div className="project-popover">
+          <div className="switcher-heading"><strong>项目与会话</strong><button className="text-button" onClick={actions.createProject}>新建项目</button></div>
+          <label>当前项目<select value={model.activeProjectId ?? ''} onChange={(event) => actions.selectProject(event.target.value)}><option value="" disabled>选择项目</option>{model.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+          <nav aria-label="剪辑会话">{model.sessions.map((session) => <div className="session-menu-row" key={session.id}><button className={session.id === model.activeSessionId ? 'selected' : ''} onClick={(event) => { actions.selectSession(session.id); event.currentTarget.closest('details')?.removeAttribute('open') }}><strong>{session.title}</strong><small>{session.preview}</small></button><button title="删除会话" aria-label={`删除${session.title}`} onClick={() => actions.deleteSession(session.id)}>×</button></div>)}</nav>
+          <button className="outline-button" onClick={actions.createSession}>＋ 新建剪辑会话</button>
         </div>
-      )}
-      <div className="sidebar-footer">
-        <button onClick={actions.openProvider}><span className="provider-dot" /> {model.providerLabel}</button>
-        <button onClick={() => setProjectSettingsOpen(true)}><span className="gear">o</span> 项目设置</button>
-        <span className={`store-state ${model.storeState}`}>
-          {model.storeState === 'ready' ? '本地 SQLite 已就绪' : model.storeState === 'browser' ? '浏览器原型模式' : '本地存储不可用'}
-        </span>
-      </div>
-      <ProjectSettingsModal
-        open={projectSettingsOpen}
-        projectId={model.activeProjectId}
-        projectName={model.activeProjectName}
-        onClose={() => setProjectSettingsOpen(false)}
-      />
+      </details>
+      <div className="rail-bottom"><button className="rail-button" title={`模型设置 · ${model.providerLabel}`} aria-label="模型设置" onClick={actions.openProvider}>✧</button><button className="rail-button" title="项目设置" aria-label="项目设置" onClick={() => setProjectSettingsOpen(true)}>⚙</button><span className={`connection-dot ${model.storeState}`} title={model.storeState === 'ready' ? '本地已连接' : '本地连接不可用'} /></div>
+      <ProjectSettingsModal open={projectSettingsOpen} projectId={model.activeProjectId} projectName={model.activeProjectName} onClose={() => setProjectSettingsOpen(false)} />
     </aside>
   )
 }

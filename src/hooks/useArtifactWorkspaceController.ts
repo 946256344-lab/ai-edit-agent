@@ -123,6 +123,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [operationLogs, setOperationLogs] = useState<StoredOperationLog[]>([])
   const [timelineVersions, setTimelineVersions] = useState<TimelineVersion[]>([])
   const activeTimelineRef = useRef<string | null>(null)
+  const snapshotSessionRef = useRef<string | null>(null)
 
   useEffect(() => {
     activeTimelineRef.current = timeline?.id ?? null
@@ -151,6 +152,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   }
 
   function reset() {
+    snapshotSessionRef.current = null
+    activeTimelineRef.current = null
     setStoryboard(null)
     setStoryboardBrief('')
     setStoryboardError(null)
@@ -168,7 +171,6 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       setStoryboard(result.storyboard)
       setStoryboardBrief(result.storyboard.brief)
       setTimeline(null)
-      applyPreview(null)
       setTimelineState('not-created')
     }
     if (result.timeline) {
@@ -219,7 +221,9 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     setStoryboard(snapshot.storyboard)
     setStoryboardBrief(snapshot.storyboard?.brief ?? '')
     setTimeline(snapshot.timeline)
-    applyPreview(snapshot.preview)
+    activeTimelineRef.current = snapshot.timeline?.id ?? null
+    if (snapshot.preview || snapshotSessionRef.current !== options.activeSessionRef.current) applyPreview(snapshot.preview)
+    snapshotSessionRef.current = options.activeSessionRef.current
     setTimelineState(snapshot.timelineState)
     setOperationLogs(snapshot.operationLogs)
     setTimelineVersions(snapshot.timelineVersions)
@@ -380,7 +384,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     setTimelineState('preview-generating')
     try {
       const generatedPreview = await renderPreview(timeline.id)
-      if (options.activeProjectRef.current !== projectId) return
+      if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== options.sessionId || activeTimelineRef.current !== timeline.id) return
       applyPreview(generatedPreview)
       setTimelineState('preview-ready')
       if (options.session?.conversationId) {
@@ -390,13 +394,19 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           '本地预览已经生成，你可以先检查节奏、镜头和字幕，再决定是否交付到剪映。',
         )
       }
+    } catch {
+      if (activeTimelineRef.current === timeline.id && options.activeSessionRef.current === options.sessionId) {
+        setTimelineState('draft')
+        setJianyingNotice('预览未能生成，已保存的粗剪仍保留。请检查素材是否可用后再生成预览。')
+      }
     } finally {
       setIsRenderingPreview(false)
     }
   }
 
-  async function deliverJianyingDraft() {
-    if (!options.projectId || !timeline || isCreatingJianyingDraft) {
+  async function deliverJianyingDraft(override?: TimelineVersion) {
+    const deliveryTimeline = override ?? timeline
+    if (!options.projectId || !deliveryTimeline || isCreatingJianyingDraft) {
       if (!timeline) {
         setJianyingNoticeTone('error')
         setJianyingNotice('还没有可交付的剪辑结果。请先在 Agent 里生成预览，或在下方详情里创建时间线。')
@@ -407,9 +417,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     setIsCreatingJianyingDraft(true)
     setJianyingNotice(null)
     try {
-      const draft = await createJianyingDraft(timeline.id)
-      if (options.activeProjectRef.current !== projectId) return
-      activeTimelineRef.current = timeline.id
+      const draft = await createJianyingDraft(deliveryTimeline.id)
+      if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== options.sessionId || activeTimelineRef.current !== deliveryTimeline.id) return
       const draftName = draftNameFromResult(draft.draftDirectory)
       const pending = draft.registrationStatus === 'pending'
       setTimelineState(pending ? 'jianying-pending' : 'jianying')
@@ -443,6 +452,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       applyPreview(nextPreview)
       setTimelineState('preview-ready')
     } else {
+      setJianyingNotice(null)
       setTimelineState('draft')
     }
     setTimelineVersions((prev) => [nextTimeline, ...prev.filter((v) => v.id !== nextTimeline.id)])
@@ -487,7 +497,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       generateStoryboard: () => void createStoryboard(),
       createTimeline: () => void createTimeline(),
       renderPreview: () => void createPreview(),
-      createJianyingDraft: () => void deliverJianyingDraft(),
+      createJianyingDraft: (override?: TimelineVersion) => void deliverJianyingDraft(override),
     },
   }
 }

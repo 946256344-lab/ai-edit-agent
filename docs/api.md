@@ -1,5 +1,21 @@
 # API 与工具契约
 
+## 2026-09-09：粗剪推荐与手动换镜
+
+新增命令（前端统一经 `src/lib/local-store.ts`）：
+
+| 命令 | 参数 | 返回与副作用 |
+| --- | --- | --- |
+| `list_shot_recommendations` | `projectId, editingTaskId, timelineVersionId, shotIndex` | 只读已保存候选，返回 `saved, beatPurpose, candidates`。候选含素材 ID、名称、缩略图、时长、当前/已使用标记及不可用原因；最多 12 个，不补假数据。 |
+| `generate_shot_recommendations` | 同上 | 老版本用户主动生成；复用已分析证据的本地排序并保存候选，不改粗剪、不重新识别素材。 |
+| `prepare_shot_replacement` | 同上及 `assetId` | 为一个候选复用 Phase 4 精修并渲染静音画面，返回原版本 ID、镜头索引、素材 ID、源起止、`cropFocus`、`previewPath`；不写时间线。依赖已配置模型，失败直接返回。 |
+
+Schema 16 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-12，删除原 storyboard 时级联删除。候选池按 beat 保存，当前镜头经 `derivedFromShotIndex` 关联原始分镜。
+
+「保存修改」复用 `commit_studio_edits`，`clipReplacements[]` 新增可选 `cropFocus`；只替换源镜头及构图，槽位时长、其他镜头与音文轨道不变。时间线与操作记录原子提交。随后 `render_preview` 更新整片预览，失败仍保留已保存版本和旧预览；`create_jianying_draft` 使用最新已保存时间线。手动撤销/重做创建新版本，切换会话或 Agent 产生其他版本后清空手动历史。
+
+交互与验证记录见 `docs/changes/2026-09-09-light-workspace-shot-replacement.md`。
+
 ## 2026-09-09：发行就绪检查
 
 新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、Python/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`。

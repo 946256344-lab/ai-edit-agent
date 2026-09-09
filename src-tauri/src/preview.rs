@@ -25,7 +25,7 @@ fn preview_directory(app: &AppHandle, timeline_version_id: &str) -> Result<PathB
     Ok(directory)
 }
 
-fn render_timeline_clip(
+pub(crate) fn render_timeline_clip(
     source: &Path,
     kind: &str,
     clip: &TimelineClip,

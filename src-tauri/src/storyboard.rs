@@ -9,7 +9,7 @@ pub(crate) mod repair;
 mod scoring;
 pub(crate) mod semantic;
 mod step_retry;
-mod timing;
+pub(crate) mod timing;
 mod validation;
 
 use crate::storyboard::repair::{RepairPacket, StoryboardIssue};
@@ -2305,9 +2305,6 @@ fn generate_storyboard_internal(
             }
         });
     let mut rough = phases::phase2_rough_shot_selection(
-        &app,
-        &access,
-        brief,
         &narrative,
         &sources,
         &usage_counts,
@@ -2640,10 +2637,15 @@ fn generate_storyboard_internal(
         shots: content.shots,
         created_at: now_millis(),
     };
-    connection.execute(
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
+    transaction.execute(
         "INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
         params![version.id, version.project_id, version.editing_task_id, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
+    crate::shot_replacement::store_pools(&transaction, &version.id, &rough.candidate_pools)?;
+    transaction.commit().map_err(|e| e.to_string())?;
     if let Some((_, prepared)) = audio_first {
         let _ =
             finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);

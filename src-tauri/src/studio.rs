@@ -75,6 +75,8 @@ pub struct StudioClipReplacement {
     pub source_start_ms: i64,
     #[serde(rename = "sourceEndMs")]
     pub source_end_ms: i64,
+    #[serde(default, rename = "cropFocus")]
+    pub crop_focus: Option<[f64; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -99,7 +101,7 @@ pub struct StudioCommitPayload {
     pub reorder: Option<Vec<i64>>,
     #[serde(default)]
     pub adjustments: Option<Vec<StudioDurationAdjustment>>,
-    #[serde(default)]
+    #[serde(default, rename = "clipReplacements")]
     pub clip_replacements: Option<Vec<StudioClipReplacement>>,
     #[serde(default)]
     pub text_tracks: Option<Vec<TextTrack>>,
@@ -162,7 +164,14 @@ pub fn commit_studio_edits(
     payload: StudioCommitPayload,
 ) -> Result<StudioCommitResult, String> {
     let connection = open_connection(&app)?;
-    let base = load_timeline_version(&connection, &payload.timeline_version_id)?;
+    commit_studio_edits_inner(&connection, payload)
+}
+
+fn commit_studio_edits_inner(
+    connection: &Connection,
+    payload: StudioCommitPayload,
+) -> Result<StudioCommitResult, String> {
+    let base = load_timeline_version(connection, &payload.timeline_version_id)?;
     if base.project_id != payload.project_id {
         return Err("Timeline 不属于该项目".to_owned());
     }
@@ -264,7 +273,9 @@ pub fn commit_studio_edits(
                 } else {
                     return Err(format!("镜头 {} 不支持的素材类型", r.shot_index));
                 }
-                clips[idx].crop_focus = None;
+                clips[idx].crop_focus = r.crop_focus;
+                clips[idx].clip_kind = "source".to_owned();
+                clips[idx].fit_reason = None;
                 clips[idx].asset_id = r.asset_id.clone();
                 clips[idx].source_start_ms = r.source_start_ms;
                 clips[idx].source_end_ms = r.source_end_ms;
@@ -663,17 +674,83 @@ pub fn commit_studio_edits(
         )
         .ok();
 
-    connection.execute(
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
+    transaction.execute(
         "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
         params![new_id, payload.project_id, new_version.storyboard_version_id, version_number, content_json, created_at],
     ).map_err(|e| e.to_string())?;
-    connection.execute(
+    transaction.execute(
         "INSERT INTO operation_logs (id, project_id, editing_task_id, conversation_id, agent_task_id, actor, operation_type, entity_type, entity_id, before_json, after_json, created_at) VALUES (?1, ?2, ?3, ?4, NULL, 'user', 'studio_commit', 'timeline_version', ?5, ?6, ?7, ?8)",
         params![Uuid::new_v4().to_string(), payload.project_id, payload.editing_task_id, conversation_id, new_id, before_json, after_json, created_at],
     ).map_err(|e| e.to_string())?;
+    transaction.commit().map_err(|e| e.to_string())?;
 
     Ok(StudioCommitResult {
         timeline: new_version,
         applied,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn replacement_keeps_tracks_and_slot_and_rolls_back_on_write_failure() {
+        let connection = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&connection).unwrap();
+        connection.execute_batch("INSERT INTO projects (id,name,created_at,updated_at) VALUES ('p','test',1,1);
+          INSERT INTO editing_tasks (id,project_id,title,created_at,updated_at) VALUES ('task','p','test',1,1);
+          INSERT INTO storyboard_versions (id,project_id,editing_task_id,version_number,status,content_json,created_at) VALUES ('s','p','task',1,'ready','{}',1);
+          INSERT INTO assets (id,project_id,kind,display_name,source_reference,analysis_status,metadata_json,created_at,updated_at) VALUES ('b','p','video','candidate','test','ready','{\"durationMs\":9000}',1,1);").unwrap();
+        let source = json!({
+          "clips": [
+            {"shotIndex":1,"assetId":"a","sourceStartMs":0,"sourceEndMs":3000,"timelineStartMs":0,"timelineEndMs":3000,"onScreenText":"保留字幕","cropFocus":[0.3,0.4]},
+            {"shotIndex":2,"assetId":"a","sourceStartMs":3000,"sourceEndMs":6000,"timelineStartMs":3000,"timelineEndMs":6000,"onScreenText":"第二镜"}],
+          "textTracks":[{"id":"text","role":"subtitle","layer":1,"enabled":true,"cues":[{"id":"cue","startMs":0,"endMs":3000,"text":"保留文案"}]}],
+          "musicTracks":[{"id":"music","enabled":true,"cues":[{"id":"mc","assetId":"music-asset","sourceStartMs":0,"sourceEndMs":6000,"timelineStartMs":0,"timelineEndMs":6000,"volume":0.2}]}],
+          "voiceoverTracks":[{"id":"voice","enabled":true,"cues":[{"id":"vc","assetId":"voice-asset","generationId":"g","sourceStartMs":0,"sourceEndMs":6000,"timelineStartMs":0,"timelineEndMs":6000,"volume":1.0,"fadeInMs":0,"fadeOutMs":0,"provider":"test","voiceId":"v","voiceName":"test"}]}]
+        });
+        connection.execute("INSERT INTO timeline_versions (id,project_id,storyboard_version_id,version_number,status,content_json,created_at) VALUES ('t','p','s',1,'draft',?1,1)", [source.to_string()]).unwrap();
+        let before = load_timeline_version(&connection, "t").unwrap();
+        let payload = || {
+            serde_json::from_value(json!({"projectId":"p","editingTaskId":"task","timelineVersionId":"t","clipReplacements":[{"shotIndex":1,"assetId":"b","sourceStartMs":2000,"sourceEndMs":5000,"cropFocus":[0.7,0.5]}]})).unwrap()
+        };
+        let result = commit_studio_edits_inner(&connection, payload()).unwrap();
+        let after = load_timeline_version(&connection, &result.timeline.id).unwrap();
+        assert_ne!(after.id, before.id);
+        assert_eq!(after.clips[0].asset_id, "b");
+        assert_eq!(after.clips[0].crop_focus, Some([0.7, 0.5]));
+        assert_eq!(after.clips[0].timeline_end_ms, 3000);
+        assert_eq!(
+            after.clips[0].source_end_ms - after.clips[0].source_start_ms,
+            3000
+        );
+        let old = serde_json::to_value(before.to_content()).unwrap();
+        let new = serde_json::to_value(after.to_content()).unwrap();
+        assert_eq!(old["clips"][1], new["clips"][1]);
+        for field in [
+            "textTracks",
+            "musicTracks",
+            "voiceoverTracks",
+            "overlayClips",
+        ] {
+            assert_eq!(old[field], new[field]);
+        }
+        assert_eq!(
+            load_timeline_version(&connection, "t").unwrap().clips[0].asset_id,
+            "a"
+        );
+        connection.execute_batch("CREATE TRIGGER fail_operation BEFORE INSERT ON operation_logs BEGIN SELECT RAISE(ABORT,'test write failure'); END;").unwrap();
+        assert!(commit_studio_edits_inner(&connection, payload()).is_err());
+        let versions: i64 = connection
+            .query_row("SELECT COUNT(*) FROM timeline_versions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(versions, 2);
+    }
 }

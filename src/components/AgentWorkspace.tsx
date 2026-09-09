@@ -11,6 +11,7 @@ export type AgentWorkspaceModel = {
   tasks: StoredAgentTask[]
   input: string
   isSending: boolean
+  editBusy?: boolean
   listenerReady: boolean
   composerNotice: string | null
   routeStatus: {
@@ -35,14 +36,15 @@ type AgentWorkspaceProps = {
 export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
   return (
     <section className="conversation-workspace conversation-workspace--chat">
+      <header className="chat-heading"><strong>剪辑助手</strong><span>{model.isSending ? '正在处理…' : '用对话完成粗剪'}</span></header>
       <div className="message-stream">
-        <div className="session-intro">
-          <span>当前项目</span>
+        {!model.messages.length && <div className="session-intro">
+          <span>ASSEMBLY</span>
           <strong>{model.storyboard?.title ?? model.session?.title ?? '从一句话开始剪辑'}</strong>
           <p>
             {model.storyboard?.summary
               ?? model.session?.brief
-              ?? '告诉我你想剪什么，我会分析素材并生成第一版视频。'}
+              ?? '描述你的视频，我来完成粗剪。满意后交给剪映继续精修。'}
           </p>
           {model.routeStatus.text && (
             <p
@@ -52,7 +54,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               {model.routeStatus.text}
             </p>
           )}
-        </div>
+        </div>}
 
         {!model.messages.length && (
           <div className="empty-chat">
@@ -74,7 +76,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         ))}
 
         {model.tasks[0] && (
-          <AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} />
+          <details className="agent-details" open={model.isSending}><summary>{model.isSending ? '查看处理进度' : '本轮处理记录'}</summary><AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} /></details>
         )}
       </div>
 
@@ -89,7 +91,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               return
             }
             event.preventDefault()
-            if (model.isSending || !model.input.trim()) {
+            if (model.isSending || model.editBusy || !model.input.trim()) {
               return
             }
             event.currentTarget.form?.requestSubmit()
@@ -108,8 +110,8 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               {model.listenerReady ? '停止' : '停止连接'}
             </button>
           ) : (
-            <button className="send-button" type="submit" disabled={!model.input.trim()}>
-              发送
+            <button className="send-button" type="submit" disabled={!model.input.trim() || model.editBusy}>
+              {model.editBusy ? '保存中…' : '发送'}
             </button>
           )}
         </div>

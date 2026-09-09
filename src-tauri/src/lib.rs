@@ -42,6 +42,8 @@ mod projects;
 mod provider;
 /// 启动/发行就绪检查：媒体 runtime、目录、凭据与剪映前置。
 mod release_readiness;
+/// 粗剪镜头的持久化推荐池与单候选试选预览。
+mod shot_replacement;
 /// 基于证据的 storyboard 提案、校验、版本与查询。
 mod storyboard;
 /// Studio 工作台：前端 mash diff 落库为新的 timeline version。
@@ -143,6 +145,9 @@ pub fn run() {
             agent::cancel_agent_edit,
             confirmation::confirm_storyboard_and_preview,
             studio::commit_studio_edits,
+            shot_replacement::list_shot_recommendations,
+            shot_replacement::generate_shot_recommendations,
+            shot_replacement::prepare_shot_replacement,
             voice_provider::synthesize_storyboard_voiceover,
         ])
         .run(tauri::generate_context!())

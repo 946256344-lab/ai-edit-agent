@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] 已实现，待审查/合并（2026-09-09，codex/light-workspace-shot-replacement）：B 浅色双栏、Top-12 持久化、手动替换及撤销/重做；桌面烟雾与隔离交互通过。基线已有 3 项校验失败、独立审查额度不足，见 docs/changes/2026-09-09-light-workspace-shot-replacement.md。
 - [x] 完成（2026-09-09，fix/jianying-deliver-feedback）：成果页剪映交付可见反馈与可读草稿名。见 docs/changes/2026-09-09-jianying-deliver-feedback.md。
 - [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。
 - [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。

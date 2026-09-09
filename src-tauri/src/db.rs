@@ -11,7 +11,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 15;
+pub(crate) const SCHEMA_VERSION: i64 = 16;
 
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
@@ -80,6 +80,10 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
           storyboard_version_id TEXT REFERENCES storyboard_versions(id) ON DELETE RESTRICT,
           version_number INTEGER NOT NULL, status TEXT NOT NULL, content_json TEXT NOT NULL, created_at INTEGER NOT NULL,
           UNIQUE(project_id, version_number)
+        );
+        CREATE TABLE IF NOT EXISTS storyboard_recommendations (
+          storyboard_version_id TEXT PRIMARY KEY NOT NULL REFERENCES storyboard_versions(id) ON DELETE CASCADE,
+          pools_json TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS agent_tasks (
           id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,

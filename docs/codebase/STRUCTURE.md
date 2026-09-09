@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-09 粗剪工作台：`src/components/RoughCutPreview.tsx` 展示并排预览与推荐候选；`src/hooks/useShotReplacementController.ts` 管理试选、保存和手动撤销/重做；`src/light-workspace.css` 为 B 浅色布局。后端 `src-tauri/src/shot_replacement.rs` 负责候选持久化、读取和单候选精修；保存复用 `studio.rs`，预览与剪映继续使用同一时间线。契约见 `docs/api.md`。
+
 ## 1）顶层地图
 
 | 路径 | 职责 | 证据 |
