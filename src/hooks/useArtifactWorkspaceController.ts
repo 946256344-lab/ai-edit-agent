@@ -57,13 +57,13 @@ export function getDeliveryStatus(
   preview: PreviewResult | null,
   timelineState: TimelineState,
 ) {
-  if (!storyboard) return '等待生成故事板'
-  if (!timeline) return '故事板已就绪 · 可创建内部时间线'
-  if (timelineState === 'preview-generating') return '预览生成中'
+  if (!storyboard) return '等待开始剪辑'
+  if (!timeline) return '第一版镜头已选好'
+  if (timelineState === 'preview-generating') return '正在生成预览'
   if (timelineState === 'jianying-pending') return '预览已完成 · 等待剪映注册'
-  if (timelineState === 'jianying') return '草稿已交付到剪映'
-  if (!preview) return '内部时间线已就绪 · 可生成预览'
-  return '预览已就绪 · 可交付草稿'
+  if (timelineState === 'jianying') return '已打开剪映草稿'
+  if (!preview) return '剪辑已完成 · 等待预览'
+  return '预览已就绪'
 }
 
 export function getTimelineLabel(timelineState: TimelineState, timeline: TimelineVersion | null) {
@@ -236,7 +236,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           sessionId,
-          `已根据当前剪辑会话创建故事板 v${generated.versionNumber}。系统会继续尝试生成时间线和预览。`,
+          `已根据当前需求生成镜头方案 v${generated.versionNumber}。系统会继续尝试生成剪辑和预览。`,
         )
       }
       options.setSessionBrief(sessionId, brief)
@@ -249,7 +249,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           sessionId,
-          `内部时间线 v${nextTimeline.versionNumber} 已生成，继续生成预览。`,
+          `剪辑 v${nextTimeline.versionNumber} 已生成，继续生成预览。`,
         )
       }
       // 自动合成配音+对齐字幕：失败（例如未配置 ElevenLabs）时跳过，
@@ -309,7 +309,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       }
     } catch {
       if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
-        setStoryboardError('Agent 未能生成可用 storyboard；没有修改现有版本。请确认素材分析已完成后重试。')
+        setStoryboardError('没能生成可用镜头方案；没有修改现有版本。请确认素材分析已完成后重试。')
       }
     } finally {
       setIsGeneratingStoryboard(false)
@@ -331,7 +331,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           options.session.id,
-          '内部时间线已生成，你现在可以直接生成预览，或继续要求我调整镜头顺序。',
+          '剪辑已生成，你现在可以直接生成预览，或继续要求我调整镜头顺序。',
         )
       }
       await refreshAudit(

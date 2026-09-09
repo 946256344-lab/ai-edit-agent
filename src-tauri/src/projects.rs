@@ -172,6 +172,29 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     drop(connection);
 
     let step_start = std::time::Instant::now();
+    let known_projects = {
+        let connection = open_connection(&app)?;
+        let mut statement = connection
+            .prepare("SELECT id FROM projects")
+            .map_err(|error| error.to_string())?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        ids
+    };
+    if let Ok(freed) = crate::preview_cache::remove_orphan_project_caches(&app, &known_projects) {
+        if freed > 0 {
+            log::info!("[PERF] initialize_local_store: removed orphan preview cache bytes={freed}");
+        }
+    }
+    log::info!(
+        "[PERF] initialize_local_store: orphan preview cache sweep took {:?}",
+        step_start.elapsed()
+    );
+
+    let step_start = std::time::Instant::now();
     resume_incomplete_analysis(&app)?;
     log::info!(
         "[PERF] initialize_local_store: resume_incomplete_analysis took {:?}",

@@ -614,6 +614,12 @@ pub(crate) fn render_preview_inner(
         )
         .map_err(|error| error.to_string())?;
     log::info!("Completed local preview render.");
+    if let Err(error) = crate::preview_cache::enforce_project_cache_limit(
+        &cache,
+        crate::preview_cache::PROJECT_CACHE_LIMIT_BYTES,
+    ) {
+        log::warn!("Preview cache eviction skipped: {error}");
+    }
     Ok(PreviewResult {
         timeline_version_id: timeline.id,
         preview_path: preview_path.to_string_lossy().into_owned(),

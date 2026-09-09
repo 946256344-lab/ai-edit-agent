@@ -46,6 +46,10 @@ fn bundled_model_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Err("semantic_model_resource_unavailable".to_owned())
 }
 
+pub(crate) fn bundled_model_present(app: &AppHandle) -> Result<bool, String> {
+    Ok(bundled_model_directory(app).is_ok())
+}
+
 fn read_model_file(directory: &Path, relative_path: &str) -> Result<Vec<u8>, String> {
     fs::read(directory.join(relative_path))
         .map_err(|_| "semantic_model_resource_unavailable".to_owned())

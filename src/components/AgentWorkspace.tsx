@@ -37,9 +37,13 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
     <section className="conversation-workspace conversation-workspace--chat">
       <div className="message-stream">
         <div className="session-intro">
-          <span>当前剪辑会话</span>
+          <span>当前项目</span>
           <strong>{model.storyboard?.title ?? model.session?.title ?? '从一句话开始剪辑'}</strong>
-          <p>{model.storyboard?.summary ?? model.session?.brief ?? '描述你想做的视频。Agent 会记录需求、分析本地素材，并将 storyboard、内部时间线、Jianying draft 和 preview 作为可检查的工具结果。'}</p>
+          <p>
+            {model.storyboard?.summary
+              ?? model.session?.brief
+              ?? '告诉我你想剪什么，我会分析素材并生成第一版视频。'}
+          </p>
           {model.routeStatus.text && (
             <p
               className={`route-status route-status-${model.routeStatus.tone}`}
@@ -62,7 +66,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
             <div className="message-avatar">{message.role === 'agent' ? 'A' : 'Y'}</div>
             <div className="message-content">
               <div className="message-meta">
-                {message.role === 'agent' ? 'Assembly Agent' : '你'} <time>{message.time}</time>
+                {message.role === 'agent' ? 'Assembly' : '你'} <time>{message.time}</time>
               </div>
               <p>{message.content}</p>
             </div>
@@ -78,7 +82,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         <textarea
           value={model.input}
           onChange={(event) => actions.setInput(event.target.value)}
-          placeholder="描述目标、提问或下达剪辑指令...（Enter 发送，Shift+Enter 换行）"
+          placeholder="想剪成什么？直接说需求或文案…（Enter 发送，Shift+Enter 换行）"
           rows={2}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
@@ -93,7 +97,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         />
         <div>
           <span className={model.composerNotice ? 'composer-notice' : undefined}>
-            {model.composerNotice ?? (model.session ? `当前会话：${model.session.title}` : '首次发送将创建 local project 和剪辑会话')}
+            {model.composerNotice ?? (model.session ? '可以说得更具体一点，例如时长、节奏或重点画面' : '发送后会自动创建项目并开始')}
           </span>
           {model.isSending ? (
             <button

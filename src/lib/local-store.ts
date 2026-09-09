@@ -439,6 +439,41 @@ export async function listAgentDiagnostics(projectId: string, editingTaskId: str
 export async function listOperationLogs(projectId: string, editingTaskId: string, agentTaskId?: string) { requireDesktopRuntime(); return invoke<StoredOperationLog[]>('list_operation_logs', { projectId, editingTaskId, agentTaskId }) }
 
 export async function renderPreview(timelineVersionId: string) { requireDesktopRuntime(); return invoke<PreviewResult>('render_preview', { timelineVersionId }) }
+
+export type PreviewCacheStatus = {
+  projectId: string
+  bytesUsed: number
+  limitBytes: number
+  fileCount: number
+}
+
+export async function getPreviewCacheStatus(projectId: string) {
+  requireDesktopRuntime()
+  return invoke<PreviewCacheStatus>('get_preview_cache_status', { projectId })
+}
+
+export async function clearPreviewCache(projectId: string, confirmed: boolean) {
+  requireDesktopRuntime()
+  return invoke<PreviewCacheStatus>('clear_preview_cache', { projectId, confirmed })
+}
+
+export type ReleaseReadinessCheck = {
+  id: string
+  title: string
+  status: 'ok' | 'warn' | 'fail' | string
+  message: string
+}
+
+export type ReleaseReadinessReport = {
+  overall: 'ready' | 'degraded' | 'blocked' | string
+  checks: ReleaseReadinessCheck[]
+}
+
+export async function getReleaseReadiness() {
+  requireDesktopRuntime()
+  return invoke<ReleaseReadinessReport>('get_release_readiness')
+}
+
 export async function createJianyingDraft(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingDraftResult>('create_jianying_draft', { timelineVersionId }) }
 
 export async function getJianyingRegistrationStatus(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingRegistrationStatus | null>('get_jianying_registration_status', { timelineVersionId }) }
