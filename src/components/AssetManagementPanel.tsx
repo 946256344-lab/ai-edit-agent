@@ -82,6 +82,9 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
             <article><b>{model.page.counts.ready}</b><span>已就绪</span></article>
             <article><b>{analyzingCount}</b><span>分析中</span></article>
             <article><b>{model.page.counts.failed}</b><span>无法读取</span></article>
+            {(model.page.counts.segmentPending ?? 0) > 0 && (
+              <article><b>{model.page.counts.segmentPending}</b><span>待分段</span></article>
+            )}
           </section>
           <AssetDirectoryTree
             projectId={model.projectId}

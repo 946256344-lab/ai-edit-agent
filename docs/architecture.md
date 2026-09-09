@@ -132,7 +132,7 @@ Windows 桌面应用（Tauri + React）
 导入本地文件或文件夹
   -> SQLite 保存源文件引用
   -> 后台 FFprobe 提取时长、尺寸、帧率和音频轨信息
-  -> FFmpeg 生成缩略图、关键帧和启发式场景片段
+  -> FFmpeg 低分辨率场景检测生成真实片段（预算 60s，失败则均匀切分），每片段抽 1–3 帧
   -> Tesseract 提取图片/关键帧英文 OCR
   -> 技术分析完成后，后台将最多六条素材的代表帧批量发送给实验性 Provider
   -> 保存按素材 ID 与源时间校验的视觉建议；每批请求 30 秒超时，失败原因随素材证据返回
@@ -294,7 +294,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows Credential Manager；`search_music` 仅返回 API 明示可下载且为 CC0/CC-BY 的曲目，CC-BY 的曲名、作者和许可 URL 会随 music cue 保存。`download_music` 才按需将单曲写入当前 local project 并交给既有本地分析队列；`use_online_music` 在一个具名、受限且可审计的调用内下载一首、等待分析完成并新建含循环背景音乐的时间线版本。每个下载副本使用唯一文件名，绝不覆盖既有本地副本。不会抓取网页、批量缓存曲库或把未验证的远程 URL 写入时间线/Jianying draft。
 
-场景检测当前覆盖前述历史滤镜描述：固定时间采样（第 1 秒、1/3、2/3、最后 1 秒）替代旧的前 30 秒场景检测，精确提取 4 帧关键帧并拼接为 2×2 网格（640×360 JPEG）供多模态选镜使用。关键帧提取路径记录到 `TechnicalMetadata.keyframe_grid_path`，素材导入时自动生成，网格生成失败只记录警告不阻塞导入。
+场景检测：FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 解析切点；单素材硬预算 60s，长片可先 keyframe 粗扫；超时或无切点时均匀切分（段长 clamp(duration/8, 3s, 8s)），最短 1.5s、最多 24 段。`TechnicalMetadata.analysisVersion=2`；旧就绪视频由 `reanalyze_asset_segments` 在技术队列空闲时后台补跑，保持 `ready` 且不触发视觉请求。关键帧网格改为片段中点帧拼图。
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 

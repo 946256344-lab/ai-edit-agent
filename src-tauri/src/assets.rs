@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod health;
 pub mod library;
+pub mod segments;
 pub mod visual;
 
 // ---- 外部模块需要的 pub(crate) re-exports ----
@@ -696,10 +697,14 @@ pub(crate) fn search_asset_segments_for_agent(
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
         let segments = if kind == "image" {
             vec![SceneSegment {
+                id: "s001".to_owned(),
                 start_ms: 0,
                 end_ms: 0,
                 scene_duration_ms: None,
                 visual_quality_score: None,
+                frames: Vec::new(),
+                visual_evidence: None,
+                motion_score: None,
             }]
         } else {
             metadata.scene_segments.clone()

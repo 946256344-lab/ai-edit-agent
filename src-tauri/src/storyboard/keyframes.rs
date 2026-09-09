@@ -67,16 +67,24 @@ mod tests {
     fn extract_keyframe_grid_returns_error_placeholder() {
         let segments = vec![
             SceneSegment {
+                id: "s001".to_owned(),
                 start_ms: 0,
                 end_ms: 5_000,
                 scene_duration_ms: Some(5_000),
                 visual_quality_score: None,
+                frames: Vec::new(),
+                visual_evidence: None,
+                motion_score: None,
             },
             SceneSegment {
+                id: "s002".to_owned(),
                 start_ms: 5_000,
                 end_ms: 10_000,
                 scene_duration_ms: Some(5_000),
                 visual_quality_score: None,
+                frames: Vec::new(),
+                visual_evidence: None,
+                motion_score: None,
             },
         ];
 

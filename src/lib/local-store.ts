@@ -112,7 +112,7 @@ export type AssetPage = {
   limit: number
   directories: AssetDirectory[]
   unfiledCount: number
-  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number }
+  counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number; segmentPending?: number }
 }
 
 export type AssetTaskCenter = {
@@ -142,10 +142,28 @@ export type AssetEvidence = {
   analysisStatus: string
   durationMs: number | null
   visualAnalysisStatus: 'queued' | 'running' | 'ready' | 'failed' | 'skipped'
+  analysisVersion?: number
   keyframes: Array<{ timeMs: number; imagePath: string }>
   ocrEvidence: Array<{ timeMs: number | null; text: string }>
-  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[] }>
+  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null }>
   visualAnalysisNote: string | null
+  segments?: Array<{
+    id: string
+    startMs: number
+    endMs: number
+    frames: Array<{ timeMs: number; imagePath: string }>
+    visualEvidence?: {
+      timeMs: number | null
+      subjects: string[]
+      scene: string | null
+      actions: string[]
+      products: string[]
+      qualityNotes: string[]
+      shotType?: string | null
+      cameraMotion?: string | null
+      segmentId?: string | null
+    } | null
+  }>
 }
 
 export type StoryboardVersion = {
@@ -160,7 +178,7 @@ export type StoryboardVersion = {
   scriptMode: 'full_script' | 'key_message'
   beats: Array<{ id: string; purpose: string; requiredVisual: string; visualKeywords?: string[]; narration?: string; onScreenText?: string }>
   uncoveredBeatIds: string[]
-  shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual' }>
+  shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual'; segmentId?: string | null }>
   createdAt: number
 }
 

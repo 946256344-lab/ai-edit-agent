@@ -145,6 +145,8 @@ pub struct AssetStatusCounts {
     pub queued: usize,
     pub failed: usize,
     pub visual_pending: usize,
+    #[serde(default)]
+    pub segment_pending: usize,
 }
 
 #[derive(Serialize)]
@@ -257,10 +259,23 @@ pub struct AssetEvidence {
     pub analysis_status: String,
     pub duration_ms: Option<i64>,
     pub visual_analysis_status: String,
+    pub analysis_version: u32,
     pub keyframes: Vec<KeyframeMetadata>,
     pub ocr_evidence: Vec<OcrEvidence>,
     pub visual_evidence: Vec<VisualEvidence>,
     pub visual_analysis_note: Option<String>,
+    #[serde(default)]
+    pub segments: Vec<AssetEvidenceSegment>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEvidenceSegment {
+    pub id: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub frames: Vec<KeyframeMetadata>,
+    pub visual_evidence: Option<VisualEvidence>,
 }
 
 #[derive(Clone, Serialize)]
@@ -826,6 +841,9 @@ fn default_storyboard_script_mode() -> String {
     "full_script".to_owned()
 }
 
+/// 片段级候选：一条 StoryboardSource 所指向的真实场景片段（或相邻双段）。
+/// 帧路径只在本地拼图时使用，不进模型文本。
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardSource {
@@ -875,6 +893,12 @@ pub struct TechnicalMetadata {
     pub(crate) visual_analysis_note: Option<String>,
     #[serde(default = "default_visual_analysis_status")]
     pub(crate) visual_analysis_status: String,
+    /// 技术分析格式版本。0=旧固定 4 帧；2=真实场景分段。
+    #[serde(default)]
+    pub(crate) analysis_version: u32,
+    /// 视觉证据格式版本。0/1=素材级单帧；2=片段级证据齐全。
+    #[serde(default)]
+    pub(crate) visual_analysis_version: u32,
     /// 由本地关键帧清晰度计算得到的素材整体质量分，范围为 0.0-1.0。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) visual_quality_score: Option<f64>,
@@ -909,6 +933,9 @@ pub struct KeyframeMetadata {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneSegment {
+    /// 片段稳定 id，如 s001；旧记录为空串，调用方按整条素材处理。
+    #[serde(default)]
+    pub(crate) id: String,
     pub(crate) start_ms: i64,
     pub(crate) end_ms: i64,
     /// 场景实际持续时长（毫秒），用于选镜时的时长匹配评分。
@@ -919,6 +946,12 @@ pub struct SceneSegment {
     /// 旧记录读取为 None，视为中等质量 0.5。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) visual_quality_score: Option<f64>,
+    #[serde(default)]
+    pub(crate) frames: Vec<KeyframeMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) visual_evidence: Option<VisualEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) motion_score: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
