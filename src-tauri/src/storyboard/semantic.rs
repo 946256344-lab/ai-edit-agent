@@ -15,7 +15,7 @@ use tauri::{AppHandle, Manager};
 
 pub(crate) const EMBEDDING_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 pub(crate) const EMBEDDING_DIMENSIONS: usize = 512;
-pub(crate) const EMBEDDING_VERSION: u32 = 1;
+pub(crate) const EMBEDDING_VERSION: u32 = 2;
 const MODEL_RESOURCE_DIRECTORY: &str = "resources/models/bge-small-zh-v1.5";
 const MODEL_SHA256: &str = "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a";
 const EMBEDDING_BATCH_SIZE: usize = 32;
@@ -100,6 +100,33 @@ fn encode_texts(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, St
     Ok(embeddings)
 }
 
+/// OCR 是否足够像可读文本（过滤 Tesseract 乱码，避免污染向量与词面匹配）。
+pub(crate) fn ocr_is_meaningful(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let total = trimmed.chars().count().max(1);
+    let alnum = trimmed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .count();
+    if (alnum as f64 / total as f64) < 0.6 {
+        return false;
+    }
+    trimmed
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && !('\u{4e00}'..='\u{9fff}').contains(&ch))
+        .any(|token| {
+            let letters = token.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+            letters >= 3
+                || token
+                    .chars()
+                    .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+                    .count()
+                    >= 2
+        })
+}
+
 pub(crate) fn evidence_text(metadata: &TechnicalMetadata) -> String {
     let mut parts = Vec::new();
     for evidence in &metadata.visual_evidence {
@@ -110,7 +137,13 @@ pub(crate) fn evidence_text(metadata: &TechnicalMetadata) -> String {
             parts.push(scene.clone());
         }
     }
-    parts.extend(metadata.ocr_evidence.iter().map(|item| item.text.clone()));
+    parts.extend(
+        metadata
+            .ocr_evidence
+            .iter()
+            .filter(|item| ocr_is_meaningful(&item.text))
+            .map(|item| item.text.clone()),
+    );
     parts
         .join(" ")
         .chars()
@@ -249,7 +282,12 @@ pub(crate) fn encode_beats(
         app,
         beats
             .iter()
-            .map(|beat| format!("{} {}", beat.required_visual, beat.purpose))
+            .map(|beat| {
+                let keywords = beat.visual_keywords.join(" ");
+                format!("{keywords} {} {}", beat.required_visual, beat.purpose)
+                    .trim()
+                    .to_owned()
+            })
             .collect(),
     )
 }
@@ -295,6 +333,43 @@ mod tests {
         assert_eq!(cosine_similarity(&[], &[]), None);
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), None);
         assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), None);
+    }
+
+    #[test]
+    fn ocr_is_meaningful_rejects_tesseract_garbage() {
+        assert!(!ocr_is_meaningful("| ~~ sf mf i ee _ aa wR"));
+        assert!(!ocr_is_meaningful("J | :"));
+        assert!(ocr_is_meaningful("KRL Power generator"));
+        assert!(ocr_is_meaningful("电池模组"));
+    }
+
+    #[test]
+    fn evidence_text_drops_garbage_ocr() {
+        let metadata = TechnicalMetadata {
+            visual_evidence: vec![crate::models::VisualEvidence {
+                time_ms: Some(0),
+                subjects: vec!["forklift".to_owned()],
+                scene: Some("loading dock".to_owned()),
+                actions: vec![],
+                products: vec![],
+                quality_notes: vec![],
+            }],
+            ocr_evidence: vec![
+                crate::models::OcrEvidence {
+                    time_ms: Some(0),
+                    text: "| ~~ sf mf i ee _ aa wR".to_owned(),
+                },
+                crate::models::OcrEvidence {
+                    time_ms: Some(1),
+                    text: "KRL Power".to_owned(),
+                },
+            ],
+            ..Default::default()
+        };
+        let text = evidence_text(&metadata);
+        assert!(text.contains("forklift"));
+        assert!(text.contains("KRL Power"));
+        assert!(!text.contains("sf mf"));
     }
 
     #[test]

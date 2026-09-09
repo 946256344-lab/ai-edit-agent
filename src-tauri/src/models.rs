@@ -793,6 +793,9 @@ pub struct StoryboardBeat {
     pub id: String,
     pub purpose: String,
     pub required_visual: String,
+    /// 英文画面检索词（4–8 个具体名词/动作），供 Phase 2 与素材英文标签对齐；旧记录缺省为空。
+    #[serde(default)]
+    pub visual_keywords: Vec<String>,
     /// 该 beat 的口播文案（full_script）。key_message 通常为空；不得用 onScreenText 代替。
     #[serde(default)]
     pub narration: String,

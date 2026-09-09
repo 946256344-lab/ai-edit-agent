@@ -26,7 +26,7 @@ pub(crate) const PHASE4_REFINE_SHOTS_PER_BATCH: usize = 10;
 /// Pass B 窗内帧间距超过该值时，Pass C 围绕精修子区间再加密收窄。
 pub(crate) const PHASE4_MAX_FRAME_SPACING_MS: i64 = 1_500;
 /// Phase 3 单次请求最多附带多少张候选网格，避免体量失控。
-pub(crate) const PHASE3_MAX_GRID_IMAGES: usize = 36;
+pub(crate) const PHASE3_MAX_GRID_IMAGES: usize = 60;
 
 /// Phase 4 内容候选窗：导入关键帧/三分段划出的一段可用素材。
 #[derive(Clone, Debug, Serialize)]

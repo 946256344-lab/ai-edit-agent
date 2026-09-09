@@ -3,6 +3,9 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-09，fix/storyboard-asset-selection-scoring）：Phase 2 跨语言召回与权重重设、Phase 3 补 requiredVisual/visualKeywords；不重跑视觉分析。见 docs/changes/2026-09-09-phase2-cross-lingual-scoring.md。
+- [ ] 后续：视觉分析队列有 queued/failed 未消化素材，需单独补跑或重试策略。
+- [ ] 后续：小素材库下「每 beat ≥2 镜」硬门会逼出凑数镜头，需单独决策是否放开。
 - [x] 完成（2026-09-09，fix/jianying-deliver-feedback）：成果页剪映交付可见反馈与可读草稿名。见 docs/changes/2026-09-09-jianying-deliver-feedback.md。
 - [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。
 - [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。

@@ -9,7 +9,7 @@
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
 use crate::provider::ModelAccess;
 use crate::storyboard::repair::{repair_packet_prompt_block, RepairPacket, StoryboardIssue};
-use crate::storyboard::semantic::cosine_similarity;
+use crate::storyboard::semantic::{cosine_similarity, ocr_is_meaningful};
 use crate::storyboard::{
     model_response_json_text, post_model_payload, scoring, STORYBOARD_TIMEOUT,
 };
@@ -45,6 +45,9 @@ pub(crate) struct BeatCandidatePool {
     beat_id: String,
     beat_purpose: String,
     candidates: Vec<StoryboardSource>,
+    /// 与 candidates 一一对应的本地召回分数；旧 pools_json 缺省为空。
+    #[serde(default)]
+    scores: Vec<scoring::CandidateScore>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -95,7 +98,7 @@ pub(crate) fn phase1_generate_narrative(
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
-        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), narration (string), onScreenText (string).\n\
+        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
@@ -162,20 +165,29 @@ pub(crate) fn phase2_rough_shot_selection(
             usage_counts,
             beat_embedding.map(Vec::as_slice),
         );
-        let ranked_sources = ranked
-            .into_iter()
-            .map(|item| item.source)
-            .collect::<Vec<_>>();
-        let (pool, library_exhausted) =
-            dedupe_and_backfill_pool(&ranked_sources, PHASE2_TOP_CANDIDATES);
+        let (pool, scores, library_exhausted) =
+            dedupe_and_backfill_pool(&ranked, PHASE2_TOP_CANDIDATES);
         log::info!(
             "Beat '{}': poolSize={}, libraryExhausted={}, sample={}",
             beat.id,
             pool.len(),
             library_exhausted,
             pool.iter()
+                .zip(scores.iter())
                 .take(8)
-                .map(|candidate| format!("{}({})", candidate.asset_id, candidate.kind))
+                .map(|(candidate, score)| {
+                    format!(
+                        "{}(sem={:.1}/lex={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
+                        candidate.asset_id,
+                        score.semantic,
+                        score.lexical,
+                        score.quality,
+                        score.duration,
+                        score.freshness,
+                        score.total,
+                        if score.has_evidence { "" } else { ",noEv" }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -192,6 +204,7 @@ pub(crate) fn phase2_rough_shot_selection(
             beat_id: beat.id.clone(),
             beat_purpose: beat.purpose.clone(),
             candidates: pool,
+            scores,
         });
     }
 
@@ -255,26 +268,28 @@ pub(crate) fn phase2_rough_shot_selection(
     })
 }
 
-/// 按排名去同/去相似并补位到 `target_len`；返回 (池, 是否库已耗尽仍不足)。
+/// 按排名去同/去相似并补位到 `target_len`；返回 (池, 分数, 是否库已耗尽仍不足)。
 fn dedupe_and_backfill_pool(
-    ranked: &[StoryboardSource],
+    ranked: &[scoring::ScoredCandidate],
     target_len: usize,
-) -> (Vec<StoryboardSource>, bool) {
+) -> (Vec<StoryboardSource>, Vec<scoring::CandidateScore>, bool) {
     let mut pool: Vec<StoryboardSource> = Vec::new();
+    let mut scores: Vec<scoring::CandidateScore> = Vec::new();
     for candidate in ranked {
         if pool.len() >= target_len {
             break;
         }
         if pool
             .iter()
-            .any(|existing| sources_are_similar(existing, candidate))
+            .any(|existing| sources_are_similar(existing, &candidate.source))
         {
             continue;
         }
-        pool.push(candidate.clone());
+        pool.push(candidate.source.clone());
+        scores.push(candidate.score.clone());
     }
     let library_exhausted = pool.len() < target_len;
-    (pool, library_exhausted)
+    (pool, scores, library_exhausted)
 }
 
 fn sources_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> bool {
@@ -323,6 +338,9 @@ fn evidence_tag_set(source: &StoryboardSource) -> HashSet<String> {
         }
     }
     for ocr in &source.ocr_evidence {
+        if !ocr_is_meaningful(&ocr.text) {
+            continue;
+        }
         let normalized = ocr.text.trim().to_ascii_lowercase();
         if normalized.len() >= 2 {
             tags.insert(normalized);
@@ -392,6 +410,7 @@ fn compact_candidate_card(
     index: usize,
     source: &StoryboardSource,
     keyframe_grid_attached: bool,
+    score: Option<&scoring::CandidateScore>,
 ) -> Value {
     let visual_tags: Vec<String> = source
         .visual_evidence
@@ -407,7 +426,7 @@ fn compact_candidate_card(
         })
         .take(12)
         .collect();
-    json!({
+    let mut card = json!({
         "candidateIndex": index,
         "assetId": source.asset_id,
         "kind": source.kind,
@@ -419,7 +438,12 @@ fn compact_candidate_card(
             json!({"startMs": segment.start_ms, "endMs": segment.end_ms})
         }).collect::<Vec<_>>(),
         "visualTags": visual_tags
-    })
+    });
+    if let Some(score) = score {
+        card["retrievalScore"] = json!(score.retrieval_score_pct());
+        card["matchedKeywords"] = json!(score.matched_keywords);
+    }
+    card
 }
 
 /// Phase 3 的精简候选池：每个 beat 只展示主 shot 和至多 3 个备选的精简卡片，
@@ -431,6 +455,7 @@ const PHASE3_MAX_ALTERNATES: usize = 3;
 /// 每个 beat 的完整短名单卡片（目标 Top-12），供 Phase 3 选片。
 fn phase3_pool_cards(
     pools: &[BeatCandidatePool],
+    beats: &[StoryboardBeat],
     attached_asset_ids: &HashSet<String>,
 ) -> Vec<Value> {
     pools
@@ -439,6 +464,7 @@ fn phase3_pool_cards(
             if pool.candidates.is_empty() {
                 return None;
             }
+            let beat = beats.iter().find(|beat| beat.id == pool.beat_id);
             let cards = pool
                 .candidates
                 .iter()
@@ -448,12 +474,17 @@ fn phase3_pool_cards(
                         index,
                         candidate,
                         attached_asset_ids.contains(&candidate.asset_id),
+                        pool.scores.get(index),
                     )
                 })
                 .collect::<Vec<_>>();
             Some(json!({
                 "beatId": pool.beat_id,
                 "beatPurpose": pool.beat_purpose,
+                "requiredVisual": beat.map(|item| item.required_visual.as_str()).unwrap_or(""),
+                "visualKeywords": beat.map(|item| item.visual_keywords.clone()).unwrap_or_default(),
+                "narration": beat.map(|item| item.narration.as_str()).unwrap_or(""),
+                "onScreenText": beat.map(|item| item.on_screen_text.as_str()).unwrap_or(""),
                 "candidates": cards
             }))
         })
@@ -483,7 +514,9 @@ fn phase3_candidate_cards(
                 .candidates
                 .iter()
                 .enumerate()
-                .map(|(index, candidate)| compact_candidate_card(index, candidate, false))
+                .map(|(index, candidate)| {
+                    compact_candidate_card(index, candidate, false, pool.scores.get(index))
+                })
                 .collect::<Vec<_>>();
             let main_shot = cards.remove(main_position);
             cards.truncate(PHASE3_MAX_ALTERNATES);
@@ -527,12 +560,25 @@ mod tests {
                 } else {
                     format!("asset-{index}")
                 };
-                source(&id)
+                crate::storyboard::scoring::ScoredCandidate {
+                    source: source(&id),
+                    score: crate::storyboard::scoring::CandidateScore {
+                        total: (20 - index) as f64,
+                        semantic: 0.0,
+                        lexical: 0.0,
+                        quality: 0.0,
+                        duration: 0.0,
+                        freshness: 0.0,
+                        has_evidence: true,
+                        matched_keywords: vec![],
+                    },
+                }
             })
             .collect::<Vec<_>>();
-        let (pool, exhausted) = dedupe_and_backfill_pool(&ranked, 12);
+        let (pool, scores, exhausted) = dedupe_and_backfill_pool(&ranked, 12);
         assert!(!exhausted);
         assert_eq!(pool.len(), 12);
+        assert_eq!(scores.len(), 12);
         let unique = pool
             .iter()
             .map(|item| item.asset_id.as_str())
@@ -566,6 +612,7 @@ mod tests {
             id: "beat-1".to_owned(),
             purpose: "purpose".to_owned(),
             required_visual: "vehicle".to_owned(),
+            visual_keywords: vec![],
             narration: "narration".to_owned(),
             on_screen_text: String::new(),
         }
@@ -592,6 +639,7 @@ mod tests {
             beat_id: beat_id.to_owned(),
             beat_purpose: "purpose".to_owned(),
             candidates: asset_ids.iter().map(|asset_id| source(asset_id)).collect(),
+            scores: vec![],
         }
     }
 
@@ -1304,6 +1352,7 @@ mod tests {
                 source("alt-c"),
                 source("alt-d"),
             ],
+            scores: vec![],
         };
         let main_asset_ids = HashMap::from([("beat-1".to_owned(), "selected".to_owned())]);
         let cards = phase3_candidate_cards(&[pool], &main_asset_ids);
@@ -1335,6 +1384,7 @@ mod tests {
             beat_id: "beat-1".to_owned(),
             beat_purpose: "purpose".to_owned(),
             candidates: vec![source("rank-one"), source("chosen"), source("alt-b")],
+            scores: vec![],
         };
         let main_asset_ids = HashMap::from([("beat-1".to_owned(), "chosen".to_owned())]);
         let cards = phase3_candidate_cards(&[pool], &main_asset_ids);
@@ -1360,14 +1410,16 @@ mod tests {
             beat_id: "beat-1".to_owned(),
             beat_purpose: "purpose".to_owned(),
             candidates: (0..12).map(|i| source(&format!("a{i}"))).collect(),
+            scores: vec![],
         };
-        let cards = phase3_pool_cards(&[pool], &HashSet::new());
+        let cards = phase3_pool_cards(&[pool], &[], &HashSet::new());
         assert_eq!(cards.len(), 1);
         assert_eq!(
             cards[0]["candidates"].as_array().map(|items| items.len()),
             Some(12)
         );
         assert_eq!(cards[0]["candidates"][0]["keyframeGridAttached"], false);
+        assert_eq!(cards[0]["requiredVisual"], "");
     }
 }
 
@@ -1388,6 +1440,7 @@ pub(crate) fn phase3_select(
     let (keyframe_blocks, attached_asset_ids) = phase3_keyframe_image_blocks(rough);
     let candidate_cards_json = serde_json::to_string(&phase3_pool_cards(
         &rough.candidate_pools,
+        &rough.beats,
         &attached_asset_ids,
     ))
     .unwrap_or_else(|_| "[]".to_owned());
@@ -1406,7 +1459,8 @@ pub(crate) fn phase3_select(
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
         Keyframe grids are attached below for some candidate assetIds (2x2 overview). Candidates with keyframeGridAttached=false have no image in this request — judge them from visualTags only.\n\
-        Use those frames to judge which assets best match each beat's purpose/requiredVisual.\n\
+        Each pool lists requiredVisual, visualKeywords, narration/onScreenText for that beat. Use those frames and tags to judge which assets best match each beat's purpose/requiredVisual/visualKeywords.\n\
+        retrievalScore and matchedKeywords are a local shortlist hint only — final choice must follow visible evidence in the frames/tags, not the score alone.\n\
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
