@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。
 - [x] 完成（2026-09-08，fix/full-script-keep-voiceover）：可念稿 full_script 保留配音+对齐字幕；缺口不计混音尾；新建时间线继承旁白轨。见 docs/changes/2026-09-08-full-script-keep-voiceover.md。
 - [x] 完成（2026-09-08，fix/key-message-longer-marker-gate）：用户要求更长成片时仍校验 key_message 标记，只放开 15s 帽。见 docs/changes/2026-09-08-key-message-longer-marker-gate.md。
 - [x] 完成（2026-09-08，fix/phase5-target-visibility）：normalize 保留 target/scriptMode；validate 按模式时长容差；画面不足走 completion gaps。见 docs/changes/2026-09-08-phase5-target-visibility.md。

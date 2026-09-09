@@ -524,6 +524,16 @@ fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 20_000
 }
 
+/// Phase 1 前由系统锁定 scriptMode：可念稿 → full_script；否则 key_message。
+/// 模型不得自行改模式，只在该模式下写结构。
+fn decide_script_mode(brief: &str) -> &'static str {
+    if brief_has_substantial_speakable_copy(brief) {
+        "full_script"
+    } else {
+        "key_message"
+    }
+}
+
 fn brief_requests_longer_runtime(brief: &str) -> bool {
     let lower = brief.to_ascii_lowercase();
     [
@@ -577,7 +587,7 @@ fn short_brief_duration_issue(
 }
 
 /// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
-/// 有大段可朗读文案时不拦：交由 `upgrade_speakable_brief_to_full_script` 纠偏。
+/// 可念稿 brief 在 Phase 1 前已由系统锁成 full_script，此处通常不会再进入。
 /// 用户要求更长成片时仍校验标记，只放开 15s 时长硬帽。
 fn key_message_marker_issue(
     brief: &str,
@@ -633,29 +643,30 @@ fn key_message_marker_issue(
     None
 }
 
-/// 有大段可朗读文案时纠偏为 full_script，以便走 audio-first；口播原文优先用模型抽出的 spokenScript，否则回落 brief。
-fn upgrade_speakable_brief_to_full_script(brief: &str, narrative: &mut phases::NarrativeStructure) {
-    if !brief_has_substantial_speakable_copy(brief) || narrative.script_mode == "full_script" {
-        // 已是 full_script 但未抽出 spokenScript 时，用 brief 托底，避免改写 beats 进 TTS。
-        if narrative.script_mode == "full_script"
-            && narrative.spoken_script.trim().is_empty()
-            && brief_has_substantial_speakable_copy(brief)
-        {
+/// 按系统已锁定的 scriptMode 补齐 spokenScript / 目标时长；不再依赖模型自选后再升/降级。
+fn enforce_decided_script_mode(
+    brief: &str,
+    required_mode: &str,
+    narrative: &mut phases::NarrativeStructure,
+) {
+    if narrative.script_mode != required_mode {
+        log::info!(
+            "Enforcing script mode: {} -> {} (system decision before Phase 1)",
+            narrative.script_mode,
+            required_mode
+        );
+        narrative.script_mode = required_mode.to_owned();
+    }
+    if required_mode == "full_script" {
+        if narrative.spoken_script.trim().is_empty() {
             narrative.spoken_script = brief.trim().to_owned();
         }
-        return;
-    }
-    log::info!(
-        "Upgraded script mode: {} -> full_script (substantial speakable copy in brief)",
-        narrative.script_mode
-    );
-    narrative.script_mode = "full_script".to_owned();
-    if narrative.spoken_script.trim().is_empty() {
-        narrative.spoken_script = brief.trim().to_owned();
-    }
-    let estimated = estimated_storyboard_duration_ms(brief).clamp(3_000, 120_000);
-    if narrative.target_duration_ms < estimated {
-        narrative.target_duration_ms = estimated;
+        let estimated = estimated_storyboard_duration_ms(brief).clamp(3_000, 120_000);
+        if narrative.target_duration_ms < estimated {
+            narrative.target_duration_ms = estimated;
+        }
+    } else {
+        narrative.spoken_script.clear();
     }
 }
 
@@ -1123,11 +1134,11 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
-        normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
-        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
-        storyboard_usage_counts, upgrade_speakable_brief_to_full_script, validate_storyboard,
-        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        decide_script_mode, enforce_decided_script_mode, estimated_storyboard_duration_ms,
+        key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
+        phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
+        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts,
+        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1605,7 +1616,8 @@ mod tests {
             ],
         };
         assert!(key_message_marker_issue(&brief, &mut narrative).is_none());
-        upgrade_speakable_brief_to_full_script(&brief, &mut narrative);
+        assert_eq!(decide_script_mode(&brief), "full_script");
+        enforce_decided_script_mode(&brief, "full_script", &mut narrative);
         assert_eq!(narrative.script_mode, "full_script");
         assert!(narrative.target_duration_ms >= 20_000);
         assert_eq!(narrative.spoken_script.trim(), brief.trim());
@@ -1620,6 +1632,33 @@ mod tests {
             voiced,
             crate::voice_provider::normalize_narration_text(&brief)
         );
+    }
+
+    #[test]
+    fn system_locks_script_mode_before_phase1() {
+        assert_eq!(decide_script_mode("帮我做个工厂宣传片"), "key_message");
+        let speakable = std::iter::repeat("word")
+            .take(80)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(decide_script_mode(&speakable), "full_script");
+        let mut narrative = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 12_000,
+            spoken_script: String::new(),
+            script_mode: "key_message".to_owned(),
+            beats: vec![StoryboardBeat {
+                id: "a".to_owned(),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                narration: String::new(),
+                on_screen_text: "标记".to_owned(),
+            }],
+        };
+        enforce_decided_script_mode(&speakable, "full_script", &mut narrative);
+        assert_eq!(narrative.script_mode, "full_script");
+        assert!(!narrative.spoken_script.trim().is_empty());
     }
 
     #[test]
@@ -2127,15 +2166,21 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1: 生成叙事结构。若 beat 数或朗读时长不满足下限，带反馈重试。
+    // Phase 1: 系统先锁定 scriptMode，再让模型只在该模式下写结构。
+    let required_script_mode = decide_script_mode(brief);
+    log::info!("Phase 1 script mode locked by system: {required_script_mode}");
     let mut phase1_feedback = None;
     let narrative = (0..MAX_PHASE1_REVISIONS).find_map(|revision| {
         log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
-        match phases::phase1_generate_narrative(&access, brief, phase1_feedback.as_deref()) {
+        match phases::phase1_generate_narrative(
+            &access,
+            brief,
+            required_script_mode,
+            phase1_feedback.as_deref(),
+        ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
-                // 先纠偏可念稿，避免 key_message 旁白硬门把本应走 full_script 的 brief 拒光。
-                upgrade_speakable_brief_to_full_script(brief, &mut candidate);
+                enforce_decided_script_mode(brief, required_script_mode, &mut candidate);
                 let estimated_duration = minimum_storyboard_duration(brief);
                 let minimum_shot_count =
                     ((estimated_duration + 7_999) / 8_000).max(1) as usize;
@@ -2187,7 +2232,7 @@ fn generate_storyboard_internal(
             .unwrap_or_else(|| "Storyboard narrative structure could not be generated.".to_owned())
     })?;
     let mut narrative = narrative;
-    upgrade_speakable_brief_to_full_script(brief, &mut narrative);
+    enforce_decided_script_mode(brief, required_script_mode, &mut narrative);
     // Audio-first: when full_script beats carry narration, pre-synthesize to obtain exact duration and override target duration so Phase 2/3 select shots around the true voiceover length. Non-critical: if TTS fails, keep estimated duration.
     let mut audio_first: Option<(i64, crate::voice_provider::AudioFirstPrepared)> = None;
     let voiceover_script = resolve_voiceover_script(

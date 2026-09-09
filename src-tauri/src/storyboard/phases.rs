@@ -65,13 +65,16 @@ pub struct RoughStoryboard {
     pub candidate_pools: Vec<BeatCandidatePool>,
 }
 
-/// Phase 1: 生成叙事结构
+/// Phase 1: 生成叙事结构（scriptMode 由调用方在请求前锁定）。
 pub(crate) fn phase1_generate_narrative(
     access: &ModelAccess,
     brief: &str,
+    required_script_mode: &str,
     feedback: Option<&str>,
 ) -> Result<NarrativeStructure, String> {
-    log::info!("Phase 1: Generating narrative structure from brief");
+    log::info!(
+        "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode})"
+    );
 
     let feedback_context = feedback.map_or(String::new(), |value| {
         format!(
@@ -79,18 +82,22 @@ pub(crate) fn phase1_generate_narrative(
         )
     });
 
+    let mode_instructions = if required_script_mode == "full_script" {
+        "REQUIRED scriptMode=full_script (locked by the system because the brief contains substantial speakable copy). Do not choose key_message.\n\
+        Put the exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
+        targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further."
+    } else {
+        "REQUIRED scriptMode=key_message (locked by the system because the brief is a goal/outline/theme, not a spoken script). Do not choose full_script.\n\
+        spokenScript=\"\", set every beat.narration to \"\", and write a short on-screen marker in beat.onScreenText in the user's language (one idea per beat, at most 24 visible characters, no emoji).\n\
+        Punchy on-screen markers only (no voiceover). targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime. Prefer 2-5 beats. Never inflate into a 30-90s essay."
+    };
+
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
-        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (full_script or key_message), spokenScript (string), and beats.\n\
+        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), narration (string), onScreenText (string).\n\
-        First decide whether the brief already contains a complete narration script the user wants spoken as written:\n\
-        - If YES: scriptMode=full_script. Put that exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
-        - If NO (goal/outline/theme only): scriptMode=key_message, spokenScript=\"\", set every beat.narration to \"\", and write a short on-screen marker in beat.onScreenText in the user's language (one idea per beat, at most 24 visible characters, no emoji).\n\
+        {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn.\n\
-        Duration and scriptMode must follow the brief's real size:\n\
-        - key_message: punchy on-screen markers only (no voiceover), targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime. Prefer 2-5 beats.\n\
-        - full_script: targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further.\n\
-        - Never inflate a short brief into a 30-90s essay. Prefer a tight key_message cut over padded voiceover.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or readable marker pacing (key_message).\n\
         {feedback_context}"

@@ -46,7 +46,11 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 `key_message` 是短目标/提纲成片：Phase 1 为每个 beat 写屏幕标记 `onScreenText`（≤24 可见字符），`narration` 留空；镜头时长按标记可读性与目标时长分配（`SpeechTiming.kind=pacing`）。时间线为每个 beat 写一条跨该 beat 镜头的标记字幕，**不自动配音**。显式 `synthesize_voiceover` 仍可用，但不得朗读 `onScreenText`，仅在 beats 仍有 narration 时合成。`full_script` 继续走口播 + audio-first + 自动配音。
 
-## 12. 当前未完成事项
+## 12. scriptMode 由系统在 Phase 1 前锁定（2026-09-08）
+
+`scriptMode` 是旁白/字幕产品路径的开关，不得交给模型自选。Rust 用 brief 朗读估算（≥约 20s → `full_script`，否则 `key_message`）写入 Phase 1 必选约束；响应后再强制钉死。模型只负责在锁定模式下拆 beat 结构。
+
+## 13. 当前未完成事项
 
 - 安装包还没有完整捆绑 FFmpeg、Tesseract、Python 和 Jianying 适配器运行时。
 - 最终视频导出尚未实现。
