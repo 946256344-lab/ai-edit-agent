@@ -31,6 +31,34 @@ struct PendingJianyingRegistration {
     timeline_version_id: String,
 }
 
+fn sanitize_draft_name_fragment(raw: &str) -> String {
+    let cleaned = raw
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    let trimmed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    trimmed.chars().take(36).collect::<String>()
+}
+
+fn unique_draft_name(connection: &rusqlite::Connection, project_id: &str) -> String {
+    let project_name = connection
+        .query_row(
+            "SELECT name FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .map(|name| sanitize_draft_name_fragment(&name))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Assembly".to_owned());
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    format!("{project_name}-{suffix}")
+}
+
 fn find_jianying_draft_location() -> Option<(PathBuf, PathBuf)> {
     let registry_path = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -440,7 +468,7 @@ pub fn create_jianying_draft(
             "cropFocus": clip.crop_focus,
         }));
     }
-    let draft_name = format!("Assembly Video Agent {}", Uuid::new_v4());
+    let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");
     let duration_ms = timeline
@@ -566,6 +594,15 @@ mod tests {
         assert!(!text_tracks_are_ready_for_jianying(&test_timeline(
             "local_preview_only"
         )));
+    }
+
+    #[test]
+    fn draft_name_sanitizes_path_characters() {
+        assert_eq!(
+            sanitize_draft_name_fragment(r#"工厂/访问:试片?"#),
+            "工厂_访问_试片_"
+        );
+        assert_eq!(sanitize_draft_name_fragment("  a   b  "), "a b");
     }
 
     #[test]
