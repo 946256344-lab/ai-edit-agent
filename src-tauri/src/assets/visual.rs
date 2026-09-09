@@ -667,6 +667,9 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
                 actions: item.actions.clone(),
                 products: item.products.clone(),
                 quality_notes: item.quality_notes.clone(),
+                shot_type: None,
+                camera_motion: None,
+                segment_id: None,
             },
         );
     }
@@ -728,13 +731,17 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
             if visual_model_retry_after().is_some() {
                 break;
             }
-            let task = (|| -> Result<Option<(String, Vec<String>)>, String> {
+            let task = (|| -> Result<Option<(String, String, Vec<String>)>, String> {
                 let connection = open_connection(&app)?;
                 let transaction = connection
                     .unchecked_transaction()
                     .map_err(|error| error.to_string())?;
-                let row = transaction.query_row("SELECT id, input_json FROM agent_tasks WHERE tool_name = 'analyze_asset_visual_batch' AND status = 'queued' ORDER BY COALESCE(json_extract(result_json, '$.priority'), 0) DESC, created_at ASC, id ASC LIMIT 1", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).optional().map_err(|error| error.to_string())?;
-                let Some((task_id, input_json)) = row else {
+                let row = transaction.query_row(
+                    "SELECT id, tool_name, input_json FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued' ORDER BY COALESCE(json_extract(result_json, '$.priority'), 0) DESC, created_at ASC, id ASC LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                ).optional().map_err(|error| error.to_string())?;
+                let Some((task_id, tool_name, input_json)) = row else {
                     return Ok(None);
                 };
                 let asset_ids = serde_json::from_str::<serde_json::Value>(&input_json)
@@ -761,7 +768,7 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                         0,
                         Some("visual_task_input_invalid"),
                     )?;
-                    return Ok(Some((task_id, Vec::new())));
+                    return Ok(Some((task_id, tool_name, Vec::new())));
                 };
                 let claimed = transaction.execute(
                     "UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
@@ -769,15 +776,23 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                 ).map_err(|error| error.to_string())?;
                 transaction.commit().map_err(|error| error.to_string())?;
                 if claimed == 1 {
-                    Ok(Some((task_id, asset_ids)))
+                    Ok(Some((task_id, tool_name, asset_ids)))
                 } else {
-                    Ok(Some((task_id, Vec::new())))
+                    Ok(Some((task_id, tool_name, Vec::new())))
                 }
             })().inspect_err(|e| log::warn!("Visual analysis worker: task claim failed: {e}"));
             match task {
-                Ok(Some((task_id, asset_ids))) => {
+                Ok(Some((task_id, tool_name, asset_ids))) => {
                     if !asset_ids.is_empty() {
-                        run_visual_analysis_batch(app.clone(), task_id, asset_ids);
+                        if tool_name == "analyze_asset_segments_batch" {
+                            super::segment_visual::run_segment_visual_analysis_batch(
+                                app.clone(),
+                                task_id,
+                                asset_ids,
+                            );
+                        } else {
+                            run_visual_analysis_batch(app.clone(), task_id, asset_ids);
+                        }
                     }
                 }
                 Ok(None) | Err(_) => break,
@@ -793,7 +808,7 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
             .and_then(|connection| {
                 connection
                     .query_row(
-                        "SELECT COUNT(*) FROM agent_tasks WHERE tool_name = 'analyze_asset_visual_batch' AND status = 'queued'",
+                        "SELECT COUNT(*) FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued'",
                         [],
                         |row| row.get::<_, i64>(0),
                     )

@@ -974,6 +974,15 @@ pub struct VisualEvidence {
     pub(crate) products: Vec<String>,
     #[serde(default)]
     pub(crate) quality_notes: Vec<String>,
+    /// 景别：wide / medium / close-up / detail；素材级旧证据为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shot_type: Option<String>,
+    /// 运镜：static / pan / tilt / handheld / zoom。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) camera_motion: Option<String>,
+    /// 所属片段 id；素材级旧证据为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) segment_id: Option<String>,
 }
 
 #[cfg(test)]

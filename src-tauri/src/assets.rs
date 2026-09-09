@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod health;
 pub mod library;
+pub mod segment_visual;
 pub mod segments;
 pub mod visual;
 
@@ -18,7 +19,8 @@ pub(crate) use analysis::{
     drain_pending_analysis, request_asset_analysis, resume_incomplete_analysis,
     retry_failed_asset_analysis, RetryFailedAnalysisStage, RETRY_FAILED_ASSET_LIMIT,
 };
-// visual：视觉批次优先级与等待
+// visual：视觉批次优先级与等待；片段级 ensure
+pub(crate) use segment_visual::{ensure_segment_visual_evidence, DEFAULT_ENSURE_BUDGET};
 pub(crate) use visual::{prioritize_pending_visual_batches, wait_for_visual_batch};
 // health：Agent 健康摘要
 pub(crate) use health::get_asset_health_summary_for_agent;
@@ -659,6 +661,7 @@ pub(crate) fn search_assets_for_agent(
 
 /// Agent 受限只读片段检索；基于真实场景段和时间点证据，排除禁用及健康异常素材。
 pub(crate) fn search_asset_segments_for_agent(
+    app: &tauri::AppHandle,
     connection: &rusqlite::Connection,
     project_id: &str,
     query: &str,
@@ -692,9 +695,28 @@ pub(crate) fn search_asset_segments_for_agent(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    let candidate_ids = assets
+        .iter()
+        .map(|(id, _, _, _)| id.clone())
+        .take(48)
+        .collect::<Vec<_>>();
+    let _ = segment_visual::ensure_segment_visual_evidence(
+        app,
+        project_id,
+        &candidate_ids,
+        std::time::Duration::from_secs(60),
+    );
     let mut matches = Vec::new();
     for (id, name, kind, metadata_json) in assets {
-        let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+        let metadata: TechnicalMetadata = connection
+            .query_row(
+                "SELECT metadata_json FROM assets WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_else(|| serde_json::from_str(&metadata_json).unwrap_or_default());
         let segments = if kind == "image" {
             vec![SceneSegment {
                 id: "s001".to_owned(),
@@ -710,34 +732,41 @@ pub(crate) fn search_asset_segments_for_agent(
             metadata.scene_segments.clone()
         };
         for segment in segments {
-            let contains_time = |time: Option<i64>| {
-                time.is_some_and(|value| value >= segment.start_ms && value <= segment.end_ms)
-            };
-            let ocr_match = metadata.ocr_evidence.iter().any(|evidence| {
-                contains_time(evidence.time_ms) && evidence.text.to_lowercase().contains(&query)
-            });
             let mut labels = Vec::new();
-            for evidence in metadata
-                .visual_evidence
-                .iter()
-                .filter(|evidence| contains_time(evidence.time_ms))
-            {
+            let evidence = segment.visual_evidence.as_ref().or_else(|| {
+                metadata.visual_evidence.iter().find(|item| {
+                    item.time_ms
+                        .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
+                })
+            });
+            if let Some(evidence) = evidence {
                 for label in evidence
                     .subjects
                     .iter()
                     .chain(&evidence.actions)
                     .chain(&evidence.products)
                     .chain(evidence.scene.iter())
+                    .chain(evidence.shot_type.iter())
                 {
                     if label.to_lowercase().contains(&query) && !labels.contains(label) {
                         labels.push(label.clone());
                     }
                 }
             }
+            let ocr_match = metadata.ocr_evidence.iter().any(|item| {
+                item.time_ms
+                    .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
+                    && item.text.to_lowercase().contains(&query)
+            });
             if ocr_match || !labels.is_empty() || name.to_lowercase().contains(&query) {
                 matches.push(serde_json::json!({
-                    "assetId": id, "displayName": name, "kind": kind,
-                    "sourceStartMs": segment.start_ms, "sourceEndMs": segment.end_ms,
+                    "assetId": id,
+                    "displayName": name,
+                    "kind": kind,
+                    "segmentId": segment.id,
+                    "sourceStartMs": segment.start_ms,
+                    "sourceEndMs": segment.end_ms,
+                    "shotType": segment.visual_evidence.as_ref().and_then(|e| e.shot_type.clone()),
                     "matchReasons": [if ocr_match { "ocr_match" } else if !labels.is_empty() { "visual_evidence_match" } else { "name_match" }],
                     "matchedVisualLabels": labels.into_iter().take(8).collect::<Vec<_>>()
                 }));

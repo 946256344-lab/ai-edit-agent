@@ -435,7 +435,8 @@ mod tests {
             actions: vec!["inspecting materials".to_owned()],
             products: vec![],
             quality_notes: vec![],
-        }];
+            ..Default::default()
+}];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
             time_ms: Some(0),
@@ -444,7 +445,8 @@ mod tests {
             actions: vec!["talking".to_owned()],
             products: vec![],
             quality_notes: vec![],
-        }];
+            ..Default::default()
+}];
         let beat = StoryboardBeat {
             id: "beat-factory".to_owned(),
             purpose: "show the factory visit".to_owned(),
@@ -474,7 +476,8 @@ mod tests {
             actions: vec!["operating forklift".to_owned()],
             products: vec!["yellow forklift".to_owned()],
             quality_notes: vec![],
-        }];
+            ..Default::default()
+}];
         let mut office = make_source("office", "video", Some(10_000), 0.95);
         office.visual_evidence = vec![crate::models::VisualEvidence {
             time_ms: Some(0),
@@ -483,7 +486,8 @@ mod tests {
             actions: vec!["talking".to_owned()],
             products: vec![],
             quality_notes: vec![],
-        }];
+            ..Default::default()
+}];
         let beat = StoryboardBeat {
             id: "beat-logistics".to_owned(),
             purpose: "展示物流发货效率".to_owned(),
@@ -520,7 +524,8 @@ mod tests {
             actions: vec![],
             products: vec!["battery".to_owned()],
             quality_notes: vec![],
-        }];
+            ..Default::default()
+}];
         let beat = StoryboardBeat {
             id: "beat-battery".to_owned(),
             purpose: "展示电池测试".to_owned(),

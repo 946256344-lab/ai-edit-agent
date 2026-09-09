@@ -732,6 +732,7 @@ pub(super) fn apply_skill(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "Segments query required.".to_owned())?;
             let results = crate::assets::search_asset_segments_for_agent(
+                state.app,
                 &state.connection,
                 state.project_id,
                 query,

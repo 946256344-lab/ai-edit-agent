@@ -189,7 +189,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析覆盖前述历史“单素材首次分析”描述：`analyze_asset` 只执行 FFprobe、缩略图、有限关键帧和 OCR，完成后即为技术 `ready`。单一后台 worker 将最多 6 条技术就绪素材的中间代表帧组成 `analyze_asset_visual_batch`；任务 payload 仅保存素材 ID，结果仅保存安全数量和错误码。模型返回的素材 ID 与源时间必须属于同一批次才会写入视觉证据。视觉状态独立为 `queued`、`running`、`ready`、`failed` 或 `skipped`，Provider/帧/响应失败绝不回退技术 `ready` 或自动无限重试。启动恢复会将有效的中断视觉批次重新排队、将无效 payload 的关联素材封闭为失败，并为旧技术 `ready` 素材补建缺失视觉批次。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材；已落地的视觉证据与关键帧网格用于排序和模型复选。brief 会优先推进并有界等待最高相关视觉批次；Phase 3 查看候选关键帧网格选片，Phase 4 用导入关键帧（或三分段）建粗窗再在窗内精修源区间。
+当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实场景分段与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 仍对中间代表帧跑 1 帧标签（粗召回）。片段级 `analyze_asset_segments_batch` **按需**入队：仅当素材进入 storyboard 粗召回或片段检索时由 `ensure_segment_visual_evidence` 触发，完成后写 `visualAnalysisVersion=2` 与 `asset_segment_embeddings` 永久缓存。单一 worker 共用熔断；任务 payload 仅保存素材 ID。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
 
 ### Agent 编程上下文架构
 
