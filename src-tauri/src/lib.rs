@@ -24,10 +24,10 @@ mod jianying;
 mod models;
 /// Jamendo 凭据、搜索、授权资格与有界下载适配器。
 mod music_provider;
-/// 出站 HTTP（配音等）：环境代理与传输失败分类。
-mod outbound_http;
 /// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;
+/// 出站 HTTP（配音等）：环境代理与传输失败分类。
+mod outbound_http;
 /// FFmpeg preview 渲染、文字/音乐合成与质量检查。
 mod preview;
 /// Preview 旁白与 BGM 混音；禁止用 `-shortest` 截断口播。
@@ -40,6 +40,8 @@ mod process;
 mod projects;
 /// 可替换模型传输、优先级门、超时、回退与熔断。
 mod provider;
+/// 启动/发行就绪检查：媒体 runtime、目录、凭据与剪映前置。
+mod release_readiness;
 /// 基于证据的 storyboard 提案、校验、版本与查询。
 mod storyboard;
 /// Studio 工作台：前端 mash diff 落库为新的 timeline version。
@@ -131,6 +133,9 @@ pub fn run() {
             audit::list_agent_diagnostics,
             audit::list_operation_logs,
             preview::render_preview,
+            preview_cache::get_preview_cache_status,
+            preview_cache::clear_preview_cache,
+            release_readiness::get_release_readiness,
             jianying::create_jianying_draft,
             jianying::get_jianying_registration_status,
             agent::submit_conversation_turn,

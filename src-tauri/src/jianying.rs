@@ -54,6 +54,14 @@ fn find_jianying_draft_location() -> Option<(PathBuf, PathBuf)> {
     Some((draft_root, registry_path))
 }
 
+pub(crate) fn draft_location_available() -> bool {
+    find_jianying_draft_location().is_some()
+}
+
+pub(crate) fn adapter_script_available(app: &AppHandle) -> bool {
+    jianying_adapter_script(app).is_ok_and(|path| path.is_file())
+}
+
 fn tasklist_contains_jianying(output: &[u8]) -> bool {
     const PROCESS_NAME: &[u8] = b"jianyingpro.exe";
     output

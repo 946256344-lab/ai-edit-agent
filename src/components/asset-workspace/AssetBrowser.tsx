@@ -1,4 +1,4 @@
-// 显示当前目录的直属素材卡片和分页动作，不负责目录过滤或后台轮询。
+// 显示当前目录的直属素材卡片；默认只展示用户可读状态，不承担目录过滤或后台轮询。
 import type { StoredAsset } from '../../lib/local-store'
 
 export type AssetView = {
@@ -14,36 +14,27 @@ export type AssetView = {
   thumbnailUrl: string | null
 }
 
-function visualStatusLabel(status: AssetView['visualStatus']) {
-  switch (status) {
-    case 'ready': return '视觉完成'
-    case 'running': return '视觉分析中'
-    case 'queued': return '视觉排队'
-    case 'failed': return '视觉失败'
-    case 'skipped': return '视觉跳过'
+function analysisStatusLabel(asset: AssetView) {
+  if (asset.sourceHealthStatus === 'missing' || asset.sourceHealthStatus === 'unreadable') {
+    return { tone: 'failed' as const, label: '无法读取' }
   }
+  if (asset.sourceHealthStatus === 'changed') {
+    return { tone: 'failed' as const, label: '文件已变化' }
+  }
+  if (asset.status === 'failed' || asset.visualStatus === 'failed') {
+    return { tone: 'failed' as const, label: '无法读取' }
+  }
+  if (asset.status === 'ready' && (asset.visualStatus === 'ready' || asset.visualStatus === 'skipped')) {
+    return { tone: 'ready' as const, label: '已就绪' }
+  }
+  return { tone: 'analyzing' as const, label: '分析中' }
 }
 
-function sourceHealthLabel(status: AssetView['sourceHealthStatus']) {
-  switch (status) {
-    case 'missing': return '源文件缺失'
-    case 'changed': return '源文件已变化'
-    case 'unreadable': return '源文件不可读'
-    default: return null
-  }
-}
-
-function AssetCard({ asset, onInspect }: { asset: AssetView; onInspect: (assetId: string) => void }) {
-  const facts = [
-    asset.status === 'ready' ? '技术分析完成' : asset.status === 'failed' ? '技术失败' : asset.status === 'queued' ? '等待分析' : '分析中',
-    visualStatusLabel(asset.visualStatus),
-    sourceHealthLabel(asset.sourceHealthStatus),
-    asset.kind === 'other' ? '其他素材' : asset.kind,
-    asset.duration ? `时长 ${asset.duration}` : null,
-  ].filter((fact): fact is string => Boolean(fact))
+function AssetCard({ asset }: { asset: AssetView }) {
+  const status = analysisStatusLabel(asset)
 
   return (
-    <button type="button" className="asset-card" onClick={() => onInspect(asset.id)}>
+    <article className="asset-card">
       <div className={`asset-card-thumb asset-card-thumb-${asset.kind}`}>
         {asset.thumbnailUrl && <img src={asset.thumbnailUrl} alt="" />}
         <span>{asset.kind === 'video' ? 'VIDEO' : asset.kind.toUpperCase()}</span>
@@ -54,9 +45,12 @@ function AssetCard({ asset, onInspect }: { asset: AssetView; onInspect: (assetId
           <strong>{asset.name}</strong>
           <small>{asset.relativePath ?? asset.folderName ?? '未归类素材'}</small>
         </header>
-        <div className="asset-chip-row">{facts.map((fact) => <span key={fact}>{fact}</span>)}</div>
+        <div className="asset-chip-row">
+          <span className={`asset-status-chip asset-status-chip--${status.tone}`}>{status.label}</span>
+          {asset.duration ? <span>时长 {asset.duration}</span> : null}
+        </div>
       </div>
-    </button>
+    </article>
   )
 }
 
@@ -65,10 +59,9 @@ type AssetBrowserProps = {
   breadcrumb: string
   matchingAssetCount: number
   assets: AssetView[]
-  onInspect: (assetId: string) => void
 }
 
-export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, onInspect }: AssetBrowserProps) {
+export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets }: AssetBrowserProps) {
   return (
     <section className="asset-list-card">
       <header className="asset-list-card__head">
@@ -80,10 +73,14 @@ export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, on
       </header>
       {assets.length > 0 ? (
         <div className="asset-list-card__body">
-          {assets.map((asset) => <AssetCard key={asset.id} asset={asset} onInspect={onInspect} />)}
+          {assets.map((asset) => <AssetCard key={asset.id} asset={asset} />)}
         </div>
       ) : (
-        <div className="asset-list-card__empty">当前目录没有直属素材。</div>
+        <div className="asset-list-card__empty">
+          {matchingAssetCount === 0 && title === '全部素材'
+            ? '把素材拖到这里，或使用上方「导入文件 / 导入文件夹」。'
+            : '当前目录没有直属素材。'}
+        </div>
       )}
     </section>
   )

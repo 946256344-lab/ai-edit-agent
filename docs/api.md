@@ -1,5 +1,15 @@
 # API 与工具契约
 
+## 2026-09-09：发行就绪检查
+
+新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、Python/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`。
+
+## 2026-09-09：预览缓存上限与清理
+
+- 单项目 `previews/cache/<projectId>` 默认上限 2 GiB；`render_preview` 成功后按修改时间淘汰最旧中间文件。
+- 新增 `get_preview_cache_status` / `clear_preview_cache`；启动时清掉已不存在项目的孤儿缓存目录。
+- 当前无删除整个项目的命令；清理入口在「项目设置」。见 `docs/changes/2026-09-09-preview-cache-limit.md`。
+
 ## 2026-09-08：Phase 3 相邻同片硬拒
 
 最终播放序相邻镜头不得共用同一 `assetId`（含跨 beat）；Phase 3 以 `consecutive_duplicate_asset` 打回，Phase 5 diversity 同步拒绝。非相邻复用仍受 40% 上限。不新增 Tauri 命令。见 `docs/changes/2026-09-08-phase3-consecutive-asset-ban.md`。
@@ -79,7 +89,10 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `list_agent_run_steps` | `{ projectId, editingTaskId, agentTaskId }` | `AgentRunStep[]` | 仅在项目、剪辑任务和调用三重作用域匹配时返回步骤；不包含参数、模型原文、对话或媒体证据。 |
 | `list_agent_diagnostics` | `{ projectId, editingTaskId, agentTaskId }` | `AgentDiagnostic[]` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
 | `list_operation_logs` | `{ projectId, editingTaskId, agentTaskId? }` | `OperationLog[]` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
-| `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。 |
+| `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。成功写入后对 `previews/cache/<projectId>` 执行单项目上限淘汰（默认 2 GiB，按修改时间删最旧中间文件）。 |
+| `get_preview_cache_status` | `{ projectId }` | `PreviewCacheStatus { projectId, bytesUsed, limitBytes, fileCount }` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
+| `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
+| `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message`（`status`=`ok|warn|fail`）。不探测源媒体内容，不写库。 |
 | `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |

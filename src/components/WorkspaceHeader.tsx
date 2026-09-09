@@ -23,7 +23,7 @@ export function WorkspaceHeader({ model, selectView }: WorkspaceHeaderProps) {
       <header className="topbar">
         <div className="crumbs">{model.projectName} <span>/</span> {model.sessionTitle}</div>
         <div className="top-actions">
-          <span className="saved">{model.storeReady ? 'local project' : '演示模式'}</span>
+          <span className="saved">{model.storeReady ? '本地项目' : '演示模式'}</span>
           {model.hasStoryboard && model.view !== 'artifacts' && (
             <button className="outline-button" onClick={() => selectView('artifacts')}>查看成果</button>
           )}
@@ -36,9 +36,6 @@ export function WorkspaceHeader({ model, selectView }: WorkspaceHeaderProps) {
         </button>
         <button className={model.view === 'artifacts' ? 'selected' : ''} onClick={() => selectView('artifacts')}>
           成果 <span>{model.shotCount}</span>
-        </button>
-        <button className={model.view === 'studio' ? 'selected' : ''} onClick={() => selectView('studio')}>
-          工作台
         </button>
         <div className="timeline-state">{model.timelineLabel}</div>
       </div>

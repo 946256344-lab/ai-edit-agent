@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。
 - [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。
 - [x] 完成（2026-09-08，fix/full-script-keep-voiceover）：可念稿 full_script 保留配音+对齐字幕；缺口不计混音尾；新建时间线继承旁白轨。见 docs/changes/2026-09-08-full-script-keep-voiceover.md。
 - [x] 完成（2026-09-08，fix/key-message-longer-marker-gate）：用户要求更长成片时仍校验 key_message 标记，只放开 15s 帽。见 docs/changes/2026-09-08-key-message-longer-marker-gate.md。
@@ -15,7 +16,6 @@
 - [x] 完成（2026-09-07，fix/phase4-overlap-resolve）：Phase 4 钳窗后窗内机械消交叠；normalize 保留消交叠但清被挪镜的 cropFocus，有构图不做整段 pack。见 docs/changes/2026-09-07-phase4-overlap-resolve.md。
 - [x] 完成（2026-09-07，fix/phase4-refine-batch）：Phase 4 Pass B/C 每镜满采样拼网格并按最多 10 镜拆批，不降精修密度。见 docs/changes/2026-09-07-phase4-refine-batch.md。
 - [x] 完成（2026-09-07，fix/voice-http-proxy）：配音 ureq 读取 HTTPS_PROXY；中文 Windows 10060 归类为 timed out；设置页区分已连接与密钥已存未探通。见 docs/changes/2026-09-07-voice-http-proxy.md。
-- [ ] 后续：预览缓存 `previews/cache/<projectId>` 增加按项目清理或占用上限；合入 smooth-editing-pipeline 后另开分支，避免本机派生视频无限堆积。
 - [ ] 后续：合入后用 1–2 个真实项目抽检竖屏 `cropFocus`（预览裁剪与 Jianying 草稿主体是否一致）。
 - [x] 完成（2026-09-07，codex/smooth-editing-pipeline）：预览分层复用、空闲停止刷新、候选评分修正、配音/语义并行、句级对齐与镜头衔接/竖屏构图；健康摘要仅在计数/任务状态变化时 bump 素材页。见 `docs/changes/2026-09-07-smooth-editing-pipeline.md`。
 - [x] 完成（2026-09-07）：完整文案由模型标 full_script+spokenScript；TTS 照念原文不用改写 beats。见 `docs/changes/2026-09-07-full-script-verbatim-voiceover.md`。

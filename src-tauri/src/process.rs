@@ -99,6 +99,23 @@ pub(crate) fn run_hidden_command_with_timeout(
     }
 }
 
+/// 探测本机程序是否能在超时内成功启动并退出（用于发行就绪检查，不解析输出正文）。
+pub(crate) fn program_responds(
+    program: impl AsRef<OsStr>,
+    args: &[&str],
+    timeout: Duration,
+) -> bool {
+    let mut command = hidden_command(program);
+    command
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    matches!(
+        run_hidden_command_with_timeout(&mut command, timeout),
+        Ok(output) if output.status.success()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

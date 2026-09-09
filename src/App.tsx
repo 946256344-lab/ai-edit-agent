@@ -8,7 +8,7 @@ import { AppSidebar } from './components/AppSidebar'
 import { ArtifactsWorkspace } from './components/ArtifactsWorkspace'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
-import { StudioWorkspace } from './components/StudioWorkspace'
+import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import type { ConversationMessage, EditingSessionView, WorkspaceView } from './components/workspace-types'
 import { useAgentRunReconciliation } from './hooks/useAgentRunReconciliation'
@@ -16,7 +16,6 @@ import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
 import { getTimelineLabel, useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceController'
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
-import { useStudioWorkspaceController } from './hooks/useStudioWorkspaceController'
 import {
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
@@ -117,10 +116,6 @@ function App() {
     ),
     refreshEditingSessions,
   })
-  const studioWorkspace = useStudioWorkspaceController(
-    artifactWorkspace.timeline,
-    artifactWorkspace.preview,
-  )
 
   async function applyAgentEditCompletion(pending: PendingAgentEdit, event?: AgentEditEvent) {
     const { projectId, sessionId } = pending
@@ -224,7 +219,7 @@ function App() {
     setEditingSessions(nextSessions)
     await selectEditingSession(projectId, session.id, nextSessions)
     if (session.conversationId) {
-      await appendStoredMessage(session.conversationId, session.id, 'agent', '这是一个新的剪辑会话。请描述成片目标，或导入素材后直接告诉我生成故事板。')
+      await appendStoredMessage(session.conversationId, session.id, 'agent', '告诉我你想剪什么。导入素材后，也可以直接说成片目标，我会开始生成第一版。')
       await refreshEditingSessions(projectId)
     }
     setActiveView('chat')
@@ -445,7 +440,7 @@ function App() {
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.error('[App] sendMessage failed:', errorMessage, error)
       let userMessage = context
-        ? '这次请求没有完成，请重试；现有 storyboard、时间线和 preview 未被修改。'
+        ? '这次请求没有完成，请重试；已有结果不会被修改。'
         : '无法准备当前剪辑任务，请重试或重新选择项目。'
 
       // 提供更具体的错误诊断
@@ -464,7 +459,7 @@ function App() {
       setComposerNotice(userMessage)
       if (context) {
         try {
-          await appendStoredMessage(context.conversationId, context.sessionId, 'agent', '这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。')
+          await appendStoredMessage(context.conversationId, context.sessionId, 'agent', '这次操作没有完成，已有结果没有被修改。请重试，或补充你希望保留的素材和片段。')
           await setConversationStatus(context.conversationId, 'ready')
         } catch {
           // The composer still stays interactive when local persistence is unavailable.
@@ -520,6 +515,7 @@ function App() {
           activeSessionId: activeEditingSessionId,
           providerLabel: provider.model.providerLabel,
           storeState,
+          activeProjectName: activeProject?.name ?? null,
         }}
         actions={{
           createSession: () => void createEditingSessionWorkspace(),
@@ -532,10 +528,11 @@ function App() {
       />
 
       <section className="workspace">
+        <ReleaseReadinessBanner enabled={storeState === 'ready'} />
         <WorkspaceHeader
           model={{
-            projectName: activeProject?.name ?? '新 local project',
-            sessionTitle: activeEditingSession?.title ?? '开始剪辑会话',
+            projectName: activeProject?.name ?? '新项目',
+            sessionTitle: activeEditingSession?.title ?? '开始剪辑',
             storeReady: storeState === 'ready',
             view: activeView,
             assetCount: assetWorkspace.page.counts.total,
@@ -587,19 +584,7 @@ function App() {
                 setActiveView('chat')
                 setInput(`调整第 ${orderIndex} 个镜头：`)
               },
-            }}
-          />
-        )}
-        {activeView === 'studio' && (
-          <StudioWorkspace
-            controller={studioWorkspace}
-            projectId={activeProjectId}
-            sessionId={activeEditingSessionId}
-            timeline={artifactWorkspace.timeline}
-            preview={artifactWorkspace.preview}
-            previewNonce={artifactWorkspace.previewNonce}
-            onCommitted={(nextTimeline, nextPreview) => {
-              artifactWorkspace.applyStudioCommit(nextTimeline, nextPreview)
+              continueAdjust: () => setActiveView('chat'),
             }}
           />
         )}

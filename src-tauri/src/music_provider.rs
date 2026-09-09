@@ -311,10 +311,9 @@ pub(crate) fn elevenlabs_json_request(
             let detail = response.into_string().unwrap_or_default();
             Err(classify_elevenlabs_http_error(code, &detail))
         }
-        Err(ureq::Error::Transport(transport)) => Err(crate::outbound_http::classify_voice_transport(
-            "ElevenLabs",
-            &transport,
-        )),
+        Err(ureq::Error::Transport(transport)) => Err(
+            crate::outbound_http::classify_voice_transport("ElevenLabs", &transport),
+        ),
     }
 }
 

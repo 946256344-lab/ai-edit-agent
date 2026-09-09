@@ -2,10 +2,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
 import type { EditingSessionView } from './workspace-types'
+import { ProjectSettingsModal } from './ProjectSettingsModal'
 
 export type AppSidebarModel = {
   projects: StoredProject[]
   activeProjectId: string | null
+  activeProjectName: string | null
   sessions: EditingSessionView[]
   activeSessionId: string | null
   providerLabel: string
@@ -34,6 +36,7 @@ type SessionMenu = {
 
 export function AppSidebar({ model, actions }: AppSidebarProps) {
   const [menu, setMenu] = useState<SessionMenu | null>(null)
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -115,11 +118,17 @@ export function AppSidebar({ model, actions }: AppSidebarProps) {
       )}
       <div className="sidebar-footer">
         <button onClick={actions.openProvider}><span className="provider-dot" /> {model.providerLabel}</button>
-        <button><span className="gear">o</span> 项目设置</button>
+        <button onClick={() => setProjectSettingsOpen(true)}><span className="gear">o</span> 项目设置</button>
         <span className={`store-state ${model.storeState}`}>
           {model.storeState === 'ready' ? '本地 SQLite 已就绪' : model.storeState === 'browser' ? '浏览器原型模式' : '本地存储不可用'}
         </span>
       </div>
+      <ProjectSettingsModal
+        open={projectSettingsOpen}
+        projectId={model.activeProjectId}
+        projectName={model.activeProjectName}
+        onClose={() => setProjectSettingsOpen(false)}
+      />
     </aside>
   )
 }
