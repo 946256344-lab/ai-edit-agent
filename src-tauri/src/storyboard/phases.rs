@@ -252,6 +252,7 @@ pub(crate) fn phase2_rough_shot_selection(
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
+            segment_id: None,
         });
     }
 
@@ -268,38 +269,73 @@ pub(crate) fn phase2_rough_shot_selection(
     })
 }
 
-/// 按排名去同/去相似并补位到 `target_len`；返回 (池, 分数, 是否库已耗尽仍不足)。
+/// 按排名去同/去相似并补位到 `target_len`。
+/// 两轮：先每素材最多 1 段，再补到目标（单素材最多 3 段）。
 fn dedupe_and_backfill_pool(
     ranked: &[scoring::ScoredCandidate],
     target_len: usize,
 ) -> (Vec<StoryboardSource>, Vec<scoring::CandidateScore>, bool) {
     let mut pool: Vec<StoryboardSource> = Vec::new();
     let mut scores: Vec<scoring::CandidateScore> = Vec::new();
-    for candidate in ranked {
+    let mut per_asset: HashMap<String, usize> = HashMap::new();
+
+    for max_per_asset in [1usize, 3usize] {
+        for candidate in ranked {
+            if pool.len() >= target_len {
+                break;
+            }
+            let count = *per_asset.get(&candidate.source.asset_id).unwrap_or(&0);
+            if count >= max_per_asset {
+                continue;
+            }
+            if pool
+                .iter()
+                .any(|existing| sources_are_similar(existing, &candidate.source))
+            {
+                continue;
+            }
+            *per_asset
+                .entry(candidate.source.asset_id.clone())
+                .or_insert(0) += 1;
+            pool.push(candidate.source.clone());
+            scores.push(candidate.score.clone());
+        }
         if pool.len() >= target_len {
             break;
         }
-        if pool
-            .iter()
-            .any(|existing| sources_are_similar(existing, &candidate.source))
-        {
-            continue;
-        }
-        pool.push(candidate.source.clone());
-        scores.push(candidate.score.clone());
     }
     let library_exhausted = pool.len() < target_len;
     (pool, scores, library_exhausted)
 }
 
+fn candidate_range_ms(source: &StoryboardSource) -> (i64, i64) {
+    if let Some(segment) = &source.segment {
+        (segment.start_ms, segment.end_ms)
+    } else {
+        (0, source.duration_ms.unwrap_or(0).max(0))
+    }
+}
+
+fn ranges_overlap(a: (i64, i64), b: (i64, i64)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
 fn sources_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> bool {
     if left.asset_id == right.asset_id {
-        return true;
+        // 同素材：范围重叠才判重（允许同片不同段同池）。
+        if ranges_overlap(candidate_range_ms(left), candidate_range_ms(right)) {
+            return true;
+        }
     }
-    if let (Some(a), Some(b)) = (
-        left.evidence_embedding.as_deref(),
-        right.evidence_embedding.as_deref(),
-    ) {
+    let left_emb = left
+        .segment_embedding
+        .as_deref()
+        .or(left.evidence_embedding.as_deref());
+    let right_emb = right
+        .segment_embedding
+        .as_deref()
+        .or(right.evidence_embedding.as_deref());
+    if let (Some(a), Some(b)) = (left_emb, right_emb) {
         if cosine_similarity(a, b).is_some_and(|score| score >= PHASE2_SIMILARITY_COSINE) {
             return true;
         }
@@ -430,15 +466,22 @@ fn compact_candidate_card(
         "candidateIndex": index,
         "assetId": source.asset_id,
         "kind": source.kind,
-        "durationMs": source.duration_ms,
+        "durationMs": source.segment.as_ref().map(|segment| segment.span_ms()).or(source.duration_ms),
         "hasKeyframeGrid": source.keyframe_grid_path.is_some(),
         "keyframeGridAttached": keyframe_grid_attached,
         "keyframeTimesMs": source.keyframes.iter().map(|frame| frame.time_ms).collect::<Vec<_>>(),
         "sceneSegments": source.scene_segments.iter().take(8).map(|segment| {
-            json!({"startMs": segment.start_ms, "endMs": segment.end_ms})
+            json!({"id": segment.id, "startMs": segment.start_ms, "endMs": segment.end_ms})
         }).collect::<Vec<_>>(),
         "visualTags": visual_tags
     });
+    if let Some(segment) = &source.segment {
+        card["segmentId"] = json!(segment.id);
+        card["startMs"] = json!(segment.start_ms);
+        card["endMs"] = json!(segment.end_ms);
+        card["shotType"] = json!(segment.shot_type);
+        card["cameraMotion"] = json!(segment.camera_motion);
+    }
     if let Some(score) = score {
         card["retrievalScore"] = json!(score.retrieval_score_pct());
         card["matchedKeywords"] = json!(score.matched_keywords);
@@ -571,6 +614,7 @@ mod tests {
                         freshness: 0.0,
                         has_evidence: true,
                         matched_keywords: vec![],
+                        shot_type: 0.0,
                     },
                 }
             })
@@ -604,6 +648,7 @@ mod tests {
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
+            segment_id: None,
         }
     }
 
@@ -631,6 +676,8 @@ mod tests {
             keyframe_grid_path: None,
             keyframes: Vec::new(),
             source_path: None,
+            segment: None,
+            segment_embedding: None,
         }
     }
 
@@ -1466,10 +1513,11 @@ pub(crate) fn phase3_select(
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
         Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries).\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list. With {covered_n} covered beats, that means at most {max_uses_if_two} uses if every beat has 2 shots, or at most {max_uses_if_three} uses if every beat has 3 shots. Prefer marking the weakest beat uncovered=true over violating this limit when the pools cannot supply enough distinct assets.\n\
-        For EACH covered beat, choose 2 or 3 DISTINCT assetIds from that beat's candidates, in playback order.\n\
-        You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then assetIds must be [].\n\
-        Do NOT invent assetIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
-        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"assetIds\":[\"a\",\"b\"],\"uncovered\":false}}]}}\n\
+        For EACH covered beat, choose 2 or 3 DISTINCT candidates from that beat's pool, in playback order.\n\
+        Prefer returning picks:[{{assetId,segmentId}}] when candidates expose segmentId; legacy assetIds still accepted.\n\
+        You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then picks/assetIds must be [].\n\
+        Do NOT invent assetIds or segmentIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
+        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"picks\":[{{\"assetId\":\"a\",\"segmentId\":\"s001\"}}],\"uncovered\":false}}]}}\n\
         Include exactly one selection object per covered beat id listed above.",
         rough.title,
         rough.summary,
@@ -1605,8 +1653,34 @@ struct Phase3BeatSelection {
     beat_id: String,
     #[serde(default)]
     asset_ids: Vec<String>,
+    /// 新契约：带 segmentId 的 picks；优先于 assetIds。
+    #[serde(default)]
+    picks: Vec<Phase3Pick>,
     #[serde(default)]
     uncovered: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Phase3Pick {
+    asset_id: String,
+    #[serde(default)]
+    segment_id: Option<String>,
+}
+
+impl Phase3BeatSelection {
+    fn resolved_picks(&self) -> Vec<Phase3Pick> {
+        if !self.picks.is_empty() {
+            return self.picks.clone();
+        }
+        self.asset_ids
+            .iter()
+            .map(|asset_id| Phase3Pick {
+                asset_id: asset_id.clone(),
+                segment_id: None,
+            })
+            .collect()
+    }
 }
 
 fn covered_beat_ids(rough: &RoughStoryboard) -> Vec<String> {
@@ -1657,7 +1731,7 @@ fn assemble_phase3_selection(
                 "Phase 3 selection missing covered beat '{beat_id}'."
             ));
         };
-        if selection.uncovered || selection.asset_ids.is_empty() {
+        if selection.uncovered || selection.resolved_picks().is_empty() {
             if !uncovered.iter().any(|id| id == &beat_id) {
                 uncovered.push(beat_id.clone());
             }
@@ -1668,24 +1742,44 @@ fn assemble_phase3_selection(
             .speech_timing
             .duration(&beat_id)
             .unwrap_or(per_beat_budget);
-        let part_count = selection.asset_ids.len() as i64;
-        for (part_offset, asset_id) in selection.asset_ids.iter().enumerate() {
-            let source = pool
-                .and_then(|pool| {
-                    pool.candidates
-                        .iter()
-                        .find(|candidate| candidate.asset_id == *asset_id)
+        let picks = selection.resolved_picks();
+        let part_count = picks.len() as i64;
+        for (part_offset, pick) in picks.iter().enumerate() {
+            let source = pool.and_then(|pool| {
+                pool.candidates.iter().find(|candidate| {
+                    candidate.asset_id == pick.asset_id
+                        && match (&pick.segment_id, &candidate.segment) {
+                            (Some(want), Some(have)) => &have.id == want,
+                            (Some(_), None) => false,
+                            (None, _) => true,
+                        }
                 })
-                .or_else(|| {
-                    // 无池时回退 rough lead（旧测试路径）
-                    None
-                });
+            });
             let duration = (per_beat_budget / part_count.max(1)).clamp(1_200, 6_000);
-            let source_duration = source
-                .and_then(|item| item.duration_ms)
+            let (provisional_start, provisional_end, segment_span) =
+                if let Some(segment) = source.and_then(|item| item.segment.as_ref()) {
+                    (
+                        segment.start_ms,
+                        segment.end_ms.max(segment.start_ms + 1),
+                        Some(segment.span_ms()),
+                    )
+                } else {
+                    (0, duration, None)
+                };
+            let source_duration = segment_span
+                .or_else(|| source.and_then(|item| item.duration_ms))
                 .unwrap_or(duration)
                 .max(1);
-            let source_end = duration.min(source_duration).max(1);
+            let source_end = if segment_span.is_some() {
+                provisional_end
+            } else {
+                (provisional_start + duration.min(source_duration)).max(provisional_start + 1)
+            };
+            let shot_duration = if segment_span.is_some() {
+                (source_end - provisional_start).clamp(1, duration.max(1))
+            } else {
+                (source_end - provisional_start).max(1)
+            };
             let split_role = if part_count <= 1 {
                 "lead"
             } else if part_offset == 0 {
@@ -1698,7 +1792,7 @@ fn assemble_phase3_selection(
             shots.push(StoryboardShot {
                 crop_focus: None,
                 order_index,
-                duration_ms: source_end,
+                duration_ms: shot_duration,
                 purpose: beat
                     .map(|item| item.purpose.clone())
                     .unwrap_or_else(|| pool.map(|p| p.beat_purpose.clone()).unwrap_or_default()),
@@ -1719,15 +1813,22 @@ fn assemble_phase3_selection(
                 } else {
                     String::new()
                 },
-                asset_id: asset_id.clone(),
-                source_start_ms: 0,
+                asset_id: pick.asset_id.clone(),
+                source_start_ms: provisional_start,
                 source_end_ms: source_end,
-                reason: "Phase 3 selected asset; ranges pending Phase 4.".to_owned(),
+                reason: if pick.segment_id.is_some() {
+                    "Phase 3 selected segment; ranges pending Phase 4 refine.".to_owned()
+                } else {
+                    "Phase 3 selected asset; ranges pending Phase 4.".to_owned()
+                },
                 beat_id: beat_id.clone(),
                 match_level: "contextual".to_owned(),
                 beat_part_index: (part_offset as i64) + 1,
                 beat_part_count: part_count,
                 split_role: split_role.to_owned(),
+                segment_id: pick.segment_id.clone().or_else(|| {
+                    source.and_then(|item| item.segment.as_ref().map(|s| s.id.clone()))
+                }),
             });
             order_index += 1;
         }
@@ -1787,14 +1888,35 @@ pub(crate) fn phase4_refine_ranges(
     let mut all_windows: Vec<Phase4ContentWindow> = Vec::new();
     for source in &selected_sources {
         let duration_ms = source.duration_ms.unwrap_or(0).max(1);
-        let keyframe_times: Vec<i64> = source.keyframes.iter().map(|frame| frame.time_ms).collect();
-        let windows =
-            build_phase4_windows_from_keyframes(&source.asset_id, duration_ms, &keyframe_times);
+        let real_segments = source
+            .scene_segments
+            .iter()
+            .filter(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms)
+            .collect::<Vec<_>>();
+        let windows = if !real_segments.is_empty() {
+            real_segments
+                .into_iter()
+                .map(|segment| Phase4ContentWindow {
+                    asset_id: source.asset_id.clone(),
+                    window_id: segment.id.clone(),
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let keyframe_times: Vec<i64> =
+                source.keyframes.iter().map(|frame| frame.time_ms).collect();
+            build_phase4_windows_from_keyframes(&source.asset_id, duration_ms, &keyframe_times)
+        };
         log::info!(
-            "Phase 4 windows for {}: count={} from_keyframes={}",
+            "Phase 4 windows for {}: count={} from_segments={}",
             source.asset_id,
             windows.len(),
-            keyframe_times.len()
+            source
+                .scene_segments
+                .iter()
+                .filter(|segment| !segment.id.is_empty())
+                .count()
         );
         windows_by_asset.insert(source.asset_id.clone(), windows.clone());
         all_windows.extend(windows);
@@ -1803,14 +1925,68 @@ pub(crate) fn phase4_refine_ranges(
         return Err("Phase 4 could not build content windows.".to_owned());
     }
 
+    // 有 Phase 3 片段锁定的镜头跳过 Pass A，直接把窗设为该片段（过短则并入相邻窗）。
+    let mut seeded_picks: Vec<Phase4WindowPick> = Vec::new();
+    let mut pass_a_orders: HashSet<i64> = HashSet::new();
+    for shot in &selected.shots {
+        if let Some(segment_id) = shot.segment_id.as_deref() {
+            let asset_windows = windows_by_asset
+                .get(&shot.asset_id)
+                .cloned()
+                .unwrap_or_default();
+            let locked = asset_windows
+                .iter()
+                .find(|window| window.window_id == segment_id)
+                .cloned()
+                .or_else(|| {
+                    Some(Phase4ContentWindow {
+                        asset_id: shot.asset_id.clone(),
+                        window_id: segment_id.to_owned(),
+                        start_ms: shot.source_start_ms,
+                        end_ms: shot.source_end_ms.max(shot.source_start_ms + 1),
+                    })
+                });
+            if let Some(mut window) = locked {
+                if window.span_ms() < shot.duration_ms.max(1) {
+                    if let Some(next) = asset_windows.iter().find(|candidate| {
+                        candidate.start_ms >= window.end_ms
+                            || (candidate.window_id != window.window_id
+                                && candidate.start_ms == window.end_ms)
+                    }) {
+                        window.end_ms = next.end_ms;
+                        window.window_id = format!("{}+{}", window.window_id, next.window_id);
+                    }
+                }
+                windows_by_asset
+                    .entry(shot.asset_id.clone())
+                    .or_default()
+                    .retain(|existing| existing.window_id != window.window_id);
+                windows_by_asset
+                    .entry(shot.asset_id.clone())
+                    .or_default()
+                    .push(window.clone());
+                seeded_picks.push(Phase4WindowPick {
+                    order_index: shot.order_index,
+                    window_id: window.window_id,
+                    uncertain: false,
+                });
+                continue;
+            }
+        }
+        pass_a_orders.insert(shot.order_index);
+    }
+
     let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
 
-    // —— Pass A：按素材贪心拆批，每批 ≤ PHASE4_PASS_A_MAX_IMAGES 张窗中点帧 ——
+    // —— Pass A：按素材贪心拆批；已片段锁定的镜头不进入 ——
     use crate::storyboard::multimodal::PHASE4_PASS_A_MAX_IMAGES;
-    let mut asset_order = selected_sources
+    let pass_a_asset_ids = selected
+        .shots
         .iter()
-        .map(|source| source.asset_id.clone())
-        .collect::<Vec<_>>();
+        .filter(|shot| pass_a_orders.contains(&shot.order_index))
+        .map(|shot| shot.asset_id.clone())
+        .collect::<HashSet<_>>();
+    let mut asset_order = pass_a_asset_ids.into_iter().collect::<Vec<_>>();
     asset_order.sort();
     let mut pass_a_batches: Vec<Vec<String>> = Vec::new();
     let mut current_batch: Vec<String> = Vec::new();
@@ -1827,19 +2003,21 @@ pub(crate) fn phase4_refine_ranges(
             pass_a_batches.push(std::mem::take(&mut current_batch));
             current_images = 0;
         }
-        // 单素材窗数超过上限时仍独占一批（无法再拆）。
         current_batch.push(asset_id.clone());
         current_images += window_count;
     }
     if !current_batch.is_empty() {
         pass_a_batches.push(current_batch);
     }
-    if pass_a_batches.is_empty() {
-        return Err("Phase 4 pass A had no assets with content windows.".to_owned());
-    }
 
-    let mut all_picks: Vec<Phase4WindowPick> = Vec::new();
+    let mut all_picks: Vec<Phase4WindowPick> = seeded_picks;
     let mut pass_a_frames = 0usize;
+    if pass_a_batches.is_empty() {
+        log::info!(
+            "Phase 4 pass A skipped: all {} shots locked to Phase 3 segments",
+            selected.shots.len()
+        );
+    }
     for (batch_index, batch_assets) in pass_a_batches.iter().enumerate() {
         let batch_asset_set = batch_assets.iter().cloned().collect::<HashSet<_>>();
         let batch_windows = all_windows
@@ -1850,7 +2028,10 @@ pub(crate) fn phase4_refine_ranges(
         let batch_shots = selected
             .shots
             .iter()
-            .filter(|shot| batch_asset_set.contains(&shot.asset_id))
+            .filter(|shot| {
+                batch_asset_set.contains(&shot.asset_id)
+                    && pass_a_orders.contains(&shot.order_index)
+            })
             .map(|shot| {
                 json!({
                     "orderIndex": shot.order_index,
@@ -1862,6 +2043,9 @@ pub(crate) fn phase4_refine_ranges(
                 })
             })
             .collect::<Vec<_>>();
+        if batch_shots.is_empty() {
+            continue;
+        }
         let window_cards = serde_json::to_string(&batch_windows)
             .map_err(|_| "Could not serialize Phase 4 windows.".to_owned())?;
         let shot_cards = serde_json::to_string(&batch_shots)
@@ -2901,6 +3085,39 @@ fn collect_phase3_issues(
                         "keep the beat at 2-3 shots using distinct pool candidates",
                     ]),
                 );
+            }
+            if let Some(segment_id) = shot.segment_id.as_deref() {
+                let segment_in_pool = rough
+                    .candidate_pools
+                    .iter()
+                    .find(|pool| pool.beat_id == beat_id)
+                    .map(|pool| {
+                        pool.candidates.iter().any(|candidate| {
+                            candidate.asset_id == shot.asset_id
+                                && candidate
+                                    .segment
+                                    .as_ref()
+                                    .is_some_and(|segment| segment.id == segment_id)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !segment_in_pool {
+                    issues.push(
+                        StoryboardIssue::new(
+                            "outside_candidate_segment",
+                            format!(
+                                "Shot {} for beat '{beat_id}' uses segment '{segment_id}' on asset '{}', which is outside that beat's Phase 2 pool.",
+                                offset + 1,
+                                shot.asset_id
+                            ),
+                            true,
+                        )
+                        .for_shots(vec![shot.order_index])
+                        .allowing(vec![
+                            "pick segmentId only from that beat's candidate pool cards",
+                        ]),
+                    );
+                }
             }
             if !used_in_beat.insert(shot.asset_id.clone()) {
                 issues.push(

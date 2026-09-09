@@ -24,6 +24,9 @@ pub(crate) struct CandidateScore {
     pub quality: f64,
     pub duration: f64,
     pub freshness: f64,
+    /// 景别与 beat 要求的轻量匹配加分；只有片段候选带景别时才非 0。
+    #[serde(default)]
+    pub shot_type: f64,
     pub has_evidence: bool,
     #[serde(default)]
     pub matched_keywords: Vec<String>,
@@ -99,29 +102,13 @@ fn calculate_candidate_score(
 
     let quality = candidate.visual_quality_score.unwrap_or(0.5) * 10.0;
 
-    let duration = if candidate.kind == "video" {
-        if let Some(duration) = candidate.duration_ms {
-            let target = target_duration_ms.max(1) as f64;
-            let available = candidate
-                .scene_segments
-                .iter()
-                .map(|segment| segment.end_ms - segment.start_ms)
-                .max()
-                .unwrap_or(duration)
-                .max(0) as f64;
-            let ratio = (available / target).min(1.0);
-            ratio * 10.0
-        } else {
-            0.0
-        }
-    } else {
-        10.0
-    };
+    let duration = duration_score(candidate, target_duration_ms);
+    let shot_type = shot_type_score(candidate, beat);
 
     let usage_count = usage_counts.get(&candidate.asset_id).copied().unwrap_or(0);
     let freshness = 5.0 / (1.0 + usage_count.max(0) as f64);
 
-    let mut total = semantic + lexical + quality + duration + freshness;
+    let mut total = semantic + lexical + quality + duration + freshness + shot_type;
 
     let current_storyboard_uses = prior_selections
         .iter()
@@ -142,9 +129,67 @@ fn calculate_candidate_score(
         quality,
         duration,
         freshness,
+        shot_type,
         has_evidence,
         matched_keywords,
     }
+}
+
+/// 时长匹配：片段候选按片段跨度衡量，整素材候选沿用最长场景段/整片时长。
+/// 跨度不足目标的 60% 时额外扣分，避免选出撑不满 beat 的碎片。
+fn duration_score(candidate: &StoryboardSource, target_duration_ms: i64) -> f64 {
+    if candidate.kind != "video" {
+        return 10.0;
+    }
+    let target = target_duration_ms.max(1) as f64;
+    let available = match candidate.segment.as_ref() {
+        Some(segment) => segment.span_ms() as f64,
+        None => {
+            let Some(duration) = candidate.duration_ms else {
+                return 0.0;
+            };
+            candidate
+                .scene_segments
+                .iter()
+                .map(|segment| segment.end_ms - segment.start_ms)
+                .max()
+                .unwrap_or(duration)
+                .max(0) as f64
+        }
+    };
+    let ratio = available / target;
+    let score = ratio.min(1.0) * 10.0;
+    if ratio < 0.6 {
+        (score - 3.0).max(0.0)
+    } else {
+        score
+    }
+}
+
+/// 景别轻量匹配：beat 要求特写/细节时偏向 close-up/detail，要求全景时偏向 wide。
+fn shot_type_score(candidate: &StoryboardSource, beat: &StoryboardBeat) -> f64 {
+    let Some(shot_type) = candidate
+        .segment
+        .as_ref()
+        .and_then(|segment| segment.shot_type.as_deref())
+    else {
+        return 0.0;
+    };
+    let shot_type = shot_type.trim().to_ascii_lowercase();
+    if shot_type.is_empty() {
+        return 0.0;
+    }
+    let request = format!("{} {}", beat.required_visual, beat.purpose).to_ascii_lowercase();
+    let wants_detail = request.contains("detail") || request.contains("特写");
+    let wants_wide =
+        request.contains("establishing") || request.contains("全景") || request.contains("wide");
+    if wants_detail && (shot_type.contains("close") || shot_type.contains("detail")) {
+        return 3.0;
+    }
+    if wants_wide && shot_type.contains("wide") {
+        return 3.0;
+    }
+    0.0
 }
 
 fn candidate_has_evidence(candidate: &StoryboardSource) -> bool {
@@ -169,11 +214,17 @@ fn semantic_match_parts(
     beat: &StoryboardBeat,
     beat_embedding: Option<&[f32]>,
 ) -> (f64, f64, Vec<String>) {
-    let cosine_available = beat_embedding
-        .zip(candidate.evidence_embedding.as_deref())
-        .and_then(|(query, candidate_embedding)| {
-            crate::storyboard::semantic::cosine_similarity(query, candidate_embedding)
-        });
+    // 片段候选优先用片段向量；片段向量缺失时回退素材级向量。
+    let candidate_embedding = candidate
+        .segment_embedding
+        .as_deref()
+        .or(candidate.evidence_embedding.as_deref());
+    let cosine_available =
+        beat_embedding
+            .zip(candidate_embedding)
+            .and_then(|(query, candidate_embedding)| {
+                crate::storyboard::semantic::cosine_similarity(query, candidate_embedding)
+            });
 
     let blob = evidence_blob(candidate);
     let evidence_has_cjk = blob
@@ -349,6 +400,8 @@ mod tests {
             keyframe_grid_path: None,
             keyframes: Vec::new(),
             source_path: None,
+            segment: None,
+            segment_embedding: None,
         }
     }
 
@@ -435,8 +488,12 @@ mod tests {
             actions: vec!["inspecting materials".to_owned()],
             products: vec![],
             quality_notes: vec![],
-            ..Default::default()
-}];
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
             time_ms: Some(0),
@@ -445,8 +502,12 @@ mod tests {
             actions: vec!["talking".to_owned()],
             products: vec![],
             quality_notes: vec![],
-            ..Default::default()
-}];
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
         let beat = StoryboardBeat {
             id: "beat-factory".to_owned(),
             purpose: "show the factory visit".to_owned(),
@@ -476,8 +537,12 @@ mod tests {
             actions: vec!["operating forklift".to_owned()],
             products: vec!["yellow forklift".to_owned()],
             quality_notes: vec![],
-            ..Default::default()
-}];
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
         let mut office = make_source("office", "video", Some(10_000), 0.95);
         office.visual_evidence = vec![crate::models::VisualEvidence {
             time_ms: Some(0),
@@ -486,8 +551,12 @@ mod tests {
             actions: vec!["talking".to_owned()],
             products: vec![],
             quality_notes: vec![],
-            ..Default::default()
-}];
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
         let beat = StoryboardBeat {
             id: "beat-logistics".to_owned(),
             purpose: "展示物流发货效率".to_owned(),
@@ -524,8 +593,12 @@ mod tests {
             actions: vec![],
             products: vec!["battery".to_owned()],
             quality_notes: vec![],
-            ..Default::default()
-}];
+            shot_type: None,
+
+            camera_motion: None,
+
+            segment_id: None,
+        }];
         let beat = StoryboardBeat {
             id: "beat-battery".to_owned(),
             purpose: "展示电池测试".to_owned(),

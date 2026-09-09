@@ -1266,6 +1266,7 @@ mod tests {
                     beat_part_index: 1,
                     beat_part_count: 2,
                     split_role: "lead".to_owned(),
+                    segment_id: None,
                 },
                 StoryboardShot {
                     crop_focus: None,
@@ -1283,6 +1284,7 @@ mod tests {
                     beat_part_index: 2,
                     beat_part_count: 2,
                     split_role: "tail".to_owned(),
+                    segment_id: None,
                 },
             ],
             created_at: 1,

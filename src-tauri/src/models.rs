@@ -792,6 +792,10 @@ pub struct StoryboardShot {
     /// 未拆分的 beat 恒为 lead。
     #[serde(default = "default_storyboard_split_role")]
     pub split_role: String,
+    /// 选中的片段 id（如 s003 或双段 s003+s004）；整条素材候选为 None。
+    /// Phase 4 用它跳过内容窗探测，直接把窗锁在该片段上。
+    #[serde(default)]
+    pub segment_id: Option<String>,
 }
 
 fn default_storyboard_match_level() -> String {
@@ -843,6 +847,25 @@ fn default_storyboard_script_mode() -> String {
 
 /// 片段级候选：一条 StoryboardSource 所指向的真实场景片段（或相邻双段）。
 /// 帧路径只在本地拼图时使用，不进模型文本。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateSegment {
+    pub(crate) id: String,
+    pub(crate) start_ms: i64,
+    pub(crate) end_ms: i64,
+    #[serde(default, skip_serializing)]
+    pub(crate) frame_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shot_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) camera_motion: Option<String>,
+}
+
+impl CandidateSegment {
+    pub(crate) fn span_ms(&self) -> i64 {
+        (self.end_ms - self.start_ms).max(0)
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -870,6 +893,12 @@ pub struct StoryboardSource {
     /// 本地源路径，仅用于 Phase 4 加密抽帧；绝不写入模型 prompt。
     #[serde(default, skip_serializing)]
     pub(crate) source_path: Option<String>,
+    /// 该候选对应的真实场景片段；None 表示按整条素材参与（未分段或片段证据未就绪）。
+    #[serde(default, skip_serializing)]
+    pub(crate) segment: Option<CandidateSegment>,
+    /// 片段级证据向量；仅在片段证据与向量版本有效时进入排序。
+    #[serde(default, skip_serializing)]
+    pub(crate) segment_embedding: Option<Vec<f32>>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
