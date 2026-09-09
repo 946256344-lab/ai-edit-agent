@@ -41,6 +41,7 @@
 .artifact-empty-preview { margin: 4px 0 14px; padding: 28px 18px; border: 1px dashed #3f423a; border-radius: 8px; background: #1c1d1a; }
 .artifact-empty-preview p { margin: 0; color: #9a9c93; font-size: 12px; line-height: 1.6; max-width: 460px; }
 .artifact-primary-actions { margin-top: 2px; }
+.jianying-notice { color: #b7c9a1; font-size: 11px; line-height: 1.55; margin: 10px 0 0; }
 .artifact-details { margin: 0 28px 24px; border: 1px solid #3a3c36; border-radius: 8px; background: #1c1d1a; }
 .artifact-details > summary { cursor: pointer; list-style: none; padding: 12px 16px; color: #d5d7ce; font-size: 12px; font-weight: 700; }
 .artifact-details > summary::-webkit-details-marker { display: none; }

@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-09，fix/jianying-deliver-feedback）：成果页剪映交付可见反馈与可读草稿名。见 docs/changes/2026-09-09-jianying-deliver-feedback.md。
 - [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。
 - [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。
 - [x] 完成（2026-09-08，fix/full-script-keep-voiceover）：可念稿 full_script 保留配音+对齐字幕；缺口不计混音尾；新建时间线继承旁白轨。见 docs/changes/2026-09-08-full-script-keep-voiceover.md。

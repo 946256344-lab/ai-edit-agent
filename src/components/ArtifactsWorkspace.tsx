@@ -21,6 +21,8 @@ export type ArtifactsWorkspaceModel = {
   preview: PreviewResult | null
   previewNonce: number
   deliveryStatus: string
+  jianyingNotice: string | null
+  jianyingNoticeTone: 'info' | 'error'
   tasks: StoredAgentTask[]
   operationLogs: StoredOperationLog[]
   timelineVersions: TimelineVersion[]
@@ -109,13 +111,22 @@ export function ArtifactsWorkspace({ model, actions }: ArtifactsWorkspaceProps) 
               className="primary-button"
               onClick={actions.createJianyingDraft}
               disabled={!timeline || busy.creatingJianyingDraft}
+              title={!timeline ? '需要先有剪辑结果才能交付剪映' : undefined}
             >
-              {busy.creatingJianyingDraft ? '交付中' : '打开剪映'}
+              {busy.creatingJianyingDraft ? '交付中…' : '生成剪映草稿'}
             </button>
             <button className="outline-button" onClick={actions.continueAdjust}>
               继续调整
             </button>
           </div>
+          {model.jianyingNotice && (
+            <p className={model.jianyingNoticeTone === 'error' ? 'storyboard-error' : 'jianying-notice'}>
+              {model.jianyingNotice}
+            </p>
+          )}
+          {!timeline && preview && (
+            <p className="storyboard-error">当前预览缺少对应剪辑结果，请回到 Agent 重新生成，或在下方详情里创建时间线。</p>
+          )}
         </section>
 
         <details

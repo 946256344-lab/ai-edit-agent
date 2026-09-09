@@ -60,8 +60,8 @@ export function getDeliveryStatus(
   if (!storyboard) return '等待开始剪辑'
   if (!timeline) return '第一版镜头已选好'
   if (timelineState === 'preview-generating') return '正在生成预览'
-  if (timelineState === 'jianying-pending') return '预览已完成 · 等待剪映注册'
-  if (timelineState === 'jianying') return '已打开剪映草稿'
+  if (timelineState === 'jianying-pending') return '预览已完成 · 草稿待剪映注册'
+  if (timelineState === 'jianying') return '剪映草稿已就绪'
   if (!preview) return '剪辑已完成 · 等待预览'
   return '预览已就绪'
 }
@@ -73,6 +73,31 @@ export function getTimelineLabel(timelineState: TimelineState, timeline: Timelin
   if (timelineState === 'preview-ready') return 'preview 已生成'
   if (timelineState === 'jianying-pending') return 'Jianying draft 已生成 · 退出 Jianying 后自动注册'
   return 'Jianying draft 已注册'
+}
+
+function draftNameFromResult(draftDirectory: string) {
+  const parts = draftDirectory.split(/[/\\]/).filter(Boolean)
+  return parts[parts.length - 1] || '剪映草稿'
+}
+
+function jianyingDeliverErrorMessage(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  if (/draft library is unavailable/i.test(raw)) {
+    return '找不到剪映草稿库。请先打开一次剪映并新建任意本地草稿，然后再试。'
+  }
+  if (/not yet verified for Jianying/i.test(raw)) {
+    return '当前字幕样式还不支持交付剪映。请先用本地预览确认，或去掉未验证的字幕效果后再试。'
+  }
+  if (/Python with pyJianYingDraft is unavailable/i.test(raw)) {
+    return '本机缺少 Python（py）或 pyJianYingDraft，无法生成剪映草稿。'
+  }
+  if (/source media|unavailable asset|Music source/i.test(raw)) {
+    return '有素材文件找不到了。请先在素材页重新定位缺失文件，再交付剪映。'
+  }
+  if (/Jianying Pro is still running/i.test(raw)) {
+    return '剪映仍在运行，草稿注册未完成。请完全退出剪映后，再回到这里点一次。'
+  }
+  return '剪映草稿未能生成。请确认已安装剪映专业版，并完全退出剪映后重试。'
 }
 
 /**
@@ -93,6 +118,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [isCreatingTimeline, setIsCreatingTimeline] = useState(false)
   const [isRenderingPreview, setIsRenderingPreview] = useState(false)
   const [isCreatingJianyingDraft, setIsCreatingJianyingDraft] = useState(false)
+  const [jianyingNotice, setJianyingNotice] = useState<string | null>(null)
+  const [jianyingNoticeTone, setJianyingNoticeTone] = useState<'info' | 'error'>('info')
   const [operationLogs, setOperationLogs] = useState<StoredOperationLog[]>([])
   const [timelineVersions, setTimelineVersions] = useState<TimelineVersion[]>([])
   const activeTimelineRef = useRef<string | null>(null)
@@ -132,6 +159,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     setTimelineState('not-created')
     setOperationLogs([])
     setTimelineVersions([])
+    setJianyingNotice(null)
   }
 
   function applyAgentResult(result: AgentEditEvent['result']) {
@@ -368,23 +396,41 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   }
 
   async function deliverJianyingDraft() {
-    if (!options.projectId || !timeline || isCreatingJianyingDraft) return
+    if (!options.projectId || !timeline || isCreatingJianyingDraft) {
+      if (!timeline) {
+        setJianyingNoticeTone('error')
+        setJianyingNotice('还没有可交付的剪辑结果。请先在 Agent 里生成预览，或在下方详情里创建时间线。')
+      }
+      return
+    }
     const projectId = options.projectId
     setIsCreatingJianyingDraft(true)
+    setJianyingNotice(null)
     try {
       const draft = await createJianyingDraft(timeline.id)
       if (options.activeProjectRef.current !== projectId) return
       activeTimelineRef.current = timeline.id
-      setTimelineState(draft.registrationStatus === 'pending' ? 'jianying-pending' : 'jianying')
+      const draftName = draftNameFromResult(draft.draftDirectory)
+      const pending = draft.registrationStatus === 'pending'
+      setTimelineState(pending ? 'jianying-pending' : 'jianying')
+      setJianyingNoticeTone('info')
+      setJianyingNotice(
+        pending
+          ? `草稿「${draftName}」已写好，但剪映正在运行，列表还不会刷新。请完全退出剪映后再打开，即可看到。`
+          : `草稿「${draftName}」已生成并注册。请在剪映本地草稿箱中查找该名称；若剪映已打开，请重启后再看。`,
+      )
       if (options.session?.conversationId) {
         await options.appendAgentMessage(
           options.session.conversationId,
           options.session.id,
-          draft.registrationStatus === 'pending'
-            ? '剪映草稿已生成，等待退出剪映后自动注册。'
-            : '剪映草稿已交付，你可以打开剪映继续查看。',
+          pending
+            ? `剪映草稿「${draftName}」已生成，等待退出剪映后自动注册。`
+            : `剪映草稿「${draftName}」已交付，可在剪映本地草稿中打开。`,
         )
       }
+    } catch (error) {
+      setJianyingNoticeTone('error')
+      setJianyingNotice(jianyingDeliverErrorMessage(error))
     } finally {
       setIsCreatingJianyingDraft(false)
     }
@@ -425,6 +471,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       preview,
       previewNonce,
       deliveryStatus: getDeliveryStatus(storyboard, timeline, preview, timelineState),
+      jianyingNotice,
+      jianyingNoticeTone,
       operationLogs,
       timelineVersions,
       busy: {
