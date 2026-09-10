@@ -3,7 +3,9 @@
 
 use std::{
     ffi::OsStr,
+    io::{self, Read},
     process::{Child, Command, Output, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -67,6 +69,17 @@ fn terminate_and_reap(child: &mut Child) {
     let _ = wait_for_exit(child, Duration::from_secs(2));
 }
 
+// FFmpeg 的输出可能填满管道；必须在等待退出的同时读取 stdout/stderr。
+fn drain_pipe(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
 /// Runs a hidden command with a hard deadline. On Windows it asks `taskkill /T
 /// /F` to terminate the child tree, then reaps the direct child when it exits
 /// within a short cleanup window. If termination cannot be requested or
@@ -76,15 +89,28 @@ pub(crate) fn run_hidden_command_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> Result<Output, HiddenCommandError> {
+    let timeout =
+        crate::execution_deadline::timeout(timeout).map_err(|_| HiddenCommandError::TimedOut)?;
+    let deadline = Instant::now() + timeout;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|_| HiddenCommandError::Failed)?;
-    let deadline = Instant::now() + timeout;
+    let stdout = drain_pipe(child.stdout.take().unwrap());
+    let stderr = drain_pipe(child.stderr.take().unwrap());
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                return child
+                let mut output = child
                     .wait_with_output()
-                    .map_err(|_| HiddenCommandError::Failed)
+                    .map_err(|_| HiddenCommandError::Failed)?;
+                output.stdout = stdout
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .map_err(|_| HiddenCommandError::TimedOut)?
+                    .map_err(|_| HiddenCommandError::Failed)?;
+                output.stderr = stderr
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .map_err(|_| HiddenCommandError::TimedOut)?
+                    .map_err(|_| HiddenCommandError::Failed)?;
+                return Ok(output);
             }
             Ok(None) if Instant::now() >= deadline => {
                 terminate_and_reap(&mut child);
@@ -119,6 +145,32 @@ pub(crate) fn program_responds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_command_drains_both_pipes_before_waiting_for_exit() {
+        let mut command = if cfg!(windows) {
+            let mut command = hidden_command("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.Write('x' * 1048576); [Console]::Error.Write('e' * 1048576)",
+            ]);
+            command
+        } else {
+            let mut command = hidden_command("sh");
+            command.args([
+                "-c",
+                "head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2",
+            ]);
+            command
+        };
+        let output = run_hidden_command_with_timeout(&mut command, Duration::from_secs(5))
+            .expect("large FFmpeg-style output must not block child exit");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 1048576);
+        assert_eq!(output.stderr.len(), 1048576);
+    }
 
     #[test]
     fn hidden_command_timeout_reaps_the_child() {

@@ -319,6 +319,9 @@ pub(crate) fn extract_frames_at_times(
     }
     let mut frames = Vec::new();
     for (index, &time_ms) in times_ms.iter().enumerate() {
+        if crate::execution_deadline::check().is_err() {
+            break;
+        }
         let destination = directory.join(format!("frame_{:03}_{time_ms}.jpg", index + 1));
         if extract_jpeg_at_time(source_path, time_ms, &destination) {
             frames.push((time_ms, destination));

@@ -291,7 +291,7 @@ pub(crate) fn elevenlabs_json_request(
     request = request
         .set("xi-api-key", &api_key)
         .set("Accept", "application/json")
-        .timeout(ELEVENLABS_TIMEOUT);
+        .timeout(crate::execution_deadline::timeout(ELEVENLABS_TIMEOUT)?);
     let result = if let Some(payload) = body {
         request
             .set("Content-Type", "application/json")
@@ -520,7 +520,7 @@ pub(crate) mod fish_audio {
         request = request
             .set("Authorization", &format!("Bearer {key}"))
             .set("Accept", "application/json")
-            .timeout(TIMEOUT);
+            .timeout(crate::execution_deadline::timeout(TIMEOUT)?);
         let result = if let Some(body) = body {
             request
                 .set("Content-Type", "application/json")

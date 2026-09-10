@@ -688,6 +688,57 @@ mod tests {
     }
 
     #[test]
+    fn candidate_indexes_resolve_whole_assets_and_exact_segments() {
+        let mut pool = candidate_pool("beat-1", &["whole", "segmented", "segmented"]);
+        // 整素材也带场景描述，但其编号不能被误当作选中的片段。
+        pool.candidates[0].scene_segments = vec![serde_json::from_value(serde_json::json!({
+            "id":"s001", "startMs":0, "endMs":10000
+        }))
+        .unwrap()];
+        for (index, start) in [(1, 2000), (2, 5000)] {
+            pool.candidates[index].segment = Some(crate::models::CandidateSegment {
+                id: format!("s00{index}"),
+                start_ms: start,
+                end_ms: start + 2000,
+                frame_paths: vec![],
+                shot_type: None,
+                camera_motion: None,
+            });
+        }
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "test".to_owned(),
+            summary: String::new(),
+            target_duration_ms: 6000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: vec![],
+            shots: vec![shot("whole")],
+            candidate_pools: vec![pool],
+        };
+        let mut selected = super::assemble_phase3_selection(
+            "test",
+            &rough,
+            r#"{"selections":[{"beatId":"beat-1","candidateIndexes":[0,2],"uncovered":false}]}"#,
+        )
+        .unwrap();
+        assert_eq!(selected.shots[0].asset_id, "whole");
+        assert_eq!(selected.shots[0].segment_id, None);
+        assert_eq!(selected.shots[1].segment_id.as_deref(), Some("s002"));
+        assert_eq!(selected.shots[1].source_start_ms, 5000);
+        assert_eq!(selected.shots[1].source_end_ms, 7000);
+        assert!(collect_phase3_issues(&mut selected, &rough).is_empty());
+        let invalid = super::assemble_phase3_selection(
+            "test",
+            &rough,
+            r#"{"selections":[{"beatId":"beat-1","candidateIndexes":[99],"uncovered":false}]}"#,
+        )
+        .err()
+        .expect("out-of-pool index must fail");
+        assert!(invalid.contains("candidateIndex 99"));
+    }
+
+    #[test]
     fn phase2_sends_twelve_candidates_to_the_model() {
         assert_eq!(PHASE2_TOP_CANDIDATES, 12);
     }
@@ -1510,11 +1561,11 @@ pub(crate) fn phase3_select(
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
         Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries).\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list. With {covered_n} covered beats, that means at most {max_uses_if_two} uses if every beat has 2 shots, or at most {max_uses_if_three} uses if every beat has 3 shots. Prefer marking the weakest beat uncovered=true over violating this limit when the pools cannot supply enough distinct assets.\n\
-        For EACH covered beat, choose 2 or 3 DISTINCT candidates from that beat's pool, in playback order.\n\
-        Prefer returning picks:[{{assetId,segmentId}}] when candidates expose segmentId; legacy assetIds still accepted.\n\
-        You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then picks/assetIds must be [].\n\
-        Do NOT invent assetIds or segmentIds. Do NOT pick from another beat's pool. Do NOT refine source time ranges yet.\n\n\
-        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"picks\":[{{\"assetId\":\"a\",\"segmentId\":\"s001\"}}],\"uncovered\":false}}]}}\n\
+        For EACH covered beat, choose 2 or 3 candidates with DISTINCT assetIds from that beat's pool, in playback order.\n\
+        Return candidateIndexes using the exact zero-based candidateIndex values from that beat's pool, in playback order. Rust resolves the asset, segment and source range.\n\
+        You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then candidateIndexes must be [].\n\
+        Do NOT return assetIds, segmentIds or source ranges. sceneSegments describe context, not additional selectable candidates.\n\n\
+        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"candidateIndexes\":[0,1],\"uncovered\":false}}]}}\n\
         Include exactly one selection object per covered beat id listed above.",
         rough.title,
         rough.summary,
@@ -1559,6 +1610,7 @@ pub(crate) fn phase3_select(
     let text = model_response_json_text(access, &body)
         .ok_or_else(|| "Phase 3 response did not contain JSON.".to_owned())?;
 
+    crate::execution_deadline::check()?;
     let mut selected = assemble_phase3_selection(brief, rough, &text)?;
     let issues = collect_phase3_issues(&mut selected, rough);
     log::info!(
@@ -1648,36 +1700,9 @@ struct Phase3SelectResponse {
 #[serde(rename_all = "camelCase")]
 struct Phase3BeatSelection {
     beat_id: String,
-    #[serde(default)]
-    asset_ids: Vec<String>,
-    /// 新契约：带 segmentId 的 picks；优先于 assetIds。
-    #[serde(default)]
-    picks: Vec<Phase3Pick>,
+    candidate_indexes: Vec<usize>,
     #[serde(default)]
     uncovered: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Phase3Pick {
-    asset_id: String,
-    #[serde(default)]
-    segment_id: Option<String>,
-}
-
-impl Phase3BeatSelection {
-    fn resolved_picks(&self) -> Vec<Phase3Pick> {
-        if !self.picks.is_empty() {
-            return self.picks.clone();
-        }
-        self.asset_ids
-            .iter()
-            .map(|asset_id| Phase3Pick {
-                asset_id: asset_id.clone(),
-                segment_id: None,
-            })
-            .collect()
-    }
 }
 
 fn covered_beat_ids(rough: &RoughStoryboard) -> Vec<String> {
@@ -1728,7 +1753,7 @@ fn assemble_phase3_selection(
                 "Phase 3 selection missing covered beat '{beat_id}'."
             ));
         };
-        if selection.uncovered || selection.resolved_picks().is_empty() {
+        if selection.uncovered || selection.candidate_indexes.is_empty() {
             if !uncovered.iter().any(|id| id == &beat_id) {
                 uncovered.push(beat_id.clone());
             }
@@ -1739,22 +1764,14 @@ fn assemble_phase3_selection(
             .speech_timing
             .duration(&beat_id)
             .unwrap_or(per_beat_budget);
-        let picks = selection.resolved_picks();
-        let part_count = picks.len() as i64;
-        for (part_offset, pick) in picks.iter().enumerate() {
-            let source = pool.and_then(|pool| {
-                pool.candidates.iter().find(|candidate| {
-                    candidate.asset_id == pick.asset_id
-                        && match (&pick.segment_id, &candidate.segment) {
-                            (Some(want), Some(have)) => &have.id == want,
-                            (Some(_), None) => false,
-                            (None, _) => true,
-                        }
-                })
-            });
+        let part_count = selection.candidate_indexes.len() as i64;
+        for (part_offset, index) in selection.candidate_indexes.iter().enumerate() {
+            let candidate = pool.and_then(|pool| pool.candidates.get(*index)).ok_or_else(|| {
+                format!("Phase 3 candidateIndex {index} is outside beat '{beat_id}' candidate pool.")
+            })?;
             let duration = (per_beat_budget / part_count.max(1)).clamp(1_200, 6_000);
             let (provisional_start, provisional_end, segment_span) =
-                if let Some(segment) = source.and_then(|item| item.segment.as_ref()) {
+                if let Some(segment) = candidate.segment.as_ref() {
                     (
                         segment.start_ms,
                         segment.end_ms.max(segment.start_ms + 1),
@@ -1764,7 +1781,7 @@ fn assemble_phase3_selection(
                     (0, duration, None)
                 };
             let source_duration = segment_span
-                .or_else(|| source.and_then(|item| item.duration_ms))
+                .or(candidate.duration_ms)
                 .unwrap_or(duration)
                 .max(1);
             let source_end = if segment_span.is_some() {
@@ -1810,10 +1827,10 @@ fn assemble_phase3_selection(
                 } else {
                     String::new()
                 },
-                asset_id: pick.asset_id.clone(),
+                asset_id: candidate.asset_id.clone(),
                 source_start_ms: provisional_start,
                 source_end_ms: source_end,
-                reason: if pick.segment_id.is_some() {
+                reason: if candidate.segment.is_some() {
                     "Phase 3 selected segment; ranges pending Phase 4 refine.".to_owned()
                 } else {
                     "Phase 3 selected asset; ranges pending Phase 4.".to_owned()
@@ -1823,9 +1840,7 @@ fn assemble_phase3_selection(
                 beat_part_index: (part_offset as i64) + 1,
                 beat_part_count: part_count,
                 split_role: split_role.to_owned(),
-                segment_id: pick.segment_id.clone().or_else(|| {
-                    source.and_then(|item| item.segment.as_ref().map(|s| s.id.clone()))
-                }),
+                segment_id: candidate.segment.as_ref().map(|segment| segment.id.clone()),
             });
             order_index += 1;
         }
@@ -1872,9 +1887,11 @@ pub(crate) fn phase4_refine_ranges(
         .iter()
         .map(|shot| shot.asset_id.as_str())
         .collect::<HashSet<_>>();
+    let mut seen_assets = HashSet::new();
     let selected_sources = sources
         .iter()
         .filter(|source| selected_asset_ids.contains(source.asset_id.as_str()))
+        .filter(|source| seen_assets.insert(source.asset_id.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if selected_sources.len() != selected_asset_ids.len() {
@@ -2253,6 +2270,7 @@ pub(crate) fn phase4_refine_ranges(
                 &times,
                 &format!("passB_{order_index}"),
             );
+            crate::execution_deadline::check()?;
             if frames.is_empty() {
                 continue;
             }
@@ -2455,6 +2473,7 @@ pub(crate) fn phase4_refine_ranges(
                     &times,
                     &format!("passC_{order_index}"),
                 );
+                crate::execution_deadline::check()?;
                 if frames.is_empty() {
                     continue;
                 }
@@ -2526,6 +2545,7 @@ pub(crate) fn phase4_refine_ranges(
     refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
     let mut issues = super::timing::fit_shots(&mut refined, &rough.speech_timing, &pick_map);
     resolve_overlaps_within_chosen_windows(&mut refined, &pick_map);
+    crate::execution_deadline::check()?;
     issues.extend(collect_phase4_issues(&mut refined, selected));
     refined.brief = brief.to_owned();
     refined.title = rough.title.clone();
@@ -3078,7 +3098,7 @@ fn collect_phase3_issues(
                     )
                     .for_shots(vec![shot.order_index])
                     .allowing(vec![
-                        "pick assetIds only from the beat's candidate pool",
+                        "pick candidateIndexes only from the beat's candidate pool",
                         "keep the beat at 2-3 shots using distinct pool candidates",
                     ]),
                 );
@@ -3111,7 +3131,7 @@ fn collect_phase3_issues(
                         )
                         .for_shots(vec![shot.order_index])
                         .allowing(vec![
-                            "pick segmentId only from that beat's candidate pool cards",
+                            "pick candidateIndexes only from that beat's candidate pool cards",
                         ]),
                     );
                 }
@@ -3169,7 +3189,7 @@ fn collect_phase3_issues(
                     )
                     .for_shots(affected)
                     .allowing(vec![
-                        "select 2-3 distinct assetIds from that beat's candidate pool",
+                        "select 2-3 candidateIndexes belonging to distinct assetIds from that beat's candidate pool",
                     ]),
                 );
             } else if pool_candidate_count == 1 {
@@ -3278,7 +3298,7 @@ fn collect_phase3_issues(
                     .for_shots(shot_indices)
                     .allowing(vec![
                         format!(
-                            "replace {excess} of these shots with different assetIds from their beat pools so '{asset_id}' is used at most {max_allowed} times"
+                            "replace {excess} of these shots using candidateIndexes for different assets from their beat pools so '{asset_id}' is used at most {max_allowed} times"
                         ),
                         "or mark the weakest beat uncovered=true when pools cannot supply enough distinct assets".to_owned(),
                     ]),

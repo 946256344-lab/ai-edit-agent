@@ -536,10 +536,12 @@ fn drive_native_loop(
     mut cancelled: impl FnMut() -> bool,
     mut observed: impl FnMut(&str, usize),
 ) -> Result<String, String> {
+    let _deadline = crate::execution_deadline::DeadlineScope::enter(Some(run_deadline));
     receipt.requires_project_observation = requires_observation;
     let mut storyboard_confirmation_pending = false;
     let mut tool_step_number = 0usize;
     let mut continuation = ContinuationState::default();
+    let mut exhausted_storyboard: Option<Value> = None;
     for step_number in 1..=MAX_STEPS {
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
@@ -608,11 +610,19 @@ fn drive_native_loop(
             let is_observation = OBSERVATION_TOOLS.contains(&call.name.as_str());
             let is_project_observation = is_observation && call.name != READ_LOGS;
             let executed = !(storyboard_confirmation_pending && !is_observation);
-            let result = if !executed {
+            crate::execution_deadline::check()?;
+            let result = if call.name == "generate_storyboard" && exhausted_storyboard.is_some() {
+                exhausted_storyboard.as_ref().unwrap().clone()
+            } else if !executed {
                 storyboard_confirmation_required(&call.name)
             } else {
                 execute(&call, tool_step_number)?
             };
+            if call.name == "generate_storyboard" && result["code"] == "storyboard_selection_failed"
+            {
+                exhausted_storyboard = Some(result.clone());
+            }
+            crate::execution_deadline::check()?;
             let result_status = result["status"].as_str();
             if result_status == Some("needs_confirmation") {
                 storyboard_confirmation_pending = true;
@@ -2820,17 +2830,87 @@ mod tests {
     }
 
     #[test]
-    fn storyboard_phase2_failure_tells_the_model_to_retry_generate_storyboard() {
+    fn exhausted_storyboard_is_not_executed_again_in_same_run() {
+        let tool_call = json!({"output":[{"type":"function_call", "call_id":"retry",
+            "name":"generate_storyboard", "arguments":"{}"}]})
+        .to_string();
+        let mut responses = vec![
+            tool_call.clone(),
+            tool_call,
+            json!({"output":[{"type":"message", "role":"assistant", "content":[
+                {"type":"output_text", "text":"选镜失败，未生成分镜。"}]}]})
+            .to_string(),
+        ]
+        .into_iter();
+        let mut executed = 0;
+        let mut input = Vec::new();
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &mut NativeRunReceipt::default(),
+            "生成视频",
+            Instant::now() + Duration::from_secs(5),
+            &mut |_, _| Ok(responses.next().unwrap()),
+            &mut |_, _| {
+                executed += 1;
+                Ok(safe_tool_failure_context(
+                    "generate_storyboard",
+                    "Phase 3 failed; partialCandidateSummary={}",
+                ))
+            },
+            &mut || Ok(None),
+            || false,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(executed, 1);
+        assert!(result.contains("未生成"));
+    }
+
+    #[test]
+    fn tool_execution_receives_and_obeys_the_run_deadline() {
+        let mut invoked = false;
+        let result = drive_native_loop(
+            &mut Vec::new(),
+            false,
+            false,
+            &mut NativeRunReceipt::default(),
+            "生成视频",
+            Instant::now() + Duration::from_millis(100),
+            &mut |_, _| {
+                Ok(json!({"output":[{"type":"function_call", "call_id":"slow",
+                "name":"generate_storyboard", "arguments":"{}"}]})
+                .to_string())
+            },
+            &mut |_, _| {
+                invoked = true;
+                assert!(
+                    crate::execution_deadline::timeout(Duration::from_secs(120)).unwrap()
+                        <= Duration::from_millis(100)
+                );
+                std::thread::sleep(Duration::from_millis(120));
+                Ok(json!({"status":"failed"}))
+            },
+            &mut || Ok(None),
+            || false,
+            |_, _| {},
+        );
+        assert!(invoked);
+        assert_eq!(result.unwrap_err(), crate::execution_deadline::EXCEEDED);
+    }
+
+    #[test]
+    fn storyboard_selection_failure_stops_whole_pipeline_retries() {
         let failure = safe_tool_failure_context(
             "generate_storyboard",
             "storyboard_phase2_empty: no beat received a valid shot from its top candidates.",
         );
         assert_eq!(failure["code"], "storyboard_selection_failed");
-        assert_eq!(failure["retryable"], true);
+        assert_eq!(failure["retryable"], false);
         assert!(failure["recovery"]
             .as_str()
-            .is_some_and(|text| text.contains("generate_storyboard")
-                && text.contains("Do not assemble shots")));
+            .is_some_and(|text| text.contains("Do not call generate_storyboard again")));
     }
 
     #[test]

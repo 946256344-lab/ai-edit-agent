@@ -1,5 +1,13 @@
 # API 与工具契约
 
+## 2026-09-10：剪辑失败修复
+
+公开 Tauri 命令、SQLite schema 与前端参数不变。Phase 3 内部模型响应改为 `selections:[{beatId,candidateIndexes:[0,1],uncovered:false}]`，序号仅在对应 beat 的候选池内有效；Rust 映射素材、片段与源时间范围，模型不再填写 ID。Phase 4 按素材 ID 去重候选来源，片段选择仍由镜头自身携带。
+
+`storyboard_selection_failed` 返回 `retryable:false`，已有分阶段修正耗尽后不再要求或执行本轮整套重做。Native 的 30 分钟总预算传递到同步模型/配音请求、媒体子进程和等待步骤；离线推理仅在调用前后检查，不能强制中断正在执行的 ONNX 运算。
+
+启动恢复包括 `analyze_asset_segments_batch` 的中断任务，保留已有素材/片段分析。素材视觉失败使用现有 Provider 安全错误码区分请求失败，返回内容无法解析使用 `visual_response_invalid`。见 `docs/changes/2026-09-10-editing-failure-fixes.md`。
+
 ## 2026-09-09：粗剪推荐与手动换镜
 
 新增命令（前端统一经 `src/lib/local-store.ts`）：

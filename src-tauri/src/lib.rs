@@ -18,6 +18,8 @@ mod confirmation;
 mod custom_api;
 /// SQLite 位置、连接策略与只追加 schema 迁移。
 mod db;
+/// 同步 Agent 子步骤共享截止时间，后台分析保持独立。
+mod execution_deadline;
 /// 单向 Jianying draft 创建与延迟注册。
 mod jianying;
 /// 可序列化领域/Tauri 边界类型；本模块不放持久化行为。

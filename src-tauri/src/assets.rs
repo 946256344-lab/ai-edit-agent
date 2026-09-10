@@ -151,7 +151,8 @@ pub(crate) fn wait_for_asset_ready(
     project_id: &str,
     asset_id: &str,
 ) -> Result<Asset, String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    let deadline =
+        std::time::Instant::now() + crate::execution_deadline::timeout(Duration::from_secs(45))?;
     loop {
         let assets = library::list_assets(app.clone(), project_id.to_owned())?;
         let asset = assets

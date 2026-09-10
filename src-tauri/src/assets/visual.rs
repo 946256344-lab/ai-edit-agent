@@ -573,6 +573,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
         }
     };
     let request = serde_json::json!({ "model": "gpt-5.4", "store": false, "stream": true, "input": [{ "role": "user", "content": content }], "text": { "format": { "type": "json_object" } } });
+    let mut failure_note = "visual_response_invalid".to_owned();
     let response_body =
         match post_visual_model_payload(&access, &request, Some(VISUAL_ANALYSIS_TIMEOUT)) {
             Ok(body) => body,
@@ -596,7 +597,11 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
                 );
                 return;
             }
-            Err(error) => { log::warn!("Visual model request failed: {error}"); String::new() }
+            Err(error) => {
+                log::warn!("Visual model request failed: {error}");
+                failure_note = crate::provider::classify_model_request_failure(&error).code;
+                String::new()
+            }
         };
     let response = (!response_body.is_empty())
         .then_some(response_body)
@@ -609,7 +614,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
             &asset_ids,
             "failed",
             &HashMap::new(),
-            Some("visual_request_failed"),
+            Some(&failure_note),
         );
         let _ = update_visual_batch_task(
             &app,
@@ -619,7 +624,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
             0,
             0,
             requested_count,
-            Some("visual_request_failed"),
+            Some(&failure_note),
         );
         return;
     };
@@ -841,6 +846,11 @@ pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), 
     log::info!("[PERF] recover_interrupted_visual_batches: starting");
     let start = std::time::Instant::now();
     let connection = open_connection(app)?;
+    // 片段任务不修改整素材视觉状态，也不清除已缓存的片段证据。
+    connection.execute(
+        "UPDATE agent_tasks SET status = 'queued', error_message = NULL, updated_at = ?1 WHERE tool_name = 'analyze_asset_segments_batch' AND status = 'running'",
+        params![now_millis()],
+    ).map_err(|error| error.to_string())?;
     let rows = connection
         .prepare(
             "SELECT id, input_json FROM agent_tasks WHERE tool_name = 'analyze_asset_visual_batch' AND status = 'running'",

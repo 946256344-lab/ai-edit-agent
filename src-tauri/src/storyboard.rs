@@ -2280,6 +2280,7 @@ fn generate_storyboard_internal(
     voice_id: Option<&str>,
     schedule_visual_analysis: bool,
 ) -> Result<StoryboardVersion, String> {
+    crate::execution_deadline::check()?;
     log::info!(
         "Starting AI storyboard generation. project_id={}, editing_task_id={}, brief_length={}, schedule_visual_analysis={}",
         project_id,
@@ -2443,6 +2444,7 @@ fn generate_storyboard_internal(
             .unwrap_or_else(|| "Storyboard narrative structure could not be generated.".to_owned())
     })?;
     let mut narrative = narrative;
+    crate::execution_deadline::check()?;
     enforce_decided_script_mode(brief, required_script_mode, &mut narrative);
     // Audio-first: when full_script beats carry narration, pre-synthesize to obtain exact duration and override target duration so Phase 2/3 select shots around the true voiceover length. Non-critical: if TTS fails, keep estimated duration.
     let mut audio_first: Option<(i64, crate::voice_provider::AudioFirstPrepared)> = None;
@@ -2454,7 +2456,13 @@ fn generate_storyboard_internal(
     );
     // 语义编码不依赖音频时长，与 TTS 同时执行；最终排序等待两者完成。
     let embeddings = std::thread::scope(|scope| {
-        let embedding_job = scope.spawn(|| semantic::encode_beats(&app, &narrative.beats));
+        let deadline = crate::execution_deadline::current();
+        let app_ref = &app;
+        let beats_ref = &narrative.beats;
+        let embedding_job = scope.spawn(move || {
+            let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
+            semantic::encode_beats(app_ref, beats_ref)
+        });
         if narrative.script_mode == "full_script" {
             if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty())
             {
@@ -2487,6 +2495,7 @@ fn generate_storyboard_internal(
             .join()
             .map_err(|_| "Semantic encoding worker failed.".to_owned())?
     });
+    crate::execution_deadline::check()?;
     let embeddings = embeddings.unwrap_or_else(|error| {
         log::warn!("Local semantic ranking unavailable: {error}");
         Vec::new()
@@ -2540,6 +2549,7 @@ fn generate_storyboard_internal(
         ensure.ready.len(),
         ensure.pending.len()
     );
+    crate::execution_deadline::check()?;
     let expand_set = ensure.ready.iter().cloned().collect::<HashSet<_>>();
     let connection = open_connection(&app)?;
     let (sources, visual_ready_count) =
@@ -2595,6 +2605,7 @@ fn generate_storyboard_internal(
         let mut selected = None;
         let mut budget = StepRetryBudget::new("Phase 3");
         loop {
+            crate::execution_deadline::check()?;
             let attempt = budget.semantic_attempt_number();
             log::info!("Phase 3 attempt {attempt}: select 2-3 assets per beat");
             match phases::phase3_select(&access, brief, &rough, repair.as_ref()) {
@@ -2716,6 +2727,7 @@ fn generate_storyboard_internal(
     let mut content = None;
     let mut budget = StepRetryBudget::new("Phase 4");
     loop {
+        crate::execution_deadline::check()?;
         let attempt = budget.semantic_attempt_number();
         log::info!("Phase 4 attempt {attempt}: refine source ranges");
         match phases::phase4_refine_ranges(
@@ -2878,6 +2890,7 @@ fn generate_storyboard_internal(
         log::error!("{message}");
         message
     })?;
+    crate::execution_deadline::check()?;
     log::info!("Storyboard content finalized. Persisting to database.");
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",

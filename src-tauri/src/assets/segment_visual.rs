@@ -195,7 +195,7 @@ pub(crate) fn ensure_segment_visual_evidence(
         });
     }
     queue_segment_visual_batch(app, &need)?;
-    let deadline = Instant::now() + budget;
+    let deadline = Instant::now() + crate::execution_deadline::timeout(budget)?;
     let mut remaining: HashSet<String> = need.iter().cloned().collect();
     while !remaining.is_empty() && Instant::now() < deadline {
         if visual_model_retry_after().is_some() {

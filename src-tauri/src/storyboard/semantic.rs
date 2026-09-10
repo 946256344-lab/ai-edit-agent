@@ -85,12 +85,14 @@ fn model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
 }
 
 fn encode_texts(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    crate::execution_deadline::check()?;
     if texts.is_empty() {
         return Ok(Vec::new());
     }
     let embeddings = model(app)?
         .embed(texts, Some(EMBEDDING_BATCH_SIZE))
         .map_err(|_| "semantic_model_inference_failed".to_owned())?;
+    crate::execution_deadline::check()?;
     if embeddings
         .iter()
         .any(|embedding| embedding.len() != EMBEDDING_DIMENSIONS)

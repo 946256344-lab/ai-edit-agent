@@ -189,7 +189,8 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             .filter(|value| !value.is_empty());
         let mut facts = vec![
             "Storyboard generation stopped before a valid board was saved.".to_owned(),
-            "Keep the same brief on retry; do not silently shorten or rewrite it.".to_owned(),
+            "The phase's local repair budget is exhausted; keep the user's brief unchanged."
+                .to_owned(),
         ];
         if let Some(summary) = summary {
             facts.push(format!("partialCandidateSummary={summary}"));
@@ -201,9 +202,9 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "code": "storyboard_selection_failed",
             "facts": facts,
             "partialCandidateSummary": summary,
-            "retryable": true,
-            "recovery": "Retry generate_storyboard with the SAME brief. Do not assemble shots with list_assets or search_assets. If partialCandidateSummary shows uncovered beats after a later success path, use insert_clips instead of rewriting the brief.",
-            "responseInstruction": "Tell the user the storyboard was not created. Retry generate_storyboard with the same brief only. Mention the last phase from partialCandidateSummary when present. Do not claim shots were selected from a library listing."
+            "retryable": false,
+            "recovery": "Stop this run and explain the failed phase and unresolved issue. Do not call generate_storyboard again in this run. Do not shorten the brief or assemble unverified shots.",
+            "responseInstruction": "Tell the user the storyboard was not created and explain partialCandidateSummary. Local phase repairs have already been attempted; do not restart the whole pipeline."
         });
     }
     if code.starts_with("voice_provider_") {

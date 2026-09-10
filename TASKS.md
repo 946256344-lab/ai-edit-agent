@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现并构建（2026-09-10，codex/fix-editing-failures）：候选序号选镜、Phase 4 来源去重、片段任务恢复、禁止同轮整套重试、共享截止时间与子进程管道堵塞修复。独立复审通过；328 项库测试＋2 项集成通过（排除原有字幕失败），真实联网成片待验收。见 docs/changes/2026-09-10-editing-failure-fixes.md。
 - [ ] 已实现，待审查/合并（2026-09-09，codex/light-workspace-shot-replacement）：B 浅色双栏、Top-12 持久化、手动替换及撤销/重做；桌面烟雾与隔离交互通过。基线已有 3 项校验失败、独立审查额度不足，见 docs/changes/2026-09-09-light-workspace-shot-replacement.md。
 - [x] 完成（2026-09-09，feature/segment-technical-analysis）：真实场景分段与版本化补跑。见 docs/changes/2026-09-09-segment-technical-analysis.md。
 - [x] 完成（2026-09-09，feature/segment-visual-on-demand）：按需片段视觉证据与片段向量缓存。见 docs/changes/2026-09-09-segment-visual-on-demand.md。

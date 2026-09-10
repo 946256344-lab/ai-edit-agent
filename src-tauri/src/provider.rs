@@ -805,6 +805,12 @@ pub(crate) fn post_model_payload_with_wire_observer(
     observe_response: &mut dyn FnMut(u16, &str),
 ) -> Result<String, String> {
     let _priority = begin_interactive_request();
+    let timeout = match timeout {
+        Some(timeout) => Some(crate::execution_deadline::timeout(timeout)?),
+        None => crate::execution_deadline::current()
+            .map(|_| crate::execution_deadline::timeout(Duration::MAX))
+            .transpose()?,
+    };
     post_model_payload_with_custom_model(access, payload, timeout, None, observe_response)
 }
 
