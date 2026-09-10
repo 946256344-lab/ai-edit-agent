@@ -9,7 +9,7 @@ use crate::provider::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -52,22 +52,110 @@ struct SegmentVisualAsset {
 #[serde(rename_all = "camelCase")]
 struct SegmentVisualItem {
     segment_id: String,
-    #[serde(default)]
+    /// 模型偶发返回 [startMs, endMs]；取首个数值（或区间中点）作为代表时刻。
+    #[serde(default, deserialize_with = "i64_or_range")]
     time_ms: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_string_vec")]
     subjects: Vec<String>,
-    #[serde(default)]
+    /// 模型偶发把 scene 写成字符串数组。
+    #[serde(default, deserialize_with = "string_or_joined")]
     scene: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_string_vec")]
     actions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_string_vec")]
     products: Vec<String>,
-    #[serde(default)]
+    /// Agnes 等模型常把 qualityNotes 写成单个字符串，需兼容数组与字符串。
+    #[serde(default, deserialize_with = "string_or_string_vec")]
     quality_notes: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_joined")]
     shot_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_joined")]
     camera_motion: Option<String>,
+}
+
+pub(crate) fn string_or_joined<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let parts = string_or_string_vec(deserializer)?;
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join(", ")))
+    }
+}
+
+pub(crate) fn i64_or_range<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|float| float.round() as i64)),
+        serde_json::Value::Array(items) => {
+            let nums: Vec<i64> = items
+                .into_iter()
+                .filter_map(|item| match item {
+                    serde_json::Value::Number(number) => number
+                        .as_i64()
+                        .or_else(|| number.as_f64().map(|float| float.round() as i64)),
+                    serde_json::Value::String(text) => text.trim().parse().ok(),
+                    _ => None,
+                })
+                .collect();
+            match nums.as_slice() {
+                [] => None,
+                [only] => Some(*only),
+                [start, end, ..] => Some((*start + *end) / 2),
+            }
+        }
+        serde_json::Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    })
+}
+
+pub(crate) fn string_or_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(Vec::new()),
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![trimmed.to_owned()])
+            }
+        }
+        serde_json::Value::Array(items) => Ok(items
+            .into_iter()
+            .filter_map(|item| match item {
+                serde_json::Value::String(text) => {
+                    let trimmed = text.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+                }
+                other => {
+                    let text = other.to_string();
+                    let trimmed = text.trim().trim_matches('"');
+                    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+                }
+            })
+            .collect()),
+        other => {
+            let text = other.to_string();
+            let trimmed = text.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![trimmed.to_owned()])
+            }
+        }
+    }
 }
 
 pub(crate) fn asset_needs_segment_visual(metadata: &TechnicalMetadata) -> bool {
@@ -244,7 +332,7 @@ fn segment_visual_model_content(
 ) -> Vec<serde_json::Value> {
     let mut content = vec![json!({
         "type": "input_text",
-        "text": "Analyze only visible evidence for each frame. Return JSON {assets:[{assetId,segments:[{segmentId,timeMs,subjects,scene,actions,products,shotType,cameraMotion,qualityNotes}]}]}. shotType must be one of wide|medium|close-up|detail. cameraMotion must be one of static|pan|tilt|handheld|zoom. Each assetId/segmentId/timeMs must match a supplied label. Do not infer facts not visible."
+        "text": "Analyze only visible evidence for each frame. Return JSON {assets:[{assetId,segments:[{segmentId,timeMs,subjects,scene,actions,products,shotType,cameraMotion,qualityNotes}]}]}. timeMs must be a single integer matching sourceTimeMs (not a range). scene/shotType/cameraMotion must be single strings. qualityNotes/subjects/actions/products must be string arrays. shotType must be one of wide|medium|close-up|detail. cameraMotion must be one of static|pan|tilt|handheld|zoom. Each assetId/segmentId/timeMs must match a supplied label. Do not infer facts not visible."
     })];
     for (asset_id, segment_id, time_ms, image) in frames {
         content.push(json!({
@@ -402,10 +490,20 @@ pub(crate) fn run_segment_visual_analysis_batch(
                 }
             };
         complete_visual_model_request(true);
-        let text = model_response_json_text(&access, &response_body).unwrap_or_default();
-        let Ok(parsed) = serde_json::from_str::<SegmentVisualResponse>(&text) else {
-            log::warn!("Segment visual response parse failed.");
+        let Some(text) = model_response_json_text(&access, &response_body) else {
+            log::warn!("Segment visual response did not contain JSON text.");
             continue;
+        };
+        let parsed = match serde_json::from_str::<SegmentVisualResponse>(&text) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                log::warn!(
+                    "Segment visual response parse failed: text_len={}, serde={}",
+                    text.len(),
+                    error
+                );
+                continue;
+            }
         };
         for asset in parsed.assets {
             let entry = evidence_by_asset.entry(asset.asset_id).or_default();
@@ -506,5 +604,34 @@ fn cas_write_metadata(
         Ok(())
     } else {
         Err("segment_visual_cas_conflict".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct FlexibleValues {
+        #[serde(deserialize_with = "i64_or_range")]
+        time: Option<i64>,
+        #[serde(deserialize_with = "string_or_string_vec")]
+        tags: Vec<String>,
+        #[serde(deserialize_with = "string_or_joined")]
+        scene: Option<String>,
+    }
+
+    #[test]
+    fn visual_response_values_accept_common_provider_variants() {
+        let parsed: FlexibleValues = serde_json::from_value(json!({
+            "time": [1000, 3000],
+            "tags": "battery rack",
+            "scene": ["factory", "indoors"]
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.time, Some(2000));
+        assert_eq!(parsed.tags, vec!["battery rack"]);
+        assert_eq!(parsed.scene.as_deref(), Some("factory, indoors"));
     }
 }

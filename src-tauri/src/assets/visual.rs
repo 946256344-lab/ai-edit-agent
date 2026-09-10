@@ -40,17 +40,35 @@ struct VisualBatchResponse {
 #[serde(rename_all = "camelCase")]
 struct VisualBatchAsset {
     asset_id: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::i64_or_range"
+    )]
     time_ms: Option<i64>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_string_vec"
+    )]
     subjects: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
     scene: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_string_vec"
+    )]
     actions: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_string_vec"
+    )]
     products: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_string_vec"
+    )]
     quality_notes: Vec<String>,
 }
 
