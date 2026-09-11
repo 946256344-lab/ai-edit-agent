@@ -144,6 +144,22 @@ impl RepairPacket {
     }
 }
 
+/// 从校验错误文案中读取 `Affected shot indices:` 列表。
+/// 发现问题的代码必须自己写入范围；解析不到时返回空，调用方不得默认重做全部镜头。
+pub(crate) fn parse_affected_shot_indices(message: &str) -> Vec<i64> {
+    const MARKER: &str = "Affected shot indices:";
+    let Some(offset) = message.rfind(MARKER) else {
+        return Vec::new();
+    };
+    message[offset + MARKER.len()..]
+        .trim()
+        .trim_end_matches('.')
+        .split(',')
+        .filter_map(|part| part.trim().parse::<i64>().ok())
+        .filter(|index| *index > 0)
+        .collect()
+}
+
 /// 根据候选镜头与问题集合，计算已确认正确的（冻结）镜头。
 /// 被任何 issue 点名的镜头视为待修复，未点名且存在的镜头视为已确认。
 pub(crate) fn frozen_shot_indices(

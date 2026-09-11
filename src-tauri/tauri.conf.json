@@ -47,7 +47,17 @@
       "resources/models/bge-small-zh-v1.5/tokenizer.json",
       "resources/models/bge-small-zh-v1.5/onnx/model.onnx",
       "resources/models/bge-small-zh-v1.5/LICENSE",
-      "resources/models/bge-small-zh-v1.5/NOTICE.md"
+      "resources/models/bge-small-zh-v1.5/NOTICE.md",
+      "resources/models/clip-ViT-B-32-vision/config.json",
+      "resources/models/clip-ViT-B-32-vision/preprocessor_config.json",
+      "resources/models/clip-ViT-B-32-vision/model.onnx",
+      "resources/models/clip-ViT-B-32-vision/NOTICE.md",
+      "resources/models/clip-ViT-B-32-text/config.json",
+      "resources/models/clip-ViT-B-32-text/tokenizer.json",
+      "resources/models/clip-ViT-B-32-text/tokenizer_config.json",
+      "resources/models/clip-ViT-B-32-text/special_tokens_map.json",
+      "resources/models/clip-ViT-B-32-text/model.onnx",
+      "resources/models/clip-ViT-B-32-text/NOTICE.md"
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"

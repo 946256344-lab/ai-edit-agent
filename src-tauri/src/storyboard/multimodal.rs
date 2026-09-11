@@ -14,6 +14,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 const PHASE4_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
+/// 一镜多帧批量抽帧超时：共享盘 4K 一次解码窗内多帧。
+const PHASE4_BATCH_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(90);
 /// 单素材最多保留多少个内容候选窗（每窗 1 张代表帧给选段）。
 const PHASE4_MAX_WINDOWS_PER_ASSET: usize = 12;
 /// Pass A 单次请求最多附带多少张窗中点帧，避免与 Pass B 同类的网关断连。
@@ -296,6 +298,7 @@ pub(crate) fn build_phase4_windows_from_keyframes(
 }
 
 /// 在指定时刻列表抽 JPEG；`label` 区分 passA/passB 缓存目录。
+/// 同一调用只启动一次 FFmpeg 解码该时间窗；失败的时刻再按帧回退，保持 `time_ms` 与文件名对应。
 pub(crate) fn extract_frames_at_times(
     app: &AppHandle,
     asset_id: &str,
@@ -317,14 +320,68 @@ pub(crate) fn extract_frames_at_times(
     if std::fs::create_dir_all(&directory).is_err() {
         return Vec::new();
     }
+
+    let mut unique_times = times_ms.to_vec();
+    unique_times.sort_unstable();
+    unique_times.dedup();
+
     let mut frames = Vec::new();
-    for (index, &time_ms) in times_ms.iter().enumerate() {
+    let mut pending = Vec::new();
+    for (index, &time_ms) in unique_times.iter().enumerate() {
+        let destination = directory.join(format!("frame_{:03}_{time_ms}.jpg", index + 1));
+        if destination.is_file() {
+            frames.push((time_ms, destination));
+        } else {
+            pending.push((index, time_ms, destination));
+        }
+    }
+
+    if pending.is_empty() {
+        return frames;
+    }
+
+    if crate::execution_deadline::check().is_err() {
+        return frames;
+    }
+
+    if pending.len() == 1 {
+        let (_, time_ms, destination) = &pending[0];
+        if extract_jpeg_at_time(source_path, *time_ms, destination) {
+            frames.push((*time_ms, destination.clone()));
+        } else {
+            log::warn!(
+                "Phase 4 frame extract failed: asset={} label={} t={}ms",
+                asset_id,
+                label,
+                time_ms
+            );
+        }
+        frames.sort_by_key(|(time, _)| *time);
+        return frames;
+    }
+
+    let batch_ok = extract_jpegs_at_times_batch(source_path, &pending, &directory);
+    if !batch_ok {
+        log::warn!(
+            "Phase 4 batch frame extract failed; falling back per-frame: asset={} label={} count={}",
+            asset_id,
+            label,
+            pending.len()
+        );
+    }
+
+    for (_, time_ms, destination) in &pending {
+        if destination.is_file() {
+            if !frames.iter().any(|(existing, _)| existing == time_ms) {
+                frames.push((*time_ms, destination.clone()));
+            }
+            continue;
+        }
         if crate::execution_deadline::check().is_err() {
             break;
         }
-        let destination = directory.join(format!("frame_{:03}_{time_ms}.jpg", index + 1));
-        if extract_jpeg_at_time(source_path, time_ms, &destination) {
-            frames.push((time_ms, destination));
+        if extract_jpeg_at_time(source_path, *time_ms, destination) {
+            frames.push((*time_ms, destination.clone()));
         } else {
             log::warn!(
                 "Phase 4 frame extract failed: asset={} label={} t={}ms",
@@ -334,7 +391,102 @@ pub(crate) fn extract_frames_at_times(
             );
         }
     }
+
+    frames.sort_by_key(|(time, _)| *time);
     frames
+}
+
+/// 一次打开源文件，从最早时刻起解码到最晚时刻，按目标时间点各落一帧。
+fn extract_jpegs_at_times_batch(
+    source_path: &Path,
+    pending: &[(usize, i64, PathBuf)],
+    directory: &Path,
+) -> bool {
+    if pending.is_empty() {
+        return true;
+    }
+    let first_ms = pending.iter().map(|(_, time, _)| *time).min().unwrap_or(0);
+    let last_ms = pending
+        .iter()
+        .map(|(_, time, _)| *time)
+        .max()
+        .unwrap_or(first_ms);
+    let relative_secs = pending
+        .iter()
+        .map(|(_, time, _)| ((*time - first_ms) as f64 / 1000.0).max(0.0))
+        .collect::<Vec<_>>();
+    let select = pts_select_expression(&relative_secs);
+    let vf = format!("select='{select}',scale=320:-2");
+    let pattern = directory.join("batch_%03d.jpg");
+    // 清掉旧 batch 临时文件，避免序号错位。
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("batch_") && name.ends_with(".jpg") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    let start_seconds = (first_ms as f64 / 1000.0).max(0.0);
+    // -ss 放在 -i 前：一次定位到窗首，再只解码到最后目标附近。
+    let end_pad_seconds = ((last_ms - first_ms) as f64 / 1000.0) + 0.35;
+    let mut command = hidden_command("ffmpeg");
+    command
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            &format!("{start_seconds:.3}"),
+            "-t",
+            &format!("{end_pad_seconds:.3}"),
+            "-i",
+        ])
+        .arg(source_path)
+        .args(["-vf", &vf, "-vsync", "vfr"])
+        .arg(&pattern);
+
+    let ran = matches!(
+        run_hidden_command_with_timeout(&mut command, PHASE4_BATCH_FRAME_FFMPEG_TIMEOUT),
+        Ok(_)
+    );
+    if !ran {
+        return false;
+    }
+
+    let mut produced = 0usize;
+    for (output_index, (_, time_ms, destination)) in pending.iter().enumerate() {
+        let temp = directory.join(format!("batch_{:03}.jpg", output_index + 1));
+        if !temp.is_file() {
+            continue;
+        }
+        if std::fs::rename(&temp, destination).is_err() {
+            // 跨盘 rename 失败时复制。
+            if std::fs::copy(&temp, destination).is_ok() {
+                let _ = std::fs::remove_file(&temp);
+                produced += 1;
+            }
+            continue;
+        }
+        produced += 1;
+        let _ = time_ms; // 文件名已含真实源时间
+    }
+    produced > 0
+}
+
+fn pts_select_expression(relative_secs: &[f64]) -> String {
+    relative_secs
+        .iter()
+        .map(|time| {
+            let time = (*time).max(0.0);
+            // 命中该时刻起的第一帧（浮点时间戳友好）。
+            format!("lt(prev_pts*TB\\,{time:.3})*gte(pts*TB\\,{time:.3})")
+        })
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 fn extract_jpeg_at_time(source_path: &Path, time_ms: i64, destination: &Path) -> bool {
@@ -411,6 +563,15 @@ mod tests {
         assert_eq!(config.grid_columns, 2);
         assert_eq!(config.thumbnail_width, 320);
         assert_eq!(config.thumbnail_height, 180);
+    }
+
+    #[test]
+    fn pts_select_expression_covers_each_relative_time() {
+        let expression = pts_select_expression(&[0.0, 1.5, 3.0]);
+        assert!(expression.contains("gte(pts*TB\\,0.000)"));
+        assert!(expression.contains("gte(pts*TB\\,1.500)"));
+        assert!(expression.contains("gte(pts*TB\\,3.000)"));
+        assert_eq!(expression.matches('+').count(), 2);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use super::{multimodal::Phase4ContentWindow, repair::StoryboardIssue};
 use crate::models::{StoryboardBeat, StoryboardContent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Voice：TTS alignment 时段；Pacing：key_message 屏幕标记可读性节奏。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,8 +232,15 @@ impl SpeechTiming {
                 .sum::<i64>();
             let expected = beat.end_ms - beat.start_ms;
             if actual != expected {
+                let affected = content
+                    .shots
+                    .iter()
+                    .filter(|shot| shot.beat_id == beat.beat_id)
+                    .map(|shot| shot.order_index.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Err(format!(
-                    "beat_audio_timing: beat '{}' needs {expected}ms of non-overlapping source ranges for its planned/verified beat timing, but has {actual}ms. Choose other windows within the locked assets.",
+                    "beat_audio_timing: beat '{}' needs {expected}ms of non-overlapping source ranges for its planned/verified beat timing, but has {actual}ms. Choose other windows within the locked assets. Affected shot indices: {affected}.",
                     beat.beat_id
                 ));
             }
@@ -242,10 +249,20 @@ impl SpeechTiming {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn fit_shots(
     content: &mut StoryboardContent,
     timing: &SpeechTiming,
     windows: &HashMap<i64, (Phase4ContentWindow, bool)>,
+) -> Vec<StoryboardIssue> {
+    fit_shots_scoped(content, timing, windows, None)
+}
+
+pub(crate) fn fit_shots_scoped(
+    content: &mut StoryboardContent,
+    timing: &SpeechTiming,
+    windows: &HashMap<i64, (Phase4ContentWindow, bool)>,
+    mutable: Option<&HashSet<i64>>,
 ) -> Vec<StoryboardIssue> {
     if timing.beats.is_empty() {
         return Vec::new();
@@ -263,6 +280,14 @@ pub(crate) fn fit_shots(
             .collect::<Vec<_>>();
         if indices.is_empty() {
             continue;
+        }
+        if let Some(allowed) = mutable {
+            if !indices
+                .iter()
+                .all(|&i| allowed.contains(&content.shots[i].order_index))
+            {
+                continue;
+            }
         }
         let capacities = indices
             .iter()
@@ -464,5 +489,50 @@ mod tests {
             .validate(&content)
             .unwrap_err()
             .starts_with("beat_audio_timing:"));
+        assert!(timing
+            .validate(&content)
+            .unwrap_err()
+            .contains("Affected shot indices:"));
+    }
+
+    #[test]
+    fn fit_shots_scoped_does_not_resize_frozen_beats() {
+        let shot = |order, asset| json!({"orderIndex":order,"durationMs":1000,"purpose":"p","onScreenText":"", "assetId":asset,"sourceStartMs":1000,"sourceEndMs":2000,"reason":"r","beatId":"a"});
+        let mut content: StoryboardContent = serde_json::from_value(json!({
+            "title":"t","summary":"s","shots":[shot(1,"one"),shot(2,"two")]
+        }))
+        .unwrap();
+        content.shots[0].crop_focus = Some([0.3, 0.4]);
+        let windows = [1, 2]
+            .into_iter()
+            .map(|order| {
+                (
+                    order,
+                    (
+                        Phase4ContentWindow {
+                            window_id: format!("w{order}"),
+                            asset_id: String::new(),
+                            start_ms: 500,
+                            end_ms: 3500,
+                        },
+                        false,
+                    ),
+                )
+            })
+            .collect();
+        let timing = SpeechTiming {
+            kind: SpeechTimingKind::Voice,
+            beats: vec![BeatTiming {
+                beat_id: "a".into(),
+                start_ms: 0,
+                end_ms: 5000,
+            }],
+            pauses_ms: Vec::new(),
+        };
+        let mutable = HashSet::from([2]);
+        assert!(fit_shots_scoped(&mut content, &timing, &windows, Some(&mutable)).is_empty());
+        assert_eq!(content.shots[0].duration_ms, 1000);
+        assert_eq!(content.shots[0].crop_focus, Some([0.3, 0.4]));
+        assert_eq!(content.shots[1].duration_ms, 1000);
     }
 }

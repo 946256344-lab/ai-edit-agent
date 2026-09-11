@@ -15,6 +15,7 @@
 | Python + pyJianYingDraft | 本机适配器 | Jianying draft 文件生成 | 无 | 高、实验性 | `jianying.rs`、`create_jianying_draft.py` |
 | Jianying Pro | 本地应用/文件格式 | 草稿注册和后续人工编辑 | 本机用户 | 高、单向 | `jianying.rs` |
 | BGE-small-zh + ONNX Runtime | 安装包内本地模型 | storyboard 中文语义召回 | 无、离线 | 中 | `storyboard/semantic.rs`、`tauri.conf.json` |
+| CLIP ViT-B/32 + ONNX Runtime | 安装包内本地模型（ONNX 需 fetch 脚本） | storyboard 图文召回加权 | 无、离线 | 中 | `storyboard/clip.rs`、`scripts/fetch-clip-models.ps1` |
 | Google Fonts | WebView 静态资源 | UI 字体 | 无 | 低 | `src/index.css`、`tauri.conf.json` |
 
 ## 2）数据存储

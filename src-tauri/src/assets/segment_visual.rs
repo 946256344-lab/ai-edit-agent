@@ -571,6 +571,9 @@ pub(crate) fn run_segment_visual_analysis_batch(
             }
             let _ =
                 crate::storyboard::semantic::refresh_segment_embeddings(&app, &asset_id, &metadata);
+            let _ = crate::storyboard::clip::refresh_segment_clip_embeddings(
+                &app, &asset_id, &metadata,
+            );
         }
     }
     if let Some(project_id) = project_id {

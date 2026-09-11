@@ -38,6 +38,11 @@ impl StepRetryBudget {
         self.semantic_used.saturating_add(1)
     }
 
+    #[cfg(test)]
+    pub(crate) fn semantic_used(&self) -> usize {
+        self.semantic_used
+    }
+
     pub(crate) fn can_retry_transport(&self) -> bool {
         self.transport_used < self.transport_limit
     }

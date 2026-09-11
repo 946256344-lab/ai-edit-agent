@@ -1,6 +1,6 @@
 // storyboard/phases.rs - Storyboard 分步生成
 //
-// Phase 1: 叙事结构
+// Phase 1: 叙事结构（注入本地库库存摘要，约束 requiredVisual/visualKeywords）
 // Phase 2: 每 beat 9 条去似整片 → 约 4 段 → Top-12（同片最多 2 段）
 // Phase 3: 从池中选出 2–3 镜（同 beat 互异 asset；跨 beat 允许不同非相似段）
 // Phase 4: 选内容窗 → 段内精修切点（禁止换片）
@@ -33,6 +33,11 @@ const PHASE2_SIMILARITY_COSINE: f64 = 0.92;
 const PHASE2_SIMILARITY_TAG_JACCARD: f64 = 0.55;
 /// 与 preview 相同：24×24 灰度均差低于该值视为画面相似。
 const PHASE2_PIXEL_DIFF_SIMILAR: f64 = 12.0;
+/// Phase 1 库存摘要字符上限，避免挤占 brief。
+const INVENTORY_MAX_CHARS: usize = 3_500;
+const INVENTORY_TOP_TAGS: usize = 48;
+const INVENTORY_TOP_SCENES: usize = 24;
+const INVENTORY_TOP_OCR: usize = 16;
 
 /// Phase 1 输出：纯叙事结构
 #[derive(Clone, Deserialize, Serialize)]
@@ -79,14 +84,17 @@ pub struct RoughStoryboard {
 }
 
 /// Phase 1: 生成叙事结构（scriptMode 由调用方在请求前锁定）。
+/// `library_inventory` 为本地视觉/OCR 库存摘要；空串时退回仅凭 brief 写结构。
 pub(crate) fn phase1_generate_narrative(
     access: &ModelAccess,
     brief: &str,
     required_script_mode: &str,
+    library_inventory: &str,
     feedback: Option<&str>,
 ) -> Result<NarrativeStructure, String> {
     log::info!(
-        "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode})"
+        "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode}, inventory_chars={})",
+        library_inventory.chars().count()
     );
 
     let feedback_context = feedback.map_or(String::new(), |value| {
@@ -105,15 +113,28 @@ pub(crate) fn phase1_generate_narrative(
         Punchy on-screen markers only (no voiceover). targetDurationMs typically 8-15 seconds (at most 15s) unless the user explicitly asks for a longer runtime. Prefer 2-5 beats. Never inflate into a 30-90s essay."
     };
 
+    let inventory_block = if library_inventory.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nLIBRARY INVENTORY (local visual/OCR evidence already analyzed in this project — not filenames):\n{library_inventory}\n\
+            Inventory rules (must follow):\n\
+            - Keep the brief's narrative intent, but write requiredVisual and visualKeywords so they can plausibly be shot from this inventory.\n\
+            - Prefer concrete English keywords that overlap inventory tags/scenes/OCR (e.g. if inventory has \"certificate wall\" / \"framed plaques\", do NOT invent \"signed warranty contract with stamp\").\n\
+            - If the brief needs a visual the inventory does not support, keep the beat purpose honest and set requiredVisual to the closest available evidence type; never fabricate subjects absent from the inventory just to fill every beat.\n\
+            - Do not select or invent asset IDs here — media selection happens later."
+        )
+    };
+
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
-        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
+        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or readable marker pacing (key_message).\n\
-        {feedback_context}"
+        {feedback_context}{inventory_block}"
     );
 
     let request = serde_json::json!({
@@ -140,12 +161,151 @@ pub(crate) fn phase1_generate_narrative(
         .map_err(|_| "Phase 1 JSON did not match NarrativeStructure schema.".to_owned())
 }
 
+/// 从已加载的整片候选汇总本地库存，供 Phase 1 约束画面写法（不发送路径/ID）。
+pub(crate) fn build_library_inventory_summary(sources: &[StoryboardSource]) -> String {
+    let total = sources.len();
+    let mut with_visual = 0usize;
+    let mut tag_counts: HashMap<String, usize> = HashMap::new();
+    let mut scene_counts: HashMap<String, usize> = HashMap::new();
+    let mut ocr_counts: HashMap<String, usize> = HashMap::new();
+
+    for source in sources {
+        let mut saw_visual = false;
+        for evidence in &source.visual_evidence {
+            saw_visual = true;
+            for tag in evidence
+                .subjects
+                .iter()
+                .chain(evidence.actions.iter())
+                .chain(evidence.products.iter())
+            {
+                if let Some(normalized) = normalize_inventory_phrase(tag) {
+                    *tag_counts.entry(normalized).or_insert(0) += 1;
+                }
+            }
+            if let Some(scene) = evidence
+                .scene
+                .as_deref()
+                .and_then(normalize_inventory_phrase)
+            {
+                *scene_counts.entry(scene).or_insert(0) += 1;
+            }
+        }
+        for segment in &source.scene_segments {
+            if let Some(evidence) = &segment.visual_evidence {
+                saw_visual = true;
+                for tag in evidence
+                    .subjects
+                    .iter()
+                    .chain(evidence.actions.iter())
+                    .chain(evidence.products.iter())
+                {
+                    if let Some(normalized) = normalize_inventory_phrase(tag) {
+                        *tag_counts.entry(normalized).or_insert(0) += 1;
+                    }
+                }
+                if let Some(scene) = evidence
+                    .scene
+                    .as_deref()
+                    .and_then(normalize_inventory_phrase)
+                {
+                    *scene_counts.entry(scene).or_insert(0) += 1;
+                }
+            }
+        }
+        if saw_visual {
+            with_visual += 1;
+        }
+        for item in &source.ocr_evidence {
+            if !ocr_is_meaningful(&item.text) {
+                continue;
+            }
+            if let Some(normalized) = normalize_inventory_ocr(&item.text) {
+                *ocr_counts.entry(normalized).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if tag_counts.is_empty() && scene_counts.is_empty() && ocr_counts.is_empty() {
+        return format!(
+            "videos={total}; withVisualEvidence={with_visual}; tags=(none yet — write conservative requiredVisual, avoid inventing documents/labels not known to exist)."
+        );
+    }
+
+    let tags = top_count_lines(&tag_counts, INVENTORY_TOP_TAGS);
+    let scenes = top_count_lines(&scene_counts, INVENTORY_TOP_SCENES);
+    let ocr = top_count_lines(&ocr_counts, INVENTORY_TOP_OCR);
+
+    let mut summary = format!(
+        "videos={total}; withVisualEvidence={with_visual}; withoutVisualEvidence={}\n",
+        total.saturating_sub(with_visual)
+    );
+    if !tags.is_empty() {
+        summary.push_str("frequentVisualTags: ");
+        summary.push_str(&tags.join("; "));
+        summary.push('\n');
+    }
+    if !scenes.is_empty() {
+        summary.push_str("frequentScenes: ");
+        summary.push_str(&scenes.join("; "));
+        summary.push('\n');
+    }
+    if !ocr.is_empty() {
+        summary.push_str("sampleOcr: ");
+        summary.push_str(&ocr.join("; "));
+        summary.push('\n');
+    }
+
+    trim_inventory_chars(summary, INVENTORY_MAX_CHARS)
+}
+
+fn normalize_inventory_phrase(raw: &str) -> Option<String> {
+    let trimmed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = trimmed.trim();
+    if trimmed.chars().count() < 2 {
+        return None;
+    }
+    let lowered = trimmed.to_lowercase();
+    if lowered.chars().count() > 64 {
+        return Some(lowered.chars().take(64).collect());
+    }
+    Some(lowered)
+}
+
+fn normalize_inventory_ocr(raw: &str) -> Option<String> {
+    let phrase = normalize_inventory_phrase(raw)?;
+    if phrase.chars().count() > 40 {
+        return Some(phrase.chars().take(40).collect());
+    }
+    Some(phrase)
+}
+
+fn top_count_lines(counts: &HashMap<String, usize>, limit: usize) -> Vec<String> {
+    let mut items = counts.iter().collect::<Vec<_>>();
+    items.sort_by(|left, right| right.1.cmp(left.1).then_with(|| left.0.cmp(right.0)));
+    items
+        .into_iter()
+        .take(limit)
+        .map(|(phrase, count)| format!("{phrase}×{count}"))
+        .collect()
+}
+
+fn trim_inventory_chars(text: String, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let mut clipped: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    clipped.push('…');
+    clipped
+}
+
 /// Phase 2a：每个 beat 从整片候选里召回互不相似的 9 条素材。
 pub(crate) fn phase2_asset_shortlists(
     narrative: &NarrativeStructure,
     sources: &[StoryboardSource],
     usage_counts: &HashMap<String, i32>,
     embeddings: &[Vec<f32>],
+    clip_embeddings: &[Vec<f32>],
 ) -> HashMap<String, Vec<String>> {
     let target_each = if narrative.beats.is_empty() {
         narrative.target_duration_ms
@@ -155,6 +315,7 @@ pub(crate) fn phase2_asset_shortlists(
     let mut shortlists = HashMap::new();
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
         let beat_embedding = embeddings.get(beat_index).map(Vec::as_slice);
+        let beat_clip = clip_embeddings.get(beat_index).map(Vec::as_slice);
         let ranked = scoring::rank_segment_candidates(
             sources.to_vec(),
             beat,
@@ -162,6 +323,7 @@ pub(crate) fn phase2_asset_shortlists(
             &[],
             usage_counts,
             beat_embedding,
+            beat_clip,
         );
         let ids = shortlist_dissimilar_asset_ids(&ranked, PHASE2_ASSET_SHORTLIST);
         log::info!(
@@ -218,6 +380,7 @@ pub(crate) fn phase2_rough_shot_selection(
     sources: &[StoryboardSource],
     usage_counts: &HashMap<String, i32>,
     embeddings: &[Vec<f32>],
+    clip_embeddings: &[Vec<f32>],
     speech_timing: super::timing::SpeechTiming,
     beat_asset_ids: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<RoughStoryboard, String> {
@@ -238,6 +401,7 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut prior_pool_segments: Vec<StoryboardSource> = Vec::new();
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
         let beat_embedding = embeddings.get(beat_index);
+        let beat_clip = clip_embeddings.get(beat_index);
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
         let ranked = scoring::rank_segment_candidates(
             sources.to_vec(),
@@ -246,6 +410,7 @@ pub(crate) fn phase2_rough_shot_selection(
             &[],
             usage_counts,
             beat_embedding.map(Vec::as_slice),
+            beat_clip.map(Vec::as_slice),
         );
         let allowed_ids = beat_asset_ids
             .and_then(|map| map.get(&beat.id).cloned())
@@ -270,10 +435,11 @@ pub(crate) fn phase2_rough_shot_selection(
                 .take(8)
                 .map(|(candidate, score)| {
                     format!(
-                        "{}(sem={:.1}/lex={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
+                        "{}(sem={:.1}/lex={:.1}/clip={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
                         candidate.asset_id,
                         score.semantic,
                         score.lexical,
+                        score.clip,
                         score.quality,
                         score.duration,
                         score.freshness,
@@ -786,8 +952,8 @@ mod tests {
         apply_narration_phrase_duration_floor, candidates_within_diversity_limit,
         clamp_shots_to_chosen_windows, collect_phase3_issues, collect_phase4_issues,
         dedupe_and_backfill_pool, parse_beat_pick, phase3_candidate_cards, phase3_pool_cards,
-        resolve_overlaps_within_chosen_windows, BeatCandidatePool, RoughStoryboard,
-        PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
+        resolve_overlaps_within_chosen_windows, resolve_overlaps_within_chosen_windows_scoped,
+        BeatCandidatePool, RoughStoryboard, PHASE2_TOP_CANDIDATES, PHASE3_MAX_ALTERNATES,
     };
     use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
     use std::collections::{HashMap, HashSet};
@@ -807,6 +973,7 @@ mod tests {
                         total: (20 - index) as f64,
                         semantic: 0.0,
                         lexical: 0.0,
+                        clip: 0.0,
                         quality: 0.0,
                         duration: 0.0,
                         freshness: 0.0,
@@ -838,6 +1005,7 @@ mod tests {
                     total: (20 - index) as f64,
                     semantic: 0.0,
                     lexical: 0.0,
+                    clip: 0.0,
                     quality: 0.0,
                     duration: 0.0,
                     freshness: 0.0,
@@ -855,6 +1023,7 @@ mod tests {
                     total: 30.0,
                     semantic: 0.0,
                     lexical: 0.0,
+                    clip: 0.0,
                     quality: 0.0,
                     duration: 0.0,
                     freshness: 0.0,
@@ -870,6 +1039,7 @@ mod tests {
                 total: 1.0,
                 semantic: 0.0,
                 lexical: 0.0,
+                clip: 0.0,
                 quality: 0.0,
                 duration: 0.0,
                 freshness: 0.0,
@@ -911,6 +1081,7 @@ mod tests {
                     total: (20 - index) as f64,
                     semantic: 0.0,
                     lexical: 0.0,
+                    clip: 0.0,
                     quality: 0.0,
                     duration: 0.0,
                     freshness: 0.0,
@@ -988,6 +1159,7 @@ mod tests {
             source_path: None,
             segment: None,
             segment_embedding: None,
+            segment_clip_embedding: None,
         }
     }
 
@@ -1016,6 +1188,47 @@ mod tests {
             candidates: asset_ids.iter().map(|asset_id| source(asset_id)).collect(),
             scores: vec![],
         }
+    }
+
+    #[test]
+    fn library_inventory_summary_prefers_frequent_visual_tags() {
+        let mut certificate = source("cert");
+        certificate.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["framed certificates".to_owned(), "presenter".to_owned()],
+            scene: Some("certificate wall display".to_owned()),
+            actions: vec!["pointing at plaques".to_owned()],
+            products: vec![],
+            quality_notes: vec![],
+            shot_type: None,
+            camera_motion: None,
+            segment_id: None,
+        }];
+        let mut factory = source("factory");
+        factory.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["battery modules".to_owned()],
+            scene: Some("factory production line".to_owned()),
+            actions: vec!["assembling cells".to_owned()],
+            products: vec!["battery modules".to_owned()],
+            quality_notes: vec![],
+            shot_type: None,
+            camera_motion: None,
+            segment_id: None,
+        }];
+        let summary = super::build_library_inventory_summary(&[certificate, factory]);
+        assert!(summary.contains("framed certificates"));
+        assert!(summary.contains("certificate wall display"));
+        assert!(summary.contains("battery modules"));
+        assert!(summary.contains("withVisualEvidence=2"));
+        assert!(summary.chars().count() <= super::INVENTORY_MAX_CHARS);
+    }
+
+    #[test]
+    fn library_inventory_summary_handles_empty_evidence() {
+        let summary = super::build_library_inventory_summary(&[source("bare")]);
+        assert!(summary.contains("tags=(none yet"));
+        assert!(summary.contains("videos=1"));
     }
 
     #[test]
@@ -1825,6 +2038,60 @@ mod tests {
     }
 
     #[test]
+    fn resolve_overlaps_scoped_leaves_frozen_shots_unchanged() {
+        use crate::storyboard::multimodal::Phase4ContentWindow;
+
+        let mut content = StoryboardContent {
+            brief: String::new(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 10_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![
+                {
+                    let mut item = shot("shared");
+                    item.order_index = 1;
+                    item.crop_focus = Some([0.4, 0.5]);
+                    item.source_start_ms = 0;
+                    item.source_end_ms = 4_000;
+                    item.duration_ms = 4_000;
+                    item
+                },
+                {
+                    let mut item = shot("shared");
+                    item.order_index = 2;
+                    item.beat_id = "beat-2".to_owned();
+                    item.crop_focus = Some([0.6, 0.5]);
+                    item.source_start_ms = 2_000;
+                    item.source_end_ms = 6_000;
+                    item.duration_ms = 4_000;
+                    item
+                },
+            ],
+        };
+        let window = Phase4ContentWindow {
+            window_id: "shared:w0".to_owned(),
+            asset_id: "shared".to_owned(),
+            start_ms: 0,
+            end_ms: 12_000,
+        };
+        let mut pick_map = HashMap::new();
+        pick_map.insert(1, (window.clone(), false));
+        pick_map.insert(2, (window, false));
+        let mutable = HashSet::from([2]);
+        resolve_overlaps_within_chosen_windows_scoped(&mut content, &pick_map, Some(&mutable));
+        assert_eq!(content.shots[0].crop_focus, Some([0.4, 0.5]));
+        assert_eq!(content.shots[0].source_start_ms, 0);
+        assert_eq!(content.shots[0].source_end_ms, 4_000);
+        assert!(
+            content.shots[1].source_start_ms >= 4_000
+                || content.shots[1].source_end_ms <= content.shots[0].source_start_ms
+        );
+    }
+
+    #[test]
     fn phase3_keeps_covered_shots_without_filling_uncovered_beats() {
         let mut uncovered_beat = beat();
         uncovered_beat.id = "beat-2".to_owned();
@@ -2327,801 +2594,32 @@ pub(crate) fn phase4_refine_ranges(
     rough: &RoughStoryboard,
     sources: &[StoryboardSource],
     repair: Option<&RepairPacket>,
+    session: &mut crate::storyboard::phase4::Phase4Session,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
-    use crate::storyboard::multimodal::{
-        build_phase4_windows_from_keyframes, compose_timed_frame_grid, densify_times_in_range,
-        extract_frames_at_times, read_input_image, Phase4ContentWindow,
-        PHASE4_MAX_FRAME_SPACING_MS, PHASE4_REFINE_FRAMES, PHASE4_REFINE_SHOTS_PER_BATCH,
-        PHASE4_UNCERTAIN_FRAMES,
-    };
-    use std::path::Path;
-
-    log::info!(
-        "Phase 4: window-select then in-window refine for {} locked shots (keyframe windows, no per-asset scene scan)",
-        selected.shots.len()
-    );
-
-    let selected_asset_ids = selected
-        .shots
-        .iter()
-        .map(|shot| shot.asset_id.as_str())
-        .collect::<HashSet<_>>();
-    let mut seen_assets = HashSet::new();
-    let selected_sources = sources
-        .iter()
-        .filter(|source| selected_asset_ids.contains(source.asset_id.as_str()))
-        .filter(|source| seen_assets.insert(source.asset_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if selected_sources.len() != selected_asset_ids.len() {
-        return Err("Phase 4 source scope was unavailable.".to_owned());
-    }
-
-    let mut windows_by_asset: HashMap<String, Vec<Phase4ContentWindow>> = HashMap::new();
-    let mut all_windows: Vec<Phase4ContentWindow> = Vec::new();
-    for source in &selected_sources {
-        let duration_ms = source.duration_ms.unwrap_or(0).max(1);
-        let real_segments = source
-            .scene_segments
-            .iter()
-            .filter(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms)
-            .collect::<Vec<_>>();
-        let windows = if !real_segments.is_empty() {
-            real_segments
-                .into_iter()
-                .map(|segment| Phase4ContentWindow {
-                    asset_id: source.asset_id.clone(),
-                    window_id: segment.id.clone(),
-                    start_ms: segment.start_ms,
-                    end_ms: segment.end_ms,
-                })
-                .collect::<Vec<_>>()
-        } else {
-            let keyframe_times: Vec<i64> =
-                source.keyframes.iter().map(|frame| frame.time_ms).collect();
-            build_phase4_windows_from_keyframes(&source.asset_id, duration_ms, &keyframe_times)
-        };
-        log::info!(
-            "Phase 4 windows for {}: count={} from_segments={}",
-            source.asset_id,
-            windows.len(),
-            source
-                .scene_segments
-                .iter()
-                .filter(|segment| !segment.id.is_empty())
-                .count()
-        );
-        windows_by_asset.insert(source.asset_id.clone(), windows.clone());
-        all_windows.extend(windows);
-    }
-    if all_windows.is_empty() {
-        return Err("Phase 4 could not build content windows.".to_owned());
-    }
-
-    // 有 Phase 3 片段锁定的镜头跳过 Pass A，直接把窗设为该片段（过短则并入相邻窗）。
-    let mut seeded_picks: Vec<Phase4WindowPick> = Vec::new();
-    let mut pass_a_orders: HashSet<i64> = HashSet::new();
-    for shot in &selected.shots {
-        if let Some(segment_id) = shot.segment_id.as_deref() {
-            let asset_windows = windows_by_asset
-                .get(&shot.asset_id)
-                .cloned()
-                .unwrap_or_default();
-            let locked = asset_windows
-                .iter()
-                .find(|window| window.window_id == segment_id)
-                .cloned()
-                .or_else(|| {
-                    Some(Phase4ContentWindow {
-                        asset_id: shot.asset_id.clone(),
-                        window_id: segment_id.to_owned(),
-                        start_ms: shot.source_start_ms,
-                        end_ms: shot.source_end_ms.max(shot.source_start_ms + 1),
-                    })
-                });
-            if let Some(mut window) = locked {
-                if window.span_ms() < shot.duration_ms.max(1) {
-                    if let Some(next) = asset_windows.iter().find(|candidate| {
-                        candidate.start_ms >= window.end_ms
-                            || (candidate.window_id != window.window_id
-                                && candidate.start_ms == window.end_ms)
-                    }) {
-                        window.end_ms = next.end_ms;
-                        window.window_id = format!("{}+{}", window.window_id, next.window_id);
-                    }
-                }
-                windows_by_asset
-                    .entry(shot.asset_id.clone())
-                    .or_default()
-                    .retain(|existing| existing.window_id != window.window_id);
-                windows_by_asset
-                    .entry(shot.asset_id.clone())
-                    .or_default()
-                    .push(window.clone());
-                seeded_picks.push(Phase4WindowPick {
-                    order_index: shot.order_index,
-                    window_id: window.window_id,
-                    uncertain: false,
-                });
-                continue;
-            }
-        }
-        pass_a_orders.insert(shot.order_index);
-    }
-
-    let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
-
-    // —— Pass A：按素材贪心拆批；已片段锁定的镜头不进入 ——
-    use crate::storyboard::multimodal::PHASE4_PASS_A_MAX_IMAGES;
-    let pass_a_asset_ids = selected
-        .shots
-        .iter()
-        .filter(|shot| pass_a_orders.contains(&shot.order_index))
-        .map(|shot| shot.asset_id.clone())
-        .collect::<HashSet<_>>();
-    let mut asset_order = pass_a_asset_ids.into_iter().collect::<Vec<_>>();
-    asset_order.sort();
-    let mut pass_a_batches: Vec<Vec<String>> = Vec::new();
-    let mut current_batch: Vec<String> = Vec::new();
-    let mut current_images = 0usize;
-    for asset_id in &asset_order {
-        let window_count = windows_by_asset
-            .get(asset_id)
-            .map(|windows| windows.len())
-            .unwrap_or(0);
-        if window_count == 0 {
-            continue;
-        }
-        if !current_batch.is_empty() && current_images + window_count > PHASE4_PASS_A_MAX_IMAGES {
-            pass_a_batches.push(std::mem::take(&mut current_batch));
-            current_images = 0;
-        }
-        current_batch.push(asset_id.clone());
-        current_images += window_count;
-    }
-    if !current_batch.is_empty() {
-        pass_a_batches.push(current_batch);
-    }
-
-    let mut all_picks: Vec<Phase4WindowPick> = seeded_picks;
-    let mut pass_a_frames = 0usize;
-    if pass_a_batches.is_empty() {
-        log::info!(
-            "Phase 4 pass A skipped: all {} shots locked to Phase 3 segments",
-            selected.shots.len()
-        );
-    }
-    for (batch_index, batch_assets) in pass_a_batches.iter().enumerate() {
-        let batch_asset_set = batch_assets.iter().cloned().collect::<HashSet<_>>();
-        let batch_windows = all_windows
-            .iter()
-            .filter(|window| batch_asset_set.contains(&window.asset_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let batch_shots = selected
-            .shots
-            .iter()
-            .filter(|shot| {
-                batch_asset_set.contains(&shot.asset_id)
-                    && pass_a_orders.contains(&shot.order_index)
-            })
-            .map(|shot| {
-                json!({
-                    "orderIndex": shot.order_index,
-                    "assetId": shot.asset_id,
-                    "beatId": shot.beat_id,
-                    "purpose": shot.purpose,
-                    "narrationText": shot.narration_text,
-                    "durationMs": shot.duration_ms,
-                })
-            })
-            .collect::<Vec<_>>();
-        if batch_shots.is_empty() {
-            continue;
-        }
-        let window_cards = serde_json::to_string(&batch_windows)
-            .map_err(|_| "Could not serialize Phase 4 windows.".to_owned())?;
-        let shot_cards = serde_json::to_string(&batch_shots)
-            .map_err(|_| "Could not serialize Phase 4 shots.".to_owned())?;
-        let mut pass_a_blocks = vec![json!({
-            "type": "input_text",
-            "text": format!(
-                "Brief: {brief}\n\
-                Pass A batch {}/{} — refine window picks ONLY for these assetIds: {:?}.\n\
-                Locked shots for this batch (assetIds FINAL): {shot_cards}\n\
-                Content windows for this batch: {window_cards}\n\
-                {feedback_context}\n\n\
-                Each attached image is the midpoint of one windowId (windows come from import keyframes / head-mid-tail thirds, not a fresh full-clip scene scan).\n\
-                For EVERY locked shot in this batch, pick exactly one windowId that belongs to that shot's assetId.\n\
-                Prefer actionable/on-brief content over setup/prelude/idle when both exist.\n\
-                Set uncertain=true when the best window is ambiguous or you may cut mid spoken phrase.\n\
-                Return JSON only: {{\"picks\":[{{\"orderIndex\":1,\"windowId\":\"asset:w0\",\"uncertain\":false}}]}}",
-                batch_index + 1,
-                pass_a_batches.len(),
-                batch_assets
-            )
-        })];
-        let mut batch_frame_count = 0usize;
-        for window in &batch_windows {
-            let Some(source) = selected_sources
-                .iter()
-                .find(|source| source.asset_id == window.asset_id)
-            else {
-                continue;
-            };
-            let Some(path) = source.source_path.as_deref() else {
-                continue;
-            };
-            let frames = extract_frames_at_times(
-                app,
-                &window.asset_id,
-                Path::new(path),
-                &[window.mid_ms()],
-                &format!(
-                    "passA_b{}_{}",
-                    batch_index + 1,
-                    window.window_id.replace(':', "_")
-                ),
-            );
-            for (time_ms, frame_path) in frames {
-                let Some(image) = read_input_image(&frame_path) else {
-                    continue;
-                };
-                pass_a_blocks.push(json!({
-                    "type": "input_text",
-                    "text": format!(
-                        "windowId={} assetId={} [{},{}] midTimeMs={}",
-                        window.window_id, window.asset_id, window.start_ms, window.end_ms, time_ms
-                    )
-                }));
-                pass_a_blocks.push(image);
-                batch_frame_count += 1;
-            }
-        }
-        if batch_frame_count == 0 {
-            return Err(format!(
-                "Phase 4a batch {} had no readable window midpoint frames.",
-                batch_index + 1
-            ));
-        }
-        pass_a_frames += batch_frame_count;
-        log::info!(
-            "Phase 4 pass A batch {}/{}: {} asset(s), {} midpoint frame(s)",
-            batch_index + 1,
-            pass_a_batches.len(),
-            batch_assets.len(),
-            batch_frame_count
-        );
-
-        let pass_a_request = json!({
-            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-            "store": false,
-            "stream": true,
-            "input": [{ "role": "user", "content": pass_a_blocks }],
-            "text": { "format": { "type": "json_object" } }
-        });
-        crate::storyboard::provider_trace::append_storyboard_trace(
-            "Phase 4a",
-            None,
-            repair.map(|packet| packet.attempt).unwrap_or(1),
-            "request",
-            &pass_a_request,
-        );
-        let pass_a_body = post_model_payload(access, &pass_a_request, Some(STORYBOARD_TIMEOUT))?;
-        crate::storyboard::provider_trace::append_storyboard_trace(
-            "Phase 4a",
-            None,
-            repair.map(|packet| packet.attempt).unwrap_or(1),
-            "response",
-            &serde_json::from_str::<Value>(&pass_a_body)
-                .unwrap_or_else(|_| json!({ "raw": pass_a_body })),
-        );
-        let pass_a_text = model_response_json_text(access, &pass_a_body)
-            .ok_or_else(|| "Phase 4a response did not contain JSON.".to_owned())?;
-        let batch_picks = parse_phase4_window_picks(&pass_a_text);
-        let allowed_orders = batch_shots
-            .iter()
-            .filter_map(|shot| shot.get("orderIndex").and_then(Value::as_i64))
-            .collect::<HashSet<_>>();
-        all_picks.extend(
-            batch_picks
-                .into_iter()
-                .filter(|pick| allowed_orders.contains(&pick.order_index)),
-        );
-    }
-    log::info!(
-        "Phase 4 pass A attached {pass_a_frames} window midpoint frame(s) across {} batch(es)",
-        pass_a_batches.len()
-    );
-    let picks = all_picks;
-    let pick_map = apply_phase4_window_picks(selected, &windows_by_asset, &picks);
-
-    // —— Pass B：选中窗内仍抽满 PHASE4_REFINE_FRAMES，每镜拼成 1 张网格，再按镜批请求 ——
-    let mut draft = selected.clone();
-    for shot in &mut draft.shots {
-        if let Some((window, uncertain)) = pick_map.get(&shot.order_index) {
-            let target = shot.duration_ms.max(1).min(window.span_ms().max(1));
-            let start = window
-                .mid_ms()
-                .saturating_sub(target / 2)
-                .clamp(window.start_ms, window.end_ms.saturating_sub(1));
-            let end = (start + target).min(window.end_ms).max(start + 1);
-            shot.source_start_ms = start;
-            shot.source_end_ms = end;
-            shot.duration_ms = end - start;
-            if *uncertain {
-                shot.reason = format!("{} [window={} uncertain]", shot.reason, window.window_id);
-            } else {
-                shot.reason = format!("{} [window={}]", shot.reason, window.window_id);
-            }
-        }
-    }
-
-    let mut ordered_picks = pick_map.iter().collect::<Vec<_>>();
-    ordered_picks.sort_by_key(|(order, _)| *order);
-    let mut refined = draft.clone();
-    let mut pass_b_grids = 0usize;
-    let mut pass_b_sample_frames = 0usize;
-    for (batch_index, batch) in ordered_picks
-        .chunks(PHASE4_REFINE_SHOTS_PER_BATCH)
-        .enumerate()
-    {
-        let batch_orders = batch
-            .iter()
-            .map(|(order, _)| **order)
-            .collect::<HashSet<_>>();
-        let mut pass_b_blocks = vec![json!({
-            "type": "input_text",
-            "text": format!(
-                "Brief: {brief}\n\
-                Batch {}/{} — refine ONLY these orderIndex values: {:?}. Copy every other shot unchanged from the locked draft.\n\
-                Locked storyboard draft (assetIds FINAL; refine ONLY inside each shot's chosen window): {}\n\
-                Beat timing (milliseconds; empty means not available): {}\n\
-                Chosen windows for this batch: {}\n\
-                {feedback_context}\n\n\
-                Each attached image is ONE shot's densified window as a left-to-right, top-to-bottom frame grid. Caption lists timesMs in the same order — temporal sample count is unchanged.\n\
-                Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
-                Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
-                Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
-                No overlapping ranges from the same asset. When beat timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
-                Divide beat narration across shots when needed.\n\
-                For scriptMode=key_message, keep lead-shot onScreenText equal to that beat's onScreenText marker; leave narrationText empty.\n\
-                Return complete Storyboard JSON with title, summary, targetDurationMs, scriptMode, beats, uncoveredBeatIds, shots.\n\
-                Each shot: cropFocus ([x,y], subject center in the original source frame, normalized 0..1), orderIndex, durationMs, purpose, onScreenText, narrationText, assetId, sourceStartMs, sourceEndMs, reason, beatId, matchLevel, beatPartIndex, beatPartCount.\n\
-                Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
-                matchLevel must be 'direct' or 'contextual'.",
-                batch_index + 1,
-                ordered_picks.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
-                batch.iter().map(|(order, _)| **order).collect::<Vec<_>>(),
-                serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned()),
-                serde_json::to_string(&rough.speech_timing).unwrap(),
-                serde_json::to_string(
-                    &batch
-                        .iter()
-                        .map(|(order, (window, uncertain))| json!({
-                            "orderIndex": order,
-                            "windowId": window.window_id,
-                            "startMs": window.start_ms,
-                            "endMs": window.end_ms,
-                            "uncertain": uncertain
-                        }))
-                        .collect::<Vec<_>>()
-                )
-                .unwrap_or_else(|_| "[]".to_owned())
-            )
-        })];
-        for (order_index, (window, _)) in batch {
-            let Some(source) = selected_sources
-                .iter()
-                .find(|source| source.asset_id == window.asset_id)
-            else {
-                continue;
-            };
-            let Some(path) = source.source_path.as_deref() else {
-                continue;
-            };
-            let times =
-                densify_times_in_range(window.start_ms, window.end_ms, PHASE4_REFINE_FRAMES);
-            let frames = extract_frames_at_times(
-                app,
-                &window.asset_id,
-                Path::new(path),
-                &times,
-                &format!("passB_{order_index}"),
-            );
-            crate::execution_deadline::check()?;
-            if frames.is_empty() {
-                continue;
-            }
-            pass_b_sample_frames += frames.len();
-            let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
-            let frame_paths = frames
-                .iter()
-                .map(|(_, path)| path.clone())
-                .collect::<Vec<_>>();
-            let grid_path = frames[0]
-                .1
-                .parent()
-                .map(|parent| parent.join(format!("grid_shot_{order_index}.jpg")));
-            let Some(grid_path) = grid_path else {
-                continue;
-            };
-            let Some(grid) = compose_timed_frame_grid(&frame_paths, &grid_path, 3) else {
-                continue;
-            };
-            let Some(image) = read_input_image(&grid) else {
-                continue;
-            };
-            pass_b_blocks.push(json!({
-                "type": "input_text",
-                "text": format!(
-                    "shotOrderIndex={} windowId={} gridColumns=3 timesMs={:?} (read cells L→R, T→B)",
-                    order_index, window.window_id, times_ms
-                )
-            }));
-            pass_b_blocks.push(image);
-            pass_b_grids += 1;
-        }
-        let batch_images = pass_b_blocks
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("input_image"))
-            .count();
-        if batch_images == 0 {
-            return Err(format!(
-                "Phase 4b batch {} had no readable in-window frame grids.",
-                batch_index + 1
-            ));
-        }
-        log::info!(
-            "Phase 4 pass B batch {}/{}: refining {} shot(s) as {} grid image(s)",
-            batch_index + 1,
-            ordered_picks
-                .len()
-                .div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH)
-                .max(1),
-            batch_orders.len(),
-            batch_images
-        );
-        let pass_b_request = json!({
-            "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-            "store": false,
-            "stream": true,
-            "input": [{ "role": "user", "content": pass_b_blocks }],
-            "text": { "format": { "type": "json_object" } }
-        });
-        crate::storyboard::provider_trace::append_storyboard_trace(
-            "Phase 4b",
-            None,
-            repair.map(|packet| packet.attempt).unwrap_or(1),
-            "request",
-            &pass_b_request,
-        );
-        let pass_b_body = post_model_payload(access, &pass_b_request, Some(STORYBOARD_TIMEOUT))?;
-        crate::storyboard::provider_trace::append_storyboard_trace(
-            "Phase 4b",
-            None,
-            repair.map(|packet| packet.attempt).unwrap_or(1),
-            "response",
-            &serde_json::from_str::<Value>(&pass_b_body)
-                .unwrap_or_else(|_| json!({ "raw": pass_b_body })),
-        );
-        let pass_b_text = model_response_json_text(access, &pass_b_body)
-            .ok_or_else(|| "Phase 4b response did not contain JSON.".to_owned())?;
-        let batch_refined: StoryboardContent = serde_json::from_str(&pass_b_text)
-            .map_err(|_| "Phase 4b JSON did not match StoryboardContent schema.".to_owned())?;
-        merge_phase4_batch_shots(&mut refined, &batch_refined, &batch_orders, selected);
-    }
-    log::info!(
-        "Phase 4 pass B attached {pass_b_grids} shot-grid image(s) covering {pass_b_sample_frames} timed sample frame(s) across {} batch(es)",
-        ordered_picks.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1)
-    );
-
-    // —— Pass C：uncertain 整窗加密；长窗（Pass B 帧间距 >1.5s）围绕精修子区间收窄 ——
-    #[derive(Clone, Copy)]
-    enum PassCMode {
-        Uncertain,
-        Narrow,
-    }
-    let mut pass_c_targets: Vec<(i64, PassCMode)> = Vec::new();
-    for (order, (window, uncertain)) in &pick_map {
-        if *uncertain {
-            pass_c_targets.push((*order, PassCMode::Uncertain));
-            continue;
-        }
-        let spacing = window.span_ms() / PHASE4_REFINE_FRAMES.max(1) as i64;
-        if spacing > PHASE4_MAX_FRAME_SPACING_MS {
-            pass_c_targets.push((*order, PassCMode::Narrow));
-        }
-    }
-    pass_c_targets.sort_by_key(|(order, _)| *order);
-    if !pass_c_targets.is_empty() {
-        let uncertain_count = pass_c_targets
-            .iter()
-            .filter(|(_, mode)| matches!(mode, PassCMode::Uncertain))
-            .count();
-        let narrow_count = pass_c_targets.len() - uncertain_count;
-        log::info!(
-            "Phase 4 pass C densifying {} shot(s) (uncertain={}, narrow={})",
-            pass_c_targets.len(),
-            uncertain_count,
-            narrow_count
-        );
-        for (batch_index, batch) in pass_c_targets
-            .chunks(PHASE4_REFINE_SHOTS_PER_BATCH)
-            .enumerate()
-        {
-            let allowed = batch
-                .iter()
-                .map(|(order, _)| *order)
-                .collect::<HashSet<_>>();
-            let batch_orders = batch.iter().map(|(order, _)| *order).collect::<Vec<_>>();
-            let mut pass_c_blocks = vec![json!({
-                "type": "input_text",
-                "text": format!(
-                    "Re-check ONLY these shots with denser frame grids: {:?}.\n\
-                    Batch {}/{}.\n\
-                    Current storyboard: {}\n\
-                    Keep every other shot unchanged. assetIds stay FINAL.\n\
-                    Captions mark UNCERTAIN (full chosen window) or NARROW (tighten inside the listed range only).\n\
-                    For NARROW shots, keep sourceStartMs/sourceEndMs inside the NARROW range; prefer complete actions and natural phrase boundaries.\n\
-                    Each image is one shot's denser grid; caption lists timesMs L→R, T→B.\n\
-                    Return the complete Storyboard JSON after refining only the listed shots' source ranges.\n\
-                    Avoid cutting mid spoken phrase.",
-                    batch_orders,
-                    batch_index + 1,
-                    pass_c_targets.len().div_ceil(PHASE4_REFINE_SHOTS_PER_BATCH).max(1),
-                    serde_json::to_string(&refined).unwrap_or_else(|_| "{}".to_owned())
-                )
-            })];
-            for (order_index, mode) in batch {
-                let Some((window, _)) = pick_map.get(order_index) else {
-                    continue;
-                };
-                let Some(source) = selected_sources
-                    .iter()
-                    .find(|source| source.asset_id == window.asset_id)
-                else {
-                    continue;
-                };
-                let Some(path) = source.source_path.as_deref() else {
-                    continue;
-                };
-                let (sample_start, sample_end, caption_prefix) = match mode {
-                    PassCMode::Uncertain => (
-                        window.start_ms,
-                        window.end_ms,
-                        format!(
-                            "UNCERTAIN shotOrderIndex={} windowId={}",
-                            order_index, window.window_id
-                        ),
-                    ),
-                    PassCMode::Narrow => {
-                        let shot = refined
-                            .shots
-                            .iter()
-                            .find(|shot| shot.order_index == *order_index);
-                        let Some(shot) = shot else {
-                            continue;
-                        };
-                        let span = (shot.source_end_ms - shot.source_start_ms).max(1);
-                        let pad = (span / 4).max(500);
-                        let sample_start = shot
-                            .source_start_ms
-                            .saturating_sub(pad)
-                            .max(window.start_ms);
-                        let sample_end = (shot.source_end_ms + pad).min(window.end_ms);
-                        (
-                            sample_start,
-                            sample_end.max(sample_start + 1),
-                            format!(
-                                "NARROW shotOrderIndex={} windowId={} narrowRangeMs=[{},{}]",
-                                order_index,
-                                window.window_id,
-                                sample_start,
-                                sample_end.max(sample_start + 1)
-                            ),
-                        )
-                    }
-                };
-                let times =
-                    densify_times_in_range(sample_start, sample_end, PHASE4_UNCERTAIN_FRAMES);
-                let frames = extract_frames_at_times(
-                    app,
-                    &window.asset_id,
-                    Path::new(path),
-                    &times,
-                    &format!("passC_{order_index}"),
-                );
-                crate::execution_deadline::check()?;
-                if frames.is_empty() {
-                    continue;
-                }
-                let times_ms = frames.iter().map(|(time, _)| *time).collect::<Vec<_>>();
-                let frame_paths = frames
-                    .iter()
-                    .map(|(_, path)| path.clone())
-                    .collect::<Vec<_>>();
-                let grid_path = frames[0]
-                    .1
-                    .parent()
-                    .map(|parent| parent.join(format!("grid_passC_{order_index}.jpg")));
-                let Some(grid_path) = grid_path else {
-                    continue;
-                };
-                let Some(grid) = compose_timed_frame_grid(&frame_paths, &grid_path, 5) else {
-                    continue;
-                };
-                let Some(image) = read_input_image(&grid) else {
-                    continue;
-                };
-                pass_c_blocks.push(json!({
-                    "type": "input_text",
-                    "text": format!(
-                        "{caption_prefix} gridColumns=5 timesMs={:?} (read cells L→R, T→B)",
-                        times_ms
-                    )
-                }));
-                pass_c_blocks.push(image);
-            }
-            let pass_c_request = json!({
-                "model": access.custom_config().map(|c| c.model.as_str()).unwrap_or("gpt-5.4"),
-                "store": false,
-                "stream": true,
-                "input": [{ "role": "user", "content": pass_c_blocks }],
-                "text": { "format": { "type": "json_object" } }
-            });
-            crate::storyboard::provider_trace::append_storyboard_trace(
-                "Phase 4c",
-                None,
-                repair.map(|packet| packet.attempt).unwrap_or(1),
-                "request",
-                &pass_c_request,
-            );
-            if let Ok(pass_c_body) =
-                post_model_payload(access, &pass_c_request, Some(STORYBOARD_TIMEOUT))
-            {
-                crate::storyboard::provider_trace::append_storyboard_trace(
-                    "Phase 4c",
-                    None,
-                    repair.map(|packet| packet.attempt).unwrap_or(1),
-                    "response",
-                    &serde_json::from_str::<Value>(&pass_c_body)
-                        .unwrap_or_else(|_| json!({ "raw": pass_c_body })),
-                );
-                if let Some(text) = model_response_json_text(access, &pass_c_body) {
-                    if let Ok(updated) = serde_json::from_str::<StoryboardContent>(&text) {
-                        merge_phase4_batch_shots(&mut refined, &updated, &allowed, selected);
-                    }
-                }
-            }
-        }
-    }
-
-    clamp_shots_to_chosen_windows(&mut refined, &pick_map);
-    if rough.speech_timing.beats.is_empty() {
-        apply_narration_phrase_duration_floor(&mut refined, &pick_map);
-    }
-    refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
-    let mut issues = super::timing::fit_shots(&mut refined, &rough.speech_timing, &pick_map);
-    resolve_overlaps_within_chosen_windows(&mut refined, &pick_map);
-    crate::execution_deadline::check()?;
-    issues.extend(collect_phase4_issues(&mut refined, selected));
-    refined.brief = brief.to_owned();
-    refined.title = rough.title.clone();
-    refined.summary = rough.summary.clone();
-    refined.target_duration_ms = rough.target_duration_ms;
-    refined.script_mode = rough.script_mode.clone();
-    refined.beats = rough.beats.clone();
-    refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
-    log::info!(
-        "Phase 4 refine complete: shots={}, issues={}, passC={}",
-        refined.shots.len(),
-        issues.len(),
-        pass_c_targets.len()
-    );
-    Ok((refined, issues))
+    crate::storyboard::phase4::phase4_refine_ranges(
+        app, access, brief, selected, rough, sources, repair, session,
+    )
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Phase4WindowPick {
-    order_index: i64,
-    window_id: String,
-    #[serde(default)]
-    uncertain: bool,
-}
-
-fn parse_phase4_window_picks(text: &str) -> Vec<Phase4WindowPick> {
-    let value = serde_json::from_str::<Value>(text).unwrap_or(json!({}));
-    let picks = value
-        .get("picks")
-        .cloned()
-        .or_else(|| value.get("windowPicks").cloned())
-        .unwrap_or(json!([]));
-    serde_json::from_value::<Vec<Phase4WindowPick>>(picks).unwrap_or_default()
-}
-
-fn apply_phase4_window_picks(
-    selected: &StoryboardContent,
-    windows_by_asset: &HashMap<String, Vec<crate::storyboard::multimodal::Phase4ContentWindow>>,
-    picks: &[Phase4WindowPick],
-) -> HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)> {
-    let mut map = HashMap::new();
-    for shot in &selected.shots {
-        let asset_windows = windows_by_asset
-            .get(&shot.asset_id)
-            .cloned()
-            .unwrap_or_default();
-        let pick = picks
-            .iter()
-            .find(|pick| pick.order_index == shot.order_index);
-        let chosen = pick
-            .and_then(|pick| {
-                asset_windows
-                    .iter()
-                    .find(|window| window.window_id == pick.window_id)
-                    .cloned()
-            })
-            .or_else(|| {
-                asset_windows
-                    .iter()
-                    .max_by_key(|window| window.span_ms())
-                    .cloned()
-            });
-        if let Some(window) = chosen {
-            let uncertain = pick.map(|pick| pick.uncertain).unwrap_or(false);
-            map.insert(shot.order_index, (window, uncertain));
-        }
-    }
-    map
-}
-
-fn merge_phase4_batch_shots(
-    target: &mut StoryboardContent,
-    batch: &StoryboardContent,
-    allowed_orders: &HashSet<i64>,
-    locked: &StoryboardContent,
-) {
-    for patch in &batch.shots {
-        if !allowed_orders.contains(&patch.order_index) {
-            continue;
-        }
-        let Some(original) = locked
-            .shots
-            .iter()
-            .find(|shot| shot.order_index == patch.order_index)
-        else {
-            continue;
-        };
-        if patch.asset_id != original.asset_id {
-            continue;
-        }
-        let Some(slot) = target
-            .shots
-            .iter_mut()
-            .find(|shot| shot.order_index == patch.order_index)
-        else {
-            continue;
-        };
-        slot.crop_focus = patch.crop_focus;
-        slot.source_start_ms = patch.source_start_ms;
-        slot.source_end_ms = patch.source_end_ms;
-        slot.duration_ms = patch.duration_ms;
-        slot.purpose = patch.purpose.clone();
-        slot.on_screen_text = patch.on_screen_text.clone();
-        slot.narration_text = patch.narration_text.clone();
-        slot.reason = patch.reason.clone();
-        slot.match_level = patch.match_level.clone();
-        slot.beat_part_index = patch.beat_part_index;
-        slot.beat_part_count = patch.beat_part_count;
-    }
-}
-
+#[cfg(test)]
 fn clamp_shots_to_chosen_windows(
     content: &mut StoryboardContent,
     pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
 ) {
+    clamp_shots_to_chosen_windows_scoped(content, pick_map, None);
+}
+
+pub(crate) fn clamp_shots_to_chosen_windows_scoped(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+    mutable: Option<&HashSet<i64>>,
+) {
     for shot in &mut content.shots {
+        if let Some(allowed) = mutable {
+            if !allowed.contains(&shot.order_index) {
+                continue;
+            }
+        }
         let Some((window, _)) = pick_map.get(&shot.order_index) else {
             continue;
         };
@@ -3160,9 +2658,18 @@ fn clamp_shots_to_chosen_windows(
 }
 
 /// 同素材源范围交叠时，只在 Phase 4 已选内容窗内挪切点；挪过的清 cropFocus。
+#[cfg(test)]
 fn resolve_overlaps_within_chosen_windows(
     content: &mut StoryboardContent,
     pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+) {
+    resolve_overlaps_within_chosen_windows_scoped(content, pick_map, None);
+}
+
+pub(crate) fn resolve_overlaps_within_chosen_windows_scoped(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+    mutable: Option<&HashSet<i64>>,
 ) {
     let mut by_asset: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, shot) in content.shots.iter().enumerate() {
@@ -3178,7 +2685,20 @@ fn resolve_overlaps_within_chosen_windows(
         let mut ordered = indices.clone();
         ordered.sort_by_key(|&index| content.shots[index].order_index);
         let mut occupied: Vec<(i64, i64)> = Vec::new();
+        let is_mutable = |order: i64| mutable.map_or(true, |allowed| allowed.contains(&order));
         for &index in &ordered {
+            let shot = &content.shots[index];
+            if !is_mutable(shot.order_index) {
+                occupied.push((
+                    shot.source_start_ms,
+                    shot.source_end_ms.max(shot.source_start_ms + 1),
+                ));
+            }
+        }
+        for &index in &ordered {
+            if !is_mutable(content.shots[index].order_index) {
+                continue;
+            }
             let (asset_id, order_index, preferred_start, preferred_end, need, window_bounds) = {
                 let shot = &content.shots[index];
                 let bounds = pick_map.get(&shot.order_index).and_then(|(window, _)| {
@@ -3240,9 +2760,14 @@ fn resolve_overlaps_within_chosen_windows(
             shot.duration_ms = (end - start).max(1);
             occupied.push((start, end));
         }
-        // 窗内仍交叠（例如多镜争同一满窗）：按 window 均分，仍不越窗。
+        // 窗内仍交叠：仅当参与均分的镜头都可改写才 pack，避免顺带改冻结镜头。
         if window_constrained_ranges_overlap(content, indices) {
-            pack_overlapping_shots_within_windows(content, indices, pick_map);
+            let packable = indices
+                .iter()
+                .all(|&index| is_mutable(content.shots[index].order_index));
+            if packable {
+                pack_overlapping_shots_within_windows(content, indices, pick_map);
+            }
         }
     }
 }
@@ -3375,11 +2900,25 @@ fn pack_overlapping_shots_within_windows(
 }
 
 /// 旁白句界托底：切点落在窗内时，保证画面时长够念完本镜旁白，减轻「话说一半被切」。
+#[cfg(test)]
 fn apply_narration_phrase_duration_floor(
     content: &mut StoryboardContent,
     pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
 ) {
+    apply_narration_phrase_duration_floor_scoped(content, pick_map, None);
+}
+
+pub(crate) fn apply_narration_phrase_duration_floor_scoped(
+    content: &mut StoryboardContent,
+    pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
+    mutable: Option<&HashSet<i64>>,
+) {
     for shot in &mut content.shots {
+        if let Some(allowed) = mutable {
+            if !allowed.contains(&shot.order_index) {
+                continue;
+            }
+        }
         let narration = shot.narration_text.trim();
         if narration.is_empty() {
             continue;

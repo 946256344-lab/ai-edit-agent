@@ -299,6 +299,7 @@ pub async fn generate_shot_recommendations(
             &sources,
             &HashMap::new(),
             &[],
+            &[],
             SpeechTiming::default(),
             None,
         )?;
@@ -397,6 +398,7 @@ pub async fn prepare_shot_replacement(
             candidate_pools: Vec::new(),
         };
         let access = ModelAccess::resolve()?;
+        let mut phase4_session = crate::storyboard::phase4::Phase4Session::new();
         let (refined, issues) = phases::phase4_refine_ranges(
             &app,
             &access,
@@ -405,6 +407,7 @@ pub async fn prepare_shot_replacement(
             &rough,
             std::slice::from_ref(&source),
             None,
+            &mut phase4_session,
         )?;
         if !issues.is_empty() {
             return Err("该候选未能形成符合原时长的片段，请选择其他候选。".to_owned());
