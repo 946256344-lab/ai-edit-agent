@@ -899,6 +899,9 @@ pub struct StoryboardSource {
     /// 片段级证据向量；仅在片段证据与向量版本有效时进入排序。
     #[serde(default, skip_serializing)]
     pub(crate) segment_embedding: Option<Vec<f32>>,
+    /// 片段代表帧的 CLIP 图像向量；与 beat 的 CLIP 文本向量同空间比较。
+    #[serde(default, skip_serializing)]
+    pub(crate) segment_clip_embedding: Option<Vec<f32>>,
 }
 
 #[derive(Default, Deserialize, Serialize)]

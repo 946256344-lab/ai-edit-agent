@@ -21,6 +21,9 @@ pub(crate) struct CandidateScore {
     pub total: f64,
     pub semantic: f64,
     pub lexical: f64,
+    /// beat 文案 ↔ 片段画面（CLIP）相似度；缺失时为 0，不影响既有 bge/词面路径。
+    #[serde(default)]
+    pub clip: f64,
     pub quality: f64,
     pub duration: f64,
     pub freshness: f64,
@@ -42,6 +45,7 @@ impl CandidateScore {
 ///
 /// 评分维度：
 /// - 语义相关性（0-50分）：余弦与词面各最多 25；缺一侧时另一侧放大到 50
+/// - CLIP 图文（0-25分）：beat 文案与片段代表帧；缺模型/向量时为 0
 /// - 画面质量（0-10分）：来自 visual_quality_score
 /// - 时长匹配度（0-10分）：候选时长与目标时长的适配度
 /// - 当前 Storyboard 复用惩罚（每次 -15 分）：已经选过的素材累计降权
@@ -56,6 +60,7 @@ pub(crate) fn rank_segment_candidates(
     prior_selections: &[String], // 已选镜头的 asset_id 列表
     usage_counts: &std::collections::HashMap<String, i32>, // 素材在项目其他 timeline 的去重使用次数
     beat_embedding: Option<&[f32]>,
+    beat_clip_embedding: Option<&[f32]>,
 ) -> Vec<ScoredCandidate> {
     let mut scored: Vec<_> = candidates
         .into_iter()
@@ -67,6 +72,7 @@ pub(crate) fn rank_segment_candidates(
                 prior_selections,
                 usage_counts,
                 beat_embedding,
+                beat_clip_embedding,
             );
             ScoredCandidate {
                 source: candidate,
@@ -95,10 +101,12 @@ fn calculate_candidate_score(
     prior_selections: &[String],
     usage_counts: &std::collections::HashMap<String, i32>,
     beat_embedding: Option<&[f32]>,
+    beat_clip_embedding: Option<&[f32]>,
 ) -> CandidateScore {
     let has_evidence = candidate_has_evidence(candidate);
     let (semantic, lexical, matched_keywords) =
         semantic_match_parts(candidate, beat, beat_embedding);
+    let clip = clip_match_score(candidate, beat_clip_embedding);
 
     let quality = candidate.visual_quality_score.unwrap_or(0.5) * 10.0;
 
@@ -108,7 +116,7 @@ fn calculate_candidate_score(
     let usage_count = usage_counts.get(&candidate.asset_id).copied().unwrap_or(0);
     let freshness = 5.0 / (1.0 + usage_count.max(0) as f64);
 
-    let mut total = semantic + lexical + quality + duration + freshness + shot_type;
+    let mut total = semantic + lexical + clip + quality + duration + freshness + shot_type;
 
     let current_storyboard_uses = prior_selections
         .iter()
@@ -126,6 +134,7 @@ fn calculate_candidate_score(
         total,
         semantic,
         lexical,
+        clip,
         quality,
         duration,
         freshness,
@@ -133,6 +142,14 @@ fn calculate_candidate_score(
         has_evidence,
         matched_keywords,
     }
+}
+
+fn clip_match_score(candidate: &StoryboardSource, beat_clip_embedding: Option<&[f32]>) -> f64 {
+    beat_clip_embedding
+        .zip(candidate.segment_clip_embedding.as_deref())
+        .and_then(|(query, image)| crate::storyboard::semantic::cosine_similarity(query, image))
+        .map(|similarity| similarity.max(0.0) * 25.0)
+        .unwrap_or(0.0)
 }
 
 /// 时长匹配：片段候选按片段跨度衡量，整素材候选沿用最长场景段/整片时长。
@@ -402,6 +419,7 @@ mod tests {
             source_path: None,
             segment: None,
             segment_embedding: None,
+            segment_clip_embedding: None,
         }
     }
 
@@ -422,8 +440,10 @@ mod tests {
         let low = make_source("low", "video", Some(10_000), 0.3);
 
         let usage = std::collections::HashMap::new();
-        let high_score = calculate_candidate_score(&high, &test_beat(), 10_000, &[], &usage, None);
-        let low_score = calculate_candidate_score(&low, &test_beat(), 10_000, &[], &usage, None);
+        let high_score =
+            calculate_candidate_score(&high, &test_beat(), 10_000, &[], &usage, None, None);
+        let low_score =
+            calculate_candidate_score(&low, &test_beat(), 10_000, &[], &usage, None, None);
 
         assert!(high_score.total > low_score.total, "高质量素材应得分更高");
     }
@@ -435,9 +455,9 @@ mod tests {
 
         let usage = std::collections::HashMap::new();
         let perfect_score =
-            calculate_candidate_score(&perfect, &test_beat(), 5_000, &[], &usage, None);
+            calculate_candidate_score(&perfect, &test_beat(), 5_000, &[], &usage, None, None);
         let long_score =
-            calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None);
+            calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None, None);
 
         assert_eq!(
             perfect_score.total, long_score.total,
@@ -452,8 +472,9 @@ mod tests {
 
         let usage = std::collections::HashMap::new();
         let penalized =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None);
-        let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None, None);
+        let normal =
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None, None);
 
         assert!(penalized.total < normal.total, "连续使用同一素材应被降权");
         assert!(
@@ -469,8 +490,9 @@ mod tests {
 
         let usage = std::collections::HashMap::new();
         let penalized =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None);
-        let normal = calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None);
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None, None);
+        let normal =
+            calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None, None);
 
         assert!(
             (normal.total - penalized.total - 15.0).abs() < 0.1,
@@ -522,6 +544,7 @@ mod tests {
             10_000,
             &[],
             &std::collections::HashMap::new(),
+            None,
             None,
         );
         assert_eq!(ranked[0].source.asset_id, "factory");
@@ -577,6 +600,7 @@ mod tests {
             &[],
             &std::collections::HashMap::new(),
             None,
+            None,
         );
         assert_eq!(ranked[0].source.asset_id, "forklift");
         assert!(!ranked[0].score.matched_keywords.is_empty());
@@ -614,6 +638,7 @@ mod tests {
             &[],
             &std::collections::HashMap::new(),
             None,
+            None,
         );
         assert_eq!(ranked[0].source.asset_id, "evidenced");
         assert!(ranked[0].score.has_evidence);
@@ -644,6 +669,7 @@ mod tests {
             &[],
             &std::collections::HashMap::new(),
             None,
+            None,
         );
 
         assert_eq!(ranked[0].source.asset_id, "high");
@@ -657,8 +683,15 @@ mod tests {
         let used = make_source("used", "video", Some(10_000), 0.5);
         let usage = std::collections::HashMap::from([("used".to_owned(), 3)]);
 
-        let ranked =
-            rank_segment_candidates(vec![used, fresh], &test_beat(), 10_000, &[], &usage, None);
+        let ranked = rank_segment_candidates(
+            vec![used, fresh],
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            None,
+        );
 
         assert_eq!(ranked[0].source.asset_id, "fresh");
     }
@@ -674,5 +707,36 @@ mod tests {
         assert!(serialized.get("evidenceEmbedding").is_none());
         assert!(serialized.get("evidence_embedding").is_none());
         assert!(serialized.get("keyframeGridPath").is_none());
+    }
+
+    #[test]
+    fn clip_similarity_adds_image_weight_when_present() {
+        let mut matching = make_source("match", "video", Some(10_000), 0.5);
+        matching.segment_clip_embedding = Some(vec![1.0, 0.0, 0.0]);
+        let mut other = make_source("other", "video", Some(10_000), 0.5);
+        other.segment_clip_embedding = Some(vec![0.0, 1.0, 0.0]);
+        let beat_clip = [1.0_f32, 0.0, 0.0];
+        let usage = std::collections::HashMap::new();
+        let match_score = calculate_candidate_score(
+            &matching,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            Some(&beat_clip),
+        );
+        let other_score = calculate_candidate_score(
+            &other,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            Some(&beat_clip),
+        );
+        assert!(match_score.clip > other_score.clip);
+        assert!(match_score.total > other_score.total);
+        assert!((match_score.clip - 25.0).abs() < 0.01);
     }
 }

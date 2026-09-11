@@ -1,5 +1,9 @@
 # 架构
 
+## Phase 4 局部修复（2026-09-10，合入 clip-segment-recall 2026-09-11）
+
+Phase 4 外层修复循环持有当次调用的内存精修状态：完整镜头结果（含时间范围、`cropFocus`、文案）、每镜内容窗与 `uncertain`、Pass A/B/C 已完成与待处理镜头、当前修复集合。批次请求失败只重试失败批次；镜头校验失败只修复 `affected_shots` 及必要关联镜头（源区间重叠的参与镜、同一叙事段时长问题的段内镜）。成功镜头不再向模型重提。Pass B/C 只返回本批 `orderIndex` 的切点/构图（及确需改动的旁白/屏幕文案），由 Rust 保留素材身份与顺序并根据端点计算时长。漏镜、重镜或他批镜头不能把该批标为完成。Pass C 失败保持未完成，预算耗尽返回真实失败。结构问题（素材身份、镜头数、模式）不靠重跑 Phase 4。`fit_shots`、窗内消重叠与 normalize 只改写修复集合；无法定位的问题明确失败，不默认重做全部镜头。同一批次重试复用已生成图像，窗口或采样范围变化后才重抽。预算与截止时间仍是整段 Phase 4 共用的一套，不按批次放大。实现位于 `src-tauri/src/storyboard/phase4.rs`，外层循环在 `storyboard.rs::generate_storyboard_internal`。手动换镜仍调用 Phase 4，使用独立会话。
+
 ## 剪辑失败修复（2026-09-10）
 
 Phase 3 只返回每个 beat 内的候选序号，由 Rust 取得真实素材、片段和时间范围；整素材卡片里的场景描述不是额外可选项。Phase 4 的素材来源按 assetId 去重，避免展开片段后错误触发来源数量检查。内部修正预算耗尽即返回不可重试失败，Native 同轮不再执行第二次整套分镜生成。
@@ -8,9 +12,9 @@ Phase 3 只返回每个 beat 内的候选序号，由 Rust 取得真实素材、
 
 启动时将中断的片段视觉批次恢复到 queued，不清除已有证据。当前失败素材中包含局域网共享路径；读取延迟是单独的环境因素，不通过无限重试或统一放大超时掩盖。验证记录见 `docs/changes/2026-09-10-editing-failure-fixes.md`。
 
-## Phase 4 精修拆批（2026-09-07，Pass A/长窗收窄 2026-09-08）
+## Phase 4 精修拆批（2026-09-07，Pass A/长窗收窄 2026-09-08，局部修复 2026-09-10）
 
-Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 10 镜一批调用模型，避免单次上百张图触发网关断连；批结果只回写允许的 `orderIndex`。过短导入头窗（&lt;1.2s）向前并入后窗。Pass B 后若窗内帧间距 &gt;1.5s，Pass C 围绕精修子区间再加密收窄（uncertain 仍整窗加密）。Phase 3 关键帧网格按名次跨池轮询分配（上限 36），卡片标 `keyframeGridAttached`。
+Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 10 镜一批调用模型，避免单次上百张图触发网关断连。同镜窗内多帧优先一次 FFmpeg（`-ss` 窗首 + `select` 命中各目标时刻，文件名仍带真实 `time_ms`），批量失败再按帧回退。批结果必须完整覆盖本批 `orderIndex` 后才合并；Pass B/C 改为只返回本批修改，不再要求整份 Storyboard JSON。过短导入头窗（&lt;1.2s）向前并入后窗。Pass B 后若窗内帧间距 &gt;1.5s，Pass C 围绕精修子区间再加密收窄（uncertain 仍整窗加密）。重试从失败批次或受影响镜头继续，成功结果留在当次内存状态。Phase 3 关键帧网格按名次跨池轮询分配（上限 36），卡片标 `keyframeGridAttached`。
 
 ## 配音出站代理（2026-09-07）
 
@@ -306,7 +310,7 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再让模型只在该模式下拆 beats（短 brief 偏 ≤15s；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽；`full_script` 可先 TTS 锁定时长；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **两级本地召回**：2a 每 beat 召回 9 条互不相似整片（整文件长得像的也互斥）→ 并集 `ensure_segment_visual_evidence`（预算 150s）→ 有 `scene_segments` 的短名单素材全部展开为片段（视觉超时仍锁 `segmentId` 与源范围，不退整条）→ 2b 每条保留约 4 段，去似补位到 Top-12（同片最多 2 段；不足不拉第 10 条相似片）。Phase 3 模型从池中用 `candidateIndexes` 选 **2–3 候选**（Rust 解析 asset/segment/源范围；同一 beat 禁止同 `assetId`；跨 beat 允许同一素材的不同、不重叠、不相似片段，含相邻；已用片段相似画面硬拒；池内仍有 ≥2 条可用互异素材时最少 2 镜，否则少镜或 uncovered；40% 上限按素材）。Phase 4 **有片段锁定则跳过 Pass A**，窗口=真实场景片段；否则用片段/关键帧建窗再段内精修。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；精修类失败回 Phase 4，结构/硬上限与 diversity/相似片段失败不空转 Phase 4）。单步重试分离传输/语义预算并带 `previousShots`；耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要约束 `requiredVisual`/`visualKeywords`（禁止编造库中没有的主体；短 brief 偏 ≤15s；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽；`full_script` 可先 TTS 锁定时长；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **两级本地召回**：2a 每 beat 召回 9 条互不相似整片（整文件长得像的也互斥）→ 并集 `ensure_segment_visual_evidence`（预算 150s）→ 有 `scene_segments` 的短名单素材全部展开为片段（视觉超时仍锁 `segmentId` 与源范围，不退整条）→ 2b 每条保留约 4 段，去似补位到 Top-12（同片最多 2 段；不足不拉第 10 条相似片）。Phase 3 模型从池中用 `candidateIndexes` 选 **2–3 候选**（Rust 解析 asset/segment/源范围；同一 beat 禁止同 `assetId`；跨 beat 允许同一素材的不同、不重叠、不相似片段，含相邻；已用片段相似画面硬拒；池内仍有 ≥2 条可用互异素材时最少 2 镜，否则少镜或 uncovered；40% 上限按素材）。Phase 4 **有片段锁定则跳过 Pass A**，窗口=真实场景片段；否则用片段/关键帧建窗再段内精修。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；精修类失败回 Phase 4 且只改受影响镜头，结构/硬上限与 diversity/相似片段失败不空转 Phase 4）。单步重试分离传输/语义预算；`previousShots` 只作提示快照，真实精修进度在 `Phase4Session`。耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs`、`phase4.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 
@@ -320,7 +324,7 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 
 已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
 
-- `bge-small-zh-v1.5` ONNX 模型和本地推理运行时已随生产安装包分发，运行时不联网下载。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
+- `bge-small-zh-v1.5` ONNX 模型和本地推理运行时已随生产安装包分发，运行时不联网下载。CLIP ViT-B/32（Qdrant 图文）同样离线加载：配置进仓库，ONNX 权重用 `scripts/fetch-clip-models.ps1` 拉取后打进安装包；缺失时 Phase 2 仅跳过 CLIP 加权。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
 - Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 

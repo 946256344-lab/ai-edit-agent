@@ -62,7 +62,7 @@ src/main.tsx
 | `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema 与动态目录；Provider 常驻 `load_tools` 并最多加载 5 个业务工具 |
 | `agentloop/logs.rs` | 固定读取当前应用日志文件，提供有界行范围、分页及凭据/路径遮蔽 |
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |
-| `storyboard.rs` | 证据候选、模型提案、校验和版本 |
+| `storyboard.rs` | 证据候选、模型提案、校验和版本；Phase 4 当次精修进度在 `storyboard/phase4.rs` |
 | `timeline.rs` | 时间线版本、镜头/文本/音乐编辑和查询 |
 | `timeline_voice.rs` | 旁白写入、画面补尾、系统字幕替换 |
 | `preview.rs` | FFmpeg 渲染、文本/音乐合成、质量检查 |

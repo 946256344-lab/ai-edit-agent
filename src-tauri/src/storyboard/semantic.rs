@@ -433,6 +433,7 @@ pub(crate) fn backfill_project_embeddings(
     for (asset_id, metadata_json) in segment_rows {
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
         let _ = refresh_segment_embeddings(app, &asset_id, &metadata);
+        let _ = crate::storyboard::clip::refresh_segment_clip_embeddings(app, &asset_id, &metadata);
     }
     Ok(updated)
 }

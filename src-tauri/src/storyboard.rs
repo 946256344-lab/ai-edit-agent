@@ -1,8 +1,10 @@
 //! 只使用已就绪真实媒体证据生成版本化 storyboard，并校验证据源时间范围。
 //! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
 
+pub(crate) mod clip;
 mod keyframes;
 pub(crate) mod multimodal;
+pub(crate) mod phase4;
 pub(crate) mod phases;
 mod provider_trace;
 pub(crate) mod repair;
@@ -142,6 +144,7 @@ pub(crate) fn storyboard_sources(
             source_path: Some(source_reference.clone()),
             segment: None,
             segment_embedding: None,
+            segment_clip_embedding: None,
         };
 
         let expand = expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
@@ -320,11 +323,23 @@ fn segment_source(
             }
             left
         });
+    let segment_clip_embedding = member_ids
+        .iter()
+        .filter_map(|segment_id| {
+            clip::load_segment_clip_embedding(connection, &whole_asset.asset_id, segment_id)
+        })
+        .reduce(|mut left, right| {
+            for (slot, value) in left.iter_mut().zip(right) {
+                *slot = (*slot + value) / 2.0;
+            }
+            left
+        });
     StoryboardSource {
         visual_evidence,
         ocr_evidence,
         segment: Some(segment),
         segment_embedding,
+        segment_clip_embedding,
         ..whole_asset.clone()
     }
 }
@@ -549,18 +564,8 @@ pub(crate) fn validate_storyboard(
             ));
         }
     }
-    validate_non_overlapping_video_sources(&content.shots, sources).map_err(|error| {
-        storyboard_repair_message(
-            error,
-            content.shots.iter().map(|shot| shot.order_index).collect(),
-        )
-    })?;
-    validate_shot_diversity(&content.shots, sources).map_err(|error| {
-        storyboard_repair_message(
-            error,
-            content.shots.iter().map(|shot| shot.order_index).collect(),
-        )
-    })?;
+    validate_non_overlapping_video_sources(&content.shots, sources)?;
+    validate_shot_diversity(&content.shots, sources)?;
     Ok(())
 }
 
@@ -591,10 +596,10 @@ fn validate_non_overlapping_video_sources(
                     other.source_start_ms,
                     other.source_end_ms
                 );
-                return Err(
-                    "Storyboard cannot reuse overlapping video source ranges across beats."
-                        .to_owned(),
-                );
+                return Err(storyboard_repair_message(
+                    "Storyboard cannot reuse overlapping video source ranges across beats.",
+                    vec![shot.order_index, other.order_index],
+                ));
             }
         }
     }
@@ -676,9 +681,12 @@ fn validate_shot_diversity(
                     right.source_start_ms,
                     right.source_end_ms
                 );
-                return Err(format!(
-                    "Shots (index {} and {}) reuse asset '{}' with overlapping or visually similar footage. Choose a dissimilar segment.",
-                    left.order_index, right.order_index, left.asset_id
+                return Err(storyboard_repair_message(
+                    format!(
+                        "Shots (index {} and {}) reuse asset '{}' with overlapping or visually similar footage. Choose a dissimilar segment.",
+                        left.order_index, right.order_index, left.asset_id
+                    ),
+                    vec![left.order_index, right.order_index],
                 ));
             }
         }
@@ -978,9 +986,18 @@ fn subtitle_text_from_narration(narration: &str) -> String {
 }
 
 fn normalize_storyboard_candidate(
+    content: StoryboardContent,
+    sources: &[StoryboardSource],
+    brief: &str,
+) -> StoryboardContent {
+    normalize_storyboard_candidate_scoped(content, sources, brief, None)
+}
+
+fn normalize_storyboard_candidate_scoped(
     mut content: StoryboardContent,
     sources: &[StoryboardSource],
     _brief: &str,
+    frozen: Option<&HashSet<i64>>,
 ) -> StoryboardContent {
     log::info!(
         "Normalizing storyboard candidate: shots={}, initial_target_duration_ms={}",
@@ -989,6 +1006,9 @@ fn normalize_storyboard_candidate(
     );
     let mut corrections = 0;
     for shot in &mut content.shots {
+        if frozen.is_some_and(|set| set.contains(&shot.order_index)) {
+            continue;
+        }
         if let Some(source) = sources
             .iter()
             .find(|source| source.asset_id == shot.asset_id)
@@ -1041,7 +1061,7 @@ fn normalize_storyboard_candidate(
         .iter()
         .map(|shot| (shot.order_index, shot.source_start_ms, shot.source_end_ms))
         .collect::<Vec<_>>();
-    resolve_overlapping_video_ranges(&mut content.shots, sources);
+    resolve_overlapping_video_ranges_scoped(&mut content.shots, sources, frozen);
     for shot in &mut content.shots {
         let Some((_, before_start, before_end)) = range_before
             .iter()
@@ -1170,13 +1190,27 @@ fn normalize_storyboard_candidate(
     content
 }
 
-fn resolve_overlapping_video_ranges(
+fn resolve_overlapping_video_ranges_scoped(
     shots: &mut [crate::models::StoryboardShot],
     sources: &[StoryboardSource],
+    frozen: Option<&HashSet<i64>>,
 ) {
+    let is_frozen = |order: i64| frozen.is_some_and(|set| set.contains(&order));
     let mut used: std::collections::HashMap<String, Vec<(i64, i64)>> =
         std::collections::HashMap::new();
+    for shot in shots.iter() {
+        if !is_frozen(shot.order_index) {
+            continue;
+        }
+        used.entry(shot.asset_id.clone()).or_default().push((
+            shot.source_start_ms,
+            shot.source_end_ms.max(shot.source_start_ms + 1),
+        ));
+    }
     for shot in shots.iter_mut() {
+        if is_frozen(shot.order_index) {
+            continue;
+        }
         let Some(source) = sources
             .iter()
             .find(|source| source.asset_id == shot.asset_id)
@@ -1222,6 +1256,12 @@ fn resolve_overlapping_video_ranges(
                 .any(|shot| shot.asset_id == asset_id && shot.crop_focus.is_some());
             if has_crop_focus {
                 // 已验构图的镜头禁止整段均分到未检查源窗；残留交叠交校验/Phase4。
+                continue;
+            }
+            if shots
+                .iter()
+                .any(|shot| shot.asset_id == asset_id && is_frozen(shot.order_index))
+            {
                 continue;
             }
             pack_video_asset_shots(shots, &asset_id, duration);
@@ -1412,6 +1452,7 @@ mod tests {
             source_path: None,
             segment: None,
             segment_embedding: None,
+            segment_clip_embedding: None,
         }
     }
 
@@ -2435,9 +2476,14 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1: 系统先锁定 scriptMode，再让模型只在该模式下写结构。
+    // Phase 1: 系统先锁定 scriptMode；把本地库库存摘要注入叙事，再让模型只在该模式下写结构。
     let required_script_mode = decide_script_mode(brief);
     log::info!("Phase 1 script mode locked by system: {required_script_mode}");
+    let library_inventory = phases::build_library_inventory_summary(&sources);
+    log::info!(
+        "Phase 1 library inventory prepared: chars={}",
+        library_inventory.chars().count()
+    );
     let mut phase1_feedback = None;
     let narrative = (0..MAX_PHASE1_REVISIONS).find_map(|revision| {
         log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
@@ -2445,6 +2491,7 @@ fn generate_storyboard_internal(
             &access,
             brief,
             required_script_mode,
+            &library_inventory,
             phase1_feedback.as_deref(),
         ) {
             Ok(candidate) => {
@@ -2512,13 +2559,25 @@ fn generate_storyboard_internal(
         &narrative.beats,
     );
     // 语义编码不依赖音频时长，与 TTS 同时执行；最终排序等待两者完成。
-    let embeddings = std::thread::scope(|scope| {
+    let (embeddings, clip_embeddings) = std::thread::scope(|scope| {
         let deadline = crate::execution_deadline::current();
-        let app_ref = &app;
-        let beats_ref = &narrative.beats;
-        let embedding_job = scope.spawn(move || {
-            let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
-            semantic::encode_beats(app_ref, beats_ref)
+        let embedding_job = scope.spawn({
+            let deadline = deadline;
+            let app = app.clone();
+            let beats = narrative.beats.clone();
+            move || {
+                let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
+                semantic::encode_beats(&app, &beats)
+            }
+        });
+        let clip_job = scope.spawn({
+            let deadline = deadline;
+            let app = app.clone();
+            let beats = narrative.beats.clone();
+            move || {
+                let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
+                clip::encode_beats(&app, &beats)
+            }
         });
         if narrative.script_mode == "full_script" {
             if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty())
@@ -2548,13 +2607,21 @@ fn generate_storyboard_internal(
                 }
             }
         }
-        embedding_job
+        let embeddings = embedding_job
             .join()
-            .map_err(|_| "Semantic encoding worker failed.".to_owned())?
-    });
+            .map_err(|_| "Semantic encoding worker failed.".to_owned())?;
+        let clip_embeddings = clip_job
+            .join()
+            .map_err(|_| "CLIP encoding worker failed.".to_owned())?;
+        Ok::<_, String>((embeddings, clip_embeddings))
+    })?;
     crate::execution_deadline::check()?;
     let embeddings = embeddings.unwrap_or_else(|error| {
         log::warn!("Local semantic ranking unavailable: {error}");
+        Vec::new()
+    });
+    let clip_embeddings = clip_embeddings.unwrap_or_else(|error| {
+        log::warn!("Local CLIP ranking unavailable: {error}");
         Vec::new()
     });
     if let Some((hard_target, _)) = &audio_first {
@@ -2568,8 +2635,13 @@ fn generate_storyboard_internal(
     );
 
     // Phase 2a：每 beat 9 条互不相似整片 → 并集 ensure → 有场景段则全部展开（视觉超时不退整条）
-    let beat_asset_ids =
-        phases::phase2_asset_shortlists(&narrative, &sources, &usage_counts, &embeddings);
+    let beat_asset_ids = phases::phase2_asset_shortlists(
+        &narrative,
+        &sources,
+        &usage_counts,
+        &embeddings,
+        &clip_embeddings,
+    );
     let coarse_ids = phases::union_shortlist_asset_ids(&beat_asset_ids);
     let ensure = crate::assets::ensure_segment_visual_evidence(
         &app,
@@ -2584,6 +2656,14 @@ fn generate_storyboard_internal(
         ensure.ready.len(),
         ensure.pending.len()
     );
+    // 短名单素材有代表帧即可编码 CLIP（不依赖 Agnes 标签）。
+    match clip::refresh_assets_clip_embeddings(&app, &coarse_ids) {
+        Ok(updated) if updated > 0 => {
+            log::info!("Phase 2a CLIP image embeddings updated for {updated} segments.");
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("Phase 2a CLIP image embedding skipped: {error}"),
+    }
     crate::execution_deadline::check()?;
     let expand_set = coarse_ids.iter().cloned().collect::<HashSet<_>>();
     let connection = open_connection(&app)?;
@@ -2615,6 +2695,7 @@ fn generate_storyboard_internal(
         &sources,
         &usage_counts,
         &embeddings,
+        &clip_embeddings,
         initial_timing,
         Some(&beat_asset_ids),
     )?;
@@ -2762,6 +2843,7 @@ fn generate_storyboard_internal(
     let mut repair: Option<RepairPacket> = None;
     let mut content = None;
     let mut budget = StepRetryBudget::new("Phase 4");
+    let mut phase4_session = crate::storyboard::phase4::Phase4Session::new();
     loop {
         crate::execution_deadline::check()?;
         let attempt = budget.semantic_attempt_number();
@@ -2774,6 +2856,7 @@ fn generate_storyboard_internal(
             &rough,
             &sources,
             repair.as_ref(),
+            &mut phase4_session,
         ) {
             Ok((candidate, issues)) => {
                 log::info!(
@@ -2781,6 +2864,19 @@ fn generate_storyboard_internal(
                     candidate.shots.len(),
                     issues.len()
                 );
+                if issues
+                    .iter()
+                    .any(|issue| crate::storyboard::phase4::is_structural_phase4_issue(&issue.kind))
+                {
+                    log::warn!("Phase 4 structural issue; not retrying refine.");
+                    repair = Some(build_repair_packet(
+                        attempt,
+                        issues,
+                        &candidate.shots,
+                        repair.as_ref(),
+                    ));
+                    break;
+                }
                 if issues.iter().any(|issue| issue.needs_model_decision) {
                     for issue in &issues {
                         log::warn!(
@@ -2789,6 +2885,18 @@ fn generate_storyboard_internal(
                             issue.message,
                             issue.affected_shots
                         );
+                    }
+                    if let Err(error) =
+                        crate::storyboard::phase4::repair_set_from_issues(&issues, &candidate)
+                    {
+                        log::warn!("{error}");
+                        repair = Some(build_repair_packet(
+                            attempt,
+                            issues,
+                            &candidate.shots,
+                            repair.as_ref(),
+                        ));
+                        break;
                     }
                     let has_snapshot = !candidate.shots.is_empty();
                     if budget.can_retry_semantic() {
@@ -2821,7 +2929,14 @@ fn generate_storyboard_internal(
                 }
 
                 // Phase 5: normalize 机械自修后硬校验；仅精修类问题回 Phase4
-                let candidate = normalize_storyboard_candidate(candidate, &sources, brief);
+                let frozen = phase4_session
+                    .frozen_orders(candidate.shots.iter().map(|shot| shot.order_index));
+                let candidate = if frozen.is_empty() {
+                    normalize_storyboard_candidate(candidate, &sources, brief)
+                } else {
+                    normalize_storyboard_candidate_scoped(candidate, &sources, brief, Some(&frozen))
+                };
+                phase4_session.replace_content(candidate.clone());
                 match rough
                     .speech_timing
                     .validate(&candidate)
@@ -2846,7 +2961,21 @@ fn generate_storyboard_internal(
                             ));
                             break;
                         }
-                        let issues = vec![StoryboardIssue::new("validation", error, true)];
+                        let issues = vec![crate::storyboard::phase4::issue_from_validation_error(
+                            error,
+                        )];
+                        if let Err(error) =
+                            crate::storyboard::phase4::repair_set_from_issues(&issues, &candidate)
+                        {
+                            log::warn!("{error}");
+                            repair = Some(build_repair_packet(
+                                attempt,
+                                issues,
+                                &candidate.shots,
+                                repair.as_ref(),
+                            ));
+                            break;
+                        }
                         let has_snapshot = !candidate.shots.is_empty();
                         if budget.can_retry_semantic() {
                             budget.record_semantic_failure();

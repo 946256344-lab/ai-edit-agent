@@ -14,6 +14,10 @@ dist-ssr
 src-tauri/target
 src-tauri/target-*
 
+# CLIP ONNX weights exceed GitHub's 100MB file limit; fetch via scripts/fetch-clip-models.ps1
+src-tauri/resources/models/clip-ViT-B-32-vision/model.onnx
+src-tauri/resources/models/clip-ViT-B-32-text/model.onnx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

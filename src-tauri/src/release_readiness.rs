@@ -199,6 +199,27 @@ fn semantic_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
     }
 }
 
+fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
+    match crate::storyboard::clip::bundled_models_present(app) {
+        Ok(true) => check(
+            "clip_model",
+            "本地 CLIP 模型",
+            "ok",
+            &format!(
+                "CLIP 图文模型可用（{} / {}）。",
+                crate::storyboard::clip::CLIP_VISION_MODEL,
+                crate::storyboard::clip::CLIP_TEXT_MODEL
+            ),
+        ),
+        Ok(false) | Err(_) => check(
+            "clip_model",
+            "本地 CLIP 模型",
+            "warn",
+            "CLIP 图文模型资源缺失。选镜仍可进行，但不会用画面向量加权。运行 scripts/fetch-clip-models.ps1 拉取。",
+        ),
+    }
+}
+
 #[tauri::command]
 pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, String> {
     let mut checks = Vec::new();
@@ -243,6 +264,7 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
     checks.push(provider_check());
     checks.extend(jianying_checks(&app));
     checks.push(semantic_model_check(&app));
+    checks.push(clip_model_check(&app));
 
     let overall = if checks.iter().any(|item| item.status == "fail") {
         "blocked"
