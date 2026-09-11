@@ -555,7 +555,7 @@ pub(crate) fn validate_storyboard(
             content.shots.iter().map(|shot| shot.order_index).collect(),
         )
     })?;
-    validate_shot_diversity(&content.shots).map_err(|error| {
+    validate_shot_diversity(&content.shots, sources).map_err(|error| {
         storyboard_repair_message(
             error,
             content.shots.iter().map(|shot| shot.order_index).collect(),
@@ -601,32 +601,86 @@ fn validate_non_overlapping_video_sources(
     Ok(())
 }
 
-/// 校验镜头多样性：禁止连续镜头使用同一素材的重叠/相同源范围，且同一素材占比不得超过 40%。
-fn validate_shot_diversity(shots: &[crate::models::StoryboardShot]) -> Result<(), String> {
+fn source_matching_shot<'a>(
+    shot: &crate::models::StoryboardShot,
+    sources: &'a [StoryboardSource],
+) -> Option<&'a StoryboardSource> {
+    sources
+        .iter()
+        .find(|source| {
+            source.asset_id == shot.asset_id
+                && match (&source.segment, shot.segment_id.as_deref()) {
+                    (Some(segment), Some(segment_id)) => segment.id == segment_id,
+                    (None, None) => true,
+                    (Some(segment), None) => {
+                        segment.start_ms == shot.source_start_ms
+                            && segment.end_ms == shot.source_end_ms
+                    }
+                    (None, Some(_)) => false,
+                }
+        })
+        .or_else(|| {
+            sources
+                .iter()
+                .find(|source| source.asset_id == shot.asset_id && source.segment.is_none())
+        })
+}
+
+fn storyboard_shots_are_similar(
+    left: &crate::models::StoryboardShot,
+    right: &crate::models::StoryboardShot,
+    sources: &[StoryboardSource],
+) -> bool {
+    if left.asset_id == right.asset_id {
+        if left.segment_id.is_some() && left.segment_id == right.segment_id {
+            return true;
+        }
+        if left.source_start_ms < right.source_end_ms && right.source_start_ms < left.source_end_ms
+        {
+            return true;
+        }
+    }
+    match (
+        source_matching_shot(left, sources),
+        source_matching_shot(right, sources),
+    ) {
+        (Some(left_source), Some(right_source)) => {
+            crate::storyboard::phases::sources_are_similar(left_source, right_source)
+        }
+        _ => false,
+    }
+}
+
+/// 校验镜头多样性：禁止交叠或视觉相似的已用片段，且同一素材占比不得超过 40%。
+fn validate_shot_diversity(
+    shots: &[crate::models::StoryboardShot],
+    sources: &[StoryboardSource],
+) -> Result<(), String> {
     if shots.len() < 2 {
         return Ok(());
     }
 
-    // 相邻同素材一律拒绝（与 Phase 3 硬门一致）；非相邻复用仍允许，交叠由源范围校验处理。
-    for window in shots.windows(2) {
-        if window[0].asset_id == window[1].asset_id {
-            let a = &window[0];
-            let b = &window[1];
-            log::warn!(
-                "Consecutive shots reuse the same asset: shot_{}={} [{}-{}], shot_{}={} [{}-{}]",
-                a.order_index,
-                a.asset_id,
-                a.source_start_ms,
-                a.source_end_ms,
-                b.order_index,
-                b.asset_id,
-                b.source_start_ms,
-                b.source_end_ms
-            );
-            return Err(format!(
-                "Consecutive shots (index {} and {}) reuse asset '{}'. Choose different footage for adjacent shots to maintain visual variety.",
-                a.order_index, b.order_index, a.asset_id
-            ));
+    for left_index in 0..shots.len() {
+        for right_index in (left_index + 1)..shots.len() {
+            let left = &shots[left_index];
+            let right = &shots[right_index];
+            if storyboard_shots_are_similar(left, right, sources) {
+                log::warn!(
+                    "Shots reuse overlapping or similar footage: shot_{}={} [{}-{}], shot_{}={} [{}-{}]",
+                    left.order_index,
+                    left.asset_id,
+                    left.source_start_ms,
+                    left.source_end_ms,
+                    right.order_index,
+                    right.asset_id,
+                    right.source_start_ms,
+                    right.source_end_ms
+                );
+                return Err(format!(
+                    "Shots (index {} and {}) reuse asset '{}' with overlapping or visually similar footage. Choose a dissimilar segment.",
+                    left.order_index, right.order_index, left.asset_id
+                ));
+            }
         }
     }
 
@@ -902,8 +956,11 @@ fn phase5_should_retry_phase4(error: &str) -> bool {
     {
         return false;
     }
-    // Phase 4 禁止换片，diversity / 相邻同片失败回 Phase 4 只会空转。
-    if lower.contains("diversity limit") || lower.contains("reuse asset") {
+    // Phase 4 禁止换片，diversity / 相似片段失败回 Phase 4 只会空转。
+    if lower.contains("diversity limit")
+        || lower.contains("reuse asset")
+        || lower.contains("visually similar")
+    {
         return false;
     }
     true
@@ -1907,7 +1964,7 @@ mod tests {
             "Asset 'a1' appears in 2 of 4 shots (50%), exceeding the 40% diversity limit. Recommended: use this asset for at most 1 shots."
         ));
         assert!(!phase5_should_retry_phase4(
-            "Consecutive shots (index 1 and 2) reuse asset 'a1'. Choose different footage for adjacent shots to maintain visual variety."
+            "Shots (index 1 and 2) reuse asset 'a1' with overlapping or visually similar footage. Choose a dissimilar segment."
         ));
         assert!(phase5_should_retry_phase4(
             "Storyboard cannot reuse overlapping video source ranges across beats."
@@ -2510,32 +2567,10 @@ fn generate_storyboard_internal(
         audio_first.is_some()
     );
 
-    // Phase 2a：素材级粗召回 Top-20/beat，并集 ≤48 → ensure 片段视觉 → 展开片段
-    let mut coarse_best: HashMap<String, f64> = HashMap::new();
-    for (beat_index, beat) in narrative.beats.iter().enumerate() {
-        let beat_embedding = embeddings.get(beat_index).map(|item| item.as_slice());
-        let ranked = scoring::rank_segment_candidates(
-            sources.clone(),
-            beat,
-            (narrative.target_duration_ms / narrative.beats.len().max(1) as i64).max(1_200),
-            &[],
-            &usage_counts,
-            beat_embedding,
-        );
-        for candidate in ranked.into_iter().take(20) {
-            let entry = coarse_best
-                .entry(candidate.source.asset_id.clone())
-                .or_insert(0.0);
-            *entry = entry.max(candidate.score.total);
-        }
-    }
-    let mut coarse_ranked = coarse_best.into_iter().collect::<Vec<_>>();
-    coarse_ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    coarse_ranked.truncate(48);
-    let coarse_ids = coarse_ranked
-        .into_iter()
-        .map(|(asset_id, _)| asset_id)
-        .collect::<Vec<_>>();
+    // Phase 2a：每 beat 9 条互不相似整片 → 并集 ensure → 有场景段则全部展开（视觉超时不退整条）
+    let beat_asset_ids =
+        phases::phase2_asset_shortlists(&narrative, &sources, &usage_counts, &embeddings);
+    let coarse_ids = phases::union_shortlist_asset_ids(&beat_asset_ids);
     let ensure = crate::assets::ensure_segment_visual_evidence(
         &app,
         &project_id,
@@ -2550,7 +2585,7 @@ fn generate_storyboard_internal(
         ensure.pending.len()
     );
     crate::execution_deadline::check()?;
-    let expand_set = ensure.ready.iter().cloned().collect::<HashSet<_>>();
+    let expand_set = coarse_ids.iter().cloned().collect::<HashSet<_>>();
     let connection = open_connection(&app)?;
     let (sources, visual_ready_count) =
         storyboard_sources(&connection, &project_id, Some(&expand_set))?;
@@ -2561,7 +2596,7 @@ fn generate_storyboard_internal(
         expand_set.len()
     );
 
-    // Phase 2b: 片段级 Top-12
+    // Phase 2b: 9 条内约 4 段，去似补位到 Top-12（同片最多 2 段）
     let initial_timing = audio_first
         .as_ref()
         .and_then(|(target, prepared)| {
@@ -2581,6 +2616,7 @@ fn generate_storyboard_internal(
         &usage_counts,
         &embeddings,
         initial_timing,
+        Some(&beat_asset_ids),
     )?;
     if narrative.script_mode == "key_message" {
         let covered: Vec<String> = rough

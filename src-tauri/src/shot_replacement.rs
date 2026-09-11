@@ -300,6 +300,7 @@ pub async fn generate_shot_recommendations(
             &HashMap::new(),
             &[],
             SpeechTiming::default(),
+            None,
         )?;
         store_pools(&connection, &ctx.storyboard.id, &rough.candidate_pools)?;
         recommendations(&connection, &ctx)

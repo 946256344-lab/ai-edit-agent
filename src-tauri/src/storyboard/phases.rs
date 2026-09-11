@@ -1,8 +1,8 @@
 // storyboard/phases.rs - Storyboard 分步生成
 //
 // Phase 1: 叙事结构
-// Phase 2: 本地 Top-12 短名单（去同/去相似 + 补位）
-// Phase 3: 从池中选出 2–3 个互异 asset（顺序）
+// Phase 2: 每 beat 9 条去似整片 → 约 4 段 → Top-12（同片最多 2 段）
+// Phase 3: 从池中选出 2–3 镜（同 beat 互异 asset；跨 beat 允许不同非相似段）
 // Phase 4: 选内容窗 → 段内精修切点（禁止换片）
 // Phase 5: 由调用方执行 normalize + validate_storyboard
 
@@ -16,13 +16,23 @@ use crate::storyboard::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 
 const PHASE2_TOP_CANDIDATES: usize = 12;
+/// 每个 beat 进入考虑的互不相似整片数量。
+const PHASE2_ASSET_SHORTLIST: usize = 9;
+/// 每条短名单素材保留多少段进入补位（分析仍可存储更多真实切点）。
+const PHASE2_SEGMENTS_PER_ASSET: usize = 4;
+/// Top-12 池内同一素材最多几段。
+const PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL: usize = 2;
 /// 证据向量余弦相似度达到该阈值视为「相似素材」，入池时互斥。
 const PHASE2_SIMILARITY_COSINE: f64 = 0.92;
 /// 视觉/OCR 标签 Jaccard 重叠达到该阈值视为相似。
 const PHASE2_SIMILARITY_TAG_JACCARD: f64 = 0.55;
+/// 与 preview 相同：24×24 灰度均差低于该值视为画面相似。
+const PHASE2_PIXEL_DIFF_SIMILAR: f64 = 12.0;
 
 /// Phase 1 输出：纯叙事结构
 #[derive(Clone, Deserialize, Serialize)]
@@ -130,18 +140,92 @@ pub(crate) fn phase1_generate_narrative(
         .map_err(|_| "Phase 1 JSON did not match NarrativeStructure schema.".to_owned())
 }
 
-/// Phase 2: 本地短名单——排序 + 去同/去相似 + 补位到 Top-12；不调用模型选镜。
+/// Phase 2a：每个 beat 从整片候选里召回互不相似的 9 条素材。
+pub(crate) fn phase2_asset_shortlists(
+    narrative: &NarrativeStructure,
+    sources: &[StoryboardSource],
+    usage_counts: &HashMap<String, i32>,
+    embeddings: &[Vec<f32>],
+) -> HashMap<String, Vec<String>> {
+    let target_each = if narrative.beats.is_empty() {
+        narrative.target_duration_ms
+    } else {
+        (narrative.target_duration_ms / narrative.beats.len() as i64).max(1_200)
+    };
+    let mut shortlists = HashMap::new();
+    for (beat_index, beat) in narrative.beats.iter().enumerate() {
+        let beat_embedding = embeddings.get(beat_index).map(Vec::as_slice);
+        let ranked = scoring::rank_segment_candidates(
+            sources.to_vec(),
+            beat,
+            target_each,
+            &[],
+            usage_counts,
+            beat_embedding,
+        );
+        let ids = shortlist_dissimilar_asset_ids(&ranked, PHASE2_ASSET_SHORTLIST);
+        log::info!(
+            "Phase 2a beat '{}': shortlisted {} dissimilar assets",
+            beat.id,
+            ids.len()
+        );
+        shortlists.insert(beat.id.clone(), ids);
+    }
+    shortlists
+}
+
+pub(crate) fn union_shortlist_asset_ids(shortlists: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut union = Vec::new();
+    for ids in shortlists.values() {
+        for id in ids {
+            if seen.insert(id.clone()) {
+                union.push(id.clone());
+            }
+        }
+    }
+    union
+}
+
+fn shortlist_dissimilar_asset_ids(
+    ranked: &[scoring::ScoredCandidate],
+    limit: usize,
+) -> Vec<String> {
+    let mut picked: Vec<StoryboardSource> = Vec::new();
+    let mut ids = Vec::new();
+    for candidate in ranked {
+        if ids.iter().any(|id| id == &candidate.source.asset_id) {
+            continue;
+        }
+        if picked
+            .iter()
+            .any(|existing| sources_are_similar(existing, &candidate.source))
+        {
+            continue;
+        }
+        ids.push(candidate.source.asset_id.clone());
+        picked.push(candidate.source.clone());
+        if ids.len() >= limit {
+            break;
+        }
+    }
+    ids
+}
+
+/// Phase 2: 本地短名单——9 条去似整片内排序 + 去同/去相似 + 补位到 Top-12；不调用模型选镜。
 pub(crate) fn phase2_rough_shot_selection(
     narrative: &NarrativeStructure,
     sources: &[StoryboardSource],
     usage_counts: &HashMap<String, i32>,
     embeddings: &[Vec<f32>],
     speech_timing: super::timing::SpeechTiming,
+    beat_asset_ids: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<RoughStoryboard, String> {
     log::info!(
-        "Phase 2: Shortlisting Top-{} candidates for {} beats (local dedupe + backfill)",
+        "Phase 2: Shortlisting Top-{} candidates for {} beats (9 dissimilar assets, max {} segments/asset)",
         PHASE2_TOP_CANDIDATES,
-        narrative.beats.len()
+        narrative.beats.len(),
+        PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL
     );
 
     let target_each = if narrative.beats.is_empty() {
@@ -151,6 +235,7 @@ pub(crate) fn phase2_rough_shot_selection(
     };
     let mut uncovered_beat_ids = Vec::new();
     let mut candidate_pools = Vec::new();
+    let mut prior_pool_segments: Vec<StoryboardSource> = Vec::new();
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
         let beat_embedding = embeddings.get(beat_index);
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
@@ -162,11 +247,22 @@ pub(crate) fn phase2_rough_shot_selection(
             usage_counts,
             beat_embedding.map(Vec::as_slice),
         );
+        let allowed_ids = beat_asset_ids
+            .and_then(|map| map.get(&beat.id).cloned())
+            .filter(|ids| !ids.is_empty())
+            .unwrap_or_else(|| shortlist_dissimilar_asset_ids(&ranked, PHASE2_ASSET_SHORTLIST));
+        let allowed: HashSet<&str> = allowed_ids.iter().map(String::as_str).collect();
+        let ranked: Vec<_> = ranked
+            .into_iter()
+            .filter(|candidate| allowed.contains(candidate.source.asset_id.as_str()))
+            .collect();
+        let ranked = keep_best_segments_per_asset(ranked, PHASE2_SEGMENTS_PER_ASSET);
         let (pool, scores, library_exhausted) =
-            dedupe_and_backfill_pool(&ranked, PHASE2_TOP_CANDIDATES);
+            dedupe_and_backfill_pool(&ranked, PHASE2_TOP_CANDIDATES, &prior_pool_segments);
         log::info!(
-            "Beat '{}': poolSize={}, libraryExhausted={}, sample={}",
+            "Beat '{}': assets={}, poolSize={}, libraryExhausted={}, sample={}",
             beat.id,
+            allowed_ids.len(),
             pool.len(),
             library_exhausted,
             pool.iter()
@@ -190,13 +286,14 @@ pub(crate) fn phase2_rough_shot_selection(
         );
         if pool.len() < 2 {
             log::warn!(
-                "Beat '{}': only {} distinct non-similar candidates after full-library backfill; leaving uncovered",
+                "Beat '{}': only {} distinct non-similar candidates after 9-asset shortlist; leaving uncovered",
                 beat.id,
                 pool.len()
             );
             uncovered_beat_ids.push(beat.id.clone());
             continue;
         }
+        prior_pool_segments.extend(pool.iter().cloned());
         candidate_pools.push(BeatCandidatePool {
             beat_id: beat.id.clone(),
             beat_purpose: beat.purpose.clone(),
@@ -225,31 +322,30 @@ pub(crate) fn phase2_rough_shot_selection(
             continue;
         };
         let beat = narrative.beats.iter().find(|beat| beat.id == pool.beat_id);
+        let (range_start, range_end) = candidate_range_ms(main);
+        let span = (range_end - range_start).max(1);
         let duration = speech_timing
             .duration(&pool.beat_id)
             .unwrap_or(target_each)
-            .max(1);
-        let source_end = main
-            .duration_ms
-            .unwrap_or(duration)
-            .clamp(duration, main.duration_ms.unwrap_or(duration).max(duration));
+            .max(1)
+            .min(span);
         shots.push(StoryboardShot {
             crop_focus: None,
             order_index: (index as i64) + 1,
-            duration_ms: duration.min(source_end),
+            duration_ms: duration,
             purpose: pool.beat_purpose.clone(),
             on_screen_text: String::new(),
             narration_text: beat.map(|b| b.narration.clone()).unwrap_or_default(),
             asset_id: main.asset_id.clone(),
-            source_start_ms: 0,
-            source_end_ms: duration.min(source_end).max(1),
+            source_start_ms: range_start,
+            source_end_ms: range_start + duration,
             reason: "Phase 2 shortlist lead candidate.".to_owned(),
             beat_id: pool.beat_id.clone(),
             match_level: "contextual".to_owned(),
             beat_part_index: 1,
             beat_part_count: 1,
             split_role: "lead".to_owned(),
-            segment_id: None,
+            segment_id: main.segment.as_ref().map(|segment| segment.id.clone()),
         });
     }
 
@@ -267,22 +363,29 @@ pub(crate) fn phase2_rough_shot_selection(
 }
 
 /// 按排名去同/去相似并补位到 `target_len`。
-/// 两轮：先每素材最多 1 段，再补到目标（单素材最多 3 段）。
+/// 两轮：先每素材最多 1 段，再补到目标（单素材最多 2 段）。不拉短名单以外的相似片。
 fn dedupe_and_backfill_pool(
     ranked: &[scoring::ScoredCandidate],
     target_len: usize,
+    blocked: &[StoryboardSource],
 ) -> (Vec<StoryboardSource>, Vec<scoring::CandidateScore>, bool) {
     let mut pool: Vec<StoryboardSource> = Vec::new();
     let mut scores: Vec<scoring::CandidateScore> = Vec::new();
     let mut per_asset: HashMap<String, usize> = HashMap::new();
 
-    for max_per_asset in [1usize, 3usize] {
+    for max_per_asset in [1usize, PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL] {
         for candidate in ranked {
             if pool.len() >= target_len {
                 break;
             }
             let count = *per_asset.get(&candidate.source.asset_id).unwrap_or(&0);
             if count >= max_per_asset {
+                continue;
+            }
+            if blocked
+                .iter()
+                .any(|existing| sources_are_similar(existing, &candidate.source))
+            {
                 continue;
             }
             if pool
@@ -305,6 +408,25 @@ fn dedupe_and_backfill_pool(
     (pool, scores, library_exhausted)
 }
 
+fn keep_best_segments_per_asset(
+    ranked: Vec<scoring::ScoredCandidate>,
+    max_per_asset: usize,
+) -> Vec<scoring::ScoredCandidate> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    ranked
+        .into_iter()
+        .filter(|candidate| {
+            let count = counts.entry(candidate.source.asset_id.clone()).or_insert(0);
+            if *count >= max_per_asset {
+                false
+            } else {
+                *count += 1;
+                true
+            }
+        })
+        .collect()
+}
+
 fn candidate_range_ms(source: &StoryboardSource) -> (i64, i64) {
     if let Some(segment) = &source.segment {
         (segment.start_ms, segment.end_ms)
@@ -317,12 +439,15 @@ fn ranges_overlap(a: (i64, i64), b: (i64, i64)) -> bool {
     a.0 < b.1 && b.0 < a.1
 }
 
-fn sources_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> bool {
+pub(crate) fn sources_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> bool {
     if left.asset_id == right.asset_id {
         // 同素材：范围重叠才判重（允许同片不同段同池）。
         if ranges_overlap(candidate_range_ms(left), candidate_range_ms(right)) {
             return true;
         }
+    }
+    if still_frames_are_similar(left, right) {
+        return true;
     }
     let left_emb = left
         .segment_embedding
@@ -347,6 +472,82 @@ fn sources_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> boo
         }
     }
     false
+}
+
+fn still_frames_are_similar(left: &StoryboardSource, right: &StoryboardSource) -> bool {
+    let Some(left_sig) = source_still_signature(left) else {
+        return false;
+    };
+    let Some(right_sig) = source_still_signature(right) else {
+        return false;
+    };
+    mean_pixel_difference(&left_sig, &right_sig)
+        .is_some_and(|difference| difference < PHASE2_PIXEL_DIFF_SIMILAR)
+}
+
+fn source_still_path(source: &StoryboardSource) -> Option<&str> {
+    if let Some(segment) = &source.segment {
+        if let Some(path) = segment
+            .frame_paths
+            .iter()
+            .map(String::as_str)
+            .find(|path| !path.is_empty())
+        {
+            return Some(path);
+        }
+    }
+    if let Some(path) = source
+        .keyframes
+        .iter()
+        .map(|frame| frame.image_path.as_str())
+        .find(|path| !path.is_empty())
+    {
+        return Some(path);
+    }
+    source
+        .scene_segments
+        .iter()
+        .flat_map(|segment| segment.frames.iter())
+        .map(|frame| frame.image_path.as_str())
+        .find(|path| !path.is_empty())
+}
+
+fn source_still_signature(source: &StoryboardSource) -> Option<Vec<u8>> {
+    let path = source_still_path(source)?;
+    cached_still_signature(Path::new(path))
+}
+
+fn cached_still_signature(path: &Path) -> Option<Vec<u8>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Vec<u8>>>>> = OnceLock::new();
+    let key = path.to_string_lossy().into_owned();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(existing) = guard.get(&key) {
+            return existing.clone();
+        }
+    }
+    let computed = still_signature_from_path(path);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, computed.clone());
+    }
+    computed
+}
+
+fn still_signature_from_path(path: &Path) -> Option<Vec<u8>> {
+    let gray = image::open(path).ok()?.to_luma8();
+    let resized = image::imageops::resize(&gray, 24, 24, image::imageops::FilterType::Triangle);
+    Some(resized.into_raw())
+}
+
+fn mean_pixel_difference(first: &[u8], second: &[u8]) -> Option<f64> {
+    (first.len() == second.len() && !first.is_empty()).then(|| {
+        first
+            .iter()
+            .zip(second)
+            .map(|(left, right)| left.abs_diff(*right) as u64)
+            .sum::<u64>() as f64
+            / first.len() as f64
+    })
 }
 
 fn evidence_tag_set(source: &StoryboardSource) -> HashSet<String> {
@@ -616,7 +817,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let (pool, scores, exhausted) = dedupe_and_backfill_pool(&ranked, 12);
+        let (pool, scores, exhausted) = dedupe_and_backfill_pool(&ranked, 12, &[]);
         assert!(!exhausted);
         assert_eq!(pool.len(), 12);
         assert_eq!(scores.len(), 12);
@@ -626,6 +827,104 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), 12);
         assert!(unique.contains("dup"));
+    }
+
+    #[test]
+    fn dedupe_backfill_allows_two_non_overlapping_segments_of_one_asset() {
+        let mut ranked = (0..10)
+            .map(|index| crate::storyboard::scoring::ScoredCandidate {
+                source: source(&format!("asset-{index}")),
+                score: crate::storyboard::scoring::CandidateScore {
+                    total: (20 - index) as f64,
+                    semantic: 0.0,
+                    lexical: 0.0,
+                    quality: 0.0,
+                    duration: 0.0,
+                    freshness: 0.0,
+                    has_evidence: true,
+                    matched_keywords: vec![],
+                    shot_type: 0.0,
+                },
+            })
+            .collect::<Vec<_>>();
+        ranked.insert(
+            0,
+            crate::storyboard::scoring::ScoredCandidate {
+                source: source_segment("multi", "s001", 0, 2_000),
+                score: crate::storyboard::scoring::CandidateScore {
+                    total: 30.0,
+                    semantic: 0.0,
+                    lexical: 0.0,
+                    quality: 0.0,
+                    duration: 0.0,
+                    freshness: 0.0,
+                    has_evidence: true,
+                    matched_keywords: vec![],
+                    shot_type: 0.0,
+                },
+            },
+        );
+        ranked.push(crate::storyboard::scoring::ScoredCandidate {
+            source: source_segment("multi", "s008", 8_000, 10_000),
+            score: crate::storyboard::scoring::CandidateScore {
+                total: 1.0,
+                semantic: 0.0,
+                lexical: 0.0,
+                quality: 0.0,
+                duration: 0.0,
+                freshness: 0.0,
+                has_evidence: true,
+                matched_keywords: vec![],
+                shot_type: 0.0,
+            },
+        });
+        let (pool, _, exhausted) = dedupe_and_backfill_pool(&ranked, 12, &[]);
+        assert!(!exhausted);
+        assert_eq!(pool.len(), 12);
+        let multi = pool.iter().filter(|item| item.asset_id == "multi").count();
+        assert_eq!(multi, 2);
+    }
+
+    #[test]
+    fn shortlist_skips_lookalike_assets_instead_of_taking_a_tenth() {
+        let mut ranked = Vec::new();
+        for index in 0..20 {
+            let mut item = source(&format!("asset-{index}"));
+            item.visual_evidence = vec![crate::models::VisualEvidence {
+                time_ms: Some(0),
+                subjects: if index < 12 {
+                    vec!["same-cabinet".to_owned()]
+                } else {
+                    vec![format!("unique-{index}")]
+                },
+                scene: None,
+                actions: vec![],
+                products: vec![],
+                quality_notes: vec![],
+                shot_type: None,
+                camera_motion: None,
+                segment_id: None,
+            }];
+            ranked.push(crate::storyboard::scoring::ScoredCandidate {
+                source: item,
+                score: crate::storyboard::scoring::CandidateScore {
+                    total: (20 - index) as f64,
+                    semantic: 0.0,
+                    lexical: 0.0,
+                    quality: 0.0,
+                    duration: 0.0,
+                    freshness: 0.0,
+                    has_evidence: true,
+                    matched_keywords: vec![],
+                    shot_type: 0.0,
+                },
+            });
+        }
+        let ids = super::shortlist_dissimilar_asset_ids(&ranked, 9);
+        assert_eq!(ids.len(), 9);
+        assert_eq!(ids[0], "asset-0");
+        assert!(!ids.iter().any(|id| id == "asset-1"));
+        assert!(ids.contains(&"asset-12".to_owned()));
     }
 
     fn shot(asset_id: &str) -> StoryboardShot {
@@ -647,6 +946,20 @@ mod tests {
             split_role: "lead".to_owned(),
             segment_id: None,
         }
+    }
+
+    fn shot_segment(
+        asset_id: &str,
+        segment_id: &str,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> StoryboardShot {
+        let mut item = shot(asset_id);
+        item.segment_id = Some(segment_id.to_owned());
+        item.source_start_ms = start_ms;
+        item.source_end_ms = end_ms;
+        item.duration_ms = (end_ms - start_ms).max(1);
+        item
     }
 
     fn beat() -> StoryboardBeat {
@@ -676,6 +989,24 @@ mod tests {
             segment: None,
             segment_embedding: None,
         }
+    }
+
+    fn source_segment(
+        asset_id: &str,
+        segment_id: &str,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> StoryboardSource {
+        let mut item = source(asset_id);
+        item.segment = Some(crate::models::CandidateSegment {
+            id: segment_id.to_owned(),
+            start_ms,
+            end_ms,
+            frame_paths: vec![],
+            shot_type: None,
+            camera_motion: None,
+        });
+        item
     }
 
     fn candidate_pool(beat_id: &str, asset_ids: &[&str]) -> BeatCandidatePool {
@@ -989,8 +1320,8 @@ mod tests {
     }
 
     #[test]
-    fn phase3_rejects_consecutive_same_asset_across_beats() {
-        // 回归：跨 beat 衔接也不得相邻同片；否则 Phase 4 易切出交叠源窗。
+    fn phase3_rejects_overlapping_same_asset_across_beats() {
+        // 跨 beat 相邻同片且源范围重叠仍拒绝；不同非相似段见下一测。
         let mut beat_one = beat();
         beat_one.id = "beat-1".to_owned();
         let mut beat_two = beat();
@@ -1029,26 +1360,150 @@ mod tests {
             script_mode: "key_message".to_owned(),
             beats: vec![beat_one, beat_two],
             uncovered_beat_ids: Vec::new(),
-            // beat-1 以 shared 收尾，beat-2 以 shared 开头 → 相邻同片。
             shots: vec![shot_a, shot_b, shot_c, shot_d],
         };
         let issues = collect_phase3_issues(&mut final_content, &rough);
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.kind == "consecutive_duplicate_asset"),
-            "adjacent same asset across beats must be rejected; issues={issues:?}"
+                .any(|issue| issue.kind == "similar_used_segment"),
+            "overlapping same asset across beats must be rejected; issues={issues:?}"
+        );
+    }
+
+    #[test]
+    fn phase3_allows_adjacent_different_segments_of_same_asset() {
+        let mut beat_one = beat();
+        beat_one.id = "beat-1".to_owned();
+        let mut beat_two = beat();
+        beat_two.id = "beat-2".to_owned();
+        let mut shot_a = shot("alt-a");
+        shot_a.order_index = 1;
+        shot_a.beat_id = "beat-1".to_owned();
+        let mut shot_b = shot_segment("shared", "s001", 0, 2_000);
+        shot_b.order_index = 2;
+        shot_b.beat_id = "beat-1".to_owned();
+        let mut shot_c = shot_segment("shared", "s008", 8_000, 10_000);
+        shot_c.order_index = 3;
+        shot_c.beat_id = "beat-2".to_owned();
+        let mut shot_d = shot("alt-b");
+        shot_d.order_index = 4;
+        shot_d.beat_id = "beat-2".to_owned();
+        let mut beat_three = beat();
+        beat_three.id = "beat-3".to_owned();
+        let mut shot_e = shot("alt-c");
+        shot_e.order_index = 5;
+        shot_e.beat_id = "beat-3".to_owned();
+        let mut shot_f = shot("alt-d");
+        shot_f.order_index = 6;
+        shot_f.beat_id = "beat-3".to_owned();
+        let mut pool_one = candidate_pool("beat-1", &["shared", "alt-a", "alt-x"]);
+        pool_one.candidates[0] = source_segment("shared", "s001", 0, 2_000);
+        let mut pool_two = candidate_pool("beat-2", &["shared", "alt-b", "alt-y"]);
+        pool_two.candidates[0] = source_segment("shared", "s008", 8_000, 10_000);
+        let pool_three = candidate_pool("beat-3", &["alt-c", "alt-d", "alt-z"]);
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 12_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one.clone(), beat_two.clone(), beat_three.clone()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_b.clone(), shot_c.clone(), shot_e.clone()],
+            candidate_pools: vec![pool_one, pool_two, pool_three],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 12_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one, beat_two, beat_three],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_a, shot_b, shot_c, shot_d, shot_e, shot_f],
+        };
+        let issues = collect_phase3_issues(&mut final_content, &rough);
+        assert!(
+            issues.is_empty(),
+            "different non-overlapping segments of the same asset may sit adjacent; issues={issues:?}"
+        );
+    }
+
+    #[test]
+    fn phase3_rejects_visually_similar_used_segments() {
+        let mut beat_one = beat();
+        beat_one.id = "beat-1".to_owned();
+        let mut beat_two = beat();
+        beat_two.id = "beat-2".to_owned();
+        let mut shot_a = shot("alt-a");
+        shot_a.order_index = 1;
+        shot_a.beat_id = "beat-1".to_owned();
+        let mut shot_b = shot_segment("look-a", "s001", 0, 2_000);
+        shot_b.order_index = 2;
+        shot_b.beat_id = "beat-1".to_owned();
+        let mut shot_c = shot_segment("look-b", "s002", 0, 2_000);
+        shot_c.order_index = 3;
+        shot_c.beat_id = "beat-2".to_owned();
+        let mut shot_d = shot("alt-b");
+        shot_d.order_index = 4;
+        shot_d.beat_id = "beat-2".to_owned();
+        let mut look_a = source_segment("look-a", "s001", 0, 2_000);
+        look_a.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["cabinet-interior".to_owned()],
+            scene: Some("factory cabinet".to_owned()),
+            actions: vec!["presenting".to_owned()],
+            products: vec![],
+            quality_notes: vec![],
+            shot_type: None,
+            camera_motion: None,
+            segment_id: Some("s001".to_owned()),
+        }];
+        let mut look_b = source_segment("look-b", "s002", 0, 2_000);
+        look_b.visual_evidence = vec![look_a.visual_evidence[0].clone()];
+        let mut pool_one = candidate_pool("beat-1", &["look-a", "alt-a", "alt-c"]);
+        pool_one.candidates[0] = look_a;
+        let mut pool_two = candidate_pool("beat-2", &["look-b", "alt-b", "alt-d"]);
+        pool_two.candidates[0] = look_b;
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one.clone(), beat_two.clone()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_b.clone(), shot_c.clone()],
+            candidate_pools: vec![pool_one, pool_two],
+        };
+        let mut final_content = StoryboardContent {
+            brief: String::new(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat_one, beat_two],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![shot_a, shot_b, shot_c, shot_d],
+        };
+        let issues = collect_phase3_issues(&mut final_content, &rough);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.kind == "similar_used_segment"),
+            "similar segments already used must be rejected; issues={issues:?}"
         );
     }
 
     #[test]
     fn phase3_rejects_asset_over_diversity_limit_even_when_non_adjacent() {
-        // 4 镜上限为 1：非相邻复用同一 asset 也必须在 Phase 3 拦下，避免 Phase 5→4 空转。
+        // 4 镜上限为 1：非相邻复用同一 asset 的不同段也必须在 Phase 3 拦下。
         let mut beat_one = beat();
         beat_one.id = "beat-1".to_owned();
         let mut beat_two = beat();
         beat_two.id = "beat-2".to_owned();
-        let mut shot_a = shot("shared");
+        let mut shot_a = shot_segment("shared", "s001", 0, 2_000);
         shot_a.order_index = 1;
         shot_a.beat_id = "beat-1".to_owned();
         let mut shot_b = shot("alt-a");
@@ -1057,9 +1512,13 @@ mod tests {
         let mut shot_c = shot("alt-b");
         shot_c.order_index = 3;
         shot_c.beat_id = "beat-2".to_owned();
-        let mut shot_d = shot("shared");
+        let mut shot_d = shot_segment("shared", "s008", 8_000, 10_000);
         shot_d.order_index = 4;
         shot_d.beat_id = "beat-2".to_owned();
+        let mut pool_one = candidate_pool("beat-1", &["shared", "alt-a", "alt-c"]);
+        pool_one.candidates[0] = source_segment("shared", "s001", 0, 2_000);
+        let mut pool_two = candidate_pool("beat-2", &["shared", "alt-b", "alt-d"]);
+        pool_two.candidates[0] = source_segment("shared", "s008", 8_000, 10_000);
         let rough = RoughStoryboard {
             speech_timing: Default::default(),
             title: "title".to_owned(),
@@ -1069,10 +1528,7 @@ mod tests {
             beats: vec![beat_one.clone(), beat_two.clone()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot_a.clone(), shot_c.clone()],
-            candidate_pools: vec![
-                candidate_pool("beat-1", &["shared", "alt-a", "alt-c"]),
-                candidate_pool("beat-2", &["shared", "alt-b", "alt-d"]),
-            ],
+            candidate_pools: vec![pool_one, pool_two],
         };
         let mut final_content = StoryboardContent {
             brief: String::new(),
@@ -1094,8 +1550,8 @@ mod tests {
         assert!(
             !issues
                 .iter()
-                .any(|issue| issue.kind == "consecutive_duplicate_asset"),
-            "fixture must remain non-adjacent; issues={issues:?}"
+                .any(|issue| issue.kind == "similar_used_segment"),
+            "fixture must remain non-adjacent and non-similar; issues={issues:?}"
         );
     }
 
@@ -1559,9 +2015,12 @@ pub(crate) fn phase3_select(
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
         Only actually selected shots count as reuse. Resolve repetition across the final sequence, not across candidate pools.\n\
-        Hard rule: adjacent shots in the final playback order must never share the same assetId (including across beat boundaries).\n\
+        Hard rule: within one beat, candidateIndexes must belong to DISTINCT assetIds. A pool may list two segments of one asset as alternates; pick at most one of them.\n\
+        Hard rule: later beats MAY reuse another segment of an already used assetId, including adjacent shots, but only when the segments do not overlap and are not visually similar to ANY already selected shot.\n\
+        Hard rule: never pick a candidate that is visually similar to an already selected shot (same or different assetId).\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list. With {covered_n} covered beats, that means at most {max_uses_if_two} uses if every beat has 2 shots, or at most {max_uses_if_three} uses if every beat has 3 shots. Prefer marking the weakest beat uncovered=true over violating this limit when the pools cannot supply enough distinct assets.\n\
-        For EACH covered beat, choose 2 or 3 candidates with DISTINCT assetIds from that beat's pool, in playback order.\n\
+        For EACH covered beat, choose 2 or 3 candidates with DISTINCT assetIds from that beat's pool, in playback order, when that pool still has at least two usable distinct assets after the similarity rules above.\n\
+        If the remaining pool cannot supply two distinct non-similar assets, return fewer shots or uncovered=true — do not pad with similar segments.\n\
         Return candidateIndexes using the exact zero-based candidateIndex values from that beat's pool, in playback order. Rust resolves the asset, segment and source range.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then candidateIndexes must be [].\n\
         Do NOT return assetIds, segmentIds or source ranges. sceneSegments describe context, not additional selectable candidates.\n\n\
@@ -2975,6 +3434,89 @@ fn estimated_narration_ms(text: &str) -> i64 {
     ((units.max(1.0)) * 300.0).round() as i64
 }
 
+/// 镜头时间范围与池候选对照。
+fn shot_range_ms(shot: &StoryboardShot) -> (i64, i64) {
+    (shot.source_start_ms, shot.source_end_ms)
+}
+
+fn lookup_pool_source<'a>(
+    rough: &'a RoughStoryboard,
+    shot: &StoryboardShot,
+) -> Option<&'a StoryboardSource> {
+    let pool = rough
+        .candidate_pools
+        .iter()
+        .find(|pool| pool.beat_id == shot.beat_id)?;
+    pool.candidates
+        .iter()
+        .find(|candidate| {
+            if candidate.asset_id != shot.asset_id {
+                return false;
+            }
+            match (&candidate.segment, shot.segment_id.as_deref()) {
+                (Some(segment), Some(segment_id)) => segment.id == segment_id,
+                (None, None) => true,
+                (Some(segment), None) => {
+                    segment.start_ms == shot.source_start_ms && segment.end_ms == shot.source_end_ms
+                }
+                (None, Some(_)) => false,
+            }
+        })
+        .or_else(|| {
+            pool.candidates.iter().find(|candidate| {
+                candidate.asset_id == shot.asset_id && candidate.segment.is_none()
+            })
+        })
+}
+
+fn shots_are_similar(
+    rough: &RoughStoryboard,
+    left: &StoryboardShot,
+    right: &StoryboardShot,
+) -> bool {
+    if left.asset_id == right.asset_id {
+        if left.segment_id.is_some() && left.segment_id == right.segment_id {
+            return true;
+        }
+        if ranges_overlap(shot_range_ms(left), shot_range_ms(right)) {
+            return true;
+        }
+    }
+    match (
+        lookup_pool_source(rough, left),
+        lookup_pool_source(rough, right),
+    ) {
+        (Some(left_source), Some(right_source)) => sources_are_similar(left_source, right_source),
+        _ => false,
+    }
+}
+
+fn distinct_usable_asset_count(
+    pool: Option<&BeatCandidatePool>,
+    prior_shots: &[StoryboardShot],
+    rough: &RoughStoryboard,
+) -> usize {
+    let Some(pool) = pool else {
+        return 0;
+    };
+    let mut assets = HashSet::new();
+    for candidate in &pool.candidates {
+        let blocked = prior_shots.iter().any(|shot| {
+            if let Some(source) = lookup_pool_source(rough, shot) {
+                if sources_are_similar(source, candidate) {
+                    return true;
+                }
+            }
+            shot.asset_id == candidate.asset_id
+                && ranges_overlap(shot_range_ms(shot), candidate_range_ms(candidate))
+        });
+        if !blocked {
+            assets.insert(candidate.asset_id.as_str());
+        }
+    }
+    assets.len()
+}
+
 /// 校验 Phase 3 选片输出并收集结构性问题。
 fn collect_phase3_issues(
     final_content: &mut StoryboardContent,
@@ -3169,6 +3711,12 @@ fn collect_phase3_issues(
             .get(beat_id)
             .map(|pool| pool.len())
             .unwrap_or(0);
+        let beat_pool = rough
+            .candidate_pools
+            .iter()
+            .find(|pool| pool.beat_id == beat_id);
+        let usable_assets =
+            distinct_usable_asset_count(beat_pool, &final_content.shots[..group_start], rough);
         if group_count < 2 {
             let affected = final_content
                 .shots
@@ -3177,13 +3725,14 @@ fn collect_phase3_issues(
                 .take(group_count)
                 .map(|shot| shot.order_index)
                 .collect::<Vec<_>>();
-            if pool_candidate_count >= 2 || (pool_candidate_count == 0 && allowed_assets.len() >= 2)
+            if usable_assets >= 2
+                || (beat_pool.is_none() && (pool_candidate_count >= 2 || allowed_assets.len() >= 2))
             {
                 issues.push(
                     StoryboardIssue::new(
                         "beat_below_min_shots",
                         format!(
-                            "Beat '{beat_id}' has {group_count} shot(s); every covered beat with candidate alternates must use at least 2 distinct pool assets.",
+                            "Beat '{beat_id}' has {group_count} shot(s); every covered beat with at least two usable distinct pool assets must use at least 2 distinct pool assets.",
                         ),
                         true,
                     )
@@ -3192,18 +3741,18 @@ fn collect_phase3_issues(
                         "select 2-3 candidateIndexes belonging to distinct assetIds from that beat's candidate pool",
                     ]),
                 );
-            } else if pool_candidate_count == 1 {
+            } else if usable_assets == 1 || pool_candidate_count == 1 {
                 issues.push(
                     StoryboardIssue::new(
                         "beat_below_min_shots_insufficient_pool",
                         format!(
-                            "Beat '{beat_id}' has only one Phase 2 candidate, so it cannot yet satisfy the minimum of 2 distinct shots.",
+                            "Beat '{beat_id}' does not have two usable distinct Phase 2 assets after similarity filters, so it cannot yet satisfy the minimum of 2 distinct shots.",
                         ),
                         false,
                     )
                     .for_shots(affected)
                     .allowing(vec![
-                        "leave this beat for post-timeline insert_clips repair after storyboard acceptance",
+                        "leave this beat uncovered or for post-timeline insert_clips repair after storyboard acceptance",
                     ]),
                 );
             }
@@ -3248,26 +3797,28 @@ fn collect_phase3_issues(
         );
     }
 
-    // 相邻同片硬拒（含跨 beat 衔接）；非相邻复用仍受 40% 上限约束。
-    for index in 0..final_content.shots.len().saturating_sub(1) {
-        let left = &final_content.shots[index];
-        let right = &final_content.shots[index + 1];
-        if left.asset_id == right.asset_id {
-            issues.push(
-                StoryboardIssue::new(
-                    "consecutive_duplicate_asset",
-                    format!(
-                        "Consecutive shots {} and {} both use asset '{}'; adjacent shots must use different assets.",
-                        left.order_index, right.order_index, left.asset_id
-                    ),
-                    true,
-                )
-                .for_shots(vec![left.order_index, right.order_index])
-                .allowing(vec![
-                    "replace one of the adjacent shots with a different assetId from its beat pool",
-                    "keep non-adjacent reuse only within the diversity limit",
-                ]),
-            );
+    // 已用片段相似/交叠硬拒（含跨 beat、含非相邻）；同片不同非相似段允许相邻。
+    for left_index in 0..final_content.shots.len() {
+        for right_index in (left_index + 1)..final_content.shots.len() {
+            let left = &final_content.shots[left_index];
+            let right = &final_content.shots[right_index];
+            if shots_are_similar(rough, left, right) {
+                issues.push(
+                    StoryboardIssue::new(
+                        "similar_used_segment",
+                        format!(
+                            "Shots {} and {} use overlapping or visually similar footage; later shots must pick a dissimilar segment.",
+                            left.order_index, right.order_index
+                        ),
+                        true,
+                    )
+                    .for_shots(vec![left.order_index, right.order_index])
+                    .allowing(vec![
+                        "replace one shot with a dissimilar candidateIndex from its beat pool",
+                        "or mark the weaker beat uncovered=true when no dissimilar alternate remains",
+                    ]),
+                );
+            }
         }
     }
 

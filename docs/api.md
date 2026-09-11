@@ -34,9 +34,13 @@ Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-
 - 新增 `get_preview_cache_status` / `clear_preview_cache`；启动时清掉已不存在项目的孤儿缓存目录。
 - 当前无删除整个项目的命令；清理入口在「项目设置」。见 `docs/changes/2026-09-09-preview-cache-limit.md`。
 
+## 2026-09-10：Phase 2 锁片段与跨 beat 同片不同段
+
+Phase 2 每 beat 召回 9 条互不相似整片并展开真实场景段，Top-12 且同片最多 2 段；有场景段时不因视觉超时退回整条。Phase 3 同一 beat 仍禁同 `assetId`；跨 beat 允许不同、不重叠、不相似片段（含相邻）。相似硬拒（预览同款 24×24 灰度均差 < 12，以及标签/向量）。不够则少镜或 uncovered。40% 素材占比保留。不新增 Tauri 命令。见 `docs/changes/2026-09-10-phase2-segment-shortlist.md`。
+
 ## 2026-09-08：Phase 3 相邻同片硬拒
 
-最终播放序相邻镜头不得共用同一 `assetId`（含跨 beat）；Phase 3 以 `consecutive_duplicate_asset` 打回，Phase 5 diversity 同步拒绝。非相邻复用仍受 40% 上限。不新增 Tauri 命令。见 `docs/changes/2026-09-08-phase3-consecutive-asset-ban.md`。
+~~最终播放序相邻镜头不得共用同一 `assetId`（含跨 beat）。~~ 已被 2026-09-10 片段相似/交叠硬拒取代；非相邻复用仍受 40% 上限。见 `docs/changes/2026-09-08-phase3-consecutive-asset-ban.md`。
 
 ## 2026-09-07：Phase 4/normalize 窗内消交叠
 

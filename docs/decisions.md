@@ -44,7 +44,7 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 ## 11. 片段级分析取代固定 4 帧（2026-09-09）
 
-技术分析以 FFmpeg 低分辨率场景检测生成真实片段（`analysisVersion=2`）；选镜候选单位为片段。Phase 3 返回 `assetId+segmentId`，Phase 4 有片段时跳过 Pass A。未分段或片段视觉未就绪时行为等同整条素材。
+技术分析以 FFmpeg 低分辨率场景检测生成真实片段（`analysisVersion=2`）；选镜候选单位为片段。Phase 2 每 beat 先召回 9 条互不相似整片，有 `scene_segments` 则展开为片段（视觉超时仍锁片段与源范围，不退整条）。Phase 3 返回 `assetId+segmentId`，同一 beat 禁止同片；跨 beat 允许同一素材的不同、不重叠、不相似片段。已用片段的相似画面硬拒。仅当素材没有场景段时才按整条参与。CLIP / 视频 embedding 另议。
 
 ## 12. key_message 只出字幕标记不配音（2026-09-08）
 

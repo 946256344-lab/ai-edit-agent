@@ -3,6 +3,8 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现待合并（2026-09-10，cursor/phase2-segment-shortlist）：Phase 2 每 beat 9 条去似素材、有场景段则锁片段不退整条、Top-12 且同片最多 2 段；Phase 3 同 beat 禁同片、跨 beat 允许不同非相似段、帧差/标签相似硬拒、不够则少镜或 uncovered。见 docs/changes/2026-09-10-phase2-segment-shortlist.md。
+- [ ] 进行中：CLIP / 图像向量召回，用于更精确匹配每 beat 的 9 条素材与片段。
 - [x] 已实现并构建（2026-09-10，codex/fix-editing-failures）：候选序号选镜、Phase 4 来源去重、片段任务恢复、禁止同轮整套重试、共享截止时间与子进程管道堵塞修复。独立复审通过；328 项库测试＋2 项集成通过（排除原有字幕失败），真实联网成片待验收。见 docs/changes/2026-09-10-editing-failure-fixes.md。
 - [ ] 已实现，待审查/合并（2026-09-09，codex/light-workspace-shot-replacement）：B 浅色双栏、Top-12 持久化、手动替换及撤销/重做；桌面烟雾与隔离交互通过。基线已有 3 项校验失败、独立审查额度不足，见 docs/changes/2026-09-09-light-workspace-shot-replacement.md。
 - [x] 完成（2026-09-09，feature/segment-technical-analysis）：真实场景分段与版本化补跑。见 docs/changes/2026-09-09-segment-technical-analysis.md。
