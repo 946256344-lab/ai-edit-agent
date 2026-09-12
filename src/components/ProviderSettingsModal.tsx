@@ -1,4 +1,5 @@
 // Provider 设置弹窗只编辑 controller 草稿并触发显式动作，关闭时不自动保存。
+import { useLayoutEffect, useRef } from 'react'
 import type { ProviderController } from '../hooks/useProviderController'
 
 type ProviderSettingsModalProps = {
@@ -6,16 +7,22 @@ type ProviderSettingsModalProps = {
 }
 
 export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useLayoutEffect(() => {
+    const element = dialog.current
+    if (controller.model.isOpen) element?.showModal()
+    return () => element?.close()
+  }, [controller.model.isOpen])
   if (!controller.model.isOpen) return null
   const { model, actions } = controller
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="模型提供商设置">
+    <dialog ref={dialog} className="settings-dialog" aria-label="模型提供商设置" onCancel={(event) => { event.preventDefault(); dialog.current?.close(); actions.close() }}>
       <section className="provider-modal">
-        <button className="close-button" onClick={actions.close} aria-label="关闭">x</button>
+        <button className="close-button" onClick={() => { dialog.current?.close(); actions.close() }} aria-label="关闭">×</button>
         <span className="eyebrow">MODEL ACCESS</span>
         <h2>连接 Agent 模型</h2>
-        <p>AI 剪辑 MVP 需要此模型连接。项目文件与原始素材保持在本机；仅在理解需求或分析关键帧时发送最小必要数据。API Key 只保存在 Windows 凭据库。</p>
+        <p>连接模型后即可开始 AI 剪辑。项目与原始素材保存在本机，理解需求和分析画面时会调用所选服务。</p>
 
         <div className="provider-option chosen">
           <span>
@@ -125,8 +132,8 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.elevenLabsStatus.keyStored && (
           <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>清除配音密钥</button>
         )}
-        <button className="outline-button modal-button" onClick={actions.close}>关闭</button>
+        <button className="outline-button modal-button" onClick={() => { dialog.current?.close(); actions.close() }}>关闭</button>
       </section>
-    </div>
+    </dialog>
   )
 }

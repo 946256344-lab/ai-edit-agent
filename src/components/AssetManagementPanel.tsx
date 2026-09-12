@@ -102,6 +102,7 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
             breadcrumb={directoryBreadcrumb(model.selectedDirectoryKey)}
             matchingAssetCount={model.page.total}
             assets={model.assets}
+            onInspect={actions.inspectAsset}
           />
         </main>
 

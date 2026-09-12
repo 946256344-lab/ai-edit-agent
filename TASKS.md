@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 完成（2026-09-12，codex/frontend-polish）：统一浅色前端、消息跟随与长文案输入、素材分析入口、设置弹窗键盘操作及窄窗口布局。见 docs/changes/2026-09-12-frontend-polish.md。
 - [x] 已实现待合并（2026-09-11，cursor/clip-segment-recall）：Phase 4 成功批次保留/失败续跑合入本分支；一镜一次 FFmpeg 窗内多帧抽帧（密度不变）。见 docs/changes/2026-09-11-phase4-resume-and-batch-frames.md、2026-09-11-phase4-session-on-clip-branch.md。
 - [x] 已实现待合并（2026-09-11，cursor/clip-segment-recall）：Phase 1 注入本地库库存摘要，约束 requiredVisual/visualKeywords 贴近已有画面。见 docs/changes/2026-09-11-inventory-aware-phase1.md。
 - [x] 已实现待合并（2026-09-11，cursor/clip-segment-recall）：Phase 2 加入 CLIP 图文加权（beat 文案 ↔ 片段代表帧，0–25）；与 bge/词面并存；ONNX 用 fetch 脚本，缺失降级。见 docs/changes/2026-09-11-clip-segment-recall.md。

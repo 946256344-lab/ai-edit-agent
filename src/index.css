@@ -3,5 +3,7 @@
 :root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #273448; background: #f6f7f9; font-synthesis: none; text-rendering: optimizeLegibility; color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, textarea, input { font: inherit; }
+button, textarea, input, select { font: inherit; }
 button { cursor: pointer; }
+::selection { background: #dce8fb; color: #253e65; }
+* { scrollbar-width: thin; scrollbar-color: #c4ccd8 transparent; }
