@@ -1,5 +1,5 @@
 // 当前项目维护弹窗：预览缓存占用与显式清理，不改 Provider 或素材路径。
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clearPreviewCache, getPreviewCacheStatus } from '../lib/local-store'
 import type { PreviewCacheStatus } from '../lib/local-store'
 
@@ -18,6 +18,12 @@ function formatBytes(bytes: number) {
 }
 
 export function ProjectSettingsModal({ open, projectId, projectName, onClose }: ProjectSettingsModalProps) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useLayoutEffect(() => {
+    const element = dialog.current
+    if (open) element?.showModal()
+    return () => element?.close()
+  }, [open])
   const [status, setStatus] = useState<PreviewCacheStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,9 +73,9 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
   }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="项目设置">
+    <dialog ref={dialog} className="settings-dialog" aria-label="项目设置" onCancel={(event) => { event.preventDefault(); dialog.current?.close(); onClose() }}>
       <section className="provider-modal">
-        <button className="close-button" onClick={onClose} aria-label="关闭">x</button>
+        <button className="close-button" onClick={() => { dialog.current?.close(); onClose() }} aria-label="关闭">×</button>
         <span className="eyebrow">PROJECT</span>
         <h2>项目设置</h2>
         <p>{projectName ? `当前项目：${projectName}` : '请先选择一个项目。'}</p>
@@ -97,6 +103,6 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
           {busy ? '处理中…' : '清理预览缓存'}
         </button>
       </section>
-    </div>
+    </dialog>
   )
 }

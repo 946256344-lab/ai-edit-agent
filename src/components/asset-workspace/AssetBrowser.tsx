@@ -30,25 +30,26 @@ function analysisStatusLabel(asset: AssetView) {
   return { tone: 'analyzing' as const, label: '分析中' }
 }
 
-function AssetCard({ asset }: { asset: AssetView }) {
+function AssetCard({ asset, onInspect }: { asset: AssetView; onInspect: (id: string) => void }) {
   const status = analysisStatusLabel(asset)
 
   return (
     <article className="asset-card">
       <div className={`asset-card-thumb asset-card-thumb-${asset.kind}`}>
-        {asset.thumbnailUrl && <img src={asset.thumbnailUrl} alt="" />}
+        {asset.thumbnailUrl && <img src={asset.thumbnailUrl} alt="" loading="lazy" decoding="async" />}
         <span>{asset.kind === 'video' ? 'VIDEO' : asset.kind.toUpperCase()}</span>
         {asset.duration && <time>{asset.duration}</time>}
       </div>
       <div className="asset-card-body">
         <header>
-          <strong>{asset.name}</strong>
+          <strong title={asset.name}>{asset.name}</strong>
           <small>{asset.relativePath ?? asset.folderName ?? '未归类素材'}</small>
         </header>
         <div className="asset-chip-row">
           <span className={`asset-status-chip asset-status-chip--${status.tone}`}>{status.label}</span>
           {asset.duration ? <span>时长 {asset.duration}</span> : null}
         </div>
+        <button className="asset-inspect-button" onClick={() => onInspect(asset.id)} aria-label={`查看 ${asset.name} 的分析结果`}>查看分析 <span aria-hidden="true">↗</span></button>
       </div>
     </article>
   )
@@ -59,9 +60,10 @@ type AssetBrowserProps = {
   breadcrumb: string
   matchingAssetCount: number
   assets: AssetView[]
+  onInspect: (id: string) => void
 }
 
-export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets }: AssetBrowserProps) {
+export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, onInspect }: AssetBrowserProps) {
   return (
     <section className="asset-list-card">
       <header className="asset-list-card__head">
@@ -73,12 +75,12 @@ export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets }: 
       </header>
       {assets.length > 0 ? (
         <div className="asset-list-card__body">
-          {assets.map((asset) => <AssetCard key={asset.id} asset={asset} />)}
+          {assets.map((asset) => <AssetCard key={asset.id} asset={asset} onInspect={onInspect} />)}
         </div>
       ) : (
         <div className="asset-list-card__empty">
           {matchingAssetCount === 0 && title === '全部素材'
-            ? '把素材拖到这里，或使用上方「导入文件 / 导入文件夹」。'
+            ? '还没有素材。点击上方「导入文件」或「导入文件夹」，开始准备你的第一条视频。'
             : '当前目录没有直属素材。'}
         </div>
       )}

@@ -551,7 +551,7 @@ function App() {
         />
 
         {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
-        <div className="paired-workspace">
+        <div className="paired-workspace" inert={activeView === 'assets'}>
           <AgentWorkspace
             model={{
               session: activeEditingSession,

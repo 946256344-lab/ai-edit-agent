@@ -27,7 +27,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
     <section className="rough-preview" aria-label="粗剪预览">
       <header className="preview-heading">
         <div><span className="eyebrow">{shot ? '选择替换画面' : 'ROUGH CUT'}</span><h2>{shot ? `替换镜头 ${String(shot.shotIndex).padStart(2, '0')}` : '视频预览'}</h2></div>
-        <span className="format-label">{shot ? `${((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1)} 秒 · 时长保持不变` : '9:16 · 1080p 草稿'}</span>
+        <span className="format-label">{shot ? `${((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1)} 秒 · 时长保持不变` : artifact.timeline ? `${clips.length} 个镜头 · 第 ${artifact.timeline.versionNumber} 版` : '等待生成'}</span>
       </header>
       {shot ? (
         <div className="replacement-body">
@@ -43,7 +43,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
           <div className="candidate-grid">
             {recommendations?.candidates.map((candidate, index) => (
               <button key={candidate.candidateId} className={`candidate-card ${candidate.candidateId === selectedId ? 'selected' : ''}`} disabled={busy || phase === 'preparing' || candidate.current || Boolean(candidate.unavailableReason)} onClick={() => actions.replacement.select(candidate.candidateId)} aria-pressed={candidate.candidateId === selectedId} title={candidate.unavailableReason ?? candidate.displayName}>
-                <div className="candidate-image">{candidate.thumbnailPath ? <img src={convertFileSrc(candidate.thumbnailPath)} alt="" /> : <span>暂无缩略图</span>}<b>{String(index + 1).padStart(2, '0')}</b><small>{candidate.current ? '当前镜头' : candidate.usedInTimeline ? '其他镜头已用' : `${((candidate.durationMs ?? 0) / 1000).toFixed(1)}s`}</small></div>
+                <div className="candidate-image">{candidate.thumbnailPath ? <img src={convertFileSrc(candidate.thumbnailPath)} alt="" loading="lazy" decoding="async" /> : <span>暂无缩略图</span>}<b>{String(index + 1).padStart(2, '0')}</b><small>{candidate.current ? '当前镜头' : candidate.usedInTimeline ? '其他镜头已用' : `${((candidate.durationMs ?? 0) / 1000).toFixed(1)}s`}</small></div>
                 <span>{candidate.displayName}</span><small>{(candidate.sourceStartMs / 1000).toFixed(1)}–{(candidate.sourceEndMs / 1000).toFixed(1)} 秒</small>{candidate.unavailableReason && <small>{candidate.unavailableReason}</small>}
               </button>
             ))}
