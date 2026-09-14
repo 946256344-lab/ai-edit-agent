@@ -18,10 +18,10 @@
     "harness:test": "node scripts/test-architecture-budgets.mjs && node scripts/test-agent-contracts.mjs && node scripts/test-branch-policy.mjs && node scripts/test-doc-sync.mjs",
     "harness:install": "node scripts/install-git-hooks.mjs",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/run-tauri.mjs",
     "tauri:verify": "node scripts/verify-tauri-webview.mjs",
-    "tauri:dev": "set \"NATIVE_PROVIDER_FULL_TRACE=1\" && set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",
-    "tauri:build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build"
+    "tauri:dev": "node scripts/run-tauri.mjs dev",
+    "tauri:build": "node scripts/run-tauri.mjs build"
   },
   "dependencies": {
     "@moviemasher/moviemasher.js": "^5.1.1",
