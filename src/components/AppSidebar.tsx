@@ -56,8 +56,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
         <span className="sidebar-label">剪辑会话</span>
         {!model.sessions.length && <p className="switcher-empty">从一个新的剪辑开始。</p>}
         {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''}`} key={session.id}>
-          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} onClick={() => actions.selectSession(session.id)}>
-            <span className={`session-symbol ${session.state}`}>{model.covers[session.id] ? <img src={model.covers[session.id]} alt="" loading="lazy" /> : <WorkspaceIcon name="film" />}</span>
+          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} data-initial={session.title.trim().charAt(0) || '剪'} onClick={() => actions.selectSession(session.id)}>
             <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? '正在剪辑…' : session.updated}</small></span>
           </button>
           <button className="session-delete" title="删除会话" aria-label={`删除${session.title}`} onClick={() => actions.deleteSession(session.id)}><WorkspaceIcon name="close" /></button>

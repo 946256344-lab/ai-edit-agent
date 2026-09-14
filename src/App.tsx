@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 import './App.css'
 import './light-workspace.css'
 import { AgentWorkspace } from './components/AgentWorkspace'
+import { PairedWorkspace } from './components/PairedWorkspace'
 import { AnalysisActivity } from './components/AnalysisActivity'
 import { AppSidebar } from './components/AppSidebar'
 import { RoughCutPreview } from './components/RoughCutPreview'
@@ -567,35 +568,40 @@ function App() {
           <button className="outline-button deliver-button" disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || artifactWorkspace.model.busy.creatingJianyingDraft || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'} onClick={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.createJianyingDraft(timeline))}>{artifactWorkspace.model.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>
         </header>}
         {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
-        <div className="paired-workspace" inert={activeView === 'assets'}>
-          <AgentWorkspace
-            model={{
-              session: activeEditingSession,
-              storyboard: artifactWorkspace.storyboard,
-              messages,
-              tasks: agentTasks,
-              input,
-              isSending,
-              editBusy: shotReplacement.model.phase === 'saving',
-              listenerReady: agentReconciliation.listenerReady,
-              composerNotice,
-              routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
-            }}
-            actions={{
-              setInput: (value) => {
-                setInput(value)
-                if (composerNotice) setComposerNotice(null)
-              },
-              openArtifacts: () => setActiveView('artifacts'),
-              sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage(event)) },
-              stopAgentRun,
-            }}
-          />
-          <RoughCutPreview
-            model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending }}
-            actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
-          />
-        </div>
+        <PairedWorkspace
+          hidden={activeView === 'assets'}
+          chat={(
+            <AgentWorkspace
+              model={{
+                session: activeEditingSession,
+                storyboard: artifactWorkspace.storyboard,
+                messages,
+                tasks: agentTasks,
+                input,
+                isSending,
+                editBusy: shotReplacement.model.phase === 'saving',
+                listenerReady: agentReconciliation.listenerReady,
+                composerNotice,
+                routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
+              }}
+              actions={{
+                setInput: (value) => {
+                  setInput(value)
+                  if (composerNotice) setComposerNotice(null)
+                },
+                openArtifacts: () => setActiveView('artifacts'),
+                sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage(event)) },
+                stopAgentRun,
+              }}
+            />
+          )}
+          preview={(
+            <RoughCutPreview
+              model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending }}
+              actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
+            />
+          )}
+        />
         </div>
       </section>
 
