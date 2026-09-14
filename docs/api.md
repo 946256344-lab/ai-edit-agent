@@ -341,3 +341,9 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-09-04）：`key_message` 收敛为 ≤15s 短视频（默认 8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
 维护记录（2026-09-04）：Phase 3 附带关键帧网格选片；Phase 4 用导入关键帧建粗窗再段内精修（不确定加密 + 旁白时长托底；修窗尾 clamp panic）。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。
 维护记录（2026-09-04）：可念稿强制 full_script+audio-first；normalize/join 去重旁白；key_message 旁白硬门。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
+
+# 素材详情预览补充（2026-09-14）
+
+`get_asset_evidence(assetId)` 的 `AssetEvidence` 增加 `kind`（video/image/audio/other）和 `mediaPath`（本地源媒体路径）。命令从当前素材记录读取路径，仅将该文件加入本次应用进程的 asset protocol scope；全局目录 scope 不变，不复制、转码或修改源文件。前端路径只用于 `convertFileSrc`，不显示为用户文案。
+
+素材详情以原片预览、源场景片段、视觉分析、折叠 OCR 的顺序展示。有场景分段时仍展示素材级 `visualEvidence`，不将素材级描述冒充某个片段的分析。视频片段使用 `startMs/endMs` 定位和停止播放；原格式是否可播放取决于 WebView 的媒体解码支持，失败显示不可播放状态。

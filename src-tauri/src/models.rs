@@ -256,6 +256,8 @@ pub struct CollectProjectMediaResult {
 pub struct AssetEvidence {
     pub id: String,
     pub display_name: String,
+    pub kind: String,
+    pub media_path: String,
     pub analysis_status: String,
     pub duration_ms: Option<i64>,
     pub visual_analysis_status: String,
@@ -1019,8 +1021,32 @@ pub struct VisualEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::ConversationTurnResult;
+    use super::{AssetEvidence, ConversationTurnResult};
     use serde_json::json;
+
+    #[test]
+    fn asset_evidence_exposes_the_frontend_media_contract() {
+        let serialized = serde_json::to_value(AssetEvidence {
+            id: "asset-1".to_owned(),
+            display_name: "素材.mp4".to_owned(),
+            kind: "video".to_owned(),
+            media_path: r"D:\素材\原片.mp4".to_owned(),
+            analysis_status: "ready".to_owned(),
+            duration_ms: Some(12_000),
+            visual_analysis_status: "ready".to_owned(),
+            analysis_version: 2,
+            keyframes: Vec::new(),
+            ocr_evidence: Vec::new(),
+            visual_evidence: Vec::new(),
+            visual_analysis_note: None,
+            segments: Vec::new(),
+        })
+        .expect("serialize asset evidence");
+
+        assert_eq!(serialized["kind"], "video");
+        assert_eq!(serialized["mediaPath"], r"D:\素材\原片.mp4");
+        assert_eq!(serialized["durationMs"], 12_000);
+    }
 
     #[test]
     fn conversation_run_result_uses_the_frontend_task_id_contract() {

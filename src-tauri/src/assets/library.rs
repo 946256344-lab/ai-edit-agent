@@ -3,7 +3,7 @@
 //! 职责：
 //! - 分页查询与筛选（`list_asset_page`）
 //! - 目录投影与安全相对路径（`project_asset_directories`）
-//! - 素材证据检视（`get_asset_evidence`）
+//! - 素材证据检视与所选源媒体预览授权（`get_asset_evidence`）
 //! - 用户整理：收藏、评分、备注、标签、集合（batch 操作）
 //! - 旧版导入路径兼容（legacy_* 函数）
 //!
@@ -13,7 +13,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json;
 use std::collections::HashMap;
 use std::path::Path;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::db::{now_millis, open_connection};
@@ -441,9 +441,9 @@ pub fn list_asset_page(
 #[tauri::command]
 pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvidence, String> {
     let connection = open_connection(&app)?;
-    connection
+    let evidence = connection
         .query_row(
-            "SELECT id, display_name, analysis_status, metadata_json FROM assets WHERE id = ?1",
+            "SELECT id, display_name, analysis_status, metadata_json, kind, source_reference FROM assets WHERE id = ?1",
             params![asset_id],
             |row| {
                 let metadata: TechnicalMetadata =
@@ -451,6 +451,8 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
                 Ok(AssetEvidence {
                     id: row.get(0)?,
                     display_name: row.get(1)?,
+                    kind: row.get(4)?,
+                    media_path: row.get(5)?,
                     analysis_status: row.get(2)?,
                     duration_ms: metadata.duration_ms,
                     visual_analysis_status: metadata.visual_analysis_status,
@@ -474,7 +476,11 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
                 })
             },
         )
-        .map_err(|_| "Asset evidence is unavailable.".to_owned())
+        .map_err(|_| "Asset evidence is unavailable.".to_owned())?;
+    app.asset_protocol_scope()
+        .allow_file(&evidence.media_path)
+        .map_err(|_| "Asset media could not be made available for preview.".to_owned())?;
+    Ok(evidence)
 }
 
 fn normalized_asset_label(value: String, kind: &str) -> Result<String, String> {

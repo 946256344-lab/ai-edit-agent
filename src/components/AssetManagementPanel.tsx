@@ -76,7 +76,7 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
         </div>
       </header>
 
-      <div className={`asset-workbench__grid ${showSidePanel ? '' : 'asset-workbench__grid--compact'}`}>
+      <div className={`asset-workbench__grid ${showSidePanel ? '' : 'asset-workbench__grid--compact'} ${showEvidence ? 'asset-workbench__grid--inspecting' : ''}`}>
         <aside className="asset-workbench__left">
           <section className="asset-metrics" aria-label="素材状态">
             <article><b>{model.page.counts.ready}</b><span>已就绪</span></article>
@@ -121,8 +121,8 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
                 onCancelRelink={actions.cancelRelink}
               />
             )}
-            {showEvidence && (
-              <AssetEvidenceInspector evidence={model.evidence} onClose={actions.closeEvidence} />
+            {model.evidence && (
+              <AssetEvidenceInspector key={model.evidence.id} evidence={model.evidence} onClose={actions.closeEvidence} />
             )}
           </aside>
         )}

@@ -139,6 +139,8 @@ export type CollectProjectMediaResult = { copiedCount: number; unavailableCount:
 export type AssetEvidence = {
   id: string
   displayName: string
+  kind: StoredAsset['kind']
+  mediaPath: string
   analysisStatus: string
   durationMs: number | null
   visualAnalysisStatus: 'queued' | 'running' | 'ready' | 'failed' | 'skipped'
