@@ -1,5 +1,11 @@
 # 代码库结构
 
+2026-09-14 暖白创作工作台：`src/light-workspace.css` 以实色侧栏和内容区覆盖原生 Acrylic，只露出顶部玻璃；缩小标题并优先分配预览空间。`src/index.css` 保留透明根背景并使用中性滚动条。本轮不改组件职责和业务接口。
+
+2026-09-13 原生玻璃：`src-tauri/tauri.conf.json` 配置 Windows Acrylic 与透明窗口；`src/index.css` 保持 WebView 根背景透明，`src/light-workspace.css` 提供中性透明白色分层，不在页面内模拟桌面背景。系统标题栏继续负责拖动与窗口操作。
+
+2026-09-13 浅紫工作台：`src/light-workspace.css` 统一纸面与磨砂侧栏；`AppSidebar` 放置项目内素材入口与会话，`RoughCutPlayer` 管理媒体播放展示，`useSessionArtworkController` 读取真实会话封面。`useArtifactWorkspaceController` 按当前时间线源区间取镜头条关键帧，独立于素材分页。沿用现有剪辑、替换与交付接口。
+
 2026-09-09 粗剪工作台：`src/components/RoughCutPreview.tsx` 展示并排预览与推荐片段；`src/hooks/useShotReplacementController.ts` 管理试选、保存和手动撤销/重做；`src/light-workspace.css` 为 B 浅色布局。后端 `src-tauri/src/shot_replacement.rs` 负责候选持久化、读取和单候选精修，以素材＋片段区分候选；保存复用 `studio.rs`，预览与剪映继续使用同一时间线。契约见 `docs/api.md`。
 
 ## 1）顶层地图

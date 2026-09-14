@@ -9,6 +9,7 @@ import {
   getJianyingRegistrationStatus,
   getLatestStoryboard,
   getLatestTimeline,
+  getAssetEvidence,
   listAgentTasks,
   listOperationLogs,
   listTimelineVersions,
@@ -113,6 +114,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false)
   const [timelineState, setTimelineState] = useState<TimelineState>('not-created')
   const [timeline, setTimeline] = useState<TimelineVersion | null>(null)
+  const [shotImages, setShotImages] = useState<{ timelineId: string; images: Record<number, { imagePath: string; displayName: string }>; error: string | null } | null>(null)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [previewNonce, setPreviewNonce] = useState(0)
   const [isCreatingTimeline, setIsCreatingTimeline] = useState(false)
@@ -124,6 +126,28 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [timelineVersions, setTimelineVersions] = useState<TimelineVersion[]>([])
   const activeTimelineRef = useRef<string | null>(null)
   const snapshotSessionRef = useRef<string | null>(null)
+
+  // 镜头条按时间线读取源区间内关键帧，不依赖素材库当前目录和分页。
+  useEffect(() => {
+    if (!timeline) return
+    let active = true
+    void Promise.all([...new Set(timeline.clips.map((clip) => clip.assetId))].map(getAssetEvidence))
+      .then((evidence) => {
+        const byAsset = new Map(evidence.map((asset) => [asset.id, asset]))
+        const images: Record<number, { imagePath: string; displayName: string }> = {}
+        for (const clip of timeline.clips) {
+          const asset = byAsset.get(clip.assetId)
+          const frames = [...(asset?.keyframes ?? []), ...(asset?.segments?.flatMap((segment) => segment.frames) ?? [])]
+            .filter((frame) => frame.timeMs >= clip.sourceStartMs && frame.timeMs < clip.sourceEndMs)
+          const midpoint = (clip.sourceStartMs + clip.sourceEndMs) / 2
+          frames.sort((a, b) => Math.abs(a.timeMs - midpoint) - Math.abs(b.timeMs - midpoint))
+          if (asset && frames[0]) images[clip.shotIndex] = { imagePath: frames[0].imagePath, displayName: asset.displayName }
+        }
+        if (active) setShotImages({ timelineId: timeline.id, images, error: null })
+      })
+      .catch(() => { if (active) setShotImages({ timelineId: timeline.id, images: {}, error: '镜头缩略图未能读取，仍可按序号选择镜头。' }) })
+    return () => { active = false }
+  }, [timeline])
 
   useEffect(() => {
     activeTimelineRef.current = timeline?.id ?? null
@@ -474,6 +498,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     refreshAudit,
     reset,
     model: {
+      shotImages: shotImages?.timelineId === timeline?.id ? shotImages?.images ?? {} : {},
+      thumbnailNotice: shotImages?.timelineId === timeline?.id ? shotImages?.error : null,
       storyboard,
       storyboardBrief,
       storyboardError,

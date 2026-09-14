@@ -3,6 +3,9 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现并验证（2026-09-14，codex/lavender-workspace）：暖白创作工作台，实色侧栏与内容区、仅顶部玻璃、小标题与预览优先；已同步开发版，未提交。见 docs/changes/2026-09-14-calm-workspace.md。
+- [x] 已实现并验证（2026-09-13，codex/lavender-workspace）：固定紫色改为 Windows Acrylic 原生毛玻璃，白色半透明内容层及系统窗口操作保留；已启动新版 debug，未提交。见 docs/changes/2026-09-13-native-acrylic.md。
+- [x] 已实现并验证（2026-09-13，codex/lavender-workspace）：按确认图实现浅紫工作台、项目内素材库、真实会话封面与镜头条、轻量播放器。已同步本地开发版，未提交；见 docs/changes/2026-09-13-lavender-workspace.md。
 - [x] 完成（2026-09-12，codex/frontend-polish）：统一浅色前端、消息跟随与长文案输入、素材分析入口、设置弹窗键盘操作及窄窗口布局。见 docs/changes/2026-09-12-frontend-polish.md。
 - [x] 已实现待合并（2026-09-11，cursor/clip-segment-recall）：Phase 4 成功批次保留/失败续跑合入本分支；一镜一次 FFmpeg 窗内多帧抽帧（密度不变）。见 docs/changes/2026-09-11-phase4-resume-and-batch-frames.md、2026-09-11-phase4-session-on-clip-branch.md。
 - [x] 已实现待合并（2026-09-11，cursor/clip-segment-recall）：Phase 1 注入本地库库存摘要，约束 requiredVisual/visualKeywords 贴近已有画面。见 docs/changes/2026-09-11-inventory-aware-phase1.md。

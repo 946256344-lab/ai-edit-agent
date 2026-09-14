@@ -1,20 +1,21 @@
-// 主工作台顶栏：显示项目与会话，素材管理按需打开。
+// 工作区顶栏：项目面包屑与返回粗剪入口，素材库归属左侧项目。
 import type { WorkspaceView } from './workspace-types'
+import { WorkspaceIcon } from './WorkspaceIcon'
 export type WorkspaceHeaderModel = {
   projectName: string
   sessionTitle: string
   storeReady: boolean
   view: WorkspaceView
-  assetCount: number
 }
 export function WorkspaceHeader({ model, selectView }: { model: WorkspaceHeaderModel; selectView: (view: WorkspaceView) => void }) {
-  return (
+  return <>
     <header className="topbar">
       <div className="crumbs" title={`${model.projectName} / ${model.sessionTitle}`}>{model.projectName}<span>/</span><strong>{model.sessionTitle}</strong></div>
-      <div className="top-actions">
-        <span className={`saved ${model.storeReady ? 'is-ready' : ''}`}>{model.storeReady ? '本地工作区' : '本地未连接'}</span>
-        <button className={`outline-button ${model.view === 'assets' ? 'is-active' : ''}`} aria-pressed={model.view === 'assets'} onClick={() => selectView(model.view === 'assets' ? 'chat' : 'assets')}>{model.view === 'assets' ? '← 返回粗剪' : `素材库 · ${model.assetCount}`}</button>
-      </div>
+      <span className={`saved ${model.storeReady ? 'is-ready' : ''}`}>{model.storeReady ? '本地工作区' : '本地未连接'}</span>
     </header>
-  )
+    <nav className="workspace-tabs" aria-label="工作区">
+      <button className={model.view !== 'assets' ? 'selected' : ''} aria-pressed={model.view !== 'assets'} onClick={() => selectView('chat')}><WorkspaceIcon name="film" />粗剪工作台</button>
+      {model.view === 'assets' && <span className="workspace-location">素材库</span>}
+    </nav>
+  </>
 }

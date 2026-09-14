@@ -1,8 +1,9 @@
-// 窄侧栏：项目/会话选择折叠在菜单内，保留设置入口。
+// 项目侧栏：项目内素材入口、剪辑会话与设置；操作仍交给应用 controller。
 import { useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
-import type { EditingSessionView } from './workspace-types'
+import type { EditingSessionView, WorkspaceView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
+import { WorkspaceIcon } from './WorkspaceIcon'
 
 export type AppSidebarModel = {
   projects: StoredProject[]
@@ -12,6 +13,10 @@ export type AppSidebarModel = {
   activeSessionId: string | null
   providerLabel: string
   storeState: 'browser' | 'ready' | 'unavailable'
+  view: WorkspaceView
+  assetCount: number
+  covers: Record<string, string>
+  artworkNotice: string | null
 }
 export type AppSidebarActions = {
   createSession: () => void
@@ -20,29 +25,50 @@ export type AppSidebarActions = {
   selectSession: (sessionId: string) => void
   deleteSession: (sessionId: string) => void
   openProvider: () => void
+  openAssets: () => void
 }
 export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions: AppSidebarActions }) {
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   return (
-    <aside className="sidebar icon-rail">
-      <span className="brand-mark" title="Assembly">A</span>
-      <button className="rail-button" title="新建剪辑会话" aria-label="新建剪辑会话" onClick={actions.createSession}><span aria-hidden="true">＋</span><small>新建</small></button>
-      <details className="project-switcher" onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.currentTarget.open = false
-          event.currentTarget.querySelector('summary')?.focus()
-        }
-      }}>
-        <summary className="rail-button" title="项目与会话" aria-label="项目与会话"><span aria-hidden="true">▤</span><small>项目</small></summary>
-        <div className="project-popover">
-          <div className="switcher-heading"><strong>项目与会话</strong><button className="text-button" onClick={actions.createProject}>新建项目</button></div>
-          <label>当前项目<select value={model.activeProjectId ?? ''} onChange={(event) => actions.selectProject(event.target.value)}><option value="" disabled>选择项目</option>{model.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-          <nav aria-label="剪辑会话">{model.sessions.map((session) => <div className="session-menu-row" key={session.id}><button className={session.id === model.activeSessionId ? 'selected' : ''} onClick={(event) => { actions.selectSession(session.id); event.currentTarget.closest('details')?.removeAttribute('open') }}><strong>{session.title}</strong><small>{session.preview}</small></button><button title="删除会话" aria-label={`删除${session.title}`} onClick={() => actions.deleteSession(session.id)}>×</button></div>)}</nav>
-          {!model.sessions.length && <p className="switcher-empty">还没有剪辑会话，创建一个开始吧。</p>}
-          <button className="outline-button" onClick={(event) => { actions.createSession(); event.currentTarget.closest('details')?.removeAttribute('open') }}>＋ 新建剪辑会话</button>
-        </div>
-      </details>
-      <div className="rail-bottom"><button className="rail-button" title={`模型设置 · ${model.providerLabel}`} aria-label="模型设置" onClick={actions.openProvider}><span aria-hidden="true">✧</span><small>模型</small></button><button className="rail-button" title="项目设置" aria-label="项目设置" onClick={() => setProjectSettingsOpen(true)}><span aria-hidden="true">⚙</span><small>设置</small></button><span className={`connection-dot ${model.storeState}`} role="img" aria-label={model.storeState === 'ready' ? '本地已连接' : '本地连接不可用'} title={model.storeState === 'ready' ? '本地已连接' : '本地连接不可用'} /></div>
+    <aside className="sidebar project-sidebar">
+      <span className="assembly-wordmark">Assembly</span>
+      <div className="sidebar-project">
+        <span className="sidebar-label">当前项目</span>
+        <details className="project-switcher" onKeyDown={(event) => {
+          if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() }
+        }}>
+          <summary className="project-selector" aria-label="选择项目" title={model.activeProjectName ?? '选择项目'}>
+            <span className="project-symbol">{Object.values(model.covers).find(Boolean) ? <img src={Object.values(model.covers).find(Boolean)} alt="" /> : <WorkspaceIcon name="folder" />}</span>
+            <strong>{model.activeProjectName ?? '选择项目'}</strong><WorkspaceIcon name="chevron" />
+          </summary>
+          <div className="project-popover">
+            <span className="sidebar-label">我的项目</span>
+            {model.projects.map((project) => <button key={project.id} className={project.id === model.activeProjectId ? 'selected' : ''} onClick={(event) => { actions.selectProject(project.id); event.currentTarget.closest('details')?.removeAttribute('open') }}>{project.name}</button>)}
+            <button onClick={(event) => { actions.createProject(); event.currentTarget.closest('details')?.removeAttribute('open') }}><WorkspaceIcon name="plus" />新建项目</button>
+          </div>
+        </details>
+        <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label="素材库" aria-pressed={model.view === 'assets'} onClick={actions.openAssets}>
+          <WorkspaceIcon name="library" /><span>素材库</span><small>{model.assetCount}</small>
+        </button>
+        <button className="new-edit" onClick={actions.createSession} title="新建剪辑会话"><WorkspaceIcon name="plus" /><span>新建剪辑</span></button>
+      </div>
+      <nav className="sidebar-sessions" aria-label="剪辑会话">
+        <span className="sidebar-label">剪辑会话</span>
+        {!model.sessions.length && <p className="switcher-empty">从一个新的剪辑开始。</p>}
+        {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''}`} key={session.id}>
+          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} onClick={() => actions.selectSession(session.id)}>
+            <span className={`session-symbol ${session.state}`}>{model.covers[session.id] ? <img src={model.covers[session.id]} alt="" loading="lazy" /> : <WorkspaceIcon name="film" />}</span>
+            <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? '正在剪辑…' : session.updated}</small></span>
+          </button>
+          <button className="session-delete" title="删除会话" aria-label={`删除${session.title}`} onClick={() => actions.deleteSession(session.id)}><WorkspaceIcon name="close" /></button>
+        </div>)}
+        {model.artworkNotice && <p className="switcher-empty">{model.artworkNotice}</p>}
+      </nav>
+      <div className="project-sidebar-footer">
+        <button title={`模型设置 · ${model.providerLabel}`} aria-label="模型设置" onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>模型设置</span></button>
+        <button title="项目设置" aria-label="项目设置" onClick={() => setProjectSettingsOpen(true)}><WorkspaceIcon name="settings" /><span>项目设置</span></button>
+        <span className="local-status"><i className={`connection-dot ${model.storeState}`} /><span>{model.storeState === 'ready' ? '本地工作区' : '本地未连接'}</span></span>
+      </div>
       <ProjectSettingsModal open={projectSettingsOpen} projectId={model.activeProjectId} projectName={model.activeProjectName} onClose={() => setProjectSettingsOpen(false)} />
     </aside>
   )

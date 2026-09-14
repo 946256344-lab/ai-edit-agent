@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
+import { WorkspaceIcon } from './WorkspaceIcon'
 import type { StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
 
@@ -66,7 +67,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
 
   return (
     <section className="conversation-workspace conversation-workspace--chat">
-      <header className="chat-heading"><strong>剪辑助手</strong><span>{model.isSending ? '正在处理…' : '用对话完成粗剪'}</span></header>
+      <header className="chat-heading"><strong>剪辑对话</strong><span>{model.isSending ? '正在处理…' : ''}</span></header>
       <div className="message-stream" ref={stream} onScroll={(event) => {
         const element = event.currentTarget
         followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
@@ -99,7 +100,6 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
 
         {model.messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
-            <div className="message-avatar">{message.role === 'agent' ? 'A' : 'Y'}</div>
             <div className="message-content">
               <div className="message-meta">
                 {message.role === 'agent' ? 'Assembly' : '你'} <time>{message.time}</time>
@@ -125,7 +125,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           aria-label="剪辑需求或文案"
           value={model.input}
           onChange={(event) => actions.setInput(event.target.value)}
-          placeholder="描述想要的视频，或粘贴你的文案…"
+          placeholder="告诉我你想怎么调整…"
           rows={2}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
@@ -140,7 +140,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         />
         <div>
           <span role="status" className={model.composerNotice ? 'composer-notice' : undefined}>
-            {model.composerNotice ?? (model.session ? '可以说得更具体一点，例如时长、节奏或重点画面' : '发送后会自动创建项目并开始')}
+            {model.composerNotice ?? (model.session ? '' : '发送后会自动创建项目并开始')}
           </span>
           {model.isSending ? (
             <button
@@ -151,13 +151,13 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               {model.listenerReady ? '停止' : '停止连接'}
             </button>
           ) : (
-            <button className="send-button" type="submit" disabled={!model.input.trim() || model.editBusy}>
-              {model.editBusy ? '保存中…' : '发送'}
+            <button className="send-button" type="submit" aria-label={model.editBusy ? '保存中' : '发送'} title="发送" disabled={!model.input.trim() || model.editBusy}>
+              {model.editBusy ? '…' : <WorkspaceIcon name="arrow" />}
             </button>
           )}
         </div>
-        <small className="composer-shortcut">Enter 发送 · Shift + Enter 换行</small>
       </form>
+      <small className="composer-shortcut">Enter 发送 · Shift + Enter 换行</small>
     </section>
   )
 }

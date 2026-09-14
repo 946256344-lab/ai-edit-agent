@@ -11,6 +11,7 @@ import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
+import { useSessionArtworkController } from './hooks/useSessionArtworkController'
 import type { ConversationMessage, EditingSessionView, WorkspaceView } from './components/workspace-types'
 import { useAgentRunReconciliation } from './hooks/useAgentRunReconciliation'
 import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
@@ -71,6 +72,7 @@ function App() {
   const activeEditingSessionRef = useRef<string | null>(null)
   const activeProject = projects.find((project) => project.id === activeProjectId)
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
+  const sessionArtwork = useSessionArtworkController(activeProjectId, editingSessions)
   const provider = useProviderController(desktopRuntime)
   const artifactWorkspace = useArtifactWorkspaceController({
     desktopRuntime,
@@ -526,30 +528,44 @@ function App() {
           providerLabel: provider.model.providerLabel,
           storeState,
           activeProjectName: activeProject?.name ?? null,
+          covers: sessionArtwork?.covers ?? {},
+          artworkNotice: sessionArtwork?.notice ?? null,
+          view: activeView,
+          assetCount: assetWorkspace.page.counts.total,
         }}
         actions={{
           createSession: () => shotReplacement.actions.requestAction(() => void createEditingSessionWorkspace()),
           createProject: () => shotReplacement.actions.requestAction(() => void createProjectWorkspace()),
           selectProject: (projectId) => shotReplacement.actions.requestAction(() => void selectProject(projectId)),
-          selectSession: (sessionId) => shotReplacement.actions.requestAction(() => { if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) }),
+          selectSession: (sessionId) => shotReplacement.actions.requestAction(() => { setActiveView('chat'); if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) }),
           deleteSession: (sessionId) => void deleteEditingSessionWorkspace(sessionId),
           openProvider: provider.actions.open,
+          openAssets: () => shotReplacement.actions.requestAction(() => setActiveView('assets')),
         }}
       />
 
       <section className="workspace">
-        <ReleaseReadinessBanner enabled={storeState === 'ready'} />
         <WorkspaceHeader
           model={{
             projectName: activeProject?.name ?? '新项目',
             sessionTitle: activeEditingSession?.title ?? '开始剪辑',
             storeReady: storeState === 'ready',
             view: activeView,
-            assetCount: assetWorkspace.page.counts.total,
           }}
           selectView={(view) => shotReplacement.actions.requestAction(() => setActiveView(view))}
         />
 
+        <div className="workspace-canvas">
+        <ReleaseReadinessBanner enabled={storeState === 'ready'} />
+        {activeView !== 'assets' && <header className="cut-heading">
+          <div>
+            <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? '从灵感，到画面'}</h1>
+            <p>{artifactWorkspace.timeline
+              ? `${(artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1)} 秒 · ${artifactWorkspace.timeline.clips.length} 个镜头 · 第 ${artifactWorkspace.timeline.versionNumber} 版`
+              : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
+          </div>
+          <button className="outline-button deliver-button" disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || artifactWorkspace.model.busy.creatingJianyingDraft || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'} onClick={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.createJianyingDraft(timeline))}>{artifactWorkspace.model.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>
+        </header>}
         {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
         <div className="paired-workspace" inert={activeView === 'assets'}>
           <AgentWorkspace
@@ -579,6 +595,7 @@ function App() {
             model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending }}
             actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
           />
+        </div>
         </div>
       </section>
 

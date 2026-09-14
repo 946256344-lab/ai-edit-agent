@@ -18,6 +18,9 @@
         "minWidth": 1024,
         "minHeight": 650,
         "resizable": true,
+        "transparent": true,
+        "theme": "Light",
+        "windowEffects": { "effects": ["acrylic"] },
         "fullscreen": false
       }
     ],

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ArtifactWorkspaceController } from '../hooks/useArtifactWorkspaceController'
 import type { ShotReplacementController } from '../hooks/useShotReplacementController'
+import { WorkspaceIcon } from './WorkspaceIcon'
+import { RoughCutPlayer } from './RoughCutPlayer'
 
 type Props = {
   model: { artifact: ArtifactWorkspaceController['model']; replacement: ShotReplacementController['model']; agentBusy: boolean }
@@ -26,8 +28,8 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   return (
     <section className="rough-preview" aria-label="粗剪预览">
       <header className="preview-heading">
-        <div><span className="eyebrow">{shot ? '选择替换画面' : 'ROUGH CUT'}</span><h2>{shot ? `替换镜头 ${String(shot.shotIndex).padStart(2, '0')}` : '视频预览'}</h2></div>
-        <span className="format-label">{shot ? `${((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1)} 秒 · 时长保持不变` : artifact.timeline ? `${clips.length} 个镜头 · 第 ${artifact.timeline.versionNumber} 版` : '等待生成'}</span>
+        <h2>{shot ? `替换镜头 ${String(shot.shotIndex).padStart(2, '0')}` : '视频预览'}</h2>
+        <span className="format-label">{shot ? `${((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1)} 秒 · 时长保持不变` : artifact.deliveryStatus}</span>
       </header>
       {shot ? (
         <div className="replacement-body">
@@ -51,17 +53,26 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
         </div>
       ) : (
         <>
-          <div className="rough-player">
-            {artifact.preview ? <video ref={video} key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} src={convertFileSrc(artifact.preview.previewPath)} controls playsInline onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime * 1000)} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? '正在制作你的第一版粗剪' : '你的第一版，从对话开始'}</h3><p>导入素材，告诉我想剪什么。<br />完成后在这里预览并微调镜头。</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? '生成预览' : '生成粗剪'}</button>}</div>}
+          <div className={`rough-player ${artifact.preview ? 'has-video' : ''}`}>
+            {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? '正在制作你的第一版粗剪' : '你的第一版，从对话开始'}</h3><p>导入素材，告诉我想剪什么。<br />完成后在这里预览并微调镜头。</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? '生成预览' : '生成粗剪'}</button>}</div>}
           </div>
           <div className="shot-strip" aria-label="粗剪镜头">
-            {clips.map((clip) => <button key={clip.shotIndex} className={clip.shotIndex === currentClip?.shotIndex ? 'selected' : ''} onClick={() => { setPlayhead(clip.timelineStartMs); if (video.current) video.current.currentTime = clip.timelineStartMs / 1000 }} aria-label={`定位镜头 ${clip.shotIndex}`}><b>{String(clip.shotIndex).padStart(2, '0')}</b><span>{((clip.timelineEndMs - clip.timelineStartMs) / 1000).toFixed(1)}s</span></button>)}
+            {clips.map((clip) => {
+              const image = artifact.shotImages[clip.shotIndex]
+              return <button key={clip.shotIndex} className={clip.shotIndex === currentClip?.shotIndex ? 'selected' : ''} onClick={() => { setPlayhead(clip.timelineStartMs); if (video.current) video.current.currentTime = clip.timelineStartMs / 1000 }} aria-label={`定位镜头 ${clip.shotIndex}`} aria-pressed={clip.shotIndex === currentClip?.shotIndex} title={image?.displayName ?? `镜头 ${clip.shotIndex}`}>
+                <span className="shot-thumbnail">{image ? <img src={convertFileSrc(image.imagePath)} alt="" loading="lazy" /> : <WorkspaceIcon name="film" />}</span>
+                <span className="shot-caption"><b>{String(clip.shotIndex).padStart(2, '0')}</b> · {((clip.timelineEndMs - clip.timelineStartMs) / 1000).toFixed(1)}s</span>
+              </button>
+            })}
           </div>
-          <div className="preview-tools"><div><button className="outline-button" disabled={!currentClip || busy || (currentClip.clipKind ?? 'source') !== 'source'} onClick={() => { if (currentClip) actions.replacement.open(currentClip) }}>替换当前镜头</button><button className="text-button" disabled={!replacement.canUndo || busy} onClick={actions.replacement.undo}>撤销</button><button className="text-button" disabled={!replacement.canRedo || busy} onClick={actions.replacement.redo}>重做</button></div>{artifact.timeline && <button className="text-button" disabled={busy} onClick={actions.artifact.renderPreview}>更新预览</button>}</div>
+          <div className="preview-tools">
+            <span className="current-shot">{currentClip ? `当前镜头 ${String(currentClip.shotIndex).padStart(2, '0')} · ${((currentClip.timelineEndMs - currentClip.timelineStartMs) / 1000).toFixed(1)} 秒` : '等待镜头'}</span>
+            <div><button className="outline-button" disabled={!currentClip || busy || (currentClip.clipKind ?? 'source') !== 'source'} onClick={() => { if (currentClip) actions.replacement.open(currentClip) }}>替换当前镜头</button><button className="text-button icon-button" title="撤销" aria-label="撤销" disabled={!replacement.canUndo || busy} onClick={actions.replacement.undo}><WorkspaceIcon name="undo" /></button><button className="text-button icon-button" title="重做" aria-label="重做" disabled={!replacement.canRedo || busy} onClick={actions.replacement.redo}><WorkspaceIcon name="redo" /></button>{artifact.timeline && <button className="text-button" disabled={busy} onClick={actions.artifact.renderPreview}>更新预览</button>}</div>
+          </div>
         </>
       )}
-      {(replacement.notice || stalePreview || artifact.jianyingNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>当前画面为上一版，请更新预览以查看已保存的修改。</p>}{artifact.jianyingNotice && <p>{artifact.jianyingNotice}</p>}</div>}
-      <footer className="preview-footer"><span>{shot ? '保存后才会修改粗剪' : '粗剪完成后，在剪映继续精修'}</span>{shot ? <div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>取消</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? '保存中…' : '保存修改'}</button></div> : <button className="primary-button" disabled={!artifact.timeline || busy} onClick={() => actions.replacement.requestAction((timeline) => actions.artifact.createJianyingDraft(timeline))}>{artifact.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>}</footer>
+      {(replacement.notice || stalePreview || artifact.jianyingNotice || artifact.thumbnailNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>当前画面为上一版，请更新预览以查看已保存的修改。</p>}{artifact.jianyingNotice && <p>{artifact.jianyingNotice}</p>}{artifact.thumbnailNotice && <p>{artifact.thumbnailNotice}</p>}</div>}
+      <footer className="preview-footer"><span>{shot ? '保存后才会修改粗剪' : '粗剪完成后，在剪映继续精修'}</span>{shot && <div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>取消</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? '保存中…' : '保存修改'}</button></div>}</footer>
       <dialog ref={pendingDialog} aria-labelledby="pending-title" className="pending-dialog" onCancel={actions.replacement.keepEditing}><h3 id="pending-title">还有未保存的镜头修改</h3><p>先保存这次试选，还是放弃后继续？</p><button className="primary-button" disabled={!prepared || phase !== 'idle'} onClick={actions.replacement.saveAndContinue}>保存并继续</button><button className="outline-button" onClick={actions.replacement.discardAndContinue}>放弃并继续</button><button className="text-button" onClick={actions.replacement.keepEditing}>继续编辑</button></dialog>
     </section>
   )
