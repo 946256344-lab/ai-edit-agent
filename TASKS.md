@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-15，cursor/hard-cut-segments）：素材切段只认 FFmpeg 硬切，CLIP 验真伪（相似则丢掉）；CLIP 不可用或无硬切则整条一段，删除按秒均分。analysis_version=3 空闲补跑，不改选镜/视觉 JSON。见 docs/changes/2026-09-15-hard-cut-segments.md。
 - [x] 已实现并验证（2026-09-14，codex/asset-detail-preview）：素材详情原片预览、片段范围播放、完整视觉标签与折叠 OCR；构建、独立真实媒体预览和桌面开发版启动通过。见 docs/changes/2026-09-14-asset-detail-preview.md。
 - [x] 已实现并验证（2026-09-14，codex/lavender-workspace）：暖白创作工作台，实色侧栏与内容区、仅顶部玻璃、小标题与预览优先；已同步开发版，未提交。见 docs/changes/2026-09-14-calm-workspace.md。
 - [x] 已实现并验证（2026-09-13，codex/lavender-workspace）：固定紫色改为 Windows Acrylic 原生毛玻璃，白色半透明内容层及系统窗口操作保留；已启动新版 debug，未提交。见 docs/changes/2026-09-13-native-acrylic.md。

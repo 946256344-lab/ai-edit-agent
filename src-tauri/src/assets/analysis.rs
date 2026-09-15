@@ -248,7 +248,7 @@ fn generate_video_keyframes(
     duration_ms: Option<i64>,
 ) -> Result<(Vec<KeyframeMetadata>, Vec<SceneSegment>), String> {
     let directory = derived_directory(app, asset_id)?;
-    super::segments::analyze_video_segments(source, &directory, duration_ms)
+    super::segments::analyze_video_segments(Some(app), source, &directory, duration_ms)
 }
 
 fn laplacian_variance(image: &image::GrayImage) -> Option<f64> {
@@ -1349,8 +1349,8 @@ pub(crate) fn drain_pending_analysis(app: &AppHandle, project_id: &str) -> Resul
     Ok(())
 }
 
-/// 在技术分析队列空闲时，为 analysis_version < 2 的就绪视频补跑真实分段。
-/// 保持 analysis_status=ready，不触发视觉请求，保留已有 visual_evidence。
+/// 在技术分析队列空闲时，为 analysis_version 低于当前版本的就绪视频补跑分段。
+/// 保持 analysis_status=ready，不触发视觉请求，保留素材级 visual_evidence。
 pub(crate) fn enqueue_and_spawn_segment_reanalysis(
     app: &AppHandle,
     preferred_project_id: Option<&str>,
@@ -1621,8 +1621,12 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
         }
         let source = PathBuf::from(&source_reference);
         let directory = derived_directory(&app, &asset_id)?;
-        let (keyframes, scene_segments) =
-            super::segments::analyze_video_segments(&source, &directory, metadata.duration_ms)?;
+        let (keyframes, scene_segments) = super::segments::analyze_video_segments(
+            Some(&app),
+            &source,
+            &directory,
+            metadata.duration_ms,
+        )?;
         // 保留视觉证据与状态；只替换分段/关键帧/网格。
         metadata.keyframes = keyframes;
         metadata.scene_segments = scene_segments;
@@ -1634,6 +1638,8 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
             }
         }
         metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
+        // 段边界已变，片段视觉与 CLIP 向量失效；不在此处排队视觉，留给选镜按需补。
+        metadata.visual_analysis_version = 0;
         if !metadata.keyframes.is_empty() {
             use crate::storyboard::multimodal::{generate_keyframe_grid, KeyframeGridConfig};
             let keyframe_paths: Vec<String> = metadata
@@ -1666,6 +1672,10 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
                 .map_err(|error| error.to_string())?;
             return Ok(());
         }
+        let _ = connection.execute(
+            "DELETE FROM asset_segment_embeddings WHERE asset_id = ?1",
+            params![asset_id],
+        );
         connection
             .execute(
                 "UPDATE agent_tasks SET status = 'completed', result_json = ?1, updated_at = ?2 WHERE id = ?3",

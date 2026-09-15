@@ -144,7 +144,7 @@ Windows 桌面应用（Tauri + React）
 导入本地文件或文件夹
   -> SQLite 保存源文件引用
   -> 后台 FFprobe 提取时长、尺寸、帧率和音频轨信息
-  -> FFmpeg 低分辨率场景检测生成真实片段（预算 60s，失败则均匀切分），每片段抽 1–3 帧
+  -> FFmpeg 低分辨率场景检测硬切，CLIP 验切点真伪（相似或模型不可用则不切），每片段抽最多 8 帧
   -> Tesseract 提取图片/关键帧英文 OCR
   -> 技术分析完成后，后台将最多六条素材的代表帧批量发送给实验性 Provider
   -> 保存按素材 ID 与源时间校验的视觉建议；每批请求 30 秒超时，失败原因随素材证据返回
@@ -306,7 +306,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows Credential Manager；`search_music` 仅返回 API 明示可下载且为 CC0/CC-BY 的曲目，CC-BY 的曲名、作者和许可 URL 会随 music cue 保存。`download_music` 才按需将单曲写入当前 local project 并交给既有本地分析队列；`use_online_music` 在一个具名、受限且可审计的调用内下载一首、等待分析完成并新建含循环背景音乐的时间线版本。每个下载副本使用唯一文件名，绝不覆盖既有本地副本。不会抓取网页、批量缓存曲库或把未验证的远程 URL 写入时间线/Jianying draft。
 
-场景检测：FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 解析切点；单素材硬预算 60s，长片可先 keyframe 粗扫；超时或无切点时均匀切分（段长 clamp(duration/8, 3s, 8s)），最短 1.5s、最多 24 段。`TechnicalMetadata.analysisVersion=2`；旧就绪视频由 `reanalyze_asset_segments` 在技术队列空闲时后台补跑，保持 `ready` 且不触发视觉请求。关键帧网格改为片段中点帧拼图。
+场景检测：FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 解析硬切；单素材硬预算 60s，长片可先 keyframe 粗扫。CLIP 对切点前后各一帧做相似度验真（阈值与 Phase 2 去似相同 0.92）；两侧仍像同一画面、抽帧失败或 CLIP 不可用则丢掉该切。无已验证硬切时整条一段，禁止按秒均分，不为凑数量把真切点合成 24 段。每段抽帧取首/中/尾并按约 4s 加密，上限 8 帧。`TechnicalMetadata.analysisVersion=3`；旧就绪视频由 `reanalyze_asset_segments` 在技术队列空闲时后台补跑，保持 `ready`、不自动排队视觉，片段 CLIP 向量作废后由选镜按需补。关键帧网格改为片段中点帧拼图。
 
 生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
@@ -351,3 +351,4 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 维护记录（2026-09-03）：安全上限 100 镜/beat；短 brief 时长收敛；Phase5 路由。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
 维护记录（2026-09-04）：`key_message` 默认 ≤15s（8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
 维护记录（2026-09-04）：可念稿强制 full_script+audio-first；旁白去重与硬门。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
+维护记录（2026-09-15）：素材切段只认已验证硬切，无切不切。见 `docs/changes/2026-09-15-hard-cut-segments.md`。

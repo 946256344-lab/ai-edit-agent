@@ -87,6 +87,27 @@ fn load_vision_from_directory(directory: &Path) -> Result<ImageEmbedding, String
         .map_err(|_| "clip_vision_model_load_failed".to_owned())
 }
 
+/// 编码 JPEG/PNG 字节为 CLIP 图像向量；模型缺失或推理失败返回错误，由调用方决定是否切段。
+pub(crate) fn encode_image_bytes(
+    app: &AppHandle,
+    images: &[&[u8]],
+) -> Result<Vec<Vec<f32>>, String> {
+    if images.is_empty() {
+        return Ok(Vec::new());
+    }
+    let embeddings = vision_model(app)?
+        .embed_bytes(images, Some(CLIP_BATCH_SIZE))
+        .map_err(|_| "clip_vision_inference_failed".to_owned())?;
+    if embeddings.len() != images.len()
+        || embeddings
+            .iter()
+            .any(|embedding| embedding.len() != CLIP_DIMENSIONS)
+    {
+        return Err("clip_vision_dimension_mismatch".to_owned());
+    }
+    Ok(embeddings)
+}
+
 fn load_text_from_directory(directory: &Path) -> Result<TextEmbedding, String> {
     let onnx_file = read_model_file(directory, "model.onnx")?;
     if hash_bytes(&onnx_file) != TEXT_MODEL_SHA256 {

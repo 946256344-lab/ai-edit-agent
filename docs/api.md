@@ -184,7 +184,7 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 可重试写失败和成功产物的 `qualityWarnings` 会分别触发最多两次恢复/精炼续步；无关观察或前置调用不能清除仍未闭合的失败/警告。默认工具可见性不等于完成清单；请求中明确要求的最低产物集合只用于 RunReceipt 终态验真，不参与工具暴露或路径选择。`render_preview` 的成功收据绑定返回的 `timelineVersionId`；任何后续时间线写工具若返回不同版本或缺少可验证版本，旧 preview 收据即失效，必须重新渲染才能满足 preview 完成门。
 
-内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：首次视频分析最多扫描前 30 秒、生成 4 张关键帧，并只对前两张关键帧进行 OCR；完成后素材成为技术 `ready`。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 以最多 6 条技术就绪素材为一批，发送每条素材一张低分辨率中间代表帧及素材 ID/源时间标签；模型响应只能回填同一批次内的 ID 和精确时间。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或响应无效不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
+内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：完成后素材成为技术 `ready`。场景检测用 FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 找硬切，CLIP 对切点前后帧验真（相似、抽帧失败或 CLIP 不可用则不切）；无已验证硬切则整条一段，禁止按秒均分。`analysisVersion=3`；旧就绪视频由 `reanalyze_asset_segments` 在技术队列空闲时补跑，不自动排队视觉。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 以最多 6 条技术就绪素材为一批，发送每条素材一张低分辨率中间代表帧及素材 ID/源时间标签；模型响应只能回填同一批次内的 ID 和精确时间。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或响应无效不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
 
 首次场景检测的滤镜顺序为 `fps=4 -> scale=320:-2:flags=fast_bilinear -> select(scene) -> showinfo`；它先降低比较成本，再以 `pts_time` 保存源时间。前 30 秒和最多 4 张关键帧仍是本地安全上限。
 
@@ -347,3 +347,5 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 `get_asset_evidence(assetId)` 的 `AssetEvidence` 增加 `kind`（video/image/audio/other）和 `mediaPath`（本地源媒体路径）。命令从当前素材记录读取路径，仅将该文件加入本次应用进程的 asset protocol scope；全局目录 scope 不变，不复制、转码或修改源文件。前端路径只用于 `convertFileSrc`，不显示为用户文案。
 
 素材详情以原片预览、源场景片段、视觉分析、折叠 OCR 的顺序展示。有场景分段时仍展示素材级 `visualEvidence`，不将素材级描述冒充某个片段的分析。视频片段使用 `startMs/endMs` 定位和停止播放；原格式是否可播放取决于 WebView 的媒体解码支持，失败显示不可播放状态。
+
+维护记录（2026-09-15）：素材切段只认 FFmpeg 硬切并用 CLIP 验真；无已验证硬切则整条一段。`analysisVersion=3`。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
