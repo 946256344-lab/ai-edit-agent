@@ -180,11 +180,14 @@ impl Phase4Session {
             let windows = if !real_segments.is_empty() {
                 real_segments
                     .into_iter()
-                    .map(|segment| Phase4ContentWindow {
-                        asset_id: source.asset_id.clone(),
-                        window_id: segment.id.clone(),
-                        start_ms: segment.start_ms,
-                        end_ms: segment.end_ms,
+                    .map(|segment| {
+                        let (start_ms, end_ms) = crate::assets::motion::effective_window(segment);
+                        Phase4ContentWindow {
+                            asset_id: source.asset_id.clone(),
+                            window_id: segment.id.clone(),
+                            start_ms,
+                            end_ms,
+                        }
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -248,7 +251,12 @@ impl Phase4Session {
                         .entry(shot.asset_id.clone())
                         .or_default()
                         .push(window.clone());
-                    self.pick_map.insert(shot.order_index, (window, false));
+                    let uncertain = window_motion_uncertain(
+                        &selected_sources,
+                        &shot.asset_id,
+                        &window.window_id,
+                    );
+                    self.pick_map.insert(shot.order_index, (window, uncertain));
                     pass_a_done.insert(shot.order_index);
                     continue;
                 }
@@ -724,6 +732,19 @@ impl Phase4Session {
         orders.sort_unstable();
         orders
     }
+}
+
+fn window_motion_uncertain(sources: &[StoryboardSource], asset_id: &str, window_id: &str) -> bool {
+    let Some(source) = sources.iter().find(|source| source.asset_id == asset_id) else {
+        return false;
+    };
+    window_id.split('+').any(|segment_id| {
+        source
+            .scene_segments
+            .iter()
+            .find(|segment| segment.id == segment_id)
+            .is_some_and(crate::assets::motion::profile_is_uncertain)
+    })
 }
 
 fn refine_batches(orders: &[i64]) -> Vec<Vec<i64>> {

@@ -1,5 +1,6 @@
 //! 真实硬切分段：FFmpeg 低分辨率场景检测，CLIP 验切点真伪。
 //! 无硬切、CLIP 不可用或切点两侧仍相似时整条一段；禁止按秒均分。
+//! 硬切确定后由 motion 模块写帧差能量，只收缩可用窗。
 
 use crate::models::{KeyframeMetadata, SceneSegment};
 use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
@@ -7,7 +8,10 @@ use crate::storyboard::semantic::cosine_similarity;
 use std::{fs, path::Path, time::Duration};
 use tauri::AppHandle;
 
-pub(crate) const CURRENT_ANALYSIS_VERSION: u32 = 3;
+/// 已验证硬切分段；低于此版本的就绪视频需要重切。
+pub(crate) const HARD_CUT_ANALYSIS_VERSION: u32 = 3;
+/// 硬切片段上已写入运动能量可用窗。
+pub(crate) const CURRENT_ANALYSIS_VERSION: u32 = 4;
 pub(crate) const SCENE_DETECT_BUDGET: Duration = Duration::from_secs(60);
 const SCENE_THRESHOLD: &str = "0.30";
 /// 闪光等碎段才合并；不把真硬切为凑数量合掉。
@@ -380,21 +384,6 @@ pub(crate) fn analyze_video_segments(
                 quality_scores[middle]
             })
         };
-        let motion_score = if frames.len() >= 2 {
-            Some(
-                frames
-                    .windows(2)
-                    .filter_map(|pair| {
-                        let a = frame_quality_score(Path::new(&pair[0].image_path))?;
-                        let b = frame_quality_score(Path::new(&pair[1].image_path))?;
-                        Some((a - b).abs())
-                    })
-                    .sum::<f64>()
-                    / (frames.len() - 1) as f64,
-            )
-        } else {
-            None
-        };
         if let Some(mid_frame) = frames.get(frames.len() / 2).cloned() {
             midpoint_keyframes.push(mid_frame);
         }
@@ -406,10 +395,12 @@ pub(crate) fn analyze_video_segments(
             visual_quality_score,
             frames,
             visual_evidence: None,
-            motion_score,
+            motion_score: None,
+            motion_profile: None,
         });
     }
 
+    super::motion::attach_motion_profiles(source, &mut segments);
     midpoint_keyframes.truncate(MAX_KEYFRAMES_FOR_GRID);
     Ok((midpoint_keyframes, segments))
 }

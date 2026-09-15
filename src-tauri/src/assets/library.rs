@@ -475,12 +475,18 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
                         .scene_segments
                         .into_iter()
                         .filter(|segment| !segment.id.is_empty())
-                        .map(|segment| AssetEvidenceSegment {
-                            id: segment.id,
-                            start_ms: segment.start_ms,
-                            end_ms: segment.end_ms,
-                            frames: segment.frames,
-                            visual_evidence: segment.visual_evidence,
+                        .map(|segment| {
+                            let profile = segment.motion_profile.as_ref();
+                            AssetEvidenceSegment {
+                                id: segment.id,
+                                start_ms: segment.start_ms,
+                                end_ms: segment.end_ms,
+                                frames: segment.frames,
+                                visual_evidence: segment.visual_evidence,
+                                usable_start_ms: profile.map(|item| item.usable_start_ms),
+                                usable_end_ms: profile.map(|item| item.usable_end_ms),
+                                motion_tail_settled: profile.map(|item| item.tail_settled),
+                            }
                         })
                         .collect(),
                 })

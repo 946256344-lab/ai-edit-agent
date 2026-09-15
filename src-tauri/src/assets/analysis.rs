@@ -1349,8 +1349,9 @@ pub(crate) fn drain_pending_analysis(app: &AppHandle, project_id: &str) -> Resul
     Ok(())
 }
 
-/// 在技术分析队列空闲时，为 analysis_version 低于当前版本的就绪视频补跑分段。
-/// 保持 analysis_status=ready，不触发视觉请求，保留素材级 visual_evidence。
+/// 在技术分析队列空闲时，为 analysis_version 低于当前版本的就绪视频补跑。
+/// 已是硬切分段（version≥3）时只补运动曲线，不重切、不改视觉。
+/// 更旧素材仍整段重切；保持 analysis_status=ready，不触发视觉请求。
 pub(crate) fn enqueue_and_spawn_segment_reanalysis(
     app: &AppHandle,
     preferred_project_id: Option<&str>,
@@ -1620,40 +1621,49 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
             return Ok(());
         }
         let source = PathBuf::from(&source_reference);
-        let directory = derived_directory(&app, &asset_id)?;
-        let (keyframes, scene_segments) = super::segments::analyze_video_segments(
-            Some(&app),
-            &source,
-            &directory,
-            metadata.duration_ms,
-        )?;
-        // 保留视觉证据与状态；只替换分段/关键帧/网格。
-        metadata.keyframes = keyframes;
-        metadata.scene_segments = scene_segments;
-        metadata.visual_quality_score =
-            keyframe_visual_quality_score(&metadata.keyframes).or(metadata.visual_quality_score);
-        for segment in &mut metadata.scene_segments {
-            if segment.visual_quality_score.is_none() {
-                segment.visual_quality_score = metadata.visual_quality_score;
-            }
-        }
-        metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
-        // 段边界已变，片段视觉与 CLIP 向量失效；不在此处排队视觉，留给选镜按需补。
-        metadata.visual_analysis_version = 0;
-        if !metadata.keyframes.is_empty() {
-            use crate::storyboard::multimodal::{generate_keyframe_grid, KeyframeGridConfig};
-            let keyframe_paths: Vec<String> = metadata
-                .keyframes
+        let motion_only = metadata.analysis_version >= super::segments::HARD_CUT_ANALYSIS_VERSION
+            && metadata
+                .scene_segments
                 .iter()
-                .map(|kf| kf.image_path.clone())
-                .collect();
-            if let Ok(Some(grid_path)) = generate_keyframe_grid(
-                &asset_id,
-                &keyframe_paths,
+                .any(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms);
+        if motion_only {
+            super::motion::attach_motion_profiles(&source, &mut metadata.scene_segments);
+            metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
+        } else {
+            let directory = derived_directory(&app, &asset_id)?;
+            let (keyframes, scene_segments) = super::segments::analyze_video_segments(
+                Some(&app),
+                &source,
                 &directory,
-                &KeyframeGridConfig::default(),
-            ) {
-                metadata.keyframe_grid_path = Some(grid_path.to_string_lossy().into_owned());
+                metadata.duration_ms,
+            )?;
+            metadata.keyframes = keyframes;
+            metadata.scene_segments = scene_segments;
+            metadata.visual_quality_score = keyframe_visual_quality_score(&metadata.keyframes)
+                .or(metadata.visual_quality_score);
+            for segment in &mut metadata.scene_segments {
+                if segment.visual_quality_score.is_none() {
+                    segment.visual_quality_score = metadata.visual_quality_score;
+                }
+            }
+            metadata.analysis_version = super::segments::CURRENT_ANALYSIS_VERSION;
+            // 段边界已变，片段视觉与 CLIP 向量失效；不在此处排队视觉，留给选镜按需补。
+            metadata.visual_analysis_version = 0;
+            if !metadata.keyframes.is_empty() {
+                use crate::storyboard::multimodal::{generate_keyframe_grid, KeyframeGridConfig};
+                let keyframe_paths: Vec<String> = metadata
+                    .keyframes
+                    .iter()
+                    .map(|kf| kf.image_path.clone())
+                    .collect();
+                if let Ok(Some(grid_path)) = generate_keyframe_grid(
+                    &asset_id,
+                    &keyframe_paths,
+                    &directory,
+                    &KeyframeGridConfig::default(),
+                ) {
+                    metadata.keyframe_grid_path = Some(grid_path.to_string_lossy().into_owned());
+                }
             }
         }
         let next_json = serde_json::to_string(&metadata).map_err(|error| error.to_string())?;
@@ -1672,10 +1682,12 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
                 .map_err(|error| error.to_string())?;
             return Ok(());
         }
-        let _ = connection.execute(
-            "DELETE FROM asset_segment_embeddings WHERE asset_id = ?1",
-            params![asset_id],
-        );
+        if !motion_only {
+            let _ = connection.execute(
+                "DELETE FROM asset_segment_embeddings WHERE asset_id = ?1",
+                params![asset_id],
+            );
+        }
         connection
             .execute(
                 "UPDATE agent_tasks SET status = 'completed', result_json = ?1, updated_at = ?2 WHERE id = ?3",
@@ -1683,7 +1695,8 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
                     json!({
                         "assetId": asset_id,
                         "segmentCount": metadata.scene_segments.len(),
-                        "analysisVersion": metadata.analysis_version
+                        "analysisVersion": metadata.analysis_version,
+                        "motionOnly": motion_only
                     })
                     .to_string(),
                     now_millis(),
