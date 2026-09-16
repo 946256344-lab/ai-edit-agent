@@ -105,7 +105,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
 #[tauri::command]
 pub fn list_shared_libraries(app: AppHandle) -> Result<Vec<SharedLibrary>, String> {
     let connection = open_connection(&app)?;
-    let mut statement = connection.prepare("SELECT l.id, l.name, COUNT(a.asset_id) FROM shared_libraries l LEFT JOIN shared_library_assets a ON a.library_id = l.id GROUP BY l.id ORDER BY l.name COLLATE NOCASE, l.id").map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare("SELECT l.id, l.name, COUNT(a.asset_id) FROM shared_libraries l LEFT JOIN shared_library_assets a ON a.library_id = l.id AND a.asset_id IN (SELECT id FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0) GROUP BY l.id ORDER BY l.name COLLATE NOCASE, l.id").map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(SharedLibrary {

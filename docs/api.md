@@ -1,5 +1,31 @@
 # API 与工具契约
 
+## 2026-09-16：素材分析进度与剪辑等待
+
+新增命令：
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `get_asset_analysis_progress` | projectId, assetIds? | AssetAnalysisProgress |
+| `cancel_asset_analysis` | projectId, assetIds? | 取消数量 |
+| `resume_asset_analysis` | projectId, assetIds? | 继续数量 |
+| `rename_library_asset` | projectId, assetId, name | void |
+| `remove_library_assets` | projectId, assetIds | BatchAssetActionResult |
+
+- `get_asset_analysis_progress`（projectId, assetIds?）：轻量读取项目或本次导入进度；省略 ID 集合为整个项目。
+- `cancel_asset_analysis` / `resume_asset_analysis`（projectId, assetIds?）：取消/继续首次分析，返回处理数量；已完成结果保留。取消持久化为 `metadata.analysisCancelled`，计入 queued 和 cancelled；活动数为 analyzing + queued - cancelled。取消的任务不在启动时恢复，当前外部调用允许结束，但不可回写或继续后续阶段。
+- `rename_library_asset`（projectId, assetId, name）：仅改显示名，不改本地文件名。
+- `remove_library_assets`（projectId, assetIds）：返回批量操作计数，先取消未完成首次分析，再标记 `metadata.libraryRemoved`；库列表、统计、搜索与新剪辑候选不再读取它，保留资产行、源文件和已有时间线引用。共享素材的编辑作用于该素材及引用它的所有项目，前端移除确认说明此范围。
+
+导入弹窗跟踪本次导入的 ID，预计剩余时间按本批次实际完成速度估算，尚无完成项时显示“正在估算”。“后台分析”仅关闭弹窗；弱化的“取消分析”取消该批次，素材库/对话进度条取消当前项目中的未完成分析。
+
+
+`list_asset_page` 增加可选 `analysisState: 'ready' | 'analyzing' | 'queued' | 'failed'`，与目录等现有筛选组合。新增返回 `progress: { total, ready, analyzing, queued, failed, readyVideo, cancelled }`，按当前项目的共享素材范围去重统计，不受分页或筛选影响；旧 `counts` 保持原义。
+
+首次分析状态同时考虑技术分析和画面识别，视频/图片只有两者完成才为 ready；音频/其他类型只需技术分析。技术失败、画面失败或已跳过画面识别归入 failed（详情保留已跳过说明），queued/running 不算已完成。`readyVideo` 另排除手动排除、缺失、变化和不可读的视频。`retry_asset_analysis_batch` 复用两阶段失败重试，最多 200 项，仅重试失败步骤，返回原有 requested/updated/skipped 计数。
+
+对话入口在调用任务路由和 `submit_conversation_turn` 前等待当前项目首次分析，文案和媒体选项按点击提交时快照保留；失败暂停，用户明确选择后才继续使用已完成素材。等待仅存在当前应用页面，取消、切换项目/会话会取消等待；重启不会自动续发。素材导入及重试入队期间不自动放行。`storyboard_sources` 只接收技术和首次画面分析均 ready 的视频，失败素材上的部分段卡不参与召回；Phase 4 精修仍在剪辑中执行。
+
 ## 2026-09-16：关配音不再强制 15 秒
 
 公开 Tauri 命令不变。没有配音不再等于必须 ≤15 秒。`key_message` 仍是屏幕字；时长和 beat 数由模型按用户要求和内容决定，用户没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。120 秒仍是处理上限。见 `docs/changes/2026-09-16-no-voiceover-not-15s.md`。

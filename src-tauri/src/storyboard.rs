@@ -78,8 +78,8 @@ pub(crate) fn storyboard_sources(
     expand_segments_for: Option<&HashSet<String>>,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
-        // 候选入口只接受技术分析完成的可访问视频。
-        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
+        // 候选入口只接受首次技术与画面分析均完成的视频，失败素材的部分段卡不参与剪辑。
+        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND analysis_status = 'ready' AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -1584,6 +1584,28 @@ mod tests {
             )
             .expect("exclude source fixture");
 
+        for state in ["queued", "running", "failed", "skipped"] {
+            connection
+                .execute(
+                    "INSERT INTO assets VALUES (?1, 'project-1', 'video', ?2, ?3, 'ready')",
+                    params![
+                        format!("visual-{state}"),
+                        ready_metadata.replace(
+                            "\"visualAnalysisStatus\":\"ready\"",
+                            &format!("\"visualAnalysisStatus\":\"{state}\"")
+                        ),
+                        available
+                    ],
+                )
+                .expect("insert incomplete visual analysis with partial evidence");
+        }
+
+        for flag in ["libraryRemoved", "analysisCancelled"] {
+            connection.execute(
+                "INSERT INTO assets VALUES (?1, 'project-1', 'video', json_set(?2, ?3, json('true')), ?4, 'ready')",
+                params![flag, ready_metadata, format!("$.{flag}"), available],
+            ).expect("insert hidden or cancelled source");
+        }
         let (sources, visual_ready_count) =
             storyboard_sources(&connection, "project-1", None).expect("load storyboard sources");
 

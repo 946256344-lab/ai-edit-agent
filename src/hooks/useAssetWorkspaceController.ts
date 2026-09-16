@@ -1,10 +1,13 @@
 // 素材工作区 controller：拥有目录选择、分页轮询、证据查看、健康检查和显式重链路状态。
+import { useAssetAnalysisController } from './useAssetAnalysisController'
+import { useAssetLibraryEditController } from './useAssetLibraryEditController'
 import { useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import type { AssetView } from '../components/asset-workspace/AssetBrowser'
+import { analysisPendingCount, assetAnalysisState, EMPTY_ANALYSIS_PROGRESS } from '../lib/asset-analysis'
 import type { EditingSessionView } from '../components/workspace-types'
 import {
   cancelAssetHealthScan,
@@ -16,11 +19,13 @@ import {
   isDesktopRuntime,
   listAssetPage,
   previewAssetRelink,
+  retryAssetAnalysisBatch,
   startAssetHealthScan,
 } from '../lib/local-store'
 import type {
   AgentEditEvent,
   AssetEvidence,
+  AssetAnalysisState,
   AssetHealthScanSummary,
   AssetPage,
   AssetRelinkPreview,
@@ -44,11 +49,12 @@ type AssetWorkspaceControllerOptions = {
   refreshEditingSessions: (projectId: string) => Promise<unknown>
 }
 
-const EMPTY_PAGE: Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'counts'> = {
+const EMPTY_PAGE: Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'counts' | 'progress'> = {
   total: 0,
   directories: [],
   unfiledCount: 0,
   counts: { total: 0, ready: 0, analyzing: 0, queued: 0, failed: 0, visualPending: 0, segmentPending: 0 },
+  progress: EMPTY_ANALYSIS_PROGRESS,
 }
 
 function formatDuration(durationMs: number | null) {
@@ -74,6 +80,8 @@ function toAsset(asset: StoredAsset): AssetView {
           ? 'queued'
           : 'analyzing',
     visualStatus: asset.visualAnalysisStatus,
+    analysisState: assetAnalysisState(asset),
+    analysisCancelled: asset.analysisCancelled,
     sourceHealthStatus: asset.sourceHealthStatus,
     thumbnailUrl: asset.thumbnailPath && isDesktopRuntime() ? convertFileSrc(asset.thumbnailPath) : null,
   }
@@ -94,6 +102,15 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
   const [relinkSourceDirectory, setRelinkSourceDirectory] = useState<string | null>(null)
   const [directoryKey, setDirectoryKey] = useState('all')
   const [evidence, setEvidence] = useState<AssetEvidence | null>(null)
+  const [analysisFilter, setAnalysisFilter] = useState<AssetAnalysisState | null>(null)
+  const [importingProjectId, setImportingProjectId] = useState<string | null>(null)
+  const [retryingProjectId, setRetryingProjectId] = useState<string | null>(null)
+  const importing = importingProjectId !== null && importingProjectId === options.projectId
+  const retrying = retryingProjectId !== null && retryingProjectId === options.projectId
+  const [analysisNotice, setAnalysisNotice] = useState<string | null>(null)
+
+  const analysis = useAssetAnalysisController(options.projectId, () => setPageRevision(value => value + 1))
+  const editing = useAssetLibraryEditController(options.projectId, assets, () => { setEvidence(null); setPageRevision(value => value + 1) })
 
   useEffect(() => {
     if (!options.desktopRuntime || !options.projectId) return
@@ -103,6 +120,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     const refreshAssets = () => {
       void listAssetPage(projectId, {
         directoryKey: directoryKey === 'all' ? undefined : directoryKey,
+        analysisState: analysisFilter ?? undefined,
         offset: 0,
         limit: 100,
       }).then((nextPage) => {
@@ -114,9 +132,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
             directories: nextPage.directories,
             unfiledCount: nextPage.unfiledCount,
             counts: nextPage.counts,
+            progress: nextPage.progress,
           }
           setPage((current) => JSON.stringify(current) === JSON.stringify(nextState) ? current : nextState)
-          if (nextPage.counts.queued + nextPage.counts.analyzing + nextPage.counts.visualPending > 0) {
+          if (analysisPendingCount(nextPage.progress) > 0) {
             timer = window.setTimeout(refreshAssets, 1500)
           }
         }
@@ -127,7 +146,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [directoryKey, options.activeProjectRef, options.desktopRuntime, options.projectId, pageRevision])
+  }, [analysisFilter, directoryKey, options.activeProjectRef, options.desktopRuntime, options.projectId, pageRevision])
 
   useEffect(() => {
     if (!options.desktopRuntime || !options.projectId) return
@@ -184,6 +203,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
   }, [options.desktopRuntime, options.projectId])
 
   function reset() {
+    editing.actions.clear()
     setAssets([])
     setPage(EMPTY_PAGE)
     setDirectoryKey('all')
@@ -191,6 +211,8 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     setRelinkPreview(null)
     setRelinkSourceDirectory(null)
     setEvidence(null)
+    setAnalysisFilter(null)
+    setAnalysisNotice(null)
   }
 
   function currentOrNewEditingContext() {
@@ -215,17 +237,26 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     })
     if (!selected) return
     const sources = Array.isArray(selected) ? selected : [selected]
-    const imported = await importAssets(context.projectId, sources)
-    if (options.activeProjectRef.current === context.projectId) {
-      setPageRevision((value) => value + 1)
-      setHealthRevision((value) => value + 1)
+    setImportingProjectId(context.projectId)
+    setAnalysisNotice(null)
+    try {
+      const imported = await importAssets(context.projectId, sources)
+      if (options.activeProjectRef.current === context.projectId) {
+        analysis.showImported(context.projectId, imported.map(asset => asset.id))
+        setPageRevision((value) => value + 1)
+        setHealthRevision((value) => value + 1)
+      }
+      await options.appendAgentMessage(
+        context.conversationId,
+        context.sessionId,
+        `已导入 ${imported.length} 个素材，正在分析，完成后可开始剪辑。你可以先填写剪辑要求。`,
+      )
+      await options.refreshEditingSessions(context.projectId)
+    } catch {
+      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice('导入未完成，请检查所选文件后重试。')
+    } finally {
+      setImportingProjectId(current => current === context.projectId ? null : current)
     }
-    await options.appendAgentMessage(
-      context.conversationId,
-      context.sessionId,
-      `已将 ${imported.length} 个素材加入本地分析队列。分析完成前不会影响当前故事板。`,
-    )
-    await options.refreshEditingSessions(context.projectId)
   }
 
   async function importSelectedFolder() {
@@ -233,17 +264,58 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     const context = await currentOrNewEditingContext()
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
-    const imported = await importAssetFolder(context.projectId, selected)
-    if (options.activeProjectRef.current === context.projectId) {
-      setPageRevision((value) => value + 1)
-      setHealthRevision((value) => value + 1)
+    setImportingProjectId(context.projectId)
+    setAnalysisNotice(null)
+    try {
+      const imported = await importAssetFolder(context.projectId, selected)
+      if (options.activeProjectRef.current === context.projectId) {
+        analysis.showImported(context.projectId, imported.map(asset => asset.id))
+        setPageRevision((value) => value + 1)
+        setHealthRevision((value) => value + 1)
+      }
+      await options.appendAgentMessage(
+        context.conversationId,
+        context.sessionId,
+        `已从文件夹导入 ${imported.length} 个素材，正在分析，完成后可开始剪辑。你可以先填写剪辑要求。`,
+      )
+      await options.refreshEditingSessions(context.projectId)
+    } catch {
+      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice('导入未完成，请检查所选文件夹后重试。')
+    } finally {
+      setImportingProjectId(current => current === context.projectId ? null : current)
     }
-    await options.appendAgentMessage(
-      context.conversationId,
-      context.sessionId,
-      `已从文件夹导入 ${imported.length} 个素材。仅支持的媒体文件会加入本地分析队列。`,
-    )
-    await options.refreshEditingSessions(context.projectId)
+  }
+
+  async function retryFailed() {
+    const projectId = options.projectId
+    if (!projectId || retrying) return
+    setRetryingProjectId(projectId)
+    setAnalysisNotice(null)
+    try {
+      // 先收集完整失败集合，再分批重试；避免状态变化使分页漏项。
+      const ids: string[] = []
+      let offset = 0
+      let total: number
+      do {
+        const failed = await listAssetPage(projectId, { analysisState: 'failed', offset, limit: 200 })
+        ids.push(...failed.items.map(asset => asset.id))
+        total = failed.total
+        offset += 200
+      } while (offset < total)
+      let updated = 0
+      for (let index = 0; index < ids.length; index += 200) {
+        const result = await retryAssetAnalysisBatch(projectId, ids.slice(index, index + 200))
+        updated += result.updatedCount
+      }
+      if (options.activeProjectRef.current === projectId) {
+        setAnalysisNotice(updated ? `已将 ${updated} 个失败素材重新加入分析队列。` : '没有可重试的素材。请检查文件是否可读取、是否已排除或跳过分析。')
+      }
+    } catch {
+      if (options.activeProjectRef.current === projectId) setAnalysisNotice('重试未完成，请检查分析服务配置和素材文件后再试。')
+    } finally {
+      setRetryingProjectId(current => current === projectId ? null : current)
+      if (options.activeProjectRef.current === projectId) setPageRevision(value => value + 1)
+    }
   }
 
   async function openRelink() {
@@ -291,6 +363,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
   }
 
   function selectDirectory(path: string) {
+    editing.actions.clear()
     setEvidence(null)
     if (path === directoryKey) return
     setAssets([])
@@ -301,10 +374,17 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     assets,
     page,
     reset,
+    analysis,
     model: {
       projectId: options.projectId,
       storeReady: options.storeReady,
-      page: { total: page.total, counts: page.counts },
+      page: { total: page.total, counts: page.counts, progress: page.progress },
+      analysisFilter,
+      importing,
+      retrying,
+      analysisNotice: analysis.model.notice ?? analysisNotice,
+      analysisBusy: analysis.model.busy,
+      editing: editing.model,
       directories: page.directories,
       unfiledAssetCount: page.unfiledCount,
       assets,
@@ -315,6 +395,11 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       evidence,
     },
     actions: {
+      editing: editing.actions,
+      cancelAnalysis: analysis.actions.cancel,
+      resumeAnalysis: analysis.actions.resume,
+      selectAnalysisFilter: (state: AssetAnalysisState | null) => { editing.actions.clear(); setAssets([]); setAnalysisFilter(state) },
+      retryFailed: () => void retryFailed(),
       selectDirectory,
       inspectAsset: (assetId: string) => void inspectAsset(assetId),
       closeEvidence: () => setEvidence(null),

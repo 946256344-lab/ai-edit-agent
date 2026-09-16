@@ -16,6 +16,7 @@ use std::path::Path;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
+use super::progress::{project_analysis_progress, ANALYSIS_STATE_SQL};
 use super::segments::CURRENT_ANALYSIS_VERSION;
 use crate::db::{now_millis, open_connection};
 use crate::models::{
@@ -25,6 +26,7 @@ use crate::models::{
 
 pub(crate) const ASSET_PAGE_FILTER_SQL: &str = "
     id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)
+    AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0
     AND (?2 IS NULL OR display_name LIKE '%' || ?2 || '%' OR id IN (SELECT asset_id FROM asset_user_metadata WHERE note LIKE '%' || ?2 || '%' OR asset_id IN (SELECT ata.asset_id FROM asset_tag_assignments ata JOIN asset_tags t ON t.id = ata.tag_id WHERE t.name LIKE '%' || ?2 || '%')))
     AND (?3 IS NULL OR kind = ?3)
     AND (?4 IS NULL OR analysis_status = ?4)
@@ -127,7 +129,7 @@ pub(crate) fn project_asset_directories(
     project_id: &str,
 ) -> Result<HashMap<String, String>, String> {
     let mut statement = connection
-        .prepare("SELECT id, source_reference, folder_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
+        .prepare("SELECT id, source_reference, folder_reference FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -176,7 +178,7 @@ fn list_assets_snapshot(
          coalesce((SELECT json_group_array(aci.collection_id) FROM asset_collection_items aci WHERE aci.asset_id = assets.id), '[]'),
          coalesce((SELECT status FROM asset_source_health ash WHERE ash.asset_id = assets.id), 'unchecked'),
          (SELECT checked_at FROM asset_source_health ash WHERE ash.asset_id = assets.id)
-         FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY created_at DESC",
+         FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY created_at DESC",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -188,6 +190,7 @@ fn list_assets_snapshot(
             let metadata: TechnicalMetadata =
                 serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default();
             Ok(Asset {
+                analysis_cancelled: metadata.analysis_cancelled,
                 id,
                 project_id: row.get(1)?,
                 kind: row.get(2)?,
@@ -261,6 +264,7 @@ pub fn list_asset_page(
     search: Option<String>,
     kind: Option<String>,
     analysis_status: Option<String>,
+    analysis_state: Option<String>,
     visual_status: Option<String>,
     directory_key: Option<String>,
     user_filter: Option<String>,
@@ -294,7 +298,7 @@ pub fn list_asset_page(
     let folder_asset_ids = if let Some(folder) = directory_key.as_deref() {
         let ids = if folder == "__unfiled__" {
             let mut statement = connection
-                .prepare("SELECT id FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
+                .prepare("SELECT id FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
                 .map_err(|error| error.to_string())?;
             let ids = statement
                 .query_map(params![project_id], |row| row.get::<_, String>(0))
@@ -315,7 +319,8 @@ pub fn list_asset_page(
     } else {
         None
     };
-    let filter_sql = ASSET_PAGE_FILTER_SQL;
+    let filter_sql =
+        format!("{ASSET_PAGE_FILTER_SQL} AND (?9 IS NULL OR ({ANALYSIS_STATE_SQL}) = ?9)");
     let query_params = params![
         project_id,
         search,
@@ -325,6 +330,7 @@ pub fn list_asset_page(
         folder_asset_ids,
         user_filter,
         collection_id,
+        analysis_state,
     ];
     let total: i64 = connection
         .query_row(
@@ -344,7 +350,7 @@ pub fn list_asset_page(
              coalesce((SELECT json_group_array(aci.collection_id) FROM asset_collection_items aci WHERE aci.asset_id = assets.id), '[]'),
              coalesce((SELECT status FROM asset_source_health ash WHERE ash.asset_id = assets.id), 'unchecked'),
              (SELECT checked_at FROM asset_source_health ash WHERE ash.asset_id = assets.id)
-             FROM assets WHERE {filter_sql} ORDER BY created_at DESC, id DESC LIMIT ?9 OFFSET ?10"
+             FROM assets WHERE {filter_sql} ORDER BY created_at DESC, id DESC LIMIT ?10 OFFSET ?11"
         ))
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -358,6 +364,7 @@ pub fn list_asset_page(
                 folder_asset_ids,
                 user_filter,
                 collection_id,
+                analysis_state,
                 limit as i64,
                 offset as i64,
             ],
@@ -370,6 +377,7 @@ pub fn list_asset_page(
                 let metadata: TechnicalMetadata =
                     serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default();
                 Ok(Asset {
+                    analysis_cancelled: metadata.analysis_cancelled,
                     id,
                     project_id: row.get(1)?,
                     kind: row.get(2)?,
@@ -419,7 +427,7 @@ pub fn list_asset_page(
     drop(statement);
 
     let counts_sql = format!(
-        "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < {CURRENT_ANALYSIS_VERSION}) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)"
+        "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < {CURRENT_ANALYSIS_VERSION}) FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)"
     );
     let counts = connection
         .query_row(&counts_sql, params![project_id], |row| {
@@ -445,6 +453,7 @@ pub fn list_asset_page(
         directories,
         unfiled_count,
         counts,
+        progress: project_analysis_progress(&connection, &project_id, None)?,
     })
 }
 
@@ -532,7 +541,7 @@ fn validate_batch_asset_ids(
     let placeholders = unique_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let mut statement = transaction
         .prepare(&format!(
-            "SELECT id FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND id IN ({placeholders})"
+            "SELECT id FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND id IN ({placeholders})"
         ))
         .map_err(|error| error.to_string())?;
     let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&project_id];

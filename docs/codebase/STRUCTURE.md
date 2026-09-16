@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-16 素材分析进度：`assets/progress.rs` 拥有合并状态与项目级统计；`AssetAnalysisProgress` 展示进度与筛选，`useAssetWorkspaceController` 管理导入和失败重试，`useAnalysisGateController` 在提交任务前等待首次分析。失败暂停、显式继续、取消和作用域切换均在 controller 中处理。`assets/controls.rs` 实现取消/继续和库编辑；`useAssetAnalysisController` / `AssetAnalysisModal` 管理导入弹窗及预计时间，`useAssetLibraryEditController` / `AssetEditDialog` 管理重命名和批量移除。
+
 2026-09-16 共享子素材库：`shared_library.rs` 拥有全局库、成员和项目关联迁移；`project_asset_access` 是项目可用素材范围。`useProjectCreationController` 管理创建草稿，`ProjectCreationModal` 展示命名及默认全选列表。源文件及既有分析保持原位。
 
 2026-09-15 一体化顶栏：关闭系统 decorations，`WorkspaceHeader` 展示窗口按钮，`useWindowController` 调用 Tauri 窗口 API 并同步最大化状态；顶栏和侧栏字标使用原生拖动区域，暖白背景覆盖原顶部玻璃。

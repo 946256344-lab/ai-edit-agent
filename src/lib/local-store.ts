@@ -67,6 +67,7 @@ export type StoredMessage = {
 }
 
 export type StoredAsset = {
+  analysisCancelled: boolean
   id: string
   projectId: string
   kind: 'video' | 'image' | 'audio' | 'other'
@@ -113,7 +114,11 @@ export type AssetPage = {
   directories: AssetDirectory[]
   unfiledCount: number
   counts: { total: number; ready: number; analyzing: number; queued: number; failed: number; visualPending: number; segmentPending?: number }
+  progress: AssetAnalysisProgress
 }
+
+export type AssetAnalysisState = 'ready' | 'analyzing' | 'queued' | 'failed'
+export type AssetAnalysisProgress = { total: number; ready: number; analyzing: number; queued: number; failed: number; readyVideo: number; cancelled: number }
 
 export type AssetTaskCenter = {
   technical: { queued: number; running: number; failed: number; skipped: number }
@@ -422,7 +427,7 @@ export async function collectProjectMedia(projectId: string, destinationDirector
 
 export async function listAssets(projectId: string) { requireDesktopRuntime(); return invoke<StoredAsset[]>('list_assets', { projectId }) }
 
-export async function listAssetPage(projectId: string, options: { search?: string; kind?: StoredAsset['kind']; analysisStatus?: StoredAsset['analysisStatus']; visualStatus?: StoredAsset['visualAnalysisStatus'] | 'storyboard-ready'; directoryKey?: string; userFilter?: 'favorite' | 'excluded' | 'available'; collectionId?: string; offset: number; limit: number }) {
+export async function listAssetPage(projectId: string, options: { search?: string; kind?: StoredAsset['kind']; analysisStatus?: StoredAsset['analysisStatus']; analysisState?: AssetAnalysisState; visualStatus?: StoredAsset['visualAnalysisStatus'] | 'storyboard-ready'; directoryKey?: string; userFilter?: 'favorite' | 'excluded' | 'available'; collectionId?: string; offset: number; limit: number }) {
   requireDesktopRuntime()
   return invoke<AssetPage>('list_asset_page', { projectId, ...options })
 }
@@ -434,6 +439,12 @@ export async function startAssetHealthScan(projectId: string) { requireDesktopRu
 export async function cancelAssetHealthScan(projectId: string, taskId: string) { requireDesktopRuntime(); return invoke<void>('cancel_asset_health_scan', { projectId, taskId }) }
 
 export async function retryAssetAnalysisBatch(projectId: string, assetIds: string[]) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('retry_asset_analysis_batch', { projectId, assetIds }) }
+
+export async function getAssetAnalysisProgress(projectId: string, assetIds?: string[]) { requireDesktopRuntime(); return invoke<AssetAnalysisProgress>('get_asset_analysis_progress', { projectId, assetIds }) }
+export async function cancelAssetAnalysis(projectId: string, assetIds?: string[]) { requireDesktopRuntime(); return invoke<number>('cancel_asset_analysis', { projectId, assetIds }) }
+export async function resumeAssetAnalysis(projectId: string, assetIds?: string[]) { requireDesktopRuntime(); return invoke<number>('resume_asset_analysis', { projectId, assetIds }) }
+export async function renameLibraryAsset(projectId: string, assetId: string, name: string) { requireDesktopRuntime(); return invoke<void>('rename_library_asset', { projectId, assetId, name }) }
+export async function removeLibraryAssets(projectId: string, assetIds: string[]) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('remove_library_assets', { projectId, assetIds }) }
 
 export async function skipAssetVisualAnalysisBatch(projectId: string, assetIds: string[]) { requireDesktopRuntime(); return invoke<BatchAssetActionResult>('skip_asset_visual_analysis_batch', { projectId, assetIds }) }
 

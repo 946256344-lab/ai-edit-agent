@@ -1,10 +1,10 @@
 // 应用组合根：选择项目/会话，装配领域 controller 与并排对话、粗剪预览。
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
 import './App.css'
 import './light-workspace.css'
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { PairedWorkspace } from './components/PairedWorkspace'
+import { AssetAnalysisModal } from './components/AssetAnalysisModal'
 import { AnalysisActivity } from './components/AnalysisActivity'
 import { AppSidebar } from './components/AppSidebar'
 import { RoughCutPreview } from './components/RoughCutPreview'
@@ -23,6 +23,7 @@ import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
 import { useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceController'
 import { useShotReplacementController } from './hooks/useShotReplacementController'
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
+import { useAnalysisGateController } from './hooks/useAnalysisGateController'
 import { useProviderController } from './hooks/useProviderController'
 import { useNavigationEditController } from './hooks/useNavigationEditController'
 import {
@@ -129,6 +130,7 @@ function App() {
     ),
     refreshEditingSessions,
   })
+  const analysisGate = useAnalysisGateController(activeProjectId, activeEditingSessionId, assetWorkspace.model.importing || assetWorkspace.model.retrying)
   const shotReplacement = useShotReplacementController({
     projectId: activeProjectId,
     sessionId: activeEditingSessionId,
@@ -394,21 +396,25 @@ function App() {
     ])
   }
 
-  async function sendMessage(event: FormEvent) {
-    event.preventDefault()
+  async function sendMessage() {
     const trimmed = input.trim()
-    if (!trimmed || isSending || !desktopRuntime) return
+    if (!trimmed || isSending || !desktopRuntime || assetWorkspace.model.importing) return
     const mediaOptions = { ...composerMedia.options }
     cancelRequestedRef.current = false
     setIsSending(true)
     setComposerNotice(null)
-    if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
-      setComposerNotice('Agent 事件连接暂时不可用，请再次点击发送重试。')
-      setIsSending(false)
-      return
-    }
     let context: { conversationId: string; projectId: string; sessionId: string } | null = null
     try {
+      if (!await analysisGate.waitForAnalysis() || cancelRequestedRef.current) {
+        setIsSending(false)
+        setComposerNotice('已取消等待，剪辑要求已保留。')
+        return
+      }
+      if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
+        setComposerNotice('Agent 事件连接暂时不可用，请再次点击发送重试。')
+        setIsSending(false)
+        return
+      }
       const resolved = await resolveMessageContext(trimmed)
       if (cancelRequestedRef.current) {
         setIsSending(false)
@@ -520,6 +526,10 @@ function App() {
   function stopAgentRun() {
     if (!isSending) return
     cancelRequestedRef.current = true
+    if (analysisGate.waiting) {
+      analysisGate.cancel()
+      return
+    }
     const pending = agentReconciliation.peekPendingEdit()
     if (!pending) {
       setComposerNotice('正在停止…')
@@ -596,7 +606,7 @@ function App() {
             <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? '从灵感，到画面'}</h1>
             <p>{artifactWorkspace.timeline
               ? `${(artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1)} 秒 · ${artifactWorkspace.timeline.clips.length} 个镜头 · 第 ${artifactWorkspace.timeline.versionNumber} 版`
-              : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
+              : analysisGate.waiting ? '等待素材分析完成…' : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
           </div>
           <button className="outline-button deliver-button" disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || artifactWorkspace.model.busy.creatingJianyingDraft || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'} onClick={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.createJianyingDraft(timeline))}>{artifactWorkspace.model.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>
         </header>}
@@ -616,6 +626,14 @@ function App() {
                 listenerReady: agentReconciliation.listenerReady,
                 composerNotice,
                 mediaOptions: composerMedia.options,
+                analysis: {
+                  progress: analysisGate.progress ?? assetWorkspace.page.progress,
+                  waiting: analysisGate.waiting,
+                  importing: assetWorkspace.model.importing,
+                  retrying: assetWorkspace.model.retrying,
+                  busy: assetWorkspace.model.analysisBusy,
+                  notice: assetWorkspace.model.analysisNotice,
+                },
                 routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
               }}
               actions={{
@@ -625,7 +643,11 @@ function App() {
                 },
                 openArtifacts: () => setActiveView('artifacts'),
                 toggleMedia: composerMedia.toggle,
-                sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage(event)) },
+                sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage()) },
+                retryAnalysis: assetWorkspace.actions.retryFailed,
+                cancelAnalysis: assetWorkspace.actions.cancelAnalysis,
+                resumeAnalysis: assetWorkspace.actions.resumeAnalysis,
+                useAnalyzedAssets: analysisGate.useReady,
                 stopAgentRun,
               }}
             />
@@ -641,10 +663,13 @@ function App() {
       </section>
 
       <AnalysisActivity
-        analyzingCount={assetWorkspace.page.counts.analyzing}
-        queuedCount={assetWorkspace.page.counts.queued}
+        analyzingCount={assetWorkspace.page.progress.analyzing}
+        queuedCount={assetWorkspace.page.progress.queued - assetWorkspace.page.progress.cancelled}
+        onCancel={assetWorkspace.actions.cancelAnalysis}
+        busy={assetWorkspace.model.analysisBusy}
         visibleAssets={assetWorkspace.assets}
       />
+      <AssetAnalysisModal controller={assetWorkspace.analysis} />
       <ProviderSettingsModal controller={provider} />
       <ProjectCreationModal controller={projectCreation} />
     </main>

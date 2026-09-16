@@ -1,6 +1,9 @@
 // 素材管理组合组件：默认只展示导入、目录与素材状态；证据与恢复按需出现。
+import type { AssetLibraryEditController } from '../hooks/useAssetLibraryEditController'
+import { AssetEditDialog } from './asset-workspace/AssetEditDialog'
 import { useMemo } from 'react'
-import type { AssetDirectory, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview } from '../lib/local-store'
+import type { AssetAnalysisState, AssetDirectory, AssetEvidence, AssetHealthScanSummary, AssetPage, AssetRelinkPreview } from '../lib/local-store'
+import { AssetAnalysisProgress } from './AssetAnalysisProgress'
 import { AssetBrowser } from './asset-workspace/AssetBrowser'
 import type { AssetView } from './asset-workspace/AssetBrowser'
 import { AssetDirectoryTree } from './asset-workspace/AssetDirectoryTree'
@@ -11,7 +14,13 @@ import { buildAssetDirectoryTree } from './asset-workspace/asset-directory-model
 export type AssetWorkspaceModel = {
   projectId: string | null
   storeReady: boolean
-  page: Pick<AssetPage, 'total' | 'counts'>
+  page: Pick<AssetPage, 'total' | 'counts' | 'progress'>
+  analysisFilter: AssetAnalysisState | null
+  importing: boolean
+  retrying: boolean
+  analysisNotice: string | null
+  analysisBusy: boolean
+  editing: AssetLibraryEditController['model']
   directories: AssetDirectory[]
   unfiledAssetCount: number
   assets: AssetView[]
@@ -23,6 +32,11 @@ export type AssetWorkspaceModel = {
 }
 
 export type AssetWorkspaceActions = {
+  selectAnalysisFilter: (state: AssetAnalysisState | null) => void
+  retryFailed: () => void
+  cancelAnalysis: () => void
+  resumeAnalysis: () => void
+  editing: AssetLibraryEditController['actions']
   selectDirectory: (directoryKey: string) => void
   inspectAsset: (assetId: string) => void
   closeEvidence: () => void
@@ -49,7 +63,7 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
     : model.selectedDirectoryKey === '__unfiled__'
       ? '未归类素材'
       : selectedNode?.name ?? '素材目录'
-  const projectReady = Boolean(model.projectId && model.storeReady)
+  const projectReady = Boolean(model.projectId && model.storeReady && !model.importing)
   const healthIssues = model.health
     ? model.health.missing + model.health.changed + model.health.unreadable
     : 0
@@ -60,7 +74,6 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
   )
   const showEvidence = Boolean(model.evidence)
   const showSidePanel = showRecovery || showEvidence
-  const analyzingCount = model.page.counts.analyzing + model.page.counts.queued
 
   return (
     <section className="asset-workbench">
@@ -76,16 +89,10 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
         </div>
       </header>
 
+      <AssetAnalysisProgress progress={model.page.progress} selected={model.analysisFilter} onSelect={actions.selectAnalysisFilter} onRetry={actions.retryFailed} retrying={model.retrying} importing={model.importing} notice={model.analysisNotice} onCancel={actions.cancelAnalysis} onResume={actions.resumeAnalysis} busy={model.analysisBusy} />
+
       <div className={`asset-workbench__grid ${showSidePanel ? '' : 'asset-workbench__grid--compact'} ${showEvidence ? 'asset-workbench__grid--inspecting' : ''}`}>
         <aside className="asset-workbench__left">
-          <section className="asset-metrics" aria-label="素材状态">
-            <article><b>{model.page.counts.ready}</b><span>已就绪</span></article>
-            <article><b>{analyzingCount}</b><span>分析中</span></article>
-            <article><b>{model.page.counts.failed}</b><span>无法读取</span></article>
-            {(model.page.counts.segmentPending ?? 0) > 0 && (
-              <article><b>{model.page.counts.segmentPending}</b><span>待分段</span></article>
-            )}
-          </section>
           <AssetDirectoryTree
             projectId={model.projectId}
             roots={tree.roots}
@@ -102,7 +109,9 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
             breadcrumb={directoryBreadcrumb(model.selectedDirectoryKey)}
             matchingAssetCount={model.page.total}
             assets={model.assets}
+            filtered={model.analysisFilter !== null}
             onInspect={actions.inspectAsset}
+            editing={{ model: model.editing, actions: actions.editing }}
           />
         </main>
 
@@ -127,6 +136,7 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
           </aside>
         )}
       </div>
+      <AssetEditDialog model={model.editing} actions={actions.editing} />
     </section>
   )
 }

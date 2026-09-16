@@ -84,6 +84,7 @@ pub struct Message {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
+    pub analysis_cancelled: bool,
     pub id: String,
     pub project_id: String,
     pub kind: String,
@@ -134,6 +135,19 @@ pub struct AssetPage {
     pub directories: Vec<AssetDirectory>,
     pub unfiled_count: usize,
     pub counts: AssetStatusCounts,
+    pub progress: AssetAnalysisProgress,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetAnalysisProgress {
+    pub total: usize,
+    pub ready: usize,
+    pub analyzing: usize,
+    pub queued: usize,
+    pub failed: usize,
+    pub ready_video: usize,
+    pub cancelled: usize,
 }
 
 #[derive(Serialize)]
@@ -919,10 +933,15 @@ pub struct StoryboardSource {
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TechnicalMetadata {
+    #[serde(default)]
+    pub(crate) analysis_cancelled: bool,
+    #[serde(default)]
+    pub(crate) library_removed: bool,
     pub(crate) duration_ms: Option<i64>,
     pub(crate) width: Option<i64>,
     pub(crate) height: Option<i64>,
     pub(crate) fps: Option<f64>,
+    #[serde(default)]
     pub(crate) has_audio: bool,
     pub(crate) thumbnail_path: Option<String>,
     #[serde(default)]

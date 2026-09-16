@@ -15,7 +15,7 @@ function visualStatusLabel(status: AssetEvidence['visualAnalysisStatus']) {
     case 'ready': return '分析完成'
     case 'running': return '分析中'
     case 'queued': return '等待分析'
-    case 'failed': return '分析未完成'
+    case 'failed': return '画面识别失败'
     case 'skipped': return '已跳过视觉分析'
   }
 }
@@ -85,7 +85,7 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
       <p className="asset-detail__summary">
         {evidence.durationMs !== null && <span>{formatTimeMs(evidence.durationMs)}</span>}
         <span>{segments.length > 0 ? `${segments.length} 个片段` : `${evidence.keyframes.length} 张关键帧`}</span>
-        <span>{visualStatusLabel(evidence.visualAnalysisStatus)}</span>
+        <span>{evidence.analysisStatus === 'failed' ? '基础分析失败，请检查文件是否可读取' : evidence.kind === 'audio' || evidence.kind === 'other' ? (evidence.analysisStatus === 'ready' ? '分析完成' : '等待基础分析完成') : visualStatusLabel(evidence.visualAnalysisStatus)}</span>
       </p>
       {evidence.visualAnalysisNote && <p className="asset-detail__note">{evidence.visualAnalysisNote}</p>}
 

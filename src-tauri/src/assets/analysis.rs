@@ -184,6 +184,8 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         visual_evidence: Vec::new(),
         visual_analysis_note: None,
         visual_analysis_status: "queued".to_owned(),
+        analysis_cancelled: false,
+        library_removed: false,
         analysis_version: 0,
         visual_analysis_version: 0,
         visual_quality_score: None,
@@ -307,7 +309,7 @@ pub(crate) fn backfill_project_visual_quality(
 ) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND json_extract(metadata_json, '$.visualQualityScore') IS NULL",
+            "SELECT id, metadata_json FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND json_extract(metadata_json, '$.visualQualityScore') IS NULL",
         )
         .map_err(|_| "visual_quality_backfill_query_failed".to_owned())?;
     let rows = statement
@@ -520,7 +522,9 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
         }
         let source = PathBuf::from(&source_reference);
         let mut metadata = probe_media(&source)?;
+        if !super::controls::task_running(&app, &task_id) { return Ok(None); }
         metadata.thumbnail_path = generate_thumbnail(&app, &asset_id, &source, &kind)?;
+        if !super::controls::task_running(&app, &task_id) { return Ok(None); }
         if kind == "video" {
             (metadata.keyframes, metadata.scene_segments) =
                 generate_video_keyframes(&app, &asset_id, &source, metadata.duration_ms)?;
@@ -562,6 +566,7 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
                 }
             }
         }
+        if !super::controls::task_running(&app, &task_id) { return Ok(None); }
         metadata.ocr_evidence = extract_ocr_evidence(&kind, &source, &metadata.keyframes)?;
         Ok(Some((source_reference, metadata)))
     });
@@ -823,7 +828,7 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
                 "
                 SELECT id, project_id
                 FROM assets
-                WHERE analysis_status IN ('queued', 'analyzing')
+                WHERE analysis_status IN ('queued', 'analyzing') AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0
                 ",
             )
             .map_err(|error| error.to_string())?;
@@ -930,7 +935,7 @@ pub(crate) fn request_asset_analysis(
     let mut tasks = Vec::new();
     for asset_id in asset_ids {
         let row = transaction.query_row(
-            "SELECT source_reference, analysis_status FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
+            "SELECT source_reference, analysis_status FROM assets WHERE coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
             params![asset_id, project_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).optional().map_err(|error| error.to_string())?;
@@ -1022,7 +1027,7 @@ fn query_technical_failed_assets(
     let mut statement = connection
         .prepare(
             "SELECT id, display_name, source_reference FROM assets
-             WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
+             WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
              AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
              ORDER BY updated_at DESC, id DESC
              LIMIT ?2",
@@ -1057,7 +1062,7 @@ fn query_visual_failed_assets(
     let mut statement = connection
         .prepare(
             "SELECT id, display_name, source_reference, metadata_json FROM assets
-             WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind IN ('video', 'image')
+             WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind IN ('video', 'image')
              AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
              AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
              ORDER BY updated_at DESC, id DESC
@@ -1133,6 +1138,7 @@ fn classify_asset_for_retry(
         return Ok(None);
     }
     let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+    if metadata.analysis_cancelled || metadata.library_removed { return Ok(None); }
     if stage.includes_technical() && analysis_status == "failed" {
         return Ok(Some(FailedAssetRetryCandidate {
             asset_id: asset_id.to_owned(),
@@ -1278,11 +1284,22 @@ pub fn retry_asset_analysis_batch(
     project_id: String,
     asset_ids: Vec<String>,
 ) -> Result<BatchAssetActionResult, String> {
+    if asset_ids.is_empty() {
+        return Err("Select one or more imported assets to analyze.".to_owned());
+    }
     if asset_ids.len() > 200 {
         return Err("Select no more than 200 assets for one batch action.".to_owned());
     }
     let requested_count = asset_ids.len();
-    let updated_count = request_asset_analysis(&app, &project_id, &asset_ids)?;
+    let result = retry_failed_asset_analysis(
+        &app,
+        &project_id,
+        RetryFailedAnalysisStage::Both,
+        Some(asset_ids),
+        200,
+    )?;
+    let updated_count = result["technicalQueued"].as_u64().unwrap_or(0) as usize
+        + result["visualQueued"].as_u64().unwrap_or(0) as usize;
     let connection = open_connection(&app)?;
     connection.execute(
         "INSERT INTO operation_logs (id, project_id, actor, operation_type, entity_type, entity_id, after_json, created_at) VALUES (?1, ?2, 'user', 'retry_asset_analysis_batch', 'project_assets', ?2, ?3, ?4)",
@@ -1747,7 +1764,7 @@ pub fn get_asset_task_center(
         |row| Ok(AssetTaskStageCounts { queued: row.get::<_, Option<i64>>(0)?.unwrap_or(0) as usize, running: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, skipped: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize }),
     ).map_err(|error| error.to_string())?;
     let mut statement = connection.prepare(
-        "SELECT id, display_name, 'technical', 'technical_analysis_failed', updated_at FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
+        "SELECT id, display_name, 'technical', 'technical_analysis_failed', updated_at FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND coalesce(json_extract(metadata_json, '$.analysisCancelled'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
          UNION ALL
          SELECT id, display_name, 'visual', 'visual_analysis_failed', updated_at FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
          ORDER BY updated_at DESC LIMIT 50",

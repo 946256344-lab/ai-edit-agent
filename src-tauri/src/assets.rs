@@ -3,9 +3,11 @@
 //! 失败对调用方封闭，不得静默修改其他任务或产物。
 
 pub mod analysis;
+pub mod controls;
 pub mod health;
 pub mod library;
 pub mod motion;
+mod progress;
 pub mod segment_visual;
 pub mod segments;
 pub mod visual;
@@ -84,6 +86,7 @@ pub(crate) fn store_assets(
         let (folder_name, relative_path) =
             asset_public_folder_metadata(directory_key.as_deref(), &display_name);
         let asset = Asset {
+            analysis_cancelled: false,
             id: Uuid::new_v4().to_string(),
             project_id: project_id.to_owned(),
             kind: asset_kind(&source),
@@ -536,7 +539,7 @@ pub(crate) fn search_assets_for_agent(
     }
     let limit = limit.clamp(1, 20);
     let offset = offset.min(10_000);
-    let search_sql = "a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)
+    let search_sql = "coalesce(json_extract(a.metadata_json, '$.libraryRemoved'), 0) = 0 AND a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)
         AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = a.id), 0) = 0
         AND (?2 IS NULL OR a.kind = ?2)
         AND (?3 IS NULL OR coalesce(json_extract(a.metadata_json, '$.durationMs'), 0) >= ?3)
@@ -685,7 +688,7 @@ pub(crate) fn search_asset_segments_for_agent(
     let offset = offset.min(10_000);
     let mut statement = connection.prepare(
         "SELECT a.id, a.display_name, a.kind, a.metadata_json FROM assets a
-         WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id=?1) AND a.analysis_status='ready' AND a.kind IN ('video','image')
+         WHERE coalesce(json_extract(a.metadata_json, '$.libraryRemoved'), 0) = 0 AND a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id=?1) AND a.analysis_status='ready' AND a.kind IN ('video','image')
          AND (?2 IS NULL OR a.id=?2)
          AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id=a.id),0)=0
          AND coalesce((SELECT status FROM asset_source_health h WHERE h.asset_id=a.id),'unchecked') NOT IN ('missing','changed','unreadable')
