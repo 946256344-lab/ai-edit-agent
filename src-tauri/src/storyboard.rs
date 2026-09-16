@@ -177,10 +177,11 @@ fn expand_segment_sources(
     }
     let mut expanded = Vec::with_capacity(indexed.len() + DUAL_SEGMENT_MAX_PER_ASSET);
     for segment in &indexed {
+        let (start_ms, end_ms) = crate::assets::motion::effective_window(segment);
         let candidate = CandidateSegment {
             id: segment.id.clone(),
-            start_ms: segment.start_ms,
-            end_ms: segment.end_ms,
+            start_ms,
+            end_ms,
             frame_paths: segment
                 .frames
                 .iter()

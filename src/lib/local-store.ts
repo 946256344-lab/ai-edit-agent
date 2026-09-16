@@ -153,6 +153,9 @@ export type AssetEvidence = {
     id: string
     startMs: number
     endMs: number
+    usableStartMs?: number | null
+    usableEndMs?: number | null
+    motionTailSettled?: boolean | null
     frames: Array<{ timeMs: number; imagePath: string }>
     visualEvidence?: {
       timeMs: number | null

@@ -39,10 +39,12 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
   const isVideo = evidence.kind === 'video'
 
   function playSegment(segment: NonNullable<AssetEvidence['segments']>[number] | null) {
-    range.current = segment
+    const startMs = segment?.usableStartMs ?? segment?.startMs ?? 0
+    const endMs = segment?.usableEndMs ?? segment?.endMs ?? 0
+    range.current = segment ? { startMs, endMs } : null
     setSelectedSegment(segment?.id ?? null)
     const video = player.current!
-    video.currentTime = (segment?.startMs ?? 0) / 1000
+    video.currentTime = startMs / 1000
     void video.play().catch(() => setMediaError(true))
   }
 
@@ -82,9 +84,16 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
       {segments.length > 0 && <section className="asset-detail__section" aria-label="场景片段">
         <div className="asset-detail__section-heading"><h4>场景片段</h4>{isVideo && <button disabled={!mediaReady || mediaError} onClick={() => playSegment(null)}>播放完整视频</button>}</div>
         {segments.map((segment, index) => <article className={`asset-detail__segment ${selectedSegment === segment.id ? 'is-selected' : ''}`} key={segment.id}>
-          <button className="asset-detail__segment-play" disabled={!isVideo || !mediaReady || mediaError} aria-pressed={selectedSegment === segment.id} aria-label={`播放片段 ${index + 1}，${formatTimeMs(segment.startMs)} 至 ${formatTimeMs(segment.endMs)}`} onClick={() => playSegment(segment)}>
+          <button className="asset-detail__segment-play" disabled={!isVideo || !mediaReady || mediaError} aria-pressed={selectedSegment === segment.id} aria-label={`播放片段 ${index + 1}，${formatTimeMs(segment.usableStartMs ?? segment.startMs)} 至 ${formatTimeMs(segment.usableEndMs ?? segment.endMs)}`} onClick={() => playSegment(segment)}>
             {segment.frames.length > 0 && <img src={convertFileSrc(segment.frames[0].imagePath)} alt={`片段 ${index + 1} 关键帧`} loading="lazy" />}
-            <span><strong>片段 {index + 1}</strong><small>{formatTimeMs(segment.startMs)} – {formatTimeMs(segment.endMs)}</small></span>
+            <span>
+              <strong>片段 {index + 1}</strong>
+              <small>{formatTimeMs(segment.startMs)} – {formatTimeMs(segment.endMs)}</small>
+              {segment.usableStartMs != null && segment.usableEndMs != null
+                && (segment.usableStartMs !== segment.startMs || segment.usableEndMs !== segment.endMs)
+                && <small>可用 {formatTimeMs(segment.usableStartMs)} – {formatTimeMs(segment.usableEndMs)}</small>}
+              {segment.motionTailSettled === false && <small>结尾未收住</small>}
+            </span>
             {isVideo && <span className="asset-detail__play-label">播放</span>}
           </button>
           <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence) : '暂无片段画面描述'}</p>

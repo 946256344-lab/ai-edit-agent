@@ -5,6 +5,7 @@
 pub mod analysis;
 pub mod health;
 pub mod library;
+pub mod motion;
 pub mod segment_visual;
 pub mod segments;
 pub mod visual;
@@ -734,6 +735,7 @@ pub(crate) fn search_asset_segments_for_agent(
                 frames: Vec::new(),
                 visual_evidence: None,
                 motion_score: None,
+                motion_profile: None,
             }]
         } else {
             metadata.scene_segments.clone()

@@ -16,6 +16,7 @@ use std::path::Path;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
+use super::segments::CURRENT_ANALYSIS_VERSION;
 use crate::db::{now_millis, open_connection};
 use crate::models::{
     Asset, AssetCollection, AssetDirectory, AssetEvidence, AssetEvidenceSegment, AssetPage,
@@ -417,12 +418,21 @@ pub fn list_asset_page(
         .map_err(|error| error.to_string())?;
     drop(statement);
 
+    let counts_sql = format!(
+        "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < {CURRENT_ANALYSIS_VERSION}) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)"
+    );
     let counts = connection
-        .query_row(
-            "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < 2) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
-            params![project_id],
-            |row| Ok(AssetStatusCounts { total: row.get::<_, i64>(0)? as usize, ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize, visual_pending: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize, segment_pending: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize }),
-        )
+        .query_row(&counts_sql, params![project_id], |row| {
+            Ok(AssetStatusCounts {
+                total: row.get::<_, i64>(0)? as usize,
+                ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
+                analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
+                failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize,
+                visual_pending: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize,
+                segment_pending: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize,
+            })
+        })
         .map_err(|error| error.to_string())?;
     let directories = asset_directory_nodes(&asset_directories);
     let unfiled_count = counts.total.saturating_sub(asset_directories.len());
@@ -465,12 +475,18 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
                         .scene_segments
                         .into_iter()
                         .filter(|segment| !segment.id.is_empty())
-                        .map(|segment| AssetEvidenceSegment {
-                            id: segment.id,
-                            start_ms: segment.start_ms,
-                            end_ms: segment.end_ms,
-                            frames: segment.frames,
-                            visual_evidence: segment.visual_evidence,
+                        .map(|segment| {
+                            let profile = segment.motion_profile.as_ref();
+                            AssetEvidenceSegment {
+                                id: segment.id,
+                                start_ms: segment.start_ms,
+                                end_ms: segment.end_ms,
+                                frames: segment.frames,
+                                visual_evidence: segment.visual_evidence,
+                                usable_start_ms: profile.map(|item| item.usable_start_ms),
+                                usable_end_ms: profile.map(|item| item.usable_end_ms),
+                                motion_tail_settled: profile.map(|item| item.tail_settled),
+                            }
                         })
                         .collect(),
                 })

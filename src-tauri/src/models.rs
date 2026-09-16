@@ -278,6 +278,12 @@ pub struct AssetEvidenceSegment {
     pub end_ms: i64,
     pub frames: Vec<KeyframeMetadata>,
     pub visual_evidence: Option<VisualEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usable_start_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usable_end_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion_tail_settled: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -986,6 +992,27 @@ pub struct SceneSegment {
     pub(crate) visual_evidence: Option<VisualEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) motion_score: Option<f64>,
+    /// 硬切范围内的帧差能量与建议可用窗；旧记录为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) motion_profile: Option<MotionProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MotionEnergySample {
+    pub time_ms: i64,
+    pub energy: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MotionProfile {
+    pub energy: Vec<MotionEnergySample>,
+    pub usable_start_ms: i64,
+    pub usable_end_ms: i64,
+    pub tail_settled: bool,
+    #[serde(default)]
+    pub uncertain: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

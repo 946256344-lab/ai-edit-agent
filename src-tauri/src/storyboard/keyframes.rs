@@ -75,6 +75,7 @@ mod tests {
                 frames: Vec::new(),
                 visual_evidence: None,
                 motion_score: None,
+                motion_profile: None,
             },
             SceneSegment {
                 id: "s002".to_owned(),
@@ -85,6 +86,7 @@ mod tests {
                 frames: Vec::new(),
                 visual_evidence: None,
                 motion_score: None,
+                motion_profile: None,
             },
         ];
 
