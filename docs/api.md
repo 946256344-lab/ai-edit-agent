@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-16：生成不等第一次分析
+
+公开 Tauri 命令不变。生成分镜不再空等 queued/running 的第一次视觉批次。桌面入口仍可给 pending 批次提高优先级。召回只收已打上第一次卡的段；没卡的不借用整条素材标签。一张卡都没有时返回 `storyboard_visual_evidence_unavailable`。见 `docs/changes/2026-09-16-no-visual-wait.md`。
+
 ## 2026-09-16：Phase 2 直接按段取 9 条
 
 公开 Tauri 命令不变。Phase 2 把就绪视频全部展开为硬切段（无硬切则整条 1 段），每个 beat 取 9 段；同片最多 2 段，相似最多 2 条。有 1 条就能覆盖。后面 beat 不再预删前面池子里没用上的相似段。见 `docs/changes/2026-09-16-phase2-segment-pool.md`。
@@ -198,7 +202,7 @@ schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子
 
 模型传输复用一个进程级 `ureq::Agent`，同时保留每次请求自身的超时和凭据边界。NativeToolLoop 的每个逻辑模型步骤对 HTTP 408/425/429/500/502/503/504、超时、网络传输中断和空响应最多尝试三次；重试共享该步骤剩余的 120 秒上限与 300 秒总预算，每次 HTTP 只使用剩余预算除以剩余次数的份额，只重发 Provider payload，不重新执行已经完成的工具。每次尝试前和最多 700ms 的退避等待期间都重新检查任务取消，取消后不再发下一请求。永久 4xx 与未知错误不重试。Agent 诊断只保存稳定安全码和尝试次数，不保存 URL、模型名、响应正文或底层传输详情。交互 Agent 模型请求优先于尚未开始的粗视觉请求；粗视觉连续三次失败后熔断 60 秒，期间对应任务保持 `queued`，冷却后只允许一个半开探测。自定义 API 的批量视觉请求可使用可选 `coarseVisualModel`；storyboard 与 Agent 仍使用主 Model。OAuth 没有经验证的替代模型，继续使用既有请求模型。
 
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只为 queued 视觉批次持久化纯数字 priority，相同分数按创建时间和任务 ID 稳定排序。最高相关的 queued 或 running 批次最多等待 65 秒后继续使用已落地视觉证据，不等待全部素材。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉 Provider payload，但仍作为明确标注的本地提取文字证据提供给 storyboard，不能冒充画面语义。
+生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只为 queued 视觉批次持久化纯数字 priority，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回只使用已打上第一次卡的段，没卡的不进池。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉 Provider payload，但仍作为明确标注的本地提取文字证据提供给 storyboard，不能冒充画面语义。
 
 ## 实验性 OAuth
 

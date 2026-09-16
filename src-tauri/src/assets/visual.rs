@@ -24,7 +24,6 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
-const PRIORITY_VISUAL_WAIT_TIMEOUT: Duration = Duration::from_secs(65);
 pub(crate) const VISUAL_ANALYSIS_BATCH_SIZE: usize = 6;
 
 static VISUAL_ANALYSIS_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -752,30 +751,6 @@ pub(crate) fn prioritize_pending_visual_batches(
             .map_err(|error| error.to_string())?;
     }
     Ok(highest_running.or_else(|| ranked.first().map(|r| r.task_id.clone())))
-}
-
-pub(crate) fn wait_for_visual_batch(app: &AppHandle, task_id: Option<&str>) -> Result<(), String> {
-    let Some(task_id) = task_id else {
-        return Ok(());
-    };
-    let deadline = std::time::Instant::now() + PRIORITY_VISUAL_WAIT_TIMEOUT;
-    loop {
-        let status: String = open_connection(app)?
-            .query_row(
-                "SELECT status FROM agent_tasks WHERE id = ?1",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if status == "completed" {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline || !matches!(status.as_str(), "queued" | "running")
-        {
-            return Err("The priority visual analysis batch did not complete in time.".to_owned());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn visual_model_content(

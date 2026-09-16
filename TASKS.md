@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：生成分镜不再空等第一次视觉分析；召回只收已打上第一次卡的段。见 docs/changes/2026-09-16-no-visual-wait.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 2 每个 beat 直接从全库段里取 9 条；同片最多 2 段，相似最多 2 条；有 1 条就能拍。见 docs/changes/2026-09-16-phase2-segment-pool.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 3 覆盖 beat 允许 1 镜；有第二条不相似且对得上才加到 2–3。不再把最少 2 镜当完成门。见 docs/changes/2026-09-16-beat-one-shot-ok.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：选片不再等待片段模型加深；第一次段卡即写片段向量；第二次分析=选中镜头的 Phase 4 多帧精修。见 docs/changes/2026-09-16-visual-second-is-refine.md。

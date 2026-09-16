@@ -19,7 +19,7 @@ use crate::storyboard::step_retry::{
     build_repair_packet, is_transport_or_parse_error, StepRetryBudget,
 };
 
-use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
+use crate::assets::prioritize_pending_visual_batches;
 use crate::db::{now_millis, open_connection};
 use crate::models::{
     CandidateSegment, StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata,
@@ -71,7 +71,8 @@ const DUAL_SEGMENT_MAX_PER_ASSET: usize = 6;
 /// 加载 storyboard 候选源。
 ///
 /// `expand_segments_for` 为 `Some(set)` 时，集合内且已有真实场景分段的视频会展开成
-/// 每片段一条候选（含相邻双段组合）；其余素材保持整条素材候选（`segment = None`）。
+/// 已打第一次卡的片段候选（含两端都有卡的相邻双段组合）；没有第一次卡的段不进召回。
+/// 无硬切的整条素材只在已有整片视觉卡时参与召回。
 /// 传 `None` 表示全部按整条素材加载，用于 Phase 1 库存摘要与 Phase 4/校验。
 pub(crate) fn storyboard_sources(
     connection: &Connection,
@@ -146,19 +147,43 @@ pub(crate) fn storyboard_sources(
             segment_clip_embedding: None,
         };
 
-        let expand = expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
+        let recalling = expand_segments_for.is_some();
+        let expand = recalling
+            && expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
             && scene_segments.iter().any(|segment| !segment.id.is_empty());
-        if !expand {
-            sources.push(whole_asset);
+        if expand {
+            sources.extend(expand_segment_sources(
+                connection,
+                &whole_asset,
+                &scene_segments,
+            ));
             continue;
         }
-        sources.extend(expand_segment_sources(
-            connection,
-            &whole_asset,
-            &scene_segments,
-        ));
+        if recalling && !source_has_whole_file_card(&whole_asset) {
+            continue;
+        }
+        sources.push(whole_asset);
     }
     Ok((sources, visual_ready_count))
+}
+
+fn source_has_whole_file_card(source: &StoryboardSource) -> bool {
+    !source.visual_evidence.is_empty()
+}
+
+fn asset_has_first_pass_card(source: &StoryboardSource) -> bool {
+    let has_named_segments = source
+        .scene_segments
+        .iter()
+        .any(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms);
+    if has_named_segments {
+        source
+            .scene_segments
+            .iter()
+            .any(|segment| segment.visual_evidence.is_some())
+    } else {
+        source_has_whole_file_card(source)
+    }
 }
 
 /// 把一条整素材候选展开成片段候选：单段 + 短段与后继的双段组合。
@@ -172,10 +197,17 @@ fn expand_segment_sources(
         .filter(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms)
         .collect::<Vec<_>>();
     if indexed.is_empty() {
-        return vec![whole_asset.clone()];
+        return if source_has_whole_file_card(whole_asset) {
+            vec![whole_asset.clone()]
+        } else {
+            Vec::new()
+        };
     }
     let mut expanded = Vec::with_capacity(indexed.len() + DUAL_SEGMENT_MAX_PER_ASSET);
     for segment in &indexed {
+        let Some(card) = segment.visual_evidence.clone() else {
+            continue;
+        };
         let (start_ms, end_ms) = crate::assets::motion::effective_window(segment);
         let candidate = CandidateSegment {
             id: segment.id.clone(),
@@ -195,11 +227,7 @@ fn expand_segment_sources(
                 .as_ref()
                 .and_then(|evidence| evidence.camera_motion.clone()),
         };
-        let evidence = segment
-            .visual_evidence
-            .clone()
-            .map(|item| vec![item])
-            .unwrap_or_default();
+        let evidence = vec![card];
         expanded.push(segment_source(
             connection,
             whole_asset,
@@ -215,6 +243,9 @@ fn expand_segment_sources(
             break;
         }
         let (first, second) = (pair[0], pair[1]);
+        if first.visual_evidence.is_none() || second.visual_evidence.is_none() {
+            continue;
+        }
         let combined = second.end_ms - first.start_ms;
         // 只在首段过短、合并后仍在可用镜头长度内时才补双段候选。
         if first.end_ms - first.start_ms >= DUAL_SEGMENT_SHORT_MS
@@ -276,25 +307,9 @@ fn segment_source(
     connection: &Connection,
     whole_asset: &StoryboardSource,
     segment: CandidateSegment,
-    mut visual_evidence: Vec<crate::models::VisualEvidence>,
+    visual_evidence: Vec<crate::models::VisualEvidence>,
     member_ids: &[String],
 ) -> StoryboardSource {
-    if visual_evidence.is_empty() {
-        // 片段证据尚未就绪时退回素材级证据，保持召回而不是把候选打成无证据。
-        visual_evidence = whole_asset
-            .visual_evidence
-            .iter()
-            .filter(|evidence| {
-                evidence
-                    .time_ms
-                    .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
-            })
-            .cloned()
-            .collect();
-        if visual_evidence.is_empty() {
-            visual_evidence = whole_asset.visual_evidence.clone();
-        }
-    }
     let mut ocr_evidence = whole_asset
         .ocr_evidence
         .iter()
@@ -1434,6 +1449,7 @@ mod tests {
     };
     use crate::storyboard::phases::NarrativeStructure;
     use rusqlite::{params, Connection};
+    use std::collections::HashSet;
     use std::fs;
     use uuid::Uuid;
 
@@ -1595,6 +1611,53 @@ mod tests {
         // 诊断计数在文件可访问性过滤前计算，因此还包含 missing-video。
         assert_eq!(visual_ready_count, 2);
         assert_eq!(sources[0].visual_quality_score, Some(0.82));
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
+    }
+
+    #[test]
+    fn storyboard_sources_recall_skips_segments_without_first_pass_cards() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory =
+            std::env::temp_dir().join(format!("assembly-storyboard-card-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[{"id":"s001","startMs":0,"endMs":4000,"visualEvidence":{"timeMs":2000,"subjects":["machine"],"scene":"factory","actions":[],"products":[],"qualityNotes":[]}},{"id":"s002","startMs":4000,"endMs":8000}],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","visualQualityScore":0.82,"keyframeGridPath":null}"#;
+        connection
+            .execute(
+                "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES ('ready-video', 'project-1', 'video', ?1, ?2, 'ready')",
+                params![metadata, available],
+            )
+            .expect("insert source fixture");
+        let expand = ["ready-video".to_owned()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let (sources, _) = storyboard_sources(&connection, "project-1", Some(&expand))
+            .expect("load expanded sources");
+        let ids: Vec<_> = sources
+            .iter()
+            .filter_map(|source| source.segment.as_ref().map(|segment| segment.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["s001"]);
         fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
         fs::remove_dir(&directory).expect("remove source fixture directory");
     }
@@ -2407,9 +2470,8 @@ fn generate_storyboard_internal(
         return Err("Editing task does not belong to this project.".to_owned());
     }
     if schedule_visual_analysis {
-        log::info!("Prioritizing visual analysis batch for storyboard generation.");
-        let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
-        wait_for_visual_batch(&app, priority_batch.as_deref())?;
+        log::info!("Prioritizing pending visual batches without waiting for first-pass cards.");
+        let _ = prioritize_pending_visual_batches(&app, &project_id, brief)?;
     }
     match crate::assets::analysis::backfill_project_visual_quality(&connection, &project_id) {
         Ok(updated) if updated > 0 => {
@@ -2476,6 +2538,22 @@ fn generate_storyboard_internal(
             ))
         };
     }
+    let carded_assets = sources
+        .iter()
+        .filter(|source| asset_has_first_pass_card(source))
+        .count();
+    if carded_assets == 0 {
+        log::warn!(
+            "No first-pass segment cards available. accessible={}, visual_ready_count={}",
+            sources.len(),
+            visual_ready_count
+        );
+        return Err("storyboard_visual_evidence_unavailable: first_pass_cards=0".to_owned());
+    }
+    log::info!(
+        "First-pass cards available on {carded_assets} of {} accessible videos",
+        sources.len()
+    );
     let access = ModelAccess::resolve().map_err(|error| {
         log::warn!("AI storyboard generation could not access the configured provider: {error}.");
         error
@@ -2676,6 +2754,9 @@ fn generate_storyboard_internal(
         visual_ready_count,
         expand_set.len()
     );
+    if sources.is_empty() {
+        return Err("storyboard_visual_evidence_unavailable: first_pass_cards=0".to_owned());
+    }
     crate::execution_deadline::check()?;
     let initial_timing = audio_first
         .as_ref()
