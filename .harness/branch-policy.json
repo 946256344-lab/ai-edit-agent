@@ -1,5 +1,4 @@
 {
-  "version": 1,
-  "description": "提交前只检查分支策略与文档同步；架构预算和 Agent 契约改为可选检查，不再作为提交硬门。",
-  "protectedBranches": ["master", "main"]
+  "version": 2,
+  "description": "允许在 master 直接提交和推送；提交钩子只拒绝 detached HEAD。文档同步仍由 pre-commit 执行。"
 }

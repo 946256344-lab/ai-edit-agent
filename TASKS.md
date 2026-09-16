@@ -3,6 +3,8 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] 进行中（2026-09-16，codex/asset-analysis-progress）：统一素材分析状态、进度筛选与失败重试，导入持续提示，提交剪辑后等待首次分析完成。
+- [x] 已实现（2026-09-16）：默认在 master 提交推送；并行任务才开分支。见 docs/changes/2026-09-16-simplify-git-workflow.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：拆掉没配音必须 ≤15 秒；时长和 beat 数交给模型。见 docs/changes/2026-09-16-no-voiceover-not-15s.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：配音开着必须配音；没有可念稿时 Agent 先写稿问同意，同意后再生成。见 docs/changes/2026-09-16-voiceover-script-consent.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：选镜头失败：配音锁 full_script 不再被短 brief 打回；有整片第一次卡、段上没卡时按整条进召回。见 docs/changes/2026-09-16-shot-selection-reliability.md。

@@ -11,7 +11,7 @@
 | TypeScript 静态检查 | Oxlint + `tsc -b` | `npm run lint`、`npm run build` |
 | 架构/文档规则 | Node `assert/strict` | `npm run harness:test`、`npm run harness:check` |
 | Agent 上下文/跨层契约 | Node `assert/strict` | `npm run agent:test`、`npm run agent:check` |
-| 分支协作策略 | Node `assert/strict` + Git | `npm run branch:test`、`npm run branch:check` |
+| 分支策略（拒绝 detached HEAD） | Node `assert/strict` + Git | `npm run branch:test`、`npm run branch:check` |
 | Rust 单元/集成 | Cargo 内建 test harness | `cargo test --manifest-path src-tauri/Cargo.toml` |
 | Rust 格式 | rustfmt | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` |
 | Python adapter | `unittest` + `unittest.mock` | `python -m unittest discover -s src-tauri/scripts -p "test_*.py"` |
@@ -50,10 +50,10 @@
 
 ## 5）质量信号与缺口
 
-- 架构预算和文档同步已进入本地 pre-commit。
-- 分层 Agent 指令、源码顶部中文职责导航、IPC/注册/API 对账、进程/凭据/HTTP 所有权和工具目录一致性也进入同一 pre-commit；配置相对 `HEAD` 只允许收紧，staged 运行文件必须完整暂存。它只覆盖可机器判定的结构事实，不能判断注释语义是否准确。
+- 本地 pre-commit 只拒绝 detached HEAD，并检查文档同步；允许直接在 `master` 提交。
+- `harness:check` 仍可手动核对架构预算、Agent 契约和文档同步，但不是每次提交的硬门。
 - 没有覆盖率工具、覆盖率阈值或当前覆盖率报告。[TODO]
-- 没有 GitHub Actions/其他 CI 或已提交的远端分支保护配置；本地分支与 staged 检查可被 `--no-verify` 跳过。[TODO]
+- 没有 GitHub Actions/其他 CI；默认直推 `master`，不启用远端分支保护。[TODO]
 - 完整 Agent 多步 transcript、事件主动丢失、worker 崩溃恢复没有可重复的全自动 runner。
 - `tauri:verify` 依赖已有包含 891 条素材的本机项目，不是自包含 fixture。
 - 当前测试数量应以实际 `cargo test`/Python 输出为准，不在本文写死，避免随新增测试失真。

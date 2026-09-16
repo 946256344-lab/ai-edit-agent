@@ -45,15 +45,15 @@
 ## 5）注释约定
 
 - 注释解释“为什么有此边界、谁拥有事实、失败如何恢复”，不逐行复述语法。
-- 每个手写源码模块顶部 16 行内用中文说明职责和不负责的边界，`agent:check`/pre-commit 会拒绝缺失导航的新源码；关键权限、事务、恢复与非直观算法再写就地中文注释。
+- 每个手写源码模块顶部 16 行内用中文说明职责和不负责的边界，`npm run agent:check` 会拒绝缺失导航的新源码；关键权限、事务、恢复与非直观算法再写就地中文注释。
 - Rust 模块职责在 `lib.rs` 的 module doc 上维护，方便 IDE hover。
 - 对有竞态或安全要求的 hook/函数使用 JSDoc/Rustdoc；普通 setter 和明显 JSX 不加噪声注释。
 - 架构重构后必须同步删除或修改失真的注释；文档不能替代测试和后端校验。
 
 ## 6）测试约定
 
-- 分支、提交和 PR 只以根 `CONTRIBUTING.md` 为准；每个并行任务使用独立分支与 worktree，不在工具入口复制规则或固定分配 Agent 职责。
-- `npm run branch:check` 要求任务分支使用允许前缀、不是 `master`/`main`，并包含本地 `origin/master`；运行前由开发者显式 fetch。
+- 提交和推送只以根 `CONTRIBUTING.md` 为准；默认在 `master` 提交并推送。并行任务才使用独立分支与 worktree，不在工具入口复制规则。
+- `npm run branch:check` 只拒绝 detached HEAD，允许在 `master` 提交。
 - Rust 单元测试与模块共置在 `#[cfg(test)] mod tests`。
 - 跨模块 Agent 契约放 `src-tauri/tests/`，fixture 带版本号。
 - Python 适配器用 `unittest.mock` 隔离 Jianying/进程/文件系统。

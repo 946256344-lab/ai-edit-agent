@@ -44,7 +44,7 @@ Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保
 
 ## 开发协作边界
 
-`CONTRIBUTING.md` 是分支、worktree、验证、提交与 PR 的唯一流程；`AGENTS.md`、`CLAUDE.md`、Cursor rule 和 `opencode.json` 只是薄入口。`.harness/branch-policy.json` 与 pre-commit 禁止直接在 `master`/`main` 提交、拒绝未知分支前缀，并要求当前任务分支包含本地 `origin/master`。检查不执行网络操作，远端基线由开发者先 `git fetch origin` 更新；GitHub 分支保护仍是独立的远端 TODO。
+`CONTRIBUTING.md` 是验证与提交的唯一流程；`AGENTS.md`、`CLAUDE.md`、Cursor rule 和 `opencode.json` 只是薄入口。默认在 `master` 提交并推送。pre-commit 只拒绝 detached HEAD，并检查文档同步。多个 Agent 并行时才用独立分支和 worktree。
 
 ## 状态
 

@@ -4,6 +4,8 @@
 
 ## 什么时候会检查
 
+提交钩子只跑文档同步，并拒绝 detached HEAD。`npm run harness:check` 不是每次提交的硬门，只在改了公开契约、harness 配置或长期文档时运行：
+
 - 改了公开 Tauri 命令、前端 bridge 或本地存储入口时，确认 `docs/api.md` 同步更新。
 - 改了 `AGENTS.md`、`CONTRIBUTING.md`、`TASKS.md` 或 `docs/codebase/` 时，确认相关说明仍然一致。
 - 改了 `.harness/` 里的检查配置时，确认脚本还能读懂最新结构。

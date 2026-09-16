@@ -1,5 +1,5 @@
 #!/bin/sh
-# 提交前检查：只保留防止破坏公共契约和误提交主分支的门。
+# 提交前检查：拒绝 detached HEAD，并同步公开契约文档。允许在 master 提交。
 
 node scripts/check-branch-policy.mjs || exit 1
 node scripts/check-doc-sync.mjs --staged || exit 1
