@@ -24,6 +24,7 @@ import { useArtifactWorkspaceController } from './hooks/useArtifactWorkspaceCont
 import { useShotReplacementController } from './hooks/useShotReplacementController'
 import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController'
 import { useProviderController } from './hooks/useProviderController'
+import { useNavigationEditController } from './hooks/useNavigationEditController'
 import {
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
@@ -135,6 +136,25 @@ function App() {
     activeProjectRef,
     activeSessionRef: activeEditingSessionRef,
     applyCommit: artifactWorkspace.applyStudioCommit,
+  })
+  const navigationEditing = useNavigationEditController({
+    projects,
+    activeProjectId,
+    activeProjectRef,
+    setProjects,
+    setSessions: setEditingSessions,
+    selectProject,
+    clearActiveProject: () => {
+      assetWorkspace.reset()
+      artifactWorkspace.reset()
+      activeProjectRef.current = null
+      activeEditingSessionRef.current = null
+      setActiveProjectId(null)
+      setActiveEditingSessionId(null)
+      setEditingSessions([])
+      setMessages([])
+      setAgentTasks([])
+    },
   })
 
   async function applyAgentEditCompletion(pending: PendingAgentEdit, event?: AgentEditEvent) {
@@ -550,6 +570,9 @@ function App() {
           selectProject: (projectId) => shotReplacement.actions.requestAction(() => void selectProject(projectId)),
           selectSession: (sessionId) => shotReplacement.actions.requestAction(() => { setActiveView('chat'); if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) }),
           deleteSession: (sessionId) => void deleteEditingSessionWorkspace(sessionId),
+          renameProject: navigationEditing.actions.renameProject,
+          deleteProject: (projectId) => void navigationEditing.actions.deleteProject(projectId),
+          renameSession: navigationEditing.actions.renameSession,
           openProvider: provider.actions.open,
           openAssets: () => shotReplacement.actions.requestAction(() => setActiveView('assets')),
         }}

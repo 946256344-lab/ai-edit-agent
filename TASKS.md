@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现并验证（2026-09-16，codex/project-session-edit）：项目与剪辑会话统一操作菜单、名称编辑；项目确认删除会清理本地索引、派生分析和预览但保留原始媒体与剪映草稿。见 docs/changes/2026-09-16-project-session-edit.md。
 - [x] 已实现，未提交（2026-09-16，codex/composer-media-options）：全局共享子素材库、新建项目命名和默认全选；构建、组件交互、352 项库测试及 2 项契约测试通过，排除原有字幕样式失败；真实桌面创建与成片待验收。见 docs/changes/2026-09-16-shared-project-libraries.md。
 - [x] 已实现（2026-09-15，codex/composer-media-options）：系统标题栏融入现有工作区顶栏，接入拖动和窗口操作；构建通过、桌面已启动，原生交互待手动验收。见 docs/changes/2026-09-15-integrated-titlebar.md。
 - [x] 已实现，未提交（2026-09-15，codex/composer-media-options）：对话配音、字幕、BGM 独立开关及发送快照；组件交互、编译通过，351 项库测试通过，原有字幕/仓库检查失败见 docs/changes/2026-09-15-composer-media-options.md；真实成片待验收。

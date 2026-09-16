@@ -287,6 +287,47 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<Project>, String> {
 }
 
 #[tauri::command]
+pub fn rename_project(app: AppHandle, project_id: String, name: String) -> Result<Project, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Project name cannot be empty.".to_owned());
+    }
+    let connection = open_connection(&app)?;
+    rename_project_record(&connection, &project_id, name)
+}
+
+fn rename_project_record(
+    connection: &Connection,
+    project_id: &str,
+    name: &str,
+) -> Result<Project, String> {
+    let timestamp = now_millis();
+    let changed = connection
+        .execute(
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, timestamp, project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Project was not found.".to_owned());
+    }
+    connection
+        .query_row(
+            "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| {
+                Ok(Project {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn create_conversation(
     app: AppHandle,
     project_id: String,
@@ -398,6 +439,129 @@ pub fn list_editing_sessions(
 ) -> Result<Vec<EditingSession>, String> {
     let connection = open_connection(&app)?;
     editing_sessions_for_project(&connection, &project_id)
+}
+
+#[tauri::command]
+pub fn rename_editing_session(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    title: String,
+) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Editing session title cannot be empty.".to_owned());
+    }
+    let connection = open_connection(&app)?;
+    rename_editing_session_record(&connection, &project_id, &editing_task_id, title)
+}
+
+fn rename_editing_session_record(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    let timestamp = now_millis();
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let changed = transaction
+        .execute(
+            "UPDATE editing_tasks SET title = ?1, updated_at = ?2 WHERE id = ?3 AND project_id = ?4",
+            params![title, timestamp, editing_task_id, project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Editing session was not found in this project.".to_owned());
+    }
+    transaction
+        .execute(
+            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE editing_task_id = ?3 AND project_id = ?4",
+            params![title, timestamp, editing_task_id, project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_project(app: AppHandle, project_id: String, confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Deleting a project requires explicit confirmation.".to_owned());
+    }
+    let connection = open_connection(&app)?;
+    let (timeline_ids, asset_ids) = delete_project_records(&connection, &project_id)?;
+    drop(connection);
+
+    if let Ok(root) = app.path().app_data_dir() {
+        for timeline_id in timeline_ids {
+            let _ = fs::remove_dir_all(root.join("previews").join(timeline_id));
+        }
+        for asset_id in asset_ids {
+            let _ = fs::remove_dir_all(root.join("derived").join(asset_id));
+        }
+        let _ = fs::remove_dir_all(root.join("previews").join("cache").join(&project_id));
+    }
+    Ok(())
+}
+
+fn delete_project_records(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+            params![project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !exists {
+        return Err("Project was not found.".to_owned());
+    }
+    let timeline_ids = connection
+        .prepare("SELECT id FROM timeline_versions WHERE project_id = ?1")
+        .map_err(|error| error.to_string())?
+        .query_map(params![project_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let asset_ids = connection
+        .prepare("SELECT id FROM assets WHERE project_id = ?1")
+        .map_err(|error| error.to_string())?
+        .query_map(params![project_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for sql in [
+        "DELETE FROM agent_run_steps WHERE project_id = ?1",
+        "DELETE FROM agent_diagnostics WHERE project_id = ?1",
+        "DELETE FROM pending_clarifications WHERE project_id = ?1",
+        "DELETE FROM task_route_receipts WHERE project_id = ?1",
+        "DELETE FROM pending_task_routes WHERE project_id = ?1",
+        "DELETE FROM operation_logs WHERE project_id = ?1",
+        "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id = ?1)",
+        "DELETE FROM agent_tasks WHERE project_id = ?1",
+        "DELETE FROM timeline_versions WHERE project_id = ?1",
+        "DELETE FROM storyboard_versions WHERE project_id = ?1",
+        "DELETE FROM conversations WHERE project_id = ?1",
+        "DELETE FROM task_state_snapshots WHERE project_id = ?1",
+        "DELETE FROM editing_tasks WHERE project_id = ?1",
+        "DELETE FROM asset_collections WHERE project_id = ?1",
+        "DELETE FROM asset_tags WHERE project_id = ?1",
+        "DELETE FROM assets WHERE project_id = ?1",
+        "DELETE FROM project_libraries WHERE project_id = ?1",
+        "DELETE FROM projects WHERE id = ?1",
+    ] {
+        transaction
+            .execute(sql, params![project_id])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok((timeline_ids, asset_ids))
 }
 
 /// 删除剪辑会话（editing task）及其会话消息、Agent 记录、storyboard/timeline 与本地 preview。
@@ -829,6 +993,65 @@ pub fn list_messages(app: AppHandle, conversation_id: String) -> Result<Vec<Mess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_and_session_names_are_editable_and_project_delete_is_scoped() {
+        let connection = Connection::open_in_memory().expect("open project edit test database");
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        crate::db::migrate(&connection).expect("create current schema");
+        crate::shared_library::migrate(&connection).expect("create shared library schema");
+        connection
+            .execute_batch(
+                "
+                INSERT INTO projects (id, name, created_at, updated_at) VALUES
+                  ('project-1', 'Original', 1, 1),
+                  ('project-2', 'Keep', 1, 1);
+                INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at)
+                VALUES ('session-1', 'project-1', 'Old session', '', 2, 2);
+                INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                VALUES ('conversation-1', 'project-1', 'session-1', 'Old session', 'ready', 2, 2);
+                INSERT INTO messages (id, conversation_id, role, content, created_at)
+                VALUES ('message-1', 'conversation-1', 'user', 'hello', 3);
+                INSERT INTO assets (id, project_id, kind, display_name, source_reference, created_at, updated_at)
+                VALUES ('asset-1', 'project-1', 'video', 'Clip', 'C:/clip.mp4', 3, 3);
+                ",
+            )
+            .expect("seed editable project");
+
+        let project = rename_project_record(&connection, "project-1", "Renamed project")
+            .expect("rename project");
+        rename_editing_session_record(&connection, "project-1", "session-1", "Renamed session")
+            .expect("rename session");
+
+        assert_eq!(project.name, "Renamed project");
+        let titles: (String, String) = connection
+            .query_row(
+                "SELECT editing_tasks.title, conversations.title
+                 FROM editing_tasks JOIN conversations ON conversations.editing_task_id = editing_tasks.id
+                 WHERE editing_tasks.id = 'session-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read synchronized names");
+        assert_eq!(
+            titles,
+            ("Renamed session".to_owned(), "Renamed session".to_owned())
+        );
+
+        let (_, asset_ids) =
+            delete_project_records(&connection, "project-1").expect("delete project records");
+        assert_eq!(asset_ids, vec!["asset-1"]);
+        let remaining_projects: i64 = connection
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .expect("count remaining projects");
+        let deleted_messages: i64 = connection
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .expect("count deleted messages");
+        assert_eq!(remaining_projects, 1);
+        assert_eq!(deleted_messages, 0);
+    }
 
     #[test]
     fn editing_session_projection_uses_the_latest_legacy_conversation() {

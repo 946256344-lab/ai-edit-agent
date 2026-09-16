@@ -78,7 +78,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
         <button className="close-button" onClick={() => { dialog.current?.close(); onClose() }} aria-label="关闭">×</button>
         <span className="eyebrow">PROJECT</span>
         <h2>项目设置</h2>
-        <p>{projectName ? `当前项目：${projectName}` : '请先选择一个项目。'}</p>
+        <p>{projectName ? `项目：${projectName}` : '请先选择一个项目。'}</p>
 
         <div className="provider-option chosen">
           <span>
