@@ -91,10 +91,13 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | --- | --- | --- | --- |
 | `initialize_local_store` | 无 | `StoreStatus` | 创建应用数据目录、打开 SQLite（WAL + busy_timeout）、执行迁移；中断且存在未完成通用 Agent 调用的会话恢复为 `review`。若 `working` 会话的最新 Agent task 已终态但缺少 `agent-task-result-{agentTaskId}`，任务改为 `needs_review`、写入固定恢复消息且会话改为 `review`，不猜测丢失回答；其余 `working` 会话恢复为 `ready`。每进程还恢复一次未完成分析任务（只立即处理前 4 条，其余保持 `queued`），并对状态为 `queued`/`analyzing` 但没有对应 `analyze_asset` 任务的孤立素材补建并排队分析。 |
 | `create_project` | `{ name, libraryIds? }` | `StoredProject` | 省略库列表默认全选，空数组不选库。 |
+| `rename_project` | `{ projectId, name }` | `StoredProject` | 修改项目名称并更新时间，拒绝空名称。 |
+| `delete_project` | `{ projectId, confirmed }` | `void` | 删除项目及其素材索引、分析派生文件、会话和本地预览；保留原始媒体与外部剪映草稿。必须 `confirmed=true`。 |
 | `list_shared_libraries` | 无 | `SharedLibrary[]` | 全局子素材库名称与素材数量。 |
 | `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
 | `create_editing_session` | `{ projectId, title }` | `StoredEditingSession` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
 | `list_editing_sessions` | `{ projectId }` | `StoredEditingSession[]` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |
+| `rename_editing_session` | `{ projectId, editingTaskId, title }` | `void` | 同步修改 editing task 及其 conversation 标题，拒绝空名称。 |
 | `delete_editing_session` | `{ projectId, editingTaskId, confirmed }` | `void` | 删除剪辑会话（editing task）及其对话消息、Agent 记录、storyboard/timeline 与本地 preview 目录；项目级素材保留。必须 `confirmed=true`；进行中的 Agent 任务先标为 `cancelled`。不删除用户 Jianying 草稿目录中的外部草稿。 |
 | `create_editing_task` | `{ projectId, title }` | `StoredEditingTask` | 在既有项目内创建作用域化创作目标。 |
 | `list_editing_tasks` | `{ projectId }` | `StoredEditingTask[]` | 按最后更新时间倒序。 |

@@ -377,6 +377,8 @@ export async function listProjects() { requireDesktopRuntime(); return invoke<St
 export type SharedLibrary = { id: string; name: string; assetCount: number }
 export async function listSharedLibraries() { requireDesktopRuntime(); return invoke<SharedLibrary[]>('list_shared_libraries') }
 export async function createProject(name: string, libraryIds?: string[]) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name, libraryIds }) }
+export async function renameProject(projectId: string, name: string) { requireDesktopRuntime(); return invoke<StoredProject>('rename_project', { projectId, name }) }
+export async function deleteProject(projectId: string, confirmed: boolean) { requireDesktopRuntime(); return invoke<void>('delete_project', { projectId, confirmed }) }
 
 export async function listConversations(projectId: string, editingTaskId?: string) {
   requireDesktopRuntime()
@@ -387,6 +389,10 @@ export async function createConversation(projectId: string, editingTaskId: strin
 export async function createEditingTask(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingTask>('create_editing_task', { projectId, title }) }
 export async function createEditingSession(projectId: string, title: string) { requireDesktopRuntime(); return invoke<StoredEditingSession>('create_editing_session', { projectId, title }) }
 export async function listEditingSessions(projectId: string) { requireDesktopRuntime(); return invoke<StoredEditingSession[]>('list_editing_sessions', { projectId }) }
+export async function renameEditingSession(projectId: string, editingTaskId: string, title: string) {
+  requireDesktopRuntime()
+  return invoke<void>('rename_editing_session', { projectId, editingTaskId, title })
+}
 export async function deleteEditingSession(projectId: string, editingTaskId: string, confirmed: boolean) {
   requireDesktopRuntime()
   return invoke<void>('delete_editing_session', { projectId, editingTaskId, confirmed })

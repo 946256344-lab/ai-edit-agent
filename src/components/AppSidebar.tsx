@@ -1,8 +1,9 @@
 // 项目侧栏：项目内素材入口、剪辑会话与设置；操作仍交给应用 controller。
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
 import type { EditingSessionView, WorkspaceView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
+import { NameEditDialog } from './NameEditDialog'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 export type AppSidebarModel = {
@@ -24,13 +25,29 @@ export type AppSidebarActions = {
   selectProject: (projectId: string) => void
   selectSession: (sessionId: string) => void
   deleteSession: (sessionId: string) => void
+  renameProject: (projectId: string, name: string) => Promise<void>
+  deleteProject: (projectId: string) => void
+  renameSession: (sessionId: string, title: string) => Promise<void>
   openProvider: () => void
   openAssets: () => void
 }
 export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions: AppSidebarActions }) {
-  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
+  const sidebar = useRef<HTMLElement>(null)
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ kind: '项目' | '会话'; id: string; name: string } | null>(null)
+  const settingsProject = model.projects.find((project) => project.id === settingsProjectId)
+  useEffect(() => {
+    function closeOutsideMenus(event: PointerEvent) {
+      const target = event.target as Node
+      sidebar.current?.querySelectorAll<HTMLDetailsElement>('details[open]').forEach((menu) => {
+        if (!menu.contains(target)) menu.open = false
+      })
+    }
+    document.addEventListener('pointerdown', closeOutsideMenus)
+    return () => document.removeEventListener('pointerdown', closeOutsideMenus)
+  }, [])
   return (
-    <aside className="sidebar project-sidebar">
+    <aside ref={sidebar} className="sidebar project-sidebar">
       <span className="assembly-wordmark" data-tauri-drag-region>Assembly</span>
       <div className="sidebar-project">
         <span className="sidebar-label">当前项目</span>
@@ -43,7 +60,17 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
           </summary>
           <div className="project-popover">
             <span className="sidebar-label">我的项目</span>
-            {model.projects.map((project) => <button key={project.id} className={project.id === model.activeProjectId ? 'selected' : ''} onClick={(event) => { actions.selectProject(project.id); event.currentTarget.closest('details')?.removeAttribute('open') }}>{project.name}</button>)}
+            {model.projects.map((project) => <div className="project-option" key={project.id}>
+              <button className={project.id === model.activeProjectId ? 'selected' : ''} onClick={(event) => { actions.selectProject(project.id); event.currentTarget.closest('.project-switcher')?.removeAttribute('open') }}>{project.name}</button>
+              <details className="item-actions">
+                <summary aria-label={`编辑${project.name}`} title="项目操作">•••</summary>
+                <div className="item-menu">
+                  <button onClick={() => setRenameTarget({ kind: '项目', id: project.id, name: project.name })}>重命名</button>
+                  <button onClick={() => setSettingsProjectId(project.id)}>项目设置</button>
+                  <button className="danger" onClick={() => actions.deleteProject(project.id)}>删除项目</button>
+                </div>
+              </details>
+            </div>)}
             <button onClick={(event) => { actions.createProject(); event.currentTarget.closest('details')?.removeAttribute('open') }}><WorkspaceIcon name="plus" />新建项目</button>
           </div>
         </details>
@@ -59,16 +86,31 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
           <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} data-initial={session.title.trim().charAt(0) || '剪'} onClick={() => actions.selectSession(session.id)}>
             <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? '正在剪辑…' : session.updated}</small></span>
           </button>
-          <button className="session-delete" title="删除会话" aria-label={`删除${session.title}`} onClick={() => actions.deleteSession(session.id)}><WorkspaceIcon name="close" /></button>
+          <details className="item-actions session-actions">
+            <summary aria-label={`编辑${session.title}`} title="会话操作">•••</summary>
+            <div className="item-menu">
+              <button onClick={() => setRenameTarget({ kind: '会话', id: session.id, name: session.title })}>重命名</button>
+              <button className="danger" onClick={() => actions.deleteSession(session.id)}>删除会话</button>
+            </div>
+          </details>
         </div>)}
         {model.artworkNotice && <p className="switcher-empty">{model.artworkNotice}</p>}
       </nav>
       <div className="project-sidebar-footer">
         <button title={`模型设置 · ${model.providerLabel}`} aria-label="模型设置" onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>模型设置</span></button>
-        <button title="项目设置" aria-label="项目设置" onClick={() => setProjectSettingsOpen(true)}><WorkspaceIcon name="settings" /><span>项目设置</span></button>
+        <button title="项目设置" aria-label="项目设置" onClick={() => setSettingsProjectId(model.activeProjectId)}><WorkspaceIcon name="settings" /><span>项目设置</span></button>
         <span className="local-status"><i className={`connection-dot ${model.storeState}`} /><span>{model.storeState === 'ready' ? '本地工作区' : '本地未连接'}</span></span>
       </div>
-      <ProjectSettingsModal open={projectSettingsOpen} projectId={model.activeProjectId} projectName={model.activeProjectName} onClose={() => setProjectSettingsOpen(false)} />
+      <ProjectSettingsModal open={Boolean(settingsProjectId)} projectId={settingsProjectId} projectName={settingsProject?.name ?? null} onClose={() => setSettingsProjectId(null)} />
+      <NameEditDialog
+        open={Boolean(renameTarget)}
+        label={renameTarget?.kind ?? '项目'}
+        initialValue={renameTarget?.name ?? ''}
+        onClose={() => setRenameTarget(null)}
+        onSave={(value) => renameTarget?.kind === '项目'
+          ? actions.renameProject(renameTarget.id, value)
+          : actions.renameSession(renameTarget?.id ?? '', value)}
+      />
     </aside>
   )
 }
