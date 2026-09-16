@@ -219,7 +219,11 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
 }
 
 #[tauri::command]
-pub fn create_project(app: AppHandle, name: String) -> Result<Project, String> {
+pub fn create_project(
+    app: AppHandle,
+    name: String,
+    library_ids: Option<Vec<String>>,
+) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Project name cannot be empty.".to_owned());
@@ -232,7 +236,10 @@ pub fn create_project(app: AppHandle, name: String) -> Result<Project, String> {
         updated_at: timestamp,
     };
     let connection = open_connection(&app)?;
-    connection
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute(
             "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -243,6 +250,19 @@ pub fn create_project(app: AppHandle, name: String) -> Result<Project, String> {
             ],
         )
         .map_err(|error| error.to_string())?;
+    if let Some(ids) = library_ids {
+        for id in ids {
+            transaction
+                .execute(
+                    "INSERT INTO project_libraries (project_id, library_id) VALUES (?1, ?2)",
+                    params![project.id, id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
+        transaction.execute("INSERT INTO project_libraries (project_id, library_id) SELECT ?1, id FROM shared_libraries", [&project.id]).map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(project)
 }
 

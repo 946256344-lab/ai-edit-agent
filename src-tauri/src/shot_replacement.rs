@@ -194,7 +194,7 @@ fn recommendations(
         for source in &pool.candidates {
             let asset: Option<(String, String)> = connection
                 .query_row(
-                    "SELECT display_name, metadata_json FROM assets WHERE id=?1 AND project_id=?2",
+                    "SELECT display_name, metadata_json FROM assets WHERE id=?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                     params![source.asset_id, ctx.timeline.project_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )

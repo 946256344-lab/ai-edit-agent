@@ -83,7 +83,7 @@ fn lookup_audio_source(
 ) -> Result<String, String> {
     let source: String = connection
         .query_row(
-            "SELECT source_reference FROM assets WHERE id = ?1 AND project_id = ?2 AND kind = 'audio'",
+            "SELECT source_reference FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND kind = 'audio'",
             params![asset_id, project_id],
             |row| row.get(0),
         )

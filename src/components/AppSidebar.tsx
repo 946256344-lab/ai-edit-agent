@@ -31,7 +31,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   return (
     <aside className="sidebar project-sidebar">
-      <span className="assembly-wordmark">Assembly</span>
+      <span className="assembly-wordmark" data-tauri-drag-region>Assembly</span>
       <div className="sidebar-project">
         <span className="sidebar-label">当前项目</span>
         <details className="project-switcher" onKeyDown={(event) => {

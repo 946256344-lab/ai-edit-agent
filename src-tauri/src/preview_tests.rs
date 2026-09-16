@@ -392,7 +392,8 @@ fn ffmpeg_mixes_a_looped_music_cue_into_a_playable_preview() {
     let connection = Connection::open_in_memory().expect("open database");
     connection
         .execute_batch(
-            "CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, source_reference TEXT);",
+            "CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, source_reference TEXT);
+             CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;",
         )
         .expect("create asset table");
     connection

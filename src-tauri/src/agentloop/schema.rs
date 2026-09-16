@@ -26,6 +26,7 @@ pub(super) struct LoopState<'a> {
     pub(super) editing_task_id: &'a str,
     pub(super) conversation_id: &'a str,
     pub(super) task_brief: String,
+    pub(super) media_options: Option<crate::media_options::MediaOptions>,
     pub(super) storyboard: Option<StoryboardVersion>,
     pub(super) timelines: Vec<TimelineVersion>,
     pub(super) last_outcome: Option<AgentEditResult>,

@@ -137,7 +137,7 @@ fn asset_kind_and_duration(
 ) -> Result<(String, Option<i64>), String> {
     let (kind, metadata_json): (String, String) = connection
         .query_row(
-            "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND project_id = ?2 AND analysis_status = 'ready'",
+            "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
             params![asset_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

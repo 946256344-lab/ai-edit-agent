@@ -391,7 +391,7 @@ pub fn create_jianying_draft(
     for (index, clip) in timeline.clips.iter().enumerate() {
         let (source_reference, kind): (String, String) = connection
             .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                 params![clip.asset_id, timeline.project_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -419,7 +419,7 @@ pub fn create_jianying_draft(
         for cue in &track.cues {
             let (source_reference, kind): (String, String) = connection
                 .query_row(
-                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2 AND analysis_status = 'ready'",
+                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
                     params![cue.asset_id, timeline.project_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -447,7 +447,7 @@ pub fn create_jianying_draft(
     for (index, clip) in timeline.overlay_clips.iter().enumerate() {
         let (source_reference, kind): (String, String) = connection
             .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                 params![clip.asset_id, timeline.project_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

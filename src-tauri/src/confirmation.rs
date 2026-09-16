@@ -438,7 +438,10 @@ fn run_confirmation_sequence_pipeline(
         storyboard.id.clone(),
     )?;
     let mut voiceover_failed = None;
-    if let Some(narration) = crate::voice_provider::storyboard_narration_text(Some(&storyboard)) {
+    let media_options = crate::media_options::storyboard_options(&connection, &storyboard.id)?;
+    if let Some(narration) = crate::voice_provider::storyboard_narration_text(Some(&storyboard))
+        .filter(|_| media_options.map_or(true, |options| options.voiceover))
+    {
         match crate::voice_provider::synthesize_voiceover_for_timeline(
             &app,
             &connection,
@@ -449,6 +452,7 @@ fn run_confirmation_sequence_pipeline(
             &timeline,
             &narration,
             None,
+            media_options.map_or(true, |options| options.subtitles),
         ) {
             Ok((updated, _)) => timeline = updated,
             Err(error) => {

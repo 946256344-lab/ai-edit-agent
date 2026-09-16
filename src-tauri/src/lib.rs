@@ -22,6 +22,8 @@ mod db;
 mod execution_deadline;
 /// 单向 Jianying draft 创建与延迟注册。
 mod jianying;
+/// 对话媒体开关和分镜生成选项快照。
+mod media_options;
 /// 可序列化领域/Tauri 边界类型；本模块不放持久化行为。
 mod models;
 /// Jamendo 凭据、搜索、授权资格与有界下载适配器。
@@ -44,6 +46,7 @@ mod projects;
 mod provider;
 /// 启动/发行就绪检查：媒体 runtime、目录、凭据与剪映前置。
 mod release_readiness;
+mod shared_library;
 /// 粗剪镜头的持久化推荐池与单候选试选预览。
 mod shot_replacement;
 /// 基于证据的 storyboard 提案、校验、版本与查询。
@@ -93,6 +96,7 @@ pub fn run() {
             music_provider::fish_audio::import_fish_audio_api_key_from_environment,
             projects::initialize_local_store,
             projects::create_project,
+            shared_library::list_shared_libraries,
             projects::list_projects,
             projects::create_editing_session,
             projects::list_editing_sessions,

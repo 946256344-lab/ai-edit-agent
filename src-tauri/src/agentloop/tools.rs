@@ -294,9 +294,20 @@ fn main_chain_function_tools() -> Vec<Value> {
                     "minLength": 1,
                     "maxLength": 200,
                     "description": "Optional Provider voice id for audio-first storyboard generation; null selects the Provider default."
+                },
+                "mediaOptions": {
+                    "type": ["object", "null"],
+                    "description": "Effective media choices for this edit. Copy the current composer choices unless the user's current text explicitly overrides them. Null uses the composer choices.",
+                    "properties": {
+                        "voiceover": {"type": "boolean"},
+                        "subtitles": {"type": "boolean"},
+                        "bgm": {"type": "boolean"}
+                    },
+                    "required": ["voiceover", "subtitles", "bgm"],
+                    "additionalProperties": false
                 }
             }),
-            vec!["brief", "voiceId"],
+            vec!["brief", "voiceId", "mediaOptions"],
         ),
         function_tool(
             CREATE_TIMELINE_DRAFT,
@@ -461,9 +472,10 @@ fn delivery_function_tools() -> Vec<Value> {
                     "description": "Spoken narration. Null uses storyboard narrationText when present. Never use onScreenText."
                 },
                 "voiceId": nullable_bounded_string("Optional Provider voice id; null selects the Provider default.", 200),
+                "includeSubtitles": {"type": ["boolean", "null"], "description": "Null follows the current subtitle toggle. Override only for an explicit subtitle instruction in this turn."},
                 "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version.")
             }),
-            vec!["text", "voiceId", "timelineVersionId"],
+            vec!["text", "voiceId", "timelineVersionId", "includeSubtitles"],
         ),
         function_tool(
             CREATE_JIANYING_DRAFT,

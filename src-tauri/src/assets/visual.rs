@@ -296,7 +296,7 @@ pub(crate) fn prioritize_pending_visual_batches(
     let mut asset_scores = HashMap::new();
     let mut assets = connection
         .prepare(
-            "SELECT id, display_name, source_reference, folder_reference, metadata_json FROM assets WHERE project_id = ?1",
+            "SELECT id, display_name, source_reference, folder_reference, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
         )
         .map_err(|error| error.to_string())?;
     let rows = assets
@@ -1069,7 +1069,7 @@ pub fn skip_asset_visual_analysis_batch(
     let mut updated_count = 0usize;
     for asset_id in &asset_ids {
         let row = transaction.query_row(
-            "SELECT kind, analysis_status, metadata_json FROM assets WHERE id = ?1 AND project_id = ?2",
+            "SELECT kind, analysis_status, metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
             params![asset_id, project_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         ).optional().map_err(|error| error.to_string())?;

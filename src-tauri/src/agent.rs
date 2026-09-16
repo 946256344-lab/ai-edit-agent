@@ -258,6 +258,8 @@ pub fn execute_agent_edit(
         storyboard_version_id,
         timeline_version_id,
         request,
+        None,
+        None,
     )
 }
 
@@ -272,6 +274,7 @@ pub fn submit_conversation_turn(
     timeline_version_id: Option<String>,
     request: String,
     route_receipt: String,
+    media_options: Option<crate::media_options::MediaOptions>,
 ) -> Result<ConversationTurnResult, String> {
     if request.trim().is_empty() {
         return Err("Conversation request cannot be empty.".to_owned());
@@ -287,6 +290,13 @@ pub fn submit_conversation_turn(
         true,
     )?;
     crate::taskrouter::note_task_request(&connection, &project_id, &editing_task_id, &request)?;
+    let user_message_id: Option<String> = connection
+        .query_row(
+            "SELECT user_message_id FROM task_route_receipts WHERE id = ?1",
+            params![route_receipt],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
     let agent_task_id = spawn_agent_run(
         app,
         project_id,
@@ -295,6 +305,8 @@ pub fn submit_conversation_turn(
         storyboard_version_id,
         timeline_version_id,
         request,
+        media_options,
+        user_message_id,
     )?;
     Ok(ConversationTurnResult::Run { agent_task_id })
 }
@@ -364,6 +376,8 @@ fn spawn_agent_run(
     storyboard_version_id: Option<String>,
     timeline_version_id: Option<String>,
     request: String,
+    media_options: Option<crate::media_options::MediaOptions>,
+    user_message_id: Option<String>,
 ) -> Result<String, String> {
     if request.trim().is_empty() {
         return Err("Agent request cannot be empty.".to_owned());
@@ -385,7 +399,9 @@ fn spawn_agent_run(
                 json!({
                     "requestLength": request.chars().count(),
                     "storyboardVersionId": storyboard_version_id,
-                    "timelineVersionId": timeline_version_id
+                    "timelineVersionId": timeline_version_id,
+                    "mediaOptions": media_options,
+                    "userMessageId": user_message_id
                 })
                 .to_string(),
                 now_millis()

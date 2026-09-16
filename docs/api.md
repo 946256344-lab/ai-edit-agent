@@ -1,5 +1,19 @@
 # API 与工具契约
 
+## 2026-09-16：共享子素材库与新建项目
+
+`list_shared_libraries` 无参数，返回 `{ id, name, assetCount }[]`，不暴露源目录。`create_project` 接受 `{ name, libraryIds?: string[] }`：省略时选取当前全部子素材库，空数组不关联素材库；名称与库关联在同一事务提交。前端先弹出表单并默认全选。
+
+Schema 18/19 增加 `shared_libraries`、`project_libraries`、`shared_library_assets` 和 `project_asset_access` 视图。按已有导入根目录建立子库，无目录素材归入“未归类素材”；成员通过素材 ID 关联，重链路不丢失库归属。源文件及分析结果不复制，旧项目保留原有素材访问。新导入自动关联当前项目；浏览、搜索、选片、替换、预览与交付统一使用共享范围。`assets.project_id` 保留为导入来源，不再是素材读取的唯一范围。
+
+## 2026-09-15：对话媒体开关
+
+`submit_conversation_turn` 增加可选 `mediaOptions: { voiceover: boolean, subtitles: boolean, bgm: boolean }`。前端新会话默认全开，选中显示勾选标志；发送时冻结选择，`agent_tasks.input_json` 保存 `mediaOptions` 和 receipt 对应的 `userMessageId`。会话恢复读取最近一次发送设置，消息摘要按 `userMessageId` 关联。关闭项不自动新增轨道，不表示删除已有轨道；本轮明确的自然语言指令优先，普通问答不触发编辑。
+
+Native `generate_storyboard` 增加 `mediaOptions`（null 沿用本轮选择，非 null 为模型按明确文字要求合并后的选择）；`synthesize_voiceover` 增加 `includeSubtitles`（null 沿用本轮字幕选择）。严格工具 Schema 包含这两个 nullable 参数，旧的内部调用省略时仍使用默认路径。
+
+分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启且只有主题时 Phase 1 创作旁白，完整文案仍照稿念。BGM 由 Agent 复用 `search_music` / `use_online_music` 后重新渲染，有旁白时新选音乐音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`。
+
 ## 2026-09-10：剪辑失败修复
 
 公开 Tauri 命令、SQLite schema 与前端参数不变。Phase 3 内部模型响应改为 `selections:[{beatId,candidateIndexes:[0,1],uncovered:false}]`，序号仅在对应 beat 的候选池内有效；Rust 映射素材、片段与源时间范围，模型不再填写 ID。Phase 4 按素材 ID 去重候选来源，片段选择仍由镜头自身携带。
@@ -76,7 +90,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | 命令 | 输入 | 结果 | 说明 |
 | --- | --- | --- | --- |
 | `initialize_local_store` | 无 | `StoreStatus` | 创建应用数据目录、打开 SQLite（WAL + busy_timeout）、执行迁移；中断且存在未完成通用 Agent 调用的会话恢复为 `review`。若 `working` 会话的最新 Agent task 已终态但缺少 `agent-task-result-{agentTaskId}`，任务改为 `needs_review`、写入固定恢复消息且会话改为 `review`，不猜测丢失回答；其余 `working` 会话恢复为 `ready`。每进程还恢复一次未完成分析任务（只立即处理前 4 条，其余保持 `queued`），并对状态为 `queued`/`analyzing` 但没有对应 `analyze_asset` 任务的孤立素材补建并排队分析。 |
-| `create_project` | `{ name }` | `StoredProject` | 拒绝空名称。 |
+| `create_project` | `{ name, libraryIds? }` | `StoredProject` | 省略库列表默认全选，空数组不选库。 |
+| `list_shared_libraries` | 无 | `SharedLibrary[]` | 全局子素材库名称与素材数量。 |
 | `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
 | `create_editing_session` | `{ projectId, title }` | `StoredEditingSession` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
 | `list_editing_sessions` | `{ projectId }` | `StoredEditingSession[]` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |

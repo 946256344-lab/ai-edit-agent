@@ -81,7 +81,7 @@ pub(crate) fn storyboard_sources(
     let mut statement = connection.prepare(
         // Top-12 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
         // 可访问视频中判断语义与画面优先级。
-        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
+        "SELECT id, kind, metadata_json, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -1542,6 +1542,7 @@ mod tests {
                     source_reference TEXT NOT NULL,
                     analysis_status TEXT NOT NULL
                 );
+                CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
                 CREATE TABLE asset_user_metadata (
                     asset_id TEXT PRIMARY KEY,
                     excluded INTEGER NOT NULL DEFAULT 0
@@ -2347,6 +2348,7 @@ pub fn generate_storyboard(
         brief,
         voice_id.as_deref(),
         true,
+        None,
     )
 }
 
@@ -2359,6 +2361,7 @@ pub(crate) fn generate_storyboard_for_agent(
     editing_task_id: String,
     brief: String,
     voice_id: Option<String>,
+    media_options: Option<crate::media_options::MediaOptions>,
 ) -> Result<StoryboardVersion, String> {
     generate_storyboard_internal(
         app,
@@ -2367,6 +2370,7 @@ pub(crate) fn generate_storyboard_for_agent(
         brief,
         voice_id.as_deref(),
         false,
+        media_options,
     )
 }
 
@@ -2377,6 +2381,7 @@ fn generate_storyboard_internal(
     brief: String,
     voice_id: Option<&str>,
     schedule_visual_analysis: bool,
+    media_options: Option<crate::media_options::MediaOptions>,
 ) -> Result<StoryboardVersion, String> {
     crate::execution_deadline::check()?;
     log::info!(
@@ -2477,7 +2482,13 @@ fn generate_storyboard_internal(
     })?;
 
     // Phase 1: 系统先锁定 scriptMode；把本地库库存摘要注入叙事，再让模型只在该模式下写结构。
-    let required_script_mode = decide_script_mode(brief);
+    let compose_narration = media_options.is_some_and(|options| options.voiceover)
+        && decide_script_mode(brief) == "key_message";
+    let required_script_mode = if compose_narration {
+        "full_script"
+    } else {
+        decide_script_mode(brief)
+    };
     log::info!("Phase 1 script mode locked by system: {required_script_mode}");
     let library_inventory = phases::build_library_inventory_summary(&sources);
     log::info!(
@@ -2493,6 +2504,7 @@ fn generate_storyboard_internal(
             required_script_mode,
             &library_inventory,
             phase1_feedback.as_deref(),
+            compose_narration,
         ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
@@ -2579,7 +2591,9 @@ fn generate_storyboard_internal(
                 clip::encode_beats(&app, &beats)
             }
         });
-        if narrative.script_mode == "full_script" {
+        if narrative.script_mode == "full_script"
+            && media_options.map_or(true, |options| options.voiceover)
+        {
             if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty())
             {
                 match crate::voice_provider::prepare_audio_first(
@@ -3084,6 +3098,12 @@ fn generate_storyboard_internal(
         params![version.id, version.project_id, version.editing_task_id, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
     crate::shot_replacement::store_pools(&transaction, &version.id, &rough.candidate_pools)?;
+    if let Some(options) = media_options {
+        transaction.execute(
+            "UPDATE storyboard_versions SET content_json = json_set(content_json, '$.mediaOptions', json(?2)) WHERE id = ?1",
+            params![version.id, serde_json::to_string(&options).map_err(|error| error.to_string())?],
+        ).map_err(|error| error.to_string())?;
+    }
     transaction.commit().map_err(|e| e.to_string())?;
     if let Some((_, prepared)) = audio_first {
         let _ =
@@ -3146,6 +3166,8 @@ fn finalize_audio_first_timeline(
         VoiceoverCue, VoiceoverTrack,
     };
     use crate::voice_provider::{cues_from_alignment, subtitle_track_from_cues};
+    let include_subtitles = crate::media_options::storyboard_options(connection, &storyboard.id)?
+        .map_or(true, |options| options.subtitles);
     let duration_ms = prepared.duration_ms;
     let generation_id = prepared.cached.generation_id.clone();
     let voice_id = prepared.cached.manifest.voice_id.clone();
@@ -3164,7 +3186,11 @@ fn finalize_audio_first_timeline(
                 source_end_ms: s.source_end_ms,
                 timeline_start_ms: cursor,
                 timeline_end_ms: end,
-                on_screen_text: s.on_screen_text.clone(),
+                on_screen_text: if include_subtitles {
+                    s.on_screen_text.clone()
+                } else {
+                    String::new()
+                },
                 clip_kind: "source".to_owned(),
                 derived_from_shot_index: None,
                 fit_reason: None,
@@ -3215,7 +3241,7 @@ fn finalize_audio_first_timeline(
             jianying_compatibility: "verified".to_owned(),
         });
     }
-    let mut text_tracks: Vec<TextTrack> = if cues.is_empty() {
+    let mut text_tracks: Vec<TextTrack> = if cues.is_empty() || !include_subtitles {
         Vec::new()
     } else {
         vec![TextTrack {
@@ -3232,7 +3258,10 @@ fn finalize_audio_first_timeline(
     };
     let mut vt: Vec<VoiceoverTrack> = Vec::new();
     if voiceover_fits {
-        if let Ok(align_cues) = cues_from_alignment(&prepared.alignment, duration_ms) {
+        if let Some(align_cues) = cues_from_alignment(&prepared.alignment, duration_ms)
+            .ok()
+            .filter(|_| include_subtitles)
+        {
             let generated = subtitle_track_from_cues(&generation_id, &align_cues);
             let kept: Vec<TextTrack> = text_tracks
                 .into_iter()

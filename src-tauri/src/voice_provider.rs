@@ -833,6 +833,7 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     timeline: &TimelineVersion,
     text: &str,
     voice_id: Option<&str>,
+    include_subtitles: bool,
 ) -> Result<(TimelineVersion, VoiceoverApplyResult), String> {
     let lock = project_lock(project_id);
     let _guard = lock
@@ -844,24 +845,28 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     let duration_ms = probe_audio_duration_ms(&mp3_path)?;
     let mut quality_warnings = Vec::new();
     // 旁白必写；对齐字幕尽力。alignment 不完整不得挡掉已合成音频。
-    let subtitle_track = match cues_from_alignment(&alignment, duration_ms) {
-        Ok(cues) if !cues.is_empty() => {
-            Some(subtitle_track_from_cues(&cached.generation_id, &cues))
-        }
-        Ok(_) | Err(_) => {
-            let reason = if reused {
-                "Cached voiceover alignment is incomplete; subtitles were not committed."
-            } else {
-                "Voiceover audio was stored but alignment is incomplete; subtitles were not committed."
-            };
-            log::warn!("{reason}");
-            quality_warnings.push(crate::models::PreviewQualityCheck {
-                category: "voiceover_subtitles".to_owned(),
-                severity: "warning".to_owned(),
-                message: reason.to_owned(),
-                shot_indices: Vec::new(),
-            });
-            None
+    let subtitle_track = if !include_subtitles {
+        None
+    } else {
+        match cues_from_alignment(&alignment, duration_ms) {
+            Ok(cues) if !cues.is_empty() => {
+                Some(subtitle_track_from_cues(&cached.generation_id, &cues))
+            }
+            Ok(_) | Err(_) => {
+                let reason = if reused {
+                    "Cached voiceover alignment is incomplete; subtitles were not committed."
+                } else {
+                    "Voiceover audio was stored but alignment is incomplete; subtitles were not committed."
+                };
+                log::warn!("{reason}");
+                quality_warnings.push(crate::models::PreviewQualityCheck {
+                    category: "voiceover_subtitles".to_owned(),
+                    severity: "warning".to_owned(),
+                    message: reason.to_owned(),
+                    shot_indices: Vec::new(),
+                });
+                None
+            }
         }
     };
     let display_name = format!(
@@ -944,6 +949,7 @@ pub fn synthesize_storyboard_voiceover(
         &editing_task_id,
         &conversation_id,
         &timeline,
+        None,
     )? {
         Some((_version, result)) => Ok(result),
         None => {
@@ -995,6 +1001,7 @@ pub(crate) fn auto_synthesize_storyboard_voiceover(
     editing_task_id: &str,
     conversation_id: &str,
     timeline: &TimelineVersion,
+    media_options: Option<crate::media_options::MediaOptions>,
 ) -> Result<Option<(TimelineVersion, VoiceoverApplyResult)>, String> {
     if !timeline.voiceover_tracks.is_empty() {
         log::info!(
@@ -1006,6 +1013,13 @@ pub(crate) fn auto_synthesize_storyboard_voiceover(
     let connection = crate::db::open_connection(app)?;
     let storyboard =
         crate::storyboard::load_storyboard_version(&connection, &timeline.storyboard_version_id)?;
+    let media_options = media_options.or(crate::media_options::storyboard_options(
+        &connection,
+        &storyboard.id,
+    )?);
+    if media_options.is_some_and(|options| !options.voiceover) {
+        return Ok(None);
+    }
     if storyboard.script_mode == "key_message" {
         log::info!(
             "Auto voiceover skipped: storyboard {} is key_message (on-screen markers only)",
@@ -1040,6 +1054,7 @@ pub(crate) fn auto_synthesize_storyboard_voiceover(
         timeline,
         &narration,
         None,
+        media_options.map_or(true, |options| options.subtitles),
     )?;
     Ok(Some((version, result)))
 }

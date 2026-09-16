@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
 import { WorkspaceIcon } from './WorkspaceIcon'
-import type { StoryboardVersion, StoredAgentTask } from '../lib/local-store'
+import type { MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
 
 export type AgentWorkspaceModel = {
@@ -16,6 +16,7 @@ export type AgentWorkspaceModel = {
   editBusy?: boolean
   listenerReady: boolean
   composerNotice: string | null
+  mediaOptions: MediaOptions
   routeStatus: {
     text: string | null
     detail: string | null
@@ -28,11 +29,20 @@ export type AgentWorkspaceActions = {
   openArtifacts: () => void
   sendMessage: (event: FormEvent<HTMLFormElement>) => void
   stopAgentRun: () => void
+  toggleMedia: (name: keyof MediaOptions) => void
 }
 
 type AgentWorkspaceProps = {
   model: AgentWorkspaceModel
   actions: AgentWorkspaceActions
+}
+
+const mediaLabels = { voiceover: '配音', subtitles: '字幕', bgm: 'BGM' } as const
+const mediaIcons = { voiceover: 'microphone', subtitles: 'subtitles', bgm: 'music' } as const
+
+function mediaSummary(options: MediaOptions) {
+  return (Object.keys(mediaLabels) as (keyof MediaOptions)[])
+    .map((key) => `${mediaLabels[key]}：${options[key] ? '开' : '关'}`).join(' · ')
 }
 
 export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
@@ -98,16 +108,20 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           </div>
         )}
 
-        {model.messages.map((message) => (
+        {model.messages.map((message) => {
+          const mediaOptions = model.tasks.find((task) => task.input.userMessageId === message.id)?.input.mediaOptions
+          return (
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-content">
               <div className="message-meta">
                 {message.role === 'agent' ? 'Assembly' : '你'} <time>{message.time}</time>
               </div>
               <p>{message.content}</p>
+              {mediaOptions && <small className="message-media-options">本轮自动添加 · {mediaSummary(mediaOptions)}</small>}
             </div>
           </article>
-        ))}
+          )
+        })}
 
         {model.tasks[0] && (
           <details className="agent-details" open={model.isSending}><summary>{model.isSending ? '查看处理进度' : '本轮处理记录'}</summary><AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} /></details>
@@ -138,10 +152,18 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
             event.currentTarget.form?.requestSubmit()
           }}
         />
-        <div>
-          <span role="status" className={model.composerNotice ? 'composer-notice' : undefined}>
-            {model.composerNotice ?? (model.session ? '' : '发送后会自动创建项目并开始')}
-          </span>
+        <div className="composer-footer">
+          <div className="composer-media-options" role="group" aria-label="本轮自动添加">
+            {(Object.keys(mediaLabels) as (keyof MediaOptions)[]).map((key) => (
+              <button key={key} type="button" aria-pressed={model.mediaOptions[key]}
+                title={`${model.mediaOptions[key] ? '关闭' : '开启'}自动${mediaLabels[key]}，发送后生效`}
+                onClick={() => actions.toggleMedia(key)}>
+                <WorkspaceIcon name={mediaIcons[key]} />
+                <span className="composer-media-label">{mediaLabels[key]}</span>
+                <span className="composer-media-check" aria-hidden="true"><WorkspaceIcon name="check" /></span>
+              </button>
+            ))}
+          </div>
           {model.isSending ? (
             <button
               className="send-button send-button--stop"
@@ -156,6 +178,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
             </button>
           )}
         </div>
+        {model.composerNotice && <span role="status" className="composer-notice">{model.composerNotice}</span>}
       </form>
       <small className="composer-shortcut">Enter 发送 · Shift + Enter 换行</small>
     </section>

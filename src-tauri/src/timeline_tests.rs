@@ -488,6 +488,7 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
         .execute_batch(
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
+            CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
             CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
@@ -569,6 +570,7 @@ fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() 
         .execute_batch(
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
+            CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
             CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
@@ -664,6 +666,7 @@ fn changing_clip_duration_shifts_following_shots_and_stays_in_source_range() {
         .execute_batch(
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
+            CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
             CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",

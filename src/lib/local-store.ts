@@ -281,6 +281,8 @@ export type TaskRouteResult = {
   routeReceipt: string | null
 }
 
+export type MediaOptions = { voiceover: boolean; subtitles: boolean; bgm: boolean }
+
 export type StoredAgentTask = {
   id: string
   projectId: string
@@ -288,7 +290,7 @@ export type StoredAgentTask = {
   conversationId: string | null
   toolName: string
   status: 'queued' | 'running' | 'completed' | 'partially_completed' | 'failed' | 'cancelled' | 'needs_clarification' | 'needs_review'
-  input: Record<string, unknown>
+  input: Record<string, unknown> & { mediaOptions?: MediaOptions | null; userMessageId?: string | null }
   result: Record<string, unknown> | null
   error: string | null
   createdAt: number
@@ -369,7 +371,9 @@ export async function clearFishAudioApiKey() { requireDesktopRuntime(); return i
 export async function importFishAudioApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<FishAudioStatus>('import_fish_audio_api_key_from_environment') }
 
 export async function listProjects() { requireDesktopRuntime(); return invoke<StoredProject[]>('list_projects') }
-export async function createProject(name: string) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name }) }
+export type SharedLibrary = { id: string; name: string; assetCount: number }
+export async function listSharedLibraries() { requireDesktopRuntime(); return invoke<SharedLibrary[]>('list_shared_libraries') }
+export async function createProject(name: string, libraryIds?: string[]) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name, libraryIds }) }
 
 export async function listConversations(projectId: string, editingTaskId?: string) {
   requireDesktopRuntime()
@@ -503,9 +507,9 @@ export async function executeAgentEdit(projectId: string, editingTaskId: string,
   return invoke<string>('execute_agent_edit', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt })
 }
 
-export async function submitConversationTurn(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string) {
+export async function submitConversationTurn(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string, mediaOptions: MediaOptions) {
   requireDesktopRuntime()
-  return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt })
+  return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt, mediaOptions })
 }
 export async function cancelAgentEdit(projectId: string, editingTaskId: string, conversationId: string, agentTaskId: string) {
   requireDesktopRuntime()
