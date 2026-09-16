@@ -88,7 +88,9 @@ pub(super) fn persisted_artifact_for_tool(
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub(super) fn safe_step_error_code(error: &str) -> &'static str {
-    if error.starts_with("voiceover_longer_than_picture:") {
+    if error.starts_with("voiceover_script_confirmation_required") {
+        "voiceover_script_confirmation_required"
+    } else if error.starts_with("voiceover_longer_than_picture:") {
         "voiceover_longer_than_picture"
     } else if error.starts_with("storyboard_source_inventory_unavailable:")
         || error.starts_with("storyboard_visual_evidence_unavailable:")
@@ -134,7 +136,18 @@ fn diagnostic_count(error: &str, key: &str) -> Option<usize> {
 pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     let code = safe_step_error_code(error);
 
-    // 前置条件缺失：render_preview/create_jianying_draft 需要先有 timeline
+    if error.starts_with("voiceover_script_confirmation_required") {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "voiceover_script",
+            "code": "voiceover_script_confirmation_required",
+            "facts": ["Voiceover is on, but the current brief is not spoken narration."],
+            "retryable": false,
+            "recovery": "Draft a complete spoken voiceover script in the user's language, show it to the user, and ask whether they agree. Do not call generate_storyboard in this turn. After they agree, call generate_storyboard with that approved script as brief.",
+            "responseInstruction": "Write a spoken narration draft for the user's theme, quote it clearly, and ask them to confirm before generating the video. Do not claim a storyboard or voiceover was created."
+        });
+    }
     if error.starts_with("no_timeline:") {
         return json!({
             "status": "failed",
@@ -865,10 +878,7 @@ pub(super) fn apply_skill(
             let media_options = args
                 .get("mediaOptions")
                 .filter(|value| !value.is_null())
-                .map(|value| {
-                    serde_json::from_value::<crate::media_options::MediaOptions>(value.clone())
-                        .map_err(|error| error.to_string())
-                })
+                .map(crate::media_options::parse_media_options)
                 .transpose()?
                 .or(state.media_options);
             state.media_options = media_options;

@@ -218,6 +218,14 @@ fn candidate_has_evidence(candidate: &StoryboardSource) -> bool {
                 .scene
                 .as_ref()
                 .is_some_and(|scene| !scene.trim().is_empty())
+            || evidence
+                .narrative_role
+                .as_ref()
+                .is_some_and(|role| !role.trim().is_empty())
+            || evidence
+                .caption
+                .as_ref()
+                .is_some_and(|caption| !caption.trim().is_empty())
     });
     let has_ocr = candidate
         .ocr_evidence
@@ -316,6 +324,12 @@ fn evidence_blob(candidate: &StoryboardSource) -> String {
         parts.extend(evidence.subjects.iter().cloned());
         parts.extend(evidence.actions.iter().cloned());
         parts.extend(evidence.products.iter().cloned());
+        if let Some(role) = &evidence.narrative_role {
+            parts.push(role.clone());
+        }
+        if let Some(caption) = &evidence.caption {
+            parts.push(caption.clone());
+        }
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -515,6 +529,8 @@ mod tests {
             camera_motion: None,
 
             segment_id: None,
+            narrative_role: None,
+            caption: None,
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
@@ -529,6 +545,8 @@ mod tests {
             camera_motion: None,
 
             segment_id: None,
+            narrative_role: None,
+            caption: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-factory".to_owned(),
@@ -565,6 +583,8 @@ mod tests {
             camera_motion: None,
 
             segment_id: None,
+            narrative_role: None,
+            caption: None,
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.95);
         office.visual_evidence = vec![crate::models::VisualEvidence {
@@ -579,6 +599,8 @@ mod tests {
             camera_motion: None,
 
             segment_id: None,
+            narrative_role: None,
+            caption: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-logistics".to_owned(),
@@ -622,6 +644,8 @@ mod tests {
             camera_motion: None,
 
             segment_id: None,
+            narrative_role: None,
+            caption: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-battery".to_owned(),

@@ -193,7 +193,7 @@ mod tests {
             "Phase 3 JSON did not match StoryboardContent schema."
         ));
         assert!(!is_transport_or_parse_error(
-            "Beat 'x' has 1 shot(s); every covered beat must expand to at least 2"
+            "Asset 'a' appears in 5 of 8 shots, exceeding the 40% diversity limit"
         ));
     }
 }

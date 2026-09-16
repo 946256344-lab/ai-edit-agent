@@ -10,6 +10,14 @@ pub struct MediaOptions {
     pub bgm: bool,
 }
 
+/// 模型有时把对象再编码成字符串；对象和 JSON 字符串都收下。
+pub(crate) fn parse_media_options(value: &serde_json::Value) -> Result<MediaOptions, String> {
+    if let Some(text) = value.as_str() {
+        return serde_json::from_str(text.trim()).map_err(|error| error.to_string());
+    }
+    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19,6 +27,27 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE storyboard_versions (id TEXT PRIMARY KEY, content_json TEXT NOT NULL);
             INSERT INTO storyboard_versions VALUES ('storyboard', '{}');").unwrap();
+        assert_eq!(
+            parse_media_options(&serde_json::json!({
+                "voiceover": true,
+                "subtitles": false,
+                "bgm": false
+            }))
+            .unwrap(),
+            MediaOptions {
+                voiceover: true,
+                subtitles: false,
+                bgm: false,
+            }
+        );
+        assert_eq!(
+            parse_media_options(&serde_json::json!(
+                "{\"voiceover\":true,\"subtitles\":false,\"bgm\":false}"
+            ))
+            .unwrap()
+            .voiceover,
+            true
+        );
         assert_eq!(storyboard_options(&connection, "storyboard").unwrap(), None);
         for mask in 0..8 {
             let options = MediaOptions {

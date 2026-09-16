@@ -20,9 +20,9 @@ pub(crate) use analysis::{
     drain_pending_analysis, request_asset_analysis, resume_incomplete_analysis,
     retry_failed_asset_analysis, RetryFailedAnalysisStage, RETRY_FAILED_ASSET_LIMIT,
 };
-// visual：视觉批次优先级与等待；片段级 ensure
+// visual：视觉批次优先级；选片只补第一次段卡的本地向量
 pub(crate) use segment_visual::{ensure_segment_visual_evidence, DEFAULT_ENSURE_BUDGET};
-pub(crate) use visual::{prioritize_pending_visual_batches, wait_for_visual_batch};
+pub(crate) use visual::prioritize_pending_visual_batches;
 // health：Agent 健康摘要
 pub(crate) use health::get_asset_health_summary_for_agent;
 

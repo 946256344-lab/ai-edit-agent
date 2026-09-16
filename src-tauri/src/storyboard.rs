@@ -19,7 +19,7 @@ use crate::storyboard::step_retry::{
     build_repair_packet, is_transport_or_parse_error, StepRetryBudget,
 };
 
-use crate::assets::{prioritize_pending_visual_batches, wait_for_visual_batch};
+use crate::assets::prioritize_pending_visual_batches;
 use crate::db::{now_millis, open_connection};
 use crate::models::{
     CandidateSegment, StoryboardContent, StoryboardSource, StoryboardVersion, TechnicalMetadata,
@@ -41,9 +41,6 @@ const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
 /// 本地处理安全上限（非创作规格）；80s 成片允许更密的切镜。
 const MAX_STORYBOARD_SHOTS: usize = 100;
 const MAX_STORYBOARD_BEATS: usize = 100;
-/// 短 brief 且无实质口播稿时，非 audio-first 下的目标时长上限。
-/// `key_message` / 短 brief 默认成片上限：偏 15 秒内短视频。
-const SHORT_BRIEF_TARGET_CAP_MS: i64 = 15_000;
 
 fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>) -> String {
     let message = message.into();
@@ -71,16 +68,17 @@ const DUAL_SEGMENT_MAX_PER_ASSET: usize = 6;
 /// 加载 storyboard 候选源。
 ///
 /// `expand_segments_for` 为 `Some(set)` 时，集合内且已有真实场景分段的视频会展开成
-/// 每片段一条候选（含相邻双段组合）；其余素材保持整条素材候选（`segment = None`）。
-/// 传 `None` 表示全部按整条素材加载，用于 Phase 2a 的素材级粗排与 Phase 4/校验。
+/// 已打第一次卡的片段候选（含两端都有卡的相邻双段组合）；没有第一次卡的段不进召回，
+/// 也不把整片标签抄到未打卡段上。段上全部没卡、素材级却有旧整片卡时，按整条进召回。
+/// 无硬切的整条素材只在已有整片视觉卡时参与召回。
+/// 传 `None` 表示全部按整条素材加载，用于 Phase 1 库存摘要与 Phase 4/校验。
 pub(crate) fn storyboard_sources(
     connection: &Connection,
     project_id: &str,
     expand_segments_for: Option<&HashSet<String>>,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
-        // Top-12 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
-        // 可访问视频中判断语义与画面优先级。
+        // 候选入口只接受技术分析完成的可访问视频。
         "SELECT id, kind, metadata_json, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
@@ -147,19 +145,36 @@ pub(crate) fn storyboard_sources(
             segment_clip_embedding: None,
         };
 
-        let expand = expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
+        let recalling = expand_segments_for.is_some();
+        let expand = recalling
+            && expand_segments_for.is_some_and(|allowed| allowed.contains(&asset_id))
             && scene_segments.iter().any(|segment| !segment.id.is_empty());
-        if !expand {
-            sources.push(whole_asset);
+        if expand {
+            sources.extend(expand_segment_sources(
+                connection,
+                &whole_asset,
+                &scene_segments,
+            ));
             continue;
         }
-        sources.extend(expand_segment_sources(
-            connection,
-            &whole_asset,
-            &scene_segments,
-        ));
+        if recalling && !source_has_whole_file_card(&whole_asset) {
+            continue;
+        }
+        sources.push(whole_asset);
     }
     Ok((sources, visual_ready_count))
+}
+
+fn source_has_whole_file_card(source: &StoryboardSource) -> bool {
+    !source.visual_evidence.is_empty()
+}
+
+fn asset_has_first_pass_card(source: &StoryboardSource) -> bool {
+    source
+        .scene_segments
+        .iter()
+        .any(|segment| !segment.id.is_empty() && segment.visual_evidence.is_some())
+        || source_has_whole_file_card(source)
 }
 
 /// 把一条整素材候选展开成片段候选：单段 + 短段与后继的双段组合。
@@ -173,10 +188,17 @@ fn expand_segment_sources(
         .filter(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms)
         .collect::<Vec<_>>();
     if indexed.is_empty() {
-        return vec![whole_asset.clone()];
+        return if source_has_whole_file_card(whole_asset) {
+            vec![whole_asset.clone()]
+        } else {
+            Vec::new()
+        };
     }
     let mut expanded = Vec::with_capacity(indexed.len() + DUAL_SEGMENT_MAX_PER_ASSET);
     for segment in &indexed {
+        let Some(card) = segment.visual_evidence.clone() else {
+            continue;
+        };
         let (start_ms, end_ms) = crate::assets::motion::effective_window(segment);
         let candidate = CandidateSegment {
             id: segment.id.clone(),
@@ -196,11 +218,7 @@ fn expand_segment_sources(
                 .as_ref()
                 .and_then(|evidence| evidence.camera_motion.clone()),
         };
-        let evidence = segment
-            .visual_evidence
-            .clone()
-            .map(|item| vec![item])
-            .unwrap_or_default();
+        let evidence = vec![card];
         expanded.push(segment_source(
             connection,
             whole_asset,
@@ -216,6 +234,9 @@ fn expand_segment_sources(
             break;
         }
         let (first, second) = (pair[0], pair[1]);
+        if first.visual_evidence.is_none() || second.visual_evidence.is_none() {
+            continue;
+        }
         let combined = second.end_ms - first.start_ms;
         // 只在首段过短、合并后仍在可用镜头长度内时才补双段候选。
         if first.end_ms - first.start_ms >= DUAL_SEGMENT_SHORT_MS
@@ -269,6 +290,9 @@ fn expand_segment_sources(
         ));
         dual_count += 1;
     }
+    if expanded.is_empty() && source_has_whole_file_card(whole_asset) {
+        return vec![whole_asset.clone()];
+    }
     expanded
 }
 
@@ -277,25 +301,9 @@ fn segment_source(
     connection: &Connection,
     whole_asset: &StoryboardSource,
     segment: CandidateSegment,
-    mut visual_evidence: Vec<crate::models::VisualEvidence>,
+    visual_evidence: Vec<crate::models::VisualEvidence>,
     member_ids: &[String],
 ) -> StoryboardSource {
-    if visual_evidence.is_empty() {
-        // 片段证据尚未就绪时退回素材级证据，保持召回而不是把候选打成无证据。
-        visual_evidence = whole_asset
-            .visual_evidence
-            .iter()
-            .filter(|evidence| {
-                evidence
-                    .time_ms
-                    .is_some_and(|time| time >= segment.start_ms && time <= segment.end_ms)
-            })
-            .cloned()
-            .collect();
-        if visual_evidence.is_empty() {
-            visual_evidence = whole_asset.visual_evidence.clone();
-        }
-    }
     let mut ocr_evidence = whole_asset
         .ocr_evidence
         .iter()
@@ -773,9 +781,15 @@ fn minimum_storyboard_duration(brief: &str) -> i64 {
     estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
 }
 
-/// 短目标/提纲（无大段可朗读文案）不应被 Phase1 扩成超过 15s 的 key_message，更不应写成 30–90s 全旁白。
+/// 短目标/提纲不应被写成可念旁白稿；时长由模型按用户要求和内容决定。
 fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 20_000
+}
+
+/// 配音开着时，brief 至少要有约一句可念的话，才当作已有旁白稿。
+/// 主题型剪辑要求通常更短；用户已同意的旁白稿通常更长。
+fn brief_has_voiceover_script(brief: &str) -> bool {
+    estimated_storyboard_duration_ms(brief) >= 3_000
 }
 
 /// Phase 1 前由系统锁定 scriptMode：可念稿 → full_script；否则 key_message。
@@ -814,35 +828,25 @@ fn brief_requests_longer_runtime(brief: &str) -> bool {
 fn short_brief_duration_issue(
     brief: &str,
     narrative: &phases::NarrativeStructure,
+    required_script_mode: &str,
 ) -> Option<String> {
     if brief_has_substantial_speakable_copy(brief) || brief_requests_longer_runtime(brief) {
         return None;
     }
     let mut issues = Vec::new();
-    if narrative.script_mode == "full_script" {
+    // 配音合成旁白已由系统锁成 full_script，不能再要求改回 key_message。
+    if narrative.script_mode == "full_script" && required_script_mode != "full_script" {
         issues.push(
             "short briefs without substantial speakable copy must use scriptMode=key_message"
                 .to_owned(),
         );
-    }
-    if narrative.target_duration_ms > SHORT_BRIEF_TARGET_CAP_MS {
-        issues.push(format!(
-            "short brief targetDurationMs is {} ms; keep it at or below {} ms unless the user asked for a longer runtime",
-            narrative.target_duration_ms, SHORT_BRIEF_TARGET_CAP_MS
-        ));
-    }
-    if narrative.beats.len() > 5 {
-        issues.push(format!(
-            "short brief produced {} beats; prefer 2-5 sharper beats for a <=15s key_message cut",
-            narrative.beats.len()
-        ));
     }
     (!issues.is_empty()).then(|| issues.join("; "))
 }
 
 /// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
 /// 可念稿 brief 在 Phase 1 前已由系统锁成 full_script，此处通常不会再进入。
-/// 用户要求更长成片时仍校验标记，只放开 15s 时长硬帽。
+/// 时长跟所选 target 走，不再夹 15 秒硬帽。
 fn key_message_marker_issue(
     brief: &str,
     narrative: &mut phases::NarrativeStructure,
@@ -883,14 +887,9 @@ fn key_message_marker_issue(
         return Some(issues.join("; "));
     }
     let soft_limit = ((narrative.target_duration_ms.max(1) as f64) * 1.2).round() as i64;
-    let limit = if brief_requests_longer_runtime(brief) {
-        soft_limit
-    } else {
-        soft_limit.min(SHORT_BRIEF_TARGET_CAP_MS)
-    };
-    if floor_sum > limit {
+    if floor_sum > soft_limit {
         return Some(format!(
-            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {limit} ms); shorten onScreenText markers or reduce beats",
+            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {soft_limit} ms); shorten onScreenText markers or reduce beats",
             narrative.target_duration_ms
         ));
     }
@@ -1423,11 +1422,12 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_script_mode, enforce_decided_script_mode, estimated_storyboard_duration_ms,
-        key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
-        phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
-        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts,
-        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        brief_has_voiceover_script, decide_script_mode, enforce_decided_script_mode,
+        estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
+        normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
+        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
+        storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
+        MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1435,6 +1435,7 @@ mod tests {
     };
     use crate::storyboard::phases::NarrativeStructure;
     use rusqlite::{params, Connection};
+    use std::collections::HashSet;
     use std::fs;
     use uuid::Uuid;
 
@@ -1601,6 +1602,100 @@ mod tests {
     }
 
     #[test]
+    fn storyboard_sources_recall_skips_segments_without_first_pass_cards() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory =
+            std::env::temp_dir().join(format!("assembly-storyboard-card-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[{"id":"s001","startMs":0,"endMs":4000,"visualEvidence":{"timeMs":2000,"subjects":["machine"],"scene":"factory","actions":[],"products":[],"qualityNotes":[]}},{"id":"s002","startMs":4000,"endMs":8000}],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","visualQualityScore":0.82,"keyframeGridPath":null}"#;
+        connection
+            .execute(
+                "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES ('ready-video', 'project-1', 'video', ?1, ?2, 'ready')",
+                params![metadata, available],
+            )
+            .expect("insert source fixture");
+        let expand = ["ready-video".to_owned()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let (sources, _) = storyboard_sources(&connection, "project-1", Some(&expand))
+            .expect("load expanded sources");
+        let ids: Vec<_> = sources
+            .iter()
+            .filter_map(|source| source.segment.as_ref().map(|segment| segment.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["s001"]);
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
+    }
+
+    #[test]
+    fn storyboard_sources_recall_uses_whole_file_card_when_named_segments_have_none() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory = std::env::temp_dir().join(format!(
+            "assembly-storyboard-whole-card-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[{"id":"s001","startMs":0,"endMs":4000},{"id":"s002","startMs":4000,"endMs":8000}],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","visualQualityScore":0.82,"keyframeGridPath":null}"#;
+        connection
+            .execute(
+                "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES ('ready-video', 'project-1', 'video', ?1, ?2, 'ready')",
+                params![metadata, available],
+            )
+            .expect("insert source fixture");
+        let expand = ["ready-video".to_owned()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let (sources, _) = storyboard_sources(&connection, "project-1", Some(&expand))
+            .expect("load expanded sources");
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].segment.is_none());
+        assert!(!sources[0].visual_evidence.is_empty());
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
+    }
+
+    #[test]
     fn usage_counts_only_the_latest_timeline_once_per_editing_task() {
         let connection = Connection::open_in_memory().expect("open test database");
         connection
@@ -1669,7 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_gaps_flag_uncovered_min_shots_and_voice_deficit() {
+    fn completion_gaps_flag_uncovered_and_voice_deficit() {
         let content = content("direct");
         let version = StoryboardVersion {
             id: "sb-1".to_owned(),
@@ -1691,7 +1786,7 @@ mod tests {
             .map(|gap: StoryboardCompletionGap| gap.code)
             .collect::<Vec<_>>();
         assert!(codes.contains(&"uncovered_beats".to_owned()));
-        assert!(codes.contains(&"beat_below_min_shots".to_owned()));
+        assert!(!codes.contains(&"beat_below_min_shots".to_owned()));
         assert!(codes.contains(&"voiceover_longer_than_picture".to_owned()));
     }
 
@@ -1796,15 +1891,50 @@ mod tests {
                 })
                 .collect(),
         };
-        let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative)
+        let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative, "key_message")
             .expect("short brief should be rejected");
         assert!(issue.contains("key_message"));
-        assert!(issue.contains("15000") || issue.contains("15"));
     }
 
     #[test]
-    fn key_message_rejects_markers_longer_than_short_cap() {
-        // 5 个合法长度标记的可读性下限之和会超过 15s 硬帽。
+    fn locked_full_script_skips_key_message_reject_and_has_no_duration_cap() {
+        let beats = (0..3)
+            .map(|index| StoryboardBeat {
+                id: format!("beat-{index}"),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                visual_keywords: vec![],
+                narration: "短旁白".to_owned(),
+                on_screen_text: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let short = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 12_000,
+            spoken_script: "工厂里正在生产。".to_owned(),
+            script_mode: "full_script".to_owned(),
+            beats: beats.clone(),
+        };
+        assert!(
+            short_brief_duration_issue("帮我做个工厂宣传片", &short, "full_script").is_none(),
+            "voiceover-locked full_script must not be bounced back to key_message"
+        );
+
+        let long = NarrativeStructure {
+            target_duration_ms: 84_000,
+            beats,
+            ..short
+        };
+        assert!(
+            short_brief_duration_issue("帮我做个工厂宣传片", &long, "full_script").is_none(),
+            "approved or locked full_script duration is not capped at 15s"
+        );
+    }
+
+    #[test]
+    fn key_message_rejects_markers_that_exceed_target_pacing() {
+        // 5 个合法长度标记的可读性下限之和会超过 12s 目标的 1.2 倍软帽。
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
@@ -1851,6 +1981,28 @@ mod tests {
     }
 
     #[test]
+    fn key_message_allows_duration_above_former_fifteen_second_cap() {
+        let mut narrative = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 30_000,
+            spoken_script: String::new(),
+            script_mode: "key_message".to_owned(),
+            beats: (0..4)
+                .map(|index| StoryboardBeat {
+                    id: format!("b{index}"),
+                    purpose: "p".to_owned(),
+                    required_visual: "v".to_owned(),
+                    visual_keywords: vec![],
+                    narration: String::new(),
+                    on_screen_text: "工厂现场".to_owned(),
+                })
+                .collect(),
+        };
+        assert!(key_message_marker_issue("帮我做个工厂宣传片", &mut narrative).is_none());
+    }
+
+    #[test]
     fn longer_runtime_brief_still_requires_key_message_markers() {
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
@@ -1874,7 +2026,7 @@ mod tests {
             "issue={missing}"
         );
 
-        // 5×24 字标记的可读性下限约 16.7s，超过 15s 硬帽但低于 1.2×60s。
+        // 5×24 字标记的可读性下限约 16.7s，低于 1.2×60s。
         narrative.beats = (0..5)
             .map(|index| StoryboardBeat {
                 id: format!("b{index}"),
@@ -1964,6 +2116,14 @@ mod tests {
         enforce_decided_script_mode(&speakable, "full_script", &mut narrative);
         assert_eq!(narrative.script_mode, "full_script");
         assert!(!narrative.spoken_script.trim().is_empty());
+    }
+
+    #[test]
+    fn brief_has_voiceover_script_rejects_theme_and_accepts_spoken_copy() {
+        assert!(!brief_has_voiceover_script("帮我做个工厂宣传片"));
+        assert!(brief_has_voiceover_script(
+            "今天我们走进智能工厂，看看生产线如何把原料变成可靠的产品，品质始终在现场被检验。"
+        ));
     }
 
     #[test]
@@ -2396,6 +2556,13 @@ fn generate_storyboard_internal(
     if brief.is_empty() {
         return Err("Storyboard brief cannot be empty.".to_owned());
     }
+    if media_options.is_some_and(|options| options.voiceover) && !brief_has_voiceover_script(brief)
+    {
+        return Err(
+            "voiceover_script_confirmation_required: voiceover is on but the brief is not spoken narration. Draft a spoken script, ask the user to confirm it, then call generate_storyboard with that approved script as brief."
+                .to_owned(),
+        );
+    }
     let connection = open_connection(&app)?;
     let task_exists = connection
         .query_row(
@@ -2408,9 +2575,8 @@ fn generate_storyboard_internal(
         return Err("Editing task does not belong to this project.".to_owned());
     }
     if schedule_visual_analysis {
-        log::info!("Prioritizing visual analysis batch for storyboard generation.");
-        let priority_batch = prioritize_pending_visual_batches(&app, &project_id, brief)?;
-        wait_for_visual_batch(&app, priority_batch.as_deref())?;
+        log::info!("Prioritizing pending visual batches without waiting for first-pass cards.");
+        let _ = prioritize_pending_visual_batches(&app, &project_id, brief)?;
     }
     match crate::assets::analysis::backfill_project_visual_quality(&connection, &project_id) {
         Ok(updated) if updated > 0 => {
@@ -2477,15 +2643,29 @@ fn generate_storyboard_internal(
             ))
         };
     }
+    let carded_assets = sources
+        .iter()
+        .filter(|source| asset_has_first_pass_card(source))
+        .count();
+    if carded_assets == 0 {
+        log::warn!(
+            "No first-pass segment cards available. accessible={}, visual_ready_count={}",
+            sources.len(),
+            visual_ready_count
+        );
+        return Err("storyboard_visual_evidence_unavailable: first_pass_cards=0".to_owned());
+    }
+    log::info!(
+        "First-pass cards available on {carded_assets} of {} accessible videos",
+        sources.len()
+    );
     let access = ModelAccess::resolve().map_err(|error| {
         log::warn!("AI storyboard generation could not access the configured provider: {error}.");
         error
     })?;
 
-    // Phase 1: 系统先锁定 scriptMode；把本地库库存摘要注入叙事，再让模型只在该模式下写结构。
-    let compose_narration = media_options.is_some_and(|options| options.voiceover)
-        && decide_script_mode(brief) == "key_message";
-    let required_script_mode = if compose_narration {
+    // Phase 1：配音开着时 brief 已是可念稿，照念 full_script；否则仍按朗读时长锁定模式。
+    let required_script_mode = if media_options.is_some_and(|options| options.voiceover) {
         "full_script"
     } else {
         decide_script_mode(brief)
@@ -2505,7 +2685,6 @@ fn generate_storyboard_internal(
             required_script_mode,
             &library_inventory,
             phase1_feedback.as_deref(),
-            compose_narration,
         ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
@@ -2536,7 +2715,11 @@ fn generate_storyboard_internal(
                             MAX_BEAT_SPOKEN_MS
                         )
                     });
-                let duration_issue = short_brief_duration_issue(brief, &candidate);
+                let duration_issue = if media_options.is_some_and(|options| options.voiceover) {
+                    None
+                } else {
+                    short_brief_duration_issue(brief, &candidate, required_script_mode)
+                };
                 let key_message_issue = key_message_marker_issue(brief, &mut candidate);
                 let issue = beat_issue
                     .or(narration_issue)
@@ -2649,49 +2832,38 @@ fn generate_storyboard_internal(
         audio_first.is_some()
     );
 
-    // Phase 2a：每 beat 9 条互不相似整片 → 并集 ensure → 有场景段则全部展开（视觉超时不退整条）
-    let beat_asset_ids = phases::phase2_asset_shortlists(
-        &narrative,
-        &sources,
-        &usage_counts,
-        &embeddings,
-        &clip_embeddings,
-    );
-    let coarse_ids = phases::union_shortlist_asset_ids(&beat_asset_ids);
+    // Phase 2：全部就绪视频按段展开，每个 beat 直接取 9 段。
+    let all_ids: Vec<String> = sources
+        .iter()
+        .map(|source| source.asset_id.clone())
+        .collect();
     let ensure = crate::assets::ensure_segment_visual_evidence(
         &app,
         &project_id,
-        &coarse_ids,
+        &all_ids,
         crate::assets::DEFAULT_ENSURE_BUDGET,
     )
     .unwrap_or_default();
     log::info!(
-        "Phase 2a ensure_segment_visual: requested={}, ready={}, pending={}",
-        coarse_ids.len(),
+        "Phase 2 first-pass segment cards: requested={}, ready={}, pending={}",
+        all_ids.len(),
         ensure.ready.len(),
         ensure.pending.len()
     );
-    // 短名单素材有代表帧即可编码 CLIP（不依赖 Agnes 标签）。
-    match clip::refresh_assets_clip_embeddings(&app, &coarse_ids) {
-        Ok(updated) if updated > 0 => {
-            log::info!("Phase 2a CLIP image embeddings updated for {updated} segments.");
-        }
-        Ok(_) => {}
-        Err(error) => log::warn!("Phase 2a CLIP image embedding skipped: {error}"),
-    }
-    crate::execution_deadline::check()?;
-    let expand_set = coarse_ids.iter().cloned().collect::<HashSet<_>>();
+    let expand_set = all_ids.iter().cloned().collect::<HashSet<_>>();
     let connection = open_connection(&app)?;
     let (sources, visual_ready_count) =
         storyboard_sources(&connection, &project_id, Some(&expand_set))?;
     log::info!(
-        "Phase 2b sources after segment expand: total={}, visual_ready={}, expanded_assets={}",
+        "Phase 2 sources after segment expand: total={}, visual_ready={}, assets={}",
         sources.len(),
         visual_ready_count,
         expand_set.len()
     );
-
-    // Phase 2b: 9 条内约 4 段，去似补位到 Top-12（同片最多 2 段）
+    if sources.is_empty() {
+        return Err("storyboard_visual_evidence_unavailable: first_pass_cards=0".to_owned());
+    }
+    crate::execution_deadline::check()?;
     let initial_timing = audio_first
         .as_ref()
         .and_then(|(target, prepared)| {
@@ -2712,8 +2884,26 @@ fn generate_storyboard_internal(
         &embeddings,
         &clip_embeddings,
         initial_timing,
-        Some(&beat_asset_ids),
     )?;
+    let pool_asset_ids = {
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for pool in &rough.candidate_pools {
+            for candidate in &pool.candidates {
+                if seen.insert(candidate.asset_id.clone()) {
+                    ids.push(candidate.asset_id.clone());
+                }
+            }
+        }
+        ids
+    };
+    match clip::refresh_assets_clip_embeddings(&app, &pool_asset_ids) {
+        Ok(updated) if updated > 0 => {
+            log::info!("Phase 2 CLIP image embeddings updated for {updated} pool segments.");
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("Phase 2 CLIP image embedding skipped: {error}"),
+    }
     if narrative.script_mode == "key_message" {
         let covered: Vec<String> = rough
             .shots
@@ -2731,7 +2921,7 @@ fn generate_storyboard_internal(
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 选 2–3 镜（传输/语义预算分离；失败带 previousShots）
+    // Phase 3: 选 1–3 镜（传输/语义预算分离；失败带 previousShots）
     let selected = {
         let mut repair: Option<RepairPacket> = None;
         let mut selected = None;
@@ -3421,11 +3611,11 @@ pub(crate) fn storyboard_completion_gaps(
             continue;
         }
         let count = shots_per_beat.get(beat.id.as_str()).copied().unwrap_or(0);
-        if count < 2 {
+        if count == 0 {
             gaps.push(StoryboardCompletionGap {
-                code: "beat_below_min_shots".to_owned(),
+                code: "covered_beat_without_shots".to_owned(),
                 message: format!(
-                    "Beat '{}' has {count} shot(s); every covered beat needs at least 2 distinct shots. Use search_asset_segments then insert_clips/replace_clips on the current timeline — do not re-run generate_storyboard just to add shots.",
+                    "Beat '{}' is marked covered but has no shots. Mark it uncovered honestly, or use search_asset_segments then insert_clips/replace_clips on the current timeline — do not re-run generate_storyboard just to add shots.",
                     beat.id
                 ),
             });

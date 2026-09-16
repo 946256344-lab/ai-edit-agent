@@ -107,7 +107,7 @@ pub(crate) fn run_native_tool_loop(
     )?;
     if let Some(options) = media_options {
         let instruction = format!(
-            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除已有轨道。配音开启且需求不是完整稿时，在 brief 中说明需要创作可念旁白稿。BGM 开启且时间线没有音乐时，先 search_music 再 use_online_music；必须写入音乐后重新 render_preview，失败如实说明。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。",
+            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。BGM 开启且时间线没有音乐时，先 search_music 再 use_online_music；必须写入音乐后重新 render_preview，失败如实说明。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。",
             serde_json::to_string(&options).map_err(|error| error.to_string())?
         );
         let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
@@ -175,6 +175,7 @@ pub(crate) fn run_native_tool_loop(
         };
         if let Err(error) = &result {
             let failure = classify_model_request_failure(error);
+            log::warn!("native provider request failed: code={}", failure.code);
             let _ = record_agent_diagnostic(
                 connection,
                 project_id,
@@ -388,12 +389,13 @@ fn native_model_reply_unavailable_result(
     agent_task_id: &str,
     receipt: &NativeRunReceipt,
 ) -> AgentEditResult {
-    let message = if receipt.successful_observation_this_turn {
+    let observed_via_tool = receipt.tool_called && receipt.successful_observation_this_turn;
+    let message = if observed_via_tool {
         "项目数据已读取，但模型未能生成最终回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。"
     } else if receipt.tool_called {
         "模型未能根据本轮工具结果生成最终回复。请检查模型连接后重试；本轮没有确认新的本地写入。"
     } else {
-        "模型未能生成回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。"
+        "模型连接失败，未能开始本轮处理。请重试；本轮没有创建或修改 storyboard、时间线或 preview。"
     };
     AgentEditResult {
         agent_task_id: agent_task_id.to_owned(),
@@ -1033,6 +1035,10 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "synthesize_voiceover" => {
             coerce_blank_strings_to_null(&mut value, &["text", "voiceId", "timelineVersionId"])
         }
+        "generate_storyboard" => {
+            coerce_blank_strings_to_null(&mut value, &["brief", "voiceId"]);
+            coerce_json_object_string(&mut value, "mediaOptions");
+        }
         _ => {}
     }
     let Some(object) = value.as_object() else {
@@ -1143,6 +1149,11 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
             if let Some(voice_id) = object.get("voiceId") {
                 if !(voice_id.is_null() || voice_id.is_string()) {
+                    return Err(invalid_arguments());
+                }
+            }
+            if let Some(media) = object.get("mediaOptions") {
+                if !(media.is_null() || media.is_object()) {
                     return Err(invalid_arguments());
                 }
             }
@@ -1420,6 +1431,31 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
 
 fn required_non_empty_string(value: &Value) -> bool {
     value.as_str().is_some_and(|text| !text.trim().is_empty())
+}
+
+fn coerce_json_object_string(value: &mut Value, key: &str) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let Some(current) = object.get(key) else {
+        return;
+    };
+    if current.is_null() {
+        return;
+    }
+    let Some(text) = current.as_str() else {
+        return;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        object.insert(key.to_owned(), Value::Null);
+        return;
+    }
+    if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+        if parsed.is_object() {
+            object.insert(key.to_owned(), parsed);
+        }
+    }
 }
 
 fn coerce_blank_strings_to_null(value: &mut Value, keys: &[&str]) {
@@ -2940,6 +2976,22 @@ mod tests {
     }
 
     #[test]
+    fn voiceover_without_script_asks_for_user_consent_instead_of_generating() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            "voiceover_script_confirmation_required: voiceover is on but the brief is not spoken narration.",
+        );
+        assert_eq!(failure["code"], "voiceover_script_confirmation_required");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("ask whether they agree")));
+        assert!(failure["responseInstruction"]
+            .as_str()
+            .is_some_and(|text| text.contains("confirm")));
+    }
+
+    #[test]
     fn unconfigured_voice_provider_returns_a_closed_failure() {
         let failure = safe_tool_failure_context(
             "list_voices",
@@ -3014,6 +3066,13 @@ mod tests {
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());
         let media = parse_native_arguments("generate_storyboard", r#"{"brief":null,"voiceId":null,"mediaOptions":{"voiceover":true,"subtitles":false,"bgm":true}}"#).unwrap();
         assert_eq!(media["mediaOptions"]["subtitles"], false);
+        let encoded = parse_native_arguments(
+            "generate_storyboard",
+            r#"{"brief":"储能宣传片","mediaOptions":"{\"voiceover\":true,\"subtitles\":false,\"bgm\":false}"}"#,
+        )
+        .unwrap();
+        assert_eq!(encoded["mediaOptions"]["voiceover"], true);
+        assert_eq!(encoded["mediaOptions"]["bgm"], false);
         let voice = parse_native_arguments(
             "synthesize_voiceover",
             r#"{"text":null,"voiceId":null,"timelineVersionId":null,"includeSubtitles":false}"#,
@@ -3509,6 +3568,29 @@ mod tests {
         assert!(result.storyboard.is_none());
         assert!(result.timeline.is_none());
         assert!(result.preview.is_none());
+    }
+
+    #[test]
+    fn first_step_provider_failure_does_not_claim_project_data_was_read() {
+        let receipt = NativeRunReceipt {
+            requires_project_observation: true,
+            successful_observation_this_turn: true,
+            tool_called: false,
+            ..NativeRunReceipt::default()
+        };
+        let (result, status) = finish_native_result(
+            "task-1",
+            Err("自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 Connection reset".to_owned()),
+            None,
+            &receipt,
+        )
+        .expect("first-step provider failure stays a native failed result");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert!(result.message.contains("模型连接失败"));
+        assert!(!result.message.contains("项目数据已读取"));
+        assert!(!result.message.contains("sensitive"));
+        assert!(!result.message.contains("private-model"));
+        assert!(result.storyboard.is_none());
     }
 
     #[test]

@@ -147,7 +147,7 @@ export type AssetEvidence = {
   analysisVersion?: number
   keyframes: Array<{ timeMs: number; imagePath: string }>
   ocrEvidence: Array<{ timeMs: number | null; text: string }>
-  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null }>
+  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null; narrativeRole?: string | null; caption?: string | null }>
   visualAnalysisNote: string | null
   segments?: Array<{
     id: string
@@ -169,6 +169,8 @@ export type AssetEvidence = {
       shotType?: string | null
       cameraMotion?: string | null
       segmentId?: string | null
+      narrativeRole?: string | null
+      caption?: string | null
     } | null
   }>
 }

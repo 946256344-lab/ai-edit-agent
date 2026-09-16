@@ -1,5 +1,6 @@
 //! 视觉分析批次队列：远端视觉模型请求、优先级排序、批次worker与恢复。
-//! 技术分析完成后自动排队；storyboard brief 可对pending批次重新排序。
+//! 技术分析完成后自动排队；粗识别按硬切段各送 1 帧、6 段一批，收下模型自拟叙事短语并写片段向量。
+//! storyboard brief 可对 pending 批次重新排序。
 
 use crate::db::{now_millis, open_connection};
 use crate::models::{BatchAssetActionResult, TechnicalMetadata, VisualEvidence};
@@ -23,7 +24,6 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
-const PRIORITY_VISUAL_WAIT_TIMEOUT: Duration = Duration::from_secs(65);
 pub(crate) const VISUAL_ANALYSIS_BATCH_SIZE: usize = 6;
 
 static VISUAL_ANALYSIS_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -33,13 +33,15 @@ static VISUAL_ANALYSIS_WAKE_SCHEDULED: AtomicBool = AtomicBool::new(false);
 #[serde(rename_all = "camelCase")]
 struct VisualBatchResponse {
     #[serde(default)]
-    assets: Vec<VisualBatchAsset>,
+    assets: Vec<Value>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VisualBatchAsset {
     asset_id: String,
+    /// 模型可能带回 timeMs；绑定只认 assetId+segmentId，本地抽帧时间为准。
+    #[allow(dead_code)]
     #[serde(
         default,
         deserialize_with = "crate::assets::segment_visual::i64_or_range"
@@ -70,6 +72,261 @@ struct VisualBatchAsset {
         deserialize_with = "crate::assets::segment_visual::string_or_string_vec"
     )]
     quality_notes: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
+    segment_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
+    narrative_role: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
+    caption: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CoarseVisualUnit {
+    pub asset_id: String,
+    pub segment_id: String,
+    pub time_ms: Option<i64>,
+    pub image_path: String,
+}
+
+/// 粗识别发送单位：有硬切段则每段中点 1 帧；否则退回整条代表帧。
+pub(crate) fn collect_visual_units(
+    asset_id: &str,
+    kind: &str,
+    metadata: &TechnicalMetadata,
+) -> Vec<CoarseVisualUnit> {
+    if kind == "video" {
+        let mut units = Vec::new();
+        for segment in &metadata.scene_segments {
+            if segment.id.is_empty() {
+                continue;
+            }
+            let Some(frame) = segment.frames.get(segment.frames.len() / 2) else {
+                continue;
+            };
+            units.push(CoarseVisualUnit {
+                asset_id: asset_id.to_owned(),
+                segment_id: segment.id.clone(),
+                time_ms: Some(frame.time_ms),
+                image_path: frame.image_path.clone(),
+            });
+        }
+        if !units.is_empty() {
+            return units;
+        }
+    }
+    representative_frame(metadata, kind)
+        .map(|(image_path, time_ms)| CoarseVisualUnit {
+            asset_id: asset_id.to_owned(),
+            segment_id: String::new(),
+            time_ms,
+            image_path,
+        })
+        .into_iter()
+        .collect()
+}
+
+fn unit_key(asset_id: &str, segment_id: &str) -> String {
+    format!("{asset_id}\0{segment_id}")
+}
+
+fn unit_key_segment(key: &str) -> &str {
+    key.split_once('\0')
+        .map(|(_, segment_id)| segment_id)
+        .unwrap_or("")
+}
+
+fn nonempty_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.chars().take(800).collect())
+}
+
+fn source_position_hint(time_ms: Option<i64>, duration_ms: Option<i64>) -> Option<String> {
+    let time = time_ms?;
+    let duration = duration_ms.filter(|value| *value > 0)?;
+    let percent = ((time as f64 / duration as f64) * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as i64;
+    Some(format!("about {percent}% of the source"))
+}
+
+fn bind_coarse_visual_key(
+    item: &VisualBatchAsset,
+    expected: &HashMap<String, Option<i64>>,
+) -> Option<(String, Option<i64>)> {
+    let segment_id = item.segment_id.as_deref().unwrap_or("");
+    let key = unit_key(&item.asset_id, segment_id);
+    if let Some(time_ms) = expected.get(&key) {
+        return Some((key, *time_ms));
+    }
+    if !segment_id.is_empty() {
+        return None;
+    }
+    let prefix = format!("{}\0", item.asset_id);
+    let mut matches = expected
+        .iter()
+        .filter(|(candidate, _)| candidate.starts_with(&prefix));
+    let (key, time_ms) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some((key.clone(), *time_ms))
+}
+
+fn coarse_visual_card(
+    item: &VisualBatchAsset,
+    segment_id: &str,
+    time_ms: Option<i64>,
+) -> VisualEvidence {
+    VisualEvidence {
+        time_ms,
+        subjects: item
+            .subjects
+            .iter()
+            .filter_map(|value| nonempty_text(Some(value)))
+            .collect(),
+        scene: nonempty_text(item.scene.as_deref()),
+        actions: item
+            .actions
+            .iter()
+            .filter_map(|value| nonempty_text(Some(value)))
+            .collect(),
+        products: item
+            .products
+            .iter()
+            .filter_map(|value| nonempty_text(Some(value)))
+            .collect(),
+        quality_notes: item
+            .quality_notes
+            .iter()
+            .filter_map(|value| nonempty_text(Some(value)))
+            .collect(),
+        shot_type: None,
+        camera_motion: None,
+        segment_id: nonempty_text(Some(segment_id)),
+        narrative_role: nonempty_text(item.narrative_role.as_deref()),
+        caption: nonempty_text(item.caption.as_deref()),
+    }
+}
+
+fn coarse_visual_task_payload(batch: &[CoarseVisualUnit]) -> Value {
+    let mut asset_ids = Vec::new();
+    let mut seen = HashSet::new();
+    let mut segments = Vec::new();
+    for unit in batch {
+        if seen.insert(unit.asset_id.clone()) {
+            asset_ids.push(unit.asset_id.clone());
+        }
+        segments.push(serde_json::json!({
+            "assetId": unit.asset_id,
+            "segmentId": unit.segment_id,
+        }));
+    }
+    serde_json::json!({
+        "assetIds": asset_ids,
+        "segments": segments,
+    })
+}
+
+fn parse_asset_ids(value: &Value) -> Option<Vec<String>> {
+    value.get("assetIds").and_then(Value::as_array).map(|ids| {
+        ids.iter()
+            .filter_map(|id| id.as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn parse_coarse_visual_specs(value: &Value) -> Option<Vec<(String, String)>> {
+    if let Some(segments) = value.get("segments").and_then(Value::as_array) {
+        if segments.is_empty() || segments.len() > VISUAL_ANALYSIS_BATCH_SIZE {
+            return None;
+        }
+        let mut specs = Vec::new();
+        for segment in segments {
+            let asset_id = segment.get("assetId").and_then(Value::as_str)?.to_owned();
+            let segment_id = segment
+                .get("segmentId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            specs.push((asset_id, segment_id));
+        }
+        return Some(specs);
+    }
+    let asset_ids = parse_asset_ids(value)?;
+    if asset_ids.is_empty() || asset_ids.len() > VISUAL_ANALYSIS_BATCH_SIZE {
+        return None;
+    }
+    Some(
+        asset_ids
+            .into_iter()
+            .map(|asset_id| (asset_id, String::new()))
+            .collect(),
+    )
+}
+
+fn coarse_visual_is_complete(kind: &str, metadata: &TechnicalMetadata) -> bool {
+    let units = collect_visual_units("asset", kind, metadata);
+    if units.is_empty() {
+        return false;
+    }
+    units.iter().all(|unit| {
+        if unit.segment_id.is_empty() {
+            !metadata.visual_evidence.is_empty()
+        } else {
+            metadata
+                .scene_segments
+                .iter()
+                .any(|segment| segment.id == unit.segment_id && segment.visual_evidence.is_some())
+        }
+    })
+}
+
+fn merge_coarse_visual_cards(metadata: &mut TechnicalMetadata, cards: &[VisualEvidence]) {
+    for card in cards {
+        let Some(segment_id) = card
+            .segment_id
+            .as_deref()
+            .filter(|segment_id| !segment_id.is_empty())
+        else {
+            if !metadata
+                .scene_segments
+                .iter()
+                .any(|segment| !segment.id.is_empty() && !segment.frames.is_empty())
+            {
+                metadata.visual_evidence = vec![card.clone()];
+            }
+            continue;
+        };
+        if let Some(segment) = metadata
+            .scene_segments
+            .iter_mut()
+            .find(|segment| segment.id == segment_id)
+        {
+            segment.visual_evidence = Some(card.clone());
+        }
+    }
+    if metadata
+        .scene_segments
+        .iter()
+        .any(|segment| !segment.id.is_empty() && !segment.frames.is_empty())
+    {
+        metadata.visual_evidence = metadata
+            .scene_segments
+            .iter()
+            .filter_map(|segment| segment.visual_evidence.clone())
+            .collect();
+    }
 }
 
 #[derive(Clone)]
@@ -161,10 +418,115 @@ fn update_visual_metadata(
         metadata.visual_analysis_note = note.map(str::to_owned);
         if let Some(item) = evidence.get(asset_id) {
             metadata.visual_evidence = vec![item.clone()];
-        } else if status == "failed" || status == "skipped" {
+        } else if status == "skipped" {
             metadata.visual_evidence.clear();
+            for segment in &mut metadata.scene_segments {
+                segment.visual_evidence = None;
+            }
         }
         if crate::storyboard::semantic::refresh_metadata_embedding(app, &mut metadata).is_err() {
+            embedding_unavailable = true;
+        }
+        updates.push((
+            asset_id.clone(),
+            metadata_json,
+            serde_json::to_string(&metadata).map_err(|error| error.to_string())?,
+        ));
+    }
+    if embedding_unavailable {
+        log::warn!(
+            "Local semantic embedding unavailable; lexical storyboard ranking remains active."
+        );
+    }
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for (asset_id, original_metadata_json, metadata_json) in updates {
+        let updated = transaction
+            .execute(
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND metadata_json = ?4",
+                params![metadata_json, now_millis(), asset_id, original_metadata_json],
+            )
+            .map_err(|error| error.to_string())?;
+        if updated == 0 {
+            return Err("Visual metadata changed while analysis was completing.".to_owned());
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn has_other_coarse_visual_task(app: &AppHandle, asset_id: &str, except_task_id: &str) -> bool {
+    open_connection(app)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_tasks WHERE tool_name = 'analyze_asset_visual_batch' AND status IN ('queued', 'running') AND id != ?1 AND instr(input_json, ?2) > 0",
+                    params![except_task_id, asset_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        })
+        .unwrap_or(0)
+        > 0
+}
+
+fn commit_coarse_visual_cards(
+    app: &AppHandle,
+    task_id: &str,
+    kind_by_asset: &HashMap<String, String>,
+    cards_by_asset: &HashMap<String, Vec<VisualEvidence>>,
+    failed_asset_ids: &[String],
+) -> Result<(), String> {
+    let mut asset_ids = cards_by_asset.keys().cloned().collect::<Vec<_>>();
+    for asset_id in failed_asset_ids {
+        if !asset_ids.iter().any(|id| id == asset_id) {
+            asset_ids.push(asset_id.clone());
+        }
+    }
+    let connection = open_connection(app)?;
+    let mut updates = Vec::new();
+    let mut embedding_unavailable = false;
+    for asset_id in &asset_ids {
+        let metadata_json: String = connection
+            .query_row(
+                "SELECT metadata_json FROM assets WHERE id = ?1",
+                params![asset_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(|| "{}".to_owned());
+        let mut metadata: TechnicalMetadata =
+            serde_json::from_str(&metadata_json).unwrap_or_default();
+        if preserves_explicit_visual_skip(&metadata, "ready") {
+            continue;
+        }
+        if let Some(cards) = cards_by_asset.get(asset_id) {
+            merge_coarse_visual_cards(&mut metadata, cards);
+        }
+        let kind = kind_by_asset
+            .get(asset_id)
+            .map(String::as_str)
+            .unwrap_or("video");
+        if coarse_visual_is_complete(kind, &metadata) {
+            metadata.visual_analysis_status = "ready".to_owned();
+            metadata.visual_analysis_note = None;
+        } else if failed_asset_ids.iter().any(|id| id == asset_id)
+            && !has_other_coarse_visual_task(app, asset_id, task_id)
+        {
+            metadata.visual_analysis_status = "failed".to_owned();
+            metadata.visual_analysis_note = Some("visual_response_incomplete".to_owned());
+        } else {
+            metadata.visual_analysis_status = "queued".to_owned();
+            metadata.visual_analysis_note = None;
+        }
+        if crate::storyboard::semantic::refresh_metadata_embedding(app, &mut metadata).is_err() {
+            embedding_unavailable = true;
+        }
+        if crate::storyboard::semantic::refresh_segment_embeddings(app, asset_id, &metadata)
+            .is_err()
+        {
             embedding_unavailable = true;
         }
         updates.push((
@@ -391,36 +753,21 @@ pub(crate) fn prioritize_pending_visual_batches(
     Ok(highest_running.or_else(|| ranked.first().map(|r| r.task_id.clone())))
 }
 
-pub(crate) fn wait_for_visual_batch(app: &AppHandle, task_id: Option<&str>) -> Result<(), String> {
-    let Some(task_id) = task_id else {
-        return Ok(());
-    };
-    let deadline = std::time::Instant::now() + PRIORITY_VISUAL_WAIT_TIMEOUT;
-    loop {
-        let status: String = open_connection(app)?
-            .query_row(
-                "SELECT status FROM agent_tasks WHERE id = ?1",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if status == "completed" {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline || !matches!(status.as_str(), "queued" | "running")
-        {
-            return Err("The priority visual analysis batch did not complete in time.".to_owned());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn visual_model_content(frames: &[(String, Option<i64>, Vec<u8>)]) -> Vec<Value> {
+fn visual_model_content(
+    frames: &[(String, String, Option<i64>, Option<i64>, Vec<u8>)],
+) -> Vec<Value> {
     let mut content = vec![
-        serde_json::json!({ "type": "input_text", "text": "Analyze only visible evidence. Return JSON {assets:[{assetId,timeMs,subjects,scene,actions,products,qualityNotes}]}. Each assetId must be one supplied label. Do not infer facts not visible." }),
+        serde_json::json!({ "type": "input_text", "text": "Look at each frame and say what this shot is. Return JSON {assets:[{assetId,segmentId,timeMs,narrativeRole,caption,subjects,scene,actions,products,qualityNotes}]}. narrativeRole: in your own words, the story job this shot could do in an edited video; invent the phrasing. caption: one short sentence of only what is visible. subjects, actions, products: short visible words. scene: a short place phrase. qualityNotes: only if the frame is hard to use. Match assetId and segmentId to a supplied label. Extra fields are ignored. Empty fields are allowed. Do not infer facts not visible." }),
     ];
-    for (asset_id, time_ms, image) in frames {
-        content.push(serde_json::json!({ "type": "input_text", "text": format!("assetId={asset_id}; sourceTimeMs={}", time_ms.map_or("image".to_owned(), |value| value.to_string())) }));
+    for (asset_id, segment_id, time_ms, duration_ms, image) in frames {
+        let mut label = format!(
+            "assetId={asset_id}; segmentId={segment_id}; sourceTimeMs={}",
+            time_ms.map_or_else(|| "image".to_owned(), |value| value.to_string())
+        );
+        if let Some(position) = source_position_hint(*time_ms, *duration_ms) {
+            label.push_str(&format!("; sourcePosition={position} (hint only)"));
+        }
+        content.push(serde_json::json!({ "type": "input_text", "text": label }));
         content.push(serde_json::json!({ "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(image)) }));
     }
     content
@@ -437,7 +784,7 @@ pub(crate) fn queue_visual_analysis_batch(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
-    let mut visual_asset_ids = Vec::new();
+    let mut visual_units = Vec::new();
     let mut project_id = None;
     for asset_id in asset_ids {
         let row = transaction
@@ -454,13 +801,14 @@ pub(crate) fn queue_visual_analysis_batch(
         let mut metadata: TechnicalMetadata =
             serde_json::from_str(&metadata_json).unwrap_or_default();
         project_id.get_or_insert(row_project_id);
-        if representative_frame(&metadata, &kind).is_some() {
-            metadata.visual_analysis_status = "queued".to_owned();
-            metadata.visual_analysis_note = None;
-            visual_asset_ids.push(asset_id.clone());
-        } else {
+        let units = collect_visual_units(asset_id, &kind, &metadata);
+        if units.is_empty() {
             metadata.visual_analysis_status = "skipped".to_owned();
             metadata.visual_analysis_note = Some("visual_analysis_not_applicable".to_owned());
+        } else {
+            metadata.visual_analysis_status = "queued".to_owned();
+            metadata.visual_analysis_note = None;
+            visual_units.extend(units);
         }
         transaction
             .execute(
@@ -473,16 +821,15 @@ pub(crate) fn queue_visual_analysis_batch(
             )
             .map_err(|error| error.to_string())?;
     }
-    if let Some(project_id) = project_id.as_ref().filter(|_| !visual_asset_ids.is_empty()) {
-        // Worker 只接受 <= VISUAL_ANALYSIS_BATCH_SIZE 的批次；多余时必须按
-        // 批次上限拆分，否则整个任务会被直接判为 visual_task_input_invalid。
-        for batch in visual_asset_ids.chunks(VISUAL_ANALYSIS_BATCH_SIZE) {
+    if let Some(project_id) = project_id.as_ref().filter(|_| !visual_units.is_empty()) {
+        // Worker 只接受 <= VISUAL_ANALYSIS_BATCH_SIZE 张图；按段拆批，不按素材条数。
+        for batch in visual_units.chunks(VISUAL_ANALYSIS_BATCH_SIZE) {
             transaction.execute(
                 "INSERT INTO agent_tasks (id, project_id, tool_name, status, input_json, result_json, created_at, updated_at) VALUES (?1, ?2, 'analyze_asset_visual_batch', 'queued', ?3, ?4, ?5, ?5)",
                 params![
                     Uuid::new_v4().to_string(),
                     project_id,
-                    serde_json::json!({ "assetIds": batch }).to_string(),
+                    coarse_visual_task_payload(batch).to_string(),
                     serde_json::json!({ "requestedCount": batch.len(), "readyCount": 0, "skippedCount": 0, "failedCount": 0 }).to_string(),
                     now_millis(),
                 ],
@@ -497,24 +844,56 @@ pub(crate) fn queue_visual_analysis_batch(
     Ok(())
 }
 
-#[rustfmt::skip]
-fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<String>) {
-    let requested_count = asset_ids.len();
+fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String) {
+    let Some(specs) = serde_json::from_str::<Value>(&input_json)
+        .ok()
+        .and_then(|value| parse_coarse_visual_specs(&value))
+    else {
+        let _ = update_visual_batch_task(
+            &app,
+            &task_id,
+            "failed",
+            0,
+            0,
+            0,
+            0,
+            Some("visual_task_input_invalid"),
+        );
+        return;
+    };
+    let requested_count = specs.len();
+    let mut asset_ids = Vec::new();
+    let mut seen_assets = HashSet::new();
+    for (asset_id, _) in &specs {
+        if seen_assets.insert(asset_id.clone()) {
+            asset_ids.push(asset_id.clone());
+        }
+    }
     let _ = update_visual_batch_task(&app, &task_id, "running", requested_count, 0, 0, 0, None);
     let _ = update_visual_metadata(&app, &asset_ids, "running", &HashMap::new(), None);
 
-    let assets = (|| -> Result<Vec<(String, String, TechnicalMetadata)>, &'static str> {
+    let assets = (|| -> Result<HashMap<String, (String, TechnicalMetadata)>, &'static str> {
         let connection = open_connection(&app).map_err(|_| "visual_storage_failed")?;
-        asset_ids
-            .iter()
-            .map(|asset_id| {
-                connection.query_row(
-                    "SELECT id, kind, metadata_json FROM assets WHERE id = ?1 AND analysis_status = 'ready'",
+        let mut map = HashMap::new();
+        for asset_id in &asset_ids {
+            let (kind, metadata): (String, TechnicalMetadata) = connection
+                .query_row(
+                    "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND analysis_status = 'ready'",
                     params![asset_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_else(|e| { log::warn!("Asset metadata_json could not be parsed: {e}"); Default::default() }))),
-                ).map_err(|_| "visual_asset_unavailable")
-            })
-            .collect()
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            serde_json::from_str(&row.get::<_, String>(1)?).unwrap_or_else(|e| {
+                                log::warn!("Asset metadata_json could not be parsed: {e}");
+                                Default::default()
+                            }),
+                        ))
+                    },
+                )
+                .map_err(|_| "visual_asset_unavailable")?;
+            map.insert(asset_id.clone(), (kind, metadata));
+        }
+        Ok(map)
     })();
     let Ok(assets) = assets else {
         let _ = update_visual_metadata(
@@ -536,14 +915,28 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
         );
         return;
     };
-    let mut source_times = HashMap::new();
+
+    let mut expected: HashMap<String, Option<i64>> = HashMap::new();
     let mut frames = Vec::new();
-    for (asset_id, kind, metadata) in &assets {
-        let Some((image_path, time_ms)) = representative_frame(metadata, kind) else {
+    let mut kind_by_asset = HashMap::new();
+    for (asset_id, segment_id) in &specs {
+        let Some((kind, metadata)) = assets.get(asset_id) else {
             continue;
         };
-        source_times.insert(asset_id.clone(), time_ms);
-        let Ok(image) = fs::read(image_path) else {
+        kind_by_asset.insert(asset_id.clone(), kind.clone());
+        let units = collect_visual_units(asset_id, kind, metadata);
+        let unit = if segment_id.is_empty() {
+            units.into_iter().next()
+        } else {
+            units
+                .into_iter()
+                .find(|unit| unit.segment_id == *segment_id)
+        };
+        let Some(unit) = unit else {
+            continue;
+        };
+        expected.insert(unit_key(asset_id, &unit.segment_id), unit.time_ms);
+        let Ok(image) = fs::read(&unit.image_path) else {
             let _ = update_visual_metadata(
                 &app,
                 &asset_ids,
@@ -563,7 +956,33 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
             );
             return;
         };
-        frames.push((asset_id.clone(), time_ms, image));
+        frames.push((
+            unit.asset_id,
+            unit.segment_id,
+            unit.time_ms,
+            metadata.duration_ms,
+            image,
+        ));
+    }
+    if frames.is_empty() {
+        let _ = update_visual_metadata(
+            &app,
+            &asset_ids,
+            "failed",
+            &HashMap::new(),
+            Some("visual_frame_unavailable"),
+        );
+        let _ = update_visual_batch_task(
+            &app,
+            &task_id,
+            "failed",
+            requested_count,
+            0,
+            0,
+            requested_count,
+            Some("visual_frame_unavailable"),
+        );
+        return;
     }
     let content = visual_model_content(&frames);
     let access = match ModelAccess::resolve() {
@@ -646,11 +1065,24 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
         );
         return;
     };
-    let allowed: HashSet<&str> = asset_ids.iter().map(String::as_str).collect();
-    if response.assets.iter().any(|item| {
-        !allowed.contains(item.asset_id.as_str())
-            || source_times.get(&item.asset_id).copied().flatten() != item.time_ms
-    }) {
+    let mut cards_by_asset: HashMap<String, Vec<VisualEvidence>> = HashMap::new();
+    let mut matched = HashSet::new();
+    for value in response.assets {
+        let Ok(item) = serde_json::from_value::<VisualBatchAsset>(value) else {
+            continue;
+        };
+        let Some((key, time_ms)) = bind_coarse_visual_key(&item, &expected) else {
+            continue;
+        };
+        if !matched.insert(key.clone()) {
+            continue;
+        }
+        cards_by_asset
+            .entry(item.asset_id.clone())
+            .or_default()
+            .push(coarse_visual_card(&item, unit_key_segment(&key), time_ms));
+    }
+    if cards_by_asset.is_empty() {
         complete_visual_model_request(false);
         let _ = update_visual_metadata(
             &app,
@@ -670,72 +1102,53 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, asset_ids: Vec<Str
             Some("visual_response_invalid"),
         );
         return;
-    };
+    }
     complete_visual_model_request(true);
-    let mut visual = HashMap::new();
-    let mut ready_ids = Vec::new();
     let mut failed_ids = Vec::new();
-    for asset_id in &asset_ids {
-        let Some(item) = response.assets.iter().find(|item| &item.asset_id == asset_id) else {
-            failed_ids.push(asset_id.clone());
+    for (asset_id, segment_id) in &specs {
+        if cards_by_asset.contains_key(asset_id) {
             continue;
+        }
+        let resolved_segment = if segment_id.is_empty() {
+            frames
+                .iter()
+                .find(|(id, _, _, _, _)| id == asset_id)
+                .map(|(_, segment_id, _, _, _)| segment_id.as_str())
+                .unwrap_or("")
+        } else {
+            segment_id.as_str()
         };
-        ready_ids.push(asset_id.clone());
-        visual.insert(
-            asset_id.clone(),
-            VisualEvidence {
-                time_ms: item.time_ms,
-                subjects: item.subjects.clone(),
-                scene: item.scene.clone(),
-                actions: item.actions.clone(),
-                products: item.products.clone(),
-                quality_notes: item.quality_notes.clone(),
-                shot_type: None,
-                camera_motion: None,
-                segment_id: None,
-            },
-        );
+        if !matched.contains(&unit_key(asset_id, resolved_segment))
+            && !failed_ids.iter().any(|id| id == asset_id)
+        {
+            failed_ids.push(asset_id.clone());
+        }
     }
-    if update_visual_metadata(&app, &ready_ids, "ready", &visual, None).is_err() {
-        let _ = update_visual_batch_task(
-            &app,
-            &task_id,
-            "failed",
-            requested_count,
-            0,
-            0,
-            requested_count,
-            Some("visual_metadata_conflict"),
-        );
-        return;
-    }
-    if update_visual_metadata(
-        &app,
-        &failed_ids,
-        "failed",
-        &HashMap::new(),
-        Some("visual_response_incomplete"),
-    )
-    .is_err()
+    if commit_coarse_visual_cards(&app, &task_id, &kind_by_asset, &cards_by_asset, &failed_ids)
+        .is_err()
     {
         let _ = update_visual_batch_task(
             &app,
             &task_id,
             "failed",
             requested_count,
-            ready_ids.len(),
             0,
-            failed_ids.len(),
+            0,
+            requested_count,
             Some("visual_metadata_conflict"),
         );
         return;
     }
+    let ready_count = asset_ids
+        .iter()
+        .filter(|asset_id| !failed_ids.iter().any(|id| id == *asset_id))
+        .count();
     let _ = update_visual_batch_task(
         &app,
         &task_id,
         "completed",
         requested_count,
-        ready_ids.len(),
+        ready_count,
         0,
         failed_ids.len(),
         (!failed_ids.is_empty()).then_some("visual_response_incomplete"),
@@ -754,7 +1167,7 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
             if visual_model_retry_after().is_some() {
                 break;
             }
-            let task = (|| -> Result<Option<(String, String, Vec<String>)>, String> {
+            let task = (|| -> Result<Option<(String, String, Vec<String>, String)>, String> {
                 let connection = open_connection(&app)?;
                 let transaction = connection
                     .unchecked_transaction()
@@ -767,19 +1180,28 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                 let Some((task_id, tool_name, input_json)) = row else {
                     return Ok(None);
                 };
-                let asset_ids = serde_json::from_str::<serde_json::Value>(&input_json)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("assetIds")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|ids| {
-                                ids.iter()
-                                    .filter_map(|id| id.as_str().map(str::to_owned))
-                                    .collect::<Vec<_>>()
-                            })
-                    })
-                    .filter(|ids| !ids.is_empty() && ids.len() <= VISUAL_ANALYSIS_BATCH_SIZE);
+                let parsed = serde_json::from_str::<Value>(&input_json).ok();
+                let asset_ids = if tool_name == "analyze_asset_segments_batch" {
+                    parsed
+                        .as_ref()
+                        .and_then(parse_asset_ids)
+                        .filter(|ids| !ids.is_empty() && ids.len() <= VISUAL_ANALYSIS_BATCH_SIZE)
+                } else {
+                    parsed
+                        .as_ref()
+                        .and_then(parse_coarse_visual_specs)
+                        .map(|specs| {
+                            let mut ids = Vec::new();
+                            let mut seen = HashSet::new();
+                            for (asset_id, _) in specs {
+                                if seen.insert(asset_id.clone()) {
+                                    ids.push(asset_id);
+                                }
+                            }
+                            ids
+                        })
+                        .filter(|ids| !ids.is_empty())
+                };
                 let Some(asset_ids) = asset_ids else {
                     update_visual_batch_task(
                         &app,
@@ -791,7 +1213,7 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                         0,
                         Some("visual_task_input_invalid"),
                     )?;
-                    return Ok(Some((task_id, tool_name, Vec::new())));
+                    return Ok(Some((task_id, tool_name, Vec::new(), input_json)));
                 };
                 let claimed = transaction.execute(
                     "UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
@@ -799,23 +1221,23 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                 ).map_err(|error| error.to_string())?;
                 transaction.commit().map_err(|error| error.to_string())?;
                 if claimed == 1 {
-                    Ok(Some((task_id, tool_name, asset_ids)))
+                    Ok(Some((task_id, tool_name, asset_ids, input_json)))
                 } else {
-                    Ok(Some((task_id, tool_name, Vec::new())))
+                    Ok(Some((task_id, tool_name, Vec::new(), input_json)))
                 }
             })().inspect_err(|e| log::warn!("Visual analysis worker: task claim failed: {e}"));
             match task {
-                Ok(Some((task_id, tool_name, asset_ids))) => {
-                    if !asset_ids.is_empty() {
-                        if tool_name == "analyze_asset_segments_batch" {
+                Ok(Some((task_id, tool_name, asset_ids, input_json))) => {
+                    if tool_name == "analyze_asset_segments_batch" {
+                        if !asset_ids.is_empty() {
                             super::segment_visual::run_segment_visual_analysis_batch(
                                 app.clone(),
                                 task_id,
                                 asset_ids,
                             );
-                        } else {
-                            run_visual_analysis_batch(app.clone(), task_id, asset_ids);
                         }
+                    } else if !asset_ids.is_empty() {
+                        run_visual_analysis_batch(app.clone(), task_id, input_json);
                     }
                 }
                 Ok(None) | Err(_) => break,
@@ -885,36 +1307,21 @@ pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), 
     let mut asset_ids = Vec::new();
     let mut invalid_asset_ids = Vec::new();
     for (task_id, input_json) in rows {
-        let parsed = serde_json::from_str::<serde_json::Value>(&input_json)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("assetIds")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|ids| {
-                        ids.iter()
-                            .filter_map(|id| id.as_str().map(str::to_owned))
-                            .collect::<Vec<_>>()
-                    })
-            })
-            .filter(|ids| !ids.is_empty());
-        if let Some(ids) = parsed {
-            if ids.len() <= VISUAL_ANALYSIS_BATCH_SIZE {
-                connection
-                    .execute(
-                        "UPDATE agent_tasks SET status = 'queued', error_message = NULL, updated_at = ?1 WHERE id = ?2",
-                        params![now_millis(), task_id],
-                    )
-                    .map_err(|error| error.to_string())?;
-                asset_ids.extend(ids);
-            } else {
-                connection.execute(
-                    "UPDATE agent_tasks SET status = 'failed', error_message = 'visual_task_input_invalid', updated_at = ?1 WHERE id = ?2",
+        let parsed = serde_json::from_str::<Value>(&input_json).ok();
+        if let Some(specs) = parsed.as_ref().and_then(parse_coarse_visual_specs) {
+            connection
+                .execute(
+                    "UPDATE agent_tasks SET status = 'queued', error_message = NULL, updated_at = ?1 WHERE id = ?2",
                     params![now_millis(), task_id],
-                ).map_err(|error| error.to_string())?;
-                invalid_asset_ids.extend(ids);
+                )
+                .map_err(|error| error.to_string())?;
+            for (asset_id, _) in specs {
+                asset_ids.push(asset_id);
             }
         } else {
+            if let Some(ids) = parsed.as_ref().and_then(parse_asset_ids) {
+                invalid_asset_ids.extend(ids);
+            }
             update_visual_batch_task(
                 app,
                 &task_id,
@@ -1017,7 +1424,7 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
         if metadata.visual_analysis_status == "queued"
             && !active_ids.contains(&asset_id)
-            && representative_frame(&metadata, &kind).is_some()
+            && !collect_visual_units(&asset_id, &kind, &metadata).is_empty()
         {
             by_project.entry(project_id).or_default().push(asset_id);
         }
@@ -1087,6 +1494,9 @@ pub fn skip_asset_visual_analysis_batch(
         metadata.visual_analysis_status = "skipped".to_owned();
         metadata.visual_analysis_note = Some("visual_analysis_skipped_by_user".to_owned());
         metadata.visual_evidence.clear();
+        for segment in &mut metadata.scene_segments {
+            segment.visual_evidence = None;
+        }
         transaction.execute(
             "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND project_id = ?4",
             params![serde_json::to_string(&metadata).map_err(|error| error.to_string())?, timestamp, asset_id, project_id],
@@ -1145,13 +1555,23 @@ mod tests {
     #[test]
     fn visual_provider_payload_contains_no_local_path_hints() {
         let local_path = r"D:\private\客户项目\coffee-launch.mp4";
-        let content = visual_model_content(&[("asset-1".to_owned(), Some(1200), vec![1, 2, 3])]);
+        let content = visual_model_content(&[(
+            "asset-1".to_owned(),
+            "s001".to_owned(),
+            Some(1200),
+            Some(10_000),
+            vec![1, 2, 3],
+        )]);
         let payload = serde_json::to_string(&content).expect("visual content should serialize");
 
         assert!(!payload.contains(local_path));
         assert!(!payload.contains("coffee-launch.mp4"));
         assert!(payload.contains("asset-1"));
+        assert!(payload.contains("segmentId=s001"));
         assert!(payload.contains("sourceTimeMs=1200"));
+        assert!(payload.contains("narrativeRole"));
+        assert!(payload.contains("sourcePosition=about 12% of the source"));
+        assert!(!payload.contains("establishing"));
     }
 
     #[test]
@@ -1168,5 +1588,136 @@ mod tests {
             ..TechnicalMetadata::default()
         };
         assert!(!preserves_explicit_visual_skip(&automatic_skip, "queued"));
+    }
+
+    fn segment_with_frames(id: &str, times: &[i64]) -> crate::models::SceneSegment {
+        crate::models::SceneSegment {
+            id: id.to_owned(),
+            start_ms: times.first().copied().unwrap_or(0),
+            end_ms: times.last().copied().unwrap_or(0) + 1000,
+            scene_duration_ms: None,
+            visual_quality_score: None,
+            frames: times
+                .iter()
+                .map(|time_ms| crate::models::KeyframeMetadata {
+                    time_ms: *time_ms,
+                    image_path: format!("{id}-{time_ms}.jpg"),
+                })
+                .collect(),
+            visual_evidence: None,
+            motion_score: None,
+            motion_profile: None,
+        }
+    }
+
+    #[test]
+    fn collect_visual_units_sends_one_midpoint_per_hard_cut_segment() {
+        let metadata = TechnicalMetadata {
+            scene_segments: vec![
+                segment_with_frames("s001", &[100, 400, 800]),
+                segment_with_frames("s002", &[2000, 2600]),
+            ],
+            ..TechnicalMetadata::default()
+        };
+        let units = collect_visual_units("asset-1", "video", &metadata);
+        assert_eq!(
+            units,
+            vec![
+                CoarseVisualUnit {
+                    asset_id: "asset-1".to_owned(),
+                    segment_id: "s001".to_owned(),
+                    time_ms: Some(400),
+                    image_path: "s001-400.jpg".to_owned(),
+                },
+                CoarseVisualUnit {
+                    asset_id: "asset-1".to_owned(),
+                    segment_id: "s002".to_owned(),
+                    time_ms: Some(2600),
+                    image_path: "s002-2600.jpg".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn coarse_visual_tasks_chunk_eight_segments_into_two_batches() {
+        let units: Vec<_> = (1..=8)
+            .map(|index| CoarseVisualUnit {
+                asset_id: "asset-1".to_owned(),
+                segment_id: format!("s{index:03}"),
+                time_ms: Some(index as i64 * 1000),
+                image_path: format!("s{index:03}.jpg"),
+            })
+            .collect();
+        let batches: Vec<_> = units.chunks(VISUAL_ANALYSIS_BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), 6);
+        assert_eq!(batches[1].len(), 2);
+        let first = coarse_visual_task_payload(batches[0]);
+        assert_eq!(first["assetIds"], serde_json::json!(["asset-1"]));
+        assert_eq!(
+            first["segments"].as_array().map(|items| items.len()),
+            Some(6)
+        );
+        assert_eq!(first["segments"][0]["segmentId"], "s001");
+    }
+
+    #[test]
+    fn parse_coarse_visual_specs_accepts_legacy_asset_id_batches() {
+        let specs = parse_coarse_visual_specs(&serde_json::json!({
+            "assetIds": ["a", "b"]
+        }))
+        .expect("legacy payload");
+        assert_eq!(
+            specs,
+            vec![
+                ("a".to_owned(), String::new()),
+                ("b".to_owned(), String::new())
+            ]
+        );
+    }
+
+    #[test]
+    fn coarse_visual_keeps_matching_card_when_one_identity_is_wrong() {
+        let mut expected = HashMap::new();
+        expected.insert(unit_key("asset-1", "s001"), Some(400));
+        expected.insert(unit_key("asset-1", "s002"), Some(2600));
+        let good = serde_json::from_value::<VisualBatchAsset>(serde_json::json!({
+            "assetId": "asset-1",
+            "segmentId": "s001",
+            "timeMs": 999,
+            "narrativeRole": "车间开场",
+            "caption": "工人站在产线旁",
+            "unknownField": "ignored"
+        }))
+        .expect("matching card");
+        let bad = serde_json::from_value::<VisualBatchAsset>(serde_json::json!({
+            "assetId": "other",
+            "segmentId": "s009",
+            "timeMs": 1
+        }))
+        .expect("unmatched card");
+        assert_eq!(
+            bind_coarse_visual_key(&good, &expected),
+            Some((unit_key("asset-1", "s001"), Some(400)))
+        );
+        assert_eq!(bind_coarse_visual_key(&bad, &expected), None);
+        let card = coarse_visual_card(&good, "s001", Some(400));
+        assert_eq!(card.narrative_role.as_deref(), Some("车间开场"));
+        assert_eq!(card.caption.as_deref(), Some("工人站在产线旁"));
+        assert_eq!(card.time_ms, Some(400));
+    }
+
+    #[test]
+    fn coarse_visual_response_ignores_unknown_fields() {
+        let parsed = serde_json::from_str::<VisualBatchResponse>(
+            r#"{"assets":[{"assetId":"asset-1","segmentId":"s001","narrativeRole":"","extra":true}]}"#,
+        )
+        .expect("extra fields should not fail JSON");
+        assert_eq!(parsed.assets.len(), 1);
+        let item = serde_json::from_value::<VisualBatchAsset>(parsed.assets[0].clone())
+            .expect("one asset card");
+        assert_eq!(item.asset_id, "asset-1");
+        assert_eq!(item.segment_id.as_deref(), Some("s001"));
     }
 }
