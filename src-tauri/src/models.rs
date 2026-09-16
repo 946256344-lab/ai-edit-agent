@@ -804,8 +804,8 @@ pub struct StoryboardShot {
     /// 未拆分的 beat 恒为 lead。
     #[serde(default = "default_storyboard_split_role")]
     pub split_role: String,
-    /// 选中的片段 id（如 s003 或双段 s003+s004）；整条素材候选为 None。
-    /// Phase 4 用它跳过内容窗探测，直接把窗锁在该片段上。
+    /// 选中的片段 id（如 s003；召回双段为 s003+s004）；整条素材候选为 None。
+    /// Phase 4 用它跳过内容窗探测，把窗锁在该片段上，不拼下一段硬切。
     #[serde(default)]
     pub segment_id: Option<String>,
 }

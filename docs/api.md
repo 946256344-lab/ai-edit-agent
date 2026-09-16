@@ -1,5 +1,21 @@
 # API 与工具契约
 
+## 2026-09-16：关配音不再强制 15 秒
+
+公开 Tauri 命令不变。没有配音不再等于必须 ≤15 秒。`key_message` 仍是屏幕字；时长和 beat 数由模型按用户要求和内容决定，用户没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。120 秒仍是处理上限。见 `docs/changes/2026-09-16-no-voiceover-not-15s.md`。
+
+## 2026-09-16：配音开着必须配音，没有稿先问同意
+
+公开 Tauri 命令不变。配音开关开着必须合成旁白。已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并问用户同意，同意前不调用 `generate_storyboard`。见 `docs/changes/2026-09-16-voiceover-script-consent.md`。
+
+## 2026-09-16：Phase 4 不拼下一段硬切
+
+公开 Tauri 命令不变。有 `segmentId` 的镜头把精修窗锁在该段；时长不够也不并入下一段硬切。召回双段 `s001+s002` 仍按这两段并窗。见 `docs/changes/2026-09-16-phase4-lock-selected-segment.md`。
+
+## 2026-09-16：选镜头不再被短 brief 与旧整片卡卡住
+
+公开 Tauri 命令不变。配音已把短 brief 锁成 `full_script` 时，Phase 1 不再要求改回 `key_message`，15 秒时长帽仍在。有硬切但段上没卡、素材级有旧整片卡时按整条进召回，不把整片标签抄到未打卡段。见 `docs/changes/2026-09-16-shot-selection-reliability.md`。
+
 ## 2026-09-16：生成不等第一次分析
 
 公开 Tauri 命令不变。生成分镜不再空等 queued/running 的第一次视觉批次。桌面入口仍可给 pending 批次提高优先级。召回只收已打上第一次卡的段；没卡的不借用整条素材标签。一张卡都没有时返回 `storyboard_visual_evidence_unavailable`。见 `docs/changes/2026-09-16-no-visual-wait.md`。
@@ -24,7 +40,7 @@ Schema 18/19 增加 `shared_libraries`、`project_libraries`、`shared_library_a
 
 Native `generate_storyboard` 增加 `mediaOptions`（null 沿用本轮选择，非 null 为模型按明确文字要求合并后的选择）；`synthesize_voiceover` 增加 `includeSubtitles`（null 沿用本轮字幕选择）。严格工具 Schema 包含这两个 nullable 参数，旧的内部调用省略时仍使用默认路径。
 
-分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启且只有主题时 Phase 1 创作旁白，完整文案仍照稿念。BGM 由 Agent 复用 `search_music` / `use_online_music` 后重新渲染，有旁白时新选音乐音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`。
+分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启时必须配音：已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并征求同意，同意后再生成并合成。完整文案仍照稿念。BGM 由 Agent 复用 `search_music` / `use_online_music` 后重新渲染，有旁白时新选音乐音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`、`docs/changes/2026-09-16-voiceover-script-consent.md`。
 
 ## 2026-09-10：剪辑失败修复
 
@@ -202,7 +218,7 @@ schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子
 
 模型传输复用一个进程级 `ureq::Agent`，同时保留每次请求自身的超时和凭据边界。NativeToolLoop 的每个逻辑模型步骤对 HTTP 408/425/429/500/502/503/504、超时、网络传输中断和空响应最多尝试三次；重试共享该步骤剩余的 120 秒上限与 300 秒总预算，每次 HTTP 只使用剩余预算除以剩余次数的份额，只重发 Provider payload，不重新执行已经完成的工具。每次尝试前和最多 700ms 的退避等待期间都重新检查任务取消，取消后不再发下一请求。永久 4xx 与未知错误不重试。Agent 诊断只保存稳定安全码和尝试次数，不保存 URL、模型名、响应正文或底层传输详情。交互 Agent 模型请求优先于尚未开始的粗视觉请求；粗视觉连续三次失败后熔断 60 秒，期间对应任务保持 `queued`，冷却后只允许一个半开探测。自定义 API 的批量视觉请求可使用可选 `coarseVisualModel`；storyboard 与 Agent 仍使用主 Model。OAuth 没有经验证的替代模型，继续使用既有请求模型。
 
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只为 queued 视觉批次持久化纯数字 priority，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回只使用已打上第一次卡的段，没卡的不进池。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉 Provider payload，但仍作为明确标注的本地提取文字证据提供给 storyboard，不能冒充画面语义。
+生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只为 queued 视觉批次持久化纯数字 priority，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回使用已打上第一次卡的段，段上没卡但素材级有旧整片卡时按整条进池，未打卡段不借用整片标签。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉 Provider payload，但仍作为明确标注的本地提取文字证据提供给 storyboard，不能冒充画面语义。
 
 ## 实验性 OAuth
 
@@ -222,9 +238,9 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 ## 素材证据与 storyboard
 
-Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应含 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**`scriptMode` 由 Rust 在 Phase 1 前按 brief 朗读估算锁定**，模型不得自选。**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认 `key_message` 与约 **8–15 秒**（硬上限 15s），除非用户明确要求更长。
+Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应含 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**`scriptMode` 由 Rust 在 Phase 1 前按 brief 朗读估算锁定**，模型不得自选。**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认 `key_message`，时长由模型按用户要求或内容决定；没说时长时建议 15–45 秒、每个镜头大约 2–3 秒，不再硬帽 15s。
 
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要（高频 tags/scenes/OCR，约 3500 字符帽），让模型只在该模式下拆 beats，且 `requiredVisual`/`visualKeywords` 须贴近库存、禁止编造库中没有的主体（短 brief 偏 ≤15s、约 2–5 beat；`full_script` 可先 TTS 锁定 `targetDurationMs`；`key_message` 每 beat 写 ≤24 字 `onScreenText`、`narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽，标记规则仍生效）。Phase 2 **仅本地**：硬过滤就绪视频后按段排序，每个 beat 取 9 段（同片最多 2，相似最多 2）；有 1 条就能覆盖，0 条才 uncovered；`key_message` 写入可读性节奏计划。Phase 3 模型从该池选出 **1–3 个互异 assetId（含顺序；有第二条不相似且对得上才加镜）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试；选片后重建节奏计划。Phase 4 **先选内容窗再段内精修**：导入关键帧（或三分段）建窗 → 每窗 1 帧选段 → 窗内加密定 `sourceStart/End` → 不确定再局部加密；`full_script` 旁白托底 / `key_message` 节奏 fit，**禁止换片**（不做每素材全片场景扫描）。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（保留 P1/audio-first 的 `targetDurationMs`/`scriptMode`；`full_script` 仅 lead 回填旁白且只拦画面过长，画面不足走 `qualityWarnings`；`key_message` lead 写 beat 标记且对称校验总时长）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 无镜头的覆盖 beat / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
+**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要（高频 tags/scenes/OCR，约 3500 字符帽），让模型只在该模式下拆 beats，且 `requiredVisual`/`visualKeywords` 须贴近库存、禁止编造库中没有的主体（时长由模型按用户要求或内容决定，120 秒为安全上限；`full_script` 可先 TTS 锁定 `targetDurationMs`；`key_message` 每 beat 写 ≤24 字 `onScreenText`、`narration` 留空，可读性下限相对目标时长硬门）。Phase 2 **仅本地**：硬过滤就绪视频后按段排序，每个 beat 取 9 段（同片最多 2，相似最多 2）；有 1 条就能覆盖，0 条才 uncovered；`key_message` 写入可读性节奏计划。Phase 3 模型从该池选出 **1–3 个互异 assetId（含顺序；有第二条不相似且对得上才加镜）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试；选片后重建节奏计划。Phase 4 **是选中镜头的第二次视觉分析**：有 `segmentId` 则跳过 Pass A，窗口锁在该段运动可用区间，不够长也不拼下一段硬切；网格多帧判断动作是否做完并改 `sourceStart/End`。无片段锁定时才用关键帧建窗。`full_script` 旁白托底 / `key_message` 节奏 fit，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（保留 P1/audio-first 的 `targetDurationMs`/`scriptMode`；`full_script` 仅 lead 回填旁白且只拦画面过长，画面不足走 `qualityWarnings`；`key_message` lead 写 beat 标记且对称校验总时长）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 无镜头的覆盖 beat / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
 `storyboard/scoring.rs` 的语义分为 0–50：有效的 512 维 `bge-small-zh-v1.5` 向量与词面命中各最多 25 分（缺一侧时另一侧放大到 50）；另加 CLIP 图文 0–25（beat 的 `visualKeywords`/`requiredVisual` ↔ 片段代表帧，模型为 `Qdrant/clip-ViT-B-32-*`，缺失时为 0）。词面查询优先使用 Phase 1 产出的英文 `visualKeywords`，并与素材英文标签对齐；中文双字仅在证据含 CJK 时参与。另加画面质量 0–10、时长匹配 0–10、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–5。无视觉证据且无有效 OCR 的素材排在有证据候选之后。OCR 乱码在向量文本、词面 blob 与相似去重中过滤。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果取最多 9 段（同片最多 2，相似最多 2），候选池携带分数分解（含 `clip`）；Phase 3 池卡片含 `requiredVisual`/`visualKeywords`/`narration`/`onScreenText` 与 `retrievalScore`，关键帧网格上限 60；从该池选 1–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。40% 次数上限按已经实际选中的镜头数动态计算。文本向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`；CLIP 图像向量写入 `asset_segment_embeddings`（model=`Qdrant/clip-ViT-B-32-vision`），不序列化进 Provider payload。CLIP ONNX 权重需本机 `scripts/fetch-clip-models.ps1` 拉取后随安装包分发（因体积不进 git）。
 

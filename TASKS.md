@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：拆掉没配音必须 ≤15 秒；时长和 beat 数交给模型。见 docs/changes/2026-09-16-no-voiceover-not-15s.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：配音开着必须配音；没有可念稿时 Agent 先写稿问同意，同意后再生成。见 docs/changes/2026-09-16-voiceover-script-consent.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：选镜头失败：配音锁 full_script 不再被短 brief 打回；有整片第一次卡、段上没卡时按整条进召回。见 docs/changes/2026-09-16-shot-selection-reliability.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 4 只在选中片段里精修，不因时长不够拼下一段硬切。见 docs/changes/2026-09-16-phase4-lock-selected-segment.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：生成分镜不再空等第一次视觉分析；召回只收已打上第一次卡的段。见 docs/changes/2026-09-16-no-visual-wait.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 2 每个 beat 直接从全库段里取 9 条；同片最多 2 段，相似最多 2 条；有 1 条就能拍。见 docs/changes/2026-09-16-phase2-segment-pool.md。
 - [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 3 覆盖 beat 允许 1 镜；有第二条不相似且对得上才加到 2–3。不再把最少 2 镜当完成门。见 docs/changes/2026-09-16-beat-one-shot-ok.md。

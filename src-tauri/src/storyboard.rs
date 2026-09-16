@@ -41,9 +41,6 @@ const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
 /// 本地处理安全上限（非创作规格）；80s 成片允许更密的切镜。
 const MAX_STORYBOARD_SHOTS: usize = 100;
 const MAX_STORYBOARD_BEATS: usize = 100;
-/// 短 brief 且无实质口播稿时，非 audio-first 下的目标时长上限。
-/// `key_message` / 短 brief 默认成片上限：偏 15 秒内短视频。
-const SHORT_BRIEF_TARGET_CAP_MS: i64 = 15_000;
 
 fn storyboard_repair_message(message: impl Into<String>, shot_indices: Vec<i64>) -> String {
     let message = message.into();
@@ -71,7 +68,8 @@ const DUAL_SEGMENT_MAX_PER_ASSET: usize = 6;
 /// 加载 storyboard 候选源。
 ///
 /// `expand_segments_for` 为 `Some(set)` 时，集合内且已有真实场景分段的视频会展开成
-/// 已打第一次卡的片段候选（含两端都有卡的相邻双段组合）；没有第一次卡的段不进召回。
+/// 已打第一次卡的片段候选（含两端都有卡的相邻双段组合）；没有第一次卡的段不进召回，
+/// 也不把整片标签抄到未打卡段上。段上全部没卡、素材级却有旧整片卡时，按整条进召回。
 /// 无硬切的整条素材只在已有整片视觉卡时参与召回。
 /// 传 `None` 表示全部按整条素材加载，用于 Phase 1 库存摘要与 Phase 4/校验。
 pub(crate) fn storyboard_sources(
@@ -172,18 +170,11 @@ fn source_has_whole_file_card(source: &StoryboardSource) -> bool {
 }
 
 fn asset_has_first_pass_card(source: &StoryboardSource) -> bool {
-    let has_named_segments = source
+    source
         .scene_segments
         .iter()
-        .any(|segment| !segment.id.is_empty() && segment.end_ms > segment.start_ms);
-    if has_named_segments {
-        source
-            .scene_segments
-            .iter()
-            .any(|segment| segment.visual_evidence.is_some())
-    } else {
-        source_has_whole_file_card(source)
-    }
+        .any(|segment| !segment.id.is_empty() && segment.visual_evidence.is_some())
+        || source_has_whole_file_card(source)
 }
 
 /// 把一条整素材候选展开成片段候选：单段 + 短段与后继的双段组合。
@@ -298,6 +289,9 @@ fn expand_segment_sources(
             &[first.id.clone(), second.id.clone()],
         ));
         dual_count += 1;
+    }
+    if expanded.is_empty() && source_has_whole_file_card(whole_asset) {
+        return vec![whole_asset.clone()];
     }
     expanded
 }
@@ -787,9 +781,15 @@ fn minimum_storyboard_duration(brief: &str) -> i64 {
     estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
 }
 
-/// 短目标/提纲（无大段可朗读文案）不应被 Phase1 扩成超过 15s 的 key_message，更不应写成 30–90s 全旁白。
+/// 短目标/提纲不应被写成可念旁白稿；时长由模型按用户要求和内容决定。
 fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 20_000
+}
+
+/// 配音开着时，brief 至少要有约一句可念的话，才当作已有旁白稿。
+/// 主题型剪辑要求通常更短；用户已同意的旁白稿通常更长。
+fn brief_has_voiceover_script(brief: &str) -> bool {
+    estimated_storyboard_duration_ms(brief) >= 3_000
 }
 
 /// Phase 1 前由系统锁定 scriptMode：可念稿 → full_script；否则 key_message。
@@ -828,35 +828,25 @@ fn brief_requests_longer_runtime(brief: &str) -> bool {
 fn short_brief_duration_issue(
     brief: &str,
     narrative: &phases::NarrativeStructure,
+    required_script_mode: &str,
 ) -> Option<String> {
     if brief_has_substantial_speakable_copy(brief) || brief_requests_longer_runtime(brief) {
         return None;
     }
     let mut issues = Vec::new();
-    if narrative.script_mode == "full_script" {
+    // 配音合成旁白已由系统锁成 full_script，不能再要求改回 key_message。
+    if narrative.script_mode == "full_script" && required_script_mode != "full_script" {
         issues.push(
             "short briefs without substantial speakable copy must use scriptMode=key_message"
                 .to_owned(),
         );
-    }
-    if narrative.target_duration_ms > SHORT_BRIEF_TARGET_CAP_MS {
-        issues.push(format!(
-            "short brief targetDurationMs is {} ms; keep it at or below {} ms unless the user asked for a longer runtime",
-            narrative.target_duration_ms, SHORT_BRIEF_TARGET_CAP_MS
-        ));
-    }
-    if narrative.beats.len() > 5 {
-        issues.push(format!(
-            "short brief produced {} beats; prefer 2-5 sharper beats for a <=15s key_message cut",
-            narrative.beats.len()
-        ));
     }
     (!issues.is_empty()).then(|| issues.join("; "))
 }
 
 /// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
 /// 可念稿 brief 在 Phase 1 前已由系统锁成 full_script，此处通常不会再进入。
-/// 用户要求更长成片时仍校验标记，只放开 15s 时长硬帽。
+/// 时长跟所选 target 走，不再夹 15 秒硬帽。
 fn key_message_marker_issue(
     brief: &str,
     narrative: &mut phases::NarrativeStructure,
@@ -897,14 +887,9 @@ fn key_message_marker_issue(
         return Some(issues.join("; "));
     }
     let soft_limit = ((narrative.target_duration_ms.max(1) as f64) * 1.2).round() as i64;
-    let limit = if brief_requests_longer_runtime(brief) {
-        soft_limit
-    } else {
-        soft_limit.min(SHORT_BRIEF_TARGET_CAP_MS)
-    };
-    if floor_sum > limit {
+    if floor_sum > soft_limit {
         return Some(format!(
-            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {limit} ms); shorten onScreenText markers or reduce beats",
+            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {soft_limit} ms); shorten onScreenText markers or reduce beats",
             narrative.target_duration_ms
         ));
     }
@@ -1437,11 +1422,12 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_script_mode, enforce_decided_script_mode, estimated_storyboard_duration_ms,
-        key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
-        phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
-        storyboard_completion_gaps, storyboard_sources, storyboard_usage_counts,
-        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        brief_has_voiceover_script, decide_script_mode, enforce_decided_script_mode,
+        estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
+        normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
+        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
+        storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
+        MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1663,6 +1649,53 @@ mod tests {
     }
 
     #[test]
+    fn storyboard_sources_recall_uses_whole_file_card_when_named_segments_have_none() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE assets (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    source_reference TEXT NOT NULL,
+                    analysis_status TEXT NOT NULL
+                );
+                CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
+                CREATE TABLE asset_user_metadata (
+                    asset_id TEXT PRIMARY KEY,
+                    excluded INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .expect("create source fixture tables");
+        let directory = std::env::temp_dir().join(format!(
+            "assembly-storyboard-whole-card-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).expect("create source fixture directory");
+        let available = directory.join("available.bin");
+        fs::write(&available, b"fixture").expect("create accessible source fixture");
+        let available = available.to_string_lossy().into_owned();
+        let metadata = r#"{"durationMs":10000,"width":1920,"height":1080,"fps":30.0,"hasAudio":false,"thumbnailPath":null,"keyframes":[],"sceneSegments":[{"id":"s001","startMs":0,"endMs":4000},{"id":"s002","startMs":4000,"endMs":8000}],"ocrEvidence":[],"visualEvidence":[{"timeMs":0,"subjects":["factory"],"scene":"factory floor","actions":[],"products":[],"qualityNotes":[]}],"visualAnalysisNote":null,"visualAnalysisStatus":"ready","visualQualityScore":0.82,"keyframeGridPath":null}"#;
+        connection
+            .execute(
+                "INSERT INTO assets (id, project_id, kind, metadata_json, source_reference, analysis_status) VALUES ('ready-video', 'project-1', 'video', ?1, ?2, 'ready')",
+                params![metadata, available],
+            )
+            .expect("insert source fixture");
+        let expand = ["ready-video".to_owned()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let (sources, _) = storyboard_sources(&connection, "project-1", Some(&expand))
+            .expect("load expanded sources");
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].segment.is_none());
+        assert!(!sources[0].visual_evidence.is_empty());
+        fs::remove_file(directory.join("available.bin")).expect("remove source fixture file");
+        fs::remove_dir(&directory).expect("remove source fixture directory");
+    }
+
+    #[test]
     fn usage_counts_only_the_latest_timeline_once_per_editing_task() {
         let connection = Connection::open_in_memory().expect("open test database");
         connection
@@ -1858,15 +1891,50 @@ mod tests {
                 })
                 .collect(),
         };
-        let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative)
+        let issue = short_brief_duration_issue("帮我做个工厂宣传片", &narrative, "key_message")
             .expect("short brief should be rejected");
         assert!(issue.contains("key_message"));
-        assert!(issue.contains("15000") || issue.contains("15"));
     }
 
     #[test]
-    fn key_message_rejects_markers_longer_than_short_cap() {
-        // 5 个合法长度标记的可读性下限之和会超过 15s 硬帽。
+    fn locked_full_script_skips_key_message_reject_and_has_no_duration_cap() {
+        let beats = (0..3)
+            .map(|index| StoryboardBeat {
+                id: format!("beat-{index}"),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                visual_keywords: vec![],
+                narration: "短旁白".to_owned(),
+                on_screen_text: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let short = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 12_000,
+            spoken_script: "工厂里正在生产。".to_owned(),
+            script_mode: "full_script".to_owned(),
+            beats: beats.clone(),
+        };
+        assert!(
+            short_brief_duration_issue("帮我做个工厂宣传片", &short, "full_script").is_none(),
+            "voiceover-locked full_script must not be bounced back to key_message"
+        );
+
+        let long = NarrativeStructure {
+            target_duration_ms: 84_000,
+            beats,
+            ..short
+        };
+        assert!(
+            short_brief_duration_issue("帮我做个工厂宣传片", &long, "full_script").is_none(),
+            "approved or locked full_script duration is not capped at 15s"
+        );
+    }
+
+    #[test]
+    fn key_message_rejects_markers_that_exceed_target_pacing() {
+        // 5 个合法长度标记的可读性下限之和会超过 12s 目标的 1.2 倍软帽。
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
@@ -1913,6 +1981,28 @@ mod tests {
     }
 
     #[test]
+    fn key_message_allows_duration_above_former_fifteen_second_cap() {
+        let mut narrative = NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 30_000,
+            spoken_script: String::new(),
+            script_mode: "key_message".to_owned(),
+            beats: (0..4)
+                .map(|index| StoryboardBeat {
+                    id: format!("b{index}"),
+                    purpose: "p".to_owned(),
+                    required_visual: "v".to_owned(),
+                    visual_keywords: vec![],
+                    narration: String::new(),
+                    on_screen_text: "工厂现场".to_owned(),
+                })
+                .collect(),
+        };
+        assert!(key_message_marker_issue("帮我做个工厂宣传片", &mut narrative).is_none());
+    }
+
+    #[test]
     fn longer_runtime_brief_still_requires_key_message_markers() {
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
@@ -1936,7 +2026,7 @@ mod tests {
             "issue={missing}"
         );
 
-        // 5×24 字标记的可读性下限约 16.7s，超过 15s 硬帽但低于 1.2×60s。
+        // 5×24 字标记的可读性下限约 16.7s，低于 1.2×60s。
         narrative.beats = (0..5)
             .map(|index| StoryboardBeat {
                 id: format!("b{index}"),
@@ -2026,6 +2116,14 @@ mod tests {
         enforce_decided_script_mode(&speakable, "full_script", &mut narrative);
         assert_eq!(narrative.script_mode, "full_script");
         assert!(!narrative.spoken_script.trim().is_empty());
+    }
+
+    #[test]
+    fn brief_has_voiceover_script_rejects_theme_and_accepts_spoken_copy() {
+        assert!(!brief_has_voiceover_script("帮我做个工厂宣传片"));
+        assert!(brief_has_voiceover_script(
+            "今天我们走进智能工厂，看看生产线如何把原料变成可靠的产品，品质始终在现场被检验。"
+        ));
     }
 
     #[test]
@@ -2458,6 +2556,13 @@ fn generate_storyboard_internal(
     if brief.is_empty() {
         return Err("Storyboard brief cannot be empty.".to_owned());
     }
+    if media_options.is_some_and(|options| options.voiceover) && !brief_has_voiceover_script(brief)
+    {
+        return Err(
+            "voiceover_script_confirmation_required: voiceover is on but the brief is not spoken narration. Draft a spoken script, ask the user to confirm it, then call generate_storyboard with that approved script as brief."
+                .to_owned(),
+        );
+    }
     let connection = open_connection(&app)?;
     let task_exists = connection
         .query_row(
@@ -2559,10 +2664,8 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1: 系统先锁定 scriptMode；把本地库库存摘要注入叙事，再让模型只在该模式下写结构。
-    let compose_narration = media_options.is_some_and(|options| options.voiceover)
-        && decide_script_mode(brief) == "key_message";
-    let required_script_mode = if compose_narration {
+    // Phase 1：配音开着时 brief 已是可念稿，照念 full_script；否则仍按朗读时长锁定模式。
+    let required_script_mode = if media_options.is_some_and(|options| options.voiceover) {
         "full_script"
     } else {
         decide_script_mode(brief)
@@ -2582,7 +2685,6 @@ fn generate_storyboard_internal(
             required_script_mode,
             &library_inventory,
             phase1_feedback.as_deref(),
-            compose_narration,
         ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
@@ -2613,7 +2715,11 @@ fn generate_storyboard_internal(
                             MAX_BEAT_SPOKEN_MS
                         )
                     });
-                let duration_issue = short_brief_duration_issue(brief, &candidate);
+                let duration_issue = if media_options.is_some_and(|options| options.voiceover) {
+                    None
+                } else {
+                    short_brief_duration_issue(brief, &candidate, required_script_mode)
+                };
                 let key_message_issue = key_message_marker_issue(brief, &mut candidate);
                 let issue = beat_issue
                     .or(narration_issue)

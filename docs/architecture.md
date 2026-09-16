@@ -1,5 +1,21 @@
 # 架构
 
+## 关配音不再强制 15 秒（2026-09-16）
+
+没有配音不再等于必须做成 ≤15 秒短片。时长和镜头节奏由模型按用户要求和内容决定；用户没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。120 秒仍是处理上限。见 `docs/changes/2026-09-16-no-voiceover-not-15s.md`。
+
+## 配音开着必须配音，没有稿先问同意（2026-09-16）
+
+配音开关开着时本轮必须合成旁白。用户已给可念稿则照念生成；只有主题时 Agent 先写旁白稿并问同意，同意前不生成分镜。见 `docs/changes/2026-09-16-voiceover-script-consent.md`。
+
+## 选镜头：配音短 brief 与旧整片卡（2026-09-16）
+
+配音已把短 brief 锁成 `full_script` 时，Phase 1 不再用「必须 key_message」打回；15 秒时长帽仍在。段上没卡但素材级有旧整片卡时按整条进召回，不把整片标签抄到未打卡段。见 `docs/changes/2026-09-16-shot-selection-reliability.md`。
+
+## Phase 4 锁在选中片段（2026-09-16）
+
+有 `segmentId` 的镜头跳过 Pass A，精修窗停在该段运动可用区间。片段短于镜头时长时不再并入下一段硬切。召回给出的双段 id 只并这两段。见 `docs/changes/2026-09-16-phase4-lock-selected-segment.md`。
+
 ## Phase 4 局部修复（2026-09-10，合入 clip-segment-recall 2026-09-11）
 
 Phase 4 外层修复循环持有当次调用的内存精修状态：完整镜头结果（含时间范围、`cropFocus`、文案）、每镜内容窗与 `uncertain`、Pass A/B/C 已完成与待处理镜头、当前修复集合。批次请求失败只重试失败批次；镜头校验失败只修复 `affected_shots` 及必要关联镜头（源区间重叠的参与镜、同一叙事段时长问题的段内镜）。成功镜头不再向模型重提。Pass B/C 只返回本批 `orderIndex` 的切点/构图（及确需改动的旁白/屏幕文案），由 Rust 保留素材身份与顺序并根据端点计算时长。漏镜、重镜或他批镜头不能把该批标为完成。Pass C 失败保持未完成，预算耗尽返回真实失败。结构问题（素材身份、镜头数、模式）不靠重跑 Phase 4。`fit_shots`、窗内消重叠与 normalize 只改写修复集合；无法定位的问题明确失败，不默认重做全部镜头。同一批次重试复用已生成图像，窗口或采样范围变化后才重抽。预算与截止时间仍是整段 Phase 4 共用的一套，不按批次放大。实现位于 `src-tauri/src/storyboard/phase4.rs`，外层循环在 `storyboard.rs::generate_storyboard_internal`。手动换镜仍调用 Phase 4，使用独立会话。
@@ -308,9 +324,9 @@ Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows
 
 场景检测：FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 解析硬切；单素材硬预算 60s，长片可先 keyframe 粗扫。CLIP 对切点前后各一帧做相似度验真（阈值与 Phase 2 去似相同 0.92）；两侧仍像同一画面、抽帧失败或 CLIP 不可用则丢掉该切。无已验证硬切时整条一段，禁止按秒均分，不为凑数量把真切点合成 24 段。每段抽帧取首/中/尾并按约 4s 加密，上限 8 帧。硬切确定后对每段抽灰度序列算帧差能量，只收缩静止开头和已收敛结尾；对比不够、手持/流水线或抽帧失败则保持硬切两端。`TechnicalMetadata.analysisVersion=4`；version&lt;3 的就绪视频由 `reanalyze_asset_segments` 整段重切，version=3 只补运动曲线且不改视觉。保持 `ready`、不自动排队视觉。Phase 4 锁定片段时窗口用运动可用区间，曲线拿不准才标 `uncertain` 加密 Pass C。关键帧网格改为片段中点帧拼图。
 
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回只使用已打上第一次卡的段。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
+生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回使用已打上第一次卡的段，段上没卡但素材级有旧整片卡时按整条进池，未打卡段不借用整片标签。配音已把短 brief 锁成 `full_script` 时不再用「必须 key_message」打回。关配音不再强制 15 秒；时长由模型按用户要求或内容决定，没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。配音开着必须配音；没有可念稿时 Agent 先写稿问同意，同意前不生成。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
 
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要约束 `requiredVisual`/`visualKeywords`（禁止编造库中没有的主体；短 brief 偏 ≤15s；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限硬门；用户明确要求更长时只放开 15s 时长帽；`full_script` 可先 TTS 锁定时长；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **本地按段召回**：就绪视频全部展开为硬切段（无硬切则整条 1 段）→ 补第一次段卡的本地片段向量（不等待模型加深）→ 每个 beat 取 9 段（同片最多 2，相似最多 2；有 1 条就能覆盖；后面 beat 不因前面池子里没用上的相似段被预删）。Phase 3 模型从池中用 `candidateIndexes` 选 **1–3 候选**（Rust 解析 asset/segment/源范围；同一 beat 禁止同 `assetId`；跨 beat 允许同一素材的不同、不重叠、不相似片段，含相邻；已用片段相似画面硬拒；有第二条不相似且对得上才加到 2–3，一镜可以过关；40% 上限按素材）。Phase 4 **是选中镜头的第二次视觉分析**：有片段锁定则跳过 Pass A，窗口=真实场景片段的运动可用区间（无曲线则用硬切两端）；网格多帧判断动作是否做完、后半截有无新信息并改 `sourceStart/End`。否则用片段/关键帧建窗再段内精修。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；精修类失败回 Phase 4 且只改受影响镜头，结构/硬上限与 diversity/相似片段失败不空转 Phase 4）。单步重试分离传输/语义预算；`previousShots` 只作提示快照，真实精修进度在 `Phase4Session`。耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs`、`phase4.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
+**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要约束 `requiredVisual`/`visualKeywords`（禁止编造库中没有的主体；时长由模型按用户要求或内容决定，120 秒为安全上限；`key_message` 每 beat 产出 ≤24 字 `onScreenText` 且 `narration` 留空，可读性下限相对目标时长硬门；`full_script` 可先 TTS 锁定时长；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **本地按段召回**：就绪视频全部展开为已打卡硬切段（无硬切、或段上没卡但有旧整片卡则整条 1 段）→ 补第一次段卡的本地片段向量（不等待模型加深）→ 每个 beat 取 9 段（同片最多 2，相似最多 2；有 1 条就能覆盖；后面 beat 不因前面池子里没用上的相似段被预删）。Phase 3 模型从池中用 `candidateIndexes` 选 **1–3 候选**（Rust 解析 asset/segment/源范围；同一 beat 禁止同 `assetId`；跨 beat 允许同一素材的不同、不重叠、不相似片段，含相邻；已用片段相似画面硬拒；每镜建议约 2–3 秒，beat 画面超过约 3 秒再加第 2–3 镜；40% 上限按素材）。Phase 4 **是选中镜头的第二次视觉分析**：有片段锁定则跳过 Pass A，窗口=该片段的运动可用区间（无曲线则用硬切两端），不够长也不拼下一段硬切；网格多帧判断动作是否做完、后半截有无新信息并改 `sourceStart/End`。否则用片段/关键帧建窗再段内精修。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；精修类失败回 Phase 4 且只改受影响镜头，结构/硬上限与 diversity/相似片段失败不空转 Phase 4）。单步重试分离传输/语义预算；`previousShots` 只作提示快照，真实精修进度在 `Phase4Session`。耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开。实现位于 `src-tauri/src/storyboard/phases.rs`、`phase4.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
 
 storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
 

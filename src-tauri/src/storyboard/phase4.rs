@@ -2,9 +2,7 @@
 //!
 //! 不替代 `RepairPacket`（那只是提示快照），不落库、不跨运行恢复。
 
-#[cfg(test)]
-use crate::models::StoryboardShot;
-use crate::models::{StoryboardContent, StoryboardSource};
+use crate::models::{StoryboardContent, StoryboardShot, StoryboardSource};
 use crate::provider::ModelAccess;
 use crate::storyboard::multimodal::{
     build_phase4_windows_from_keyframes, compose_timed_frame_grid, densify_times_in_range,
@@ -215,51 +213,16 @@ impl Phase4Session {
         let mut pass_a_pending = HashSet::new();
         let mut pass_a_done = HashSet::new();
         for shot in &selected.shots {
-            if let Some(segment_id) = shot.segment_id.as_deref() {
-                let asset_windows = windows_by_asset
-                    .get(&shot.asset_id)
-                    .cloned()
-                    .unwrap_or_default();
-                let locked = asset_windows
-                    .iter()
-                    .find(|window| window.window_id == segment_id)
-                    .cloned()
-                    .or_else(|| {
-                        Some(Phase4ContentWindow {
-                            asset_id: shot.asset_id.clone(),
-                            window_id: segment_id.to_owned(),
-                            start_ms: shot.source_start_ms,
-                            end_ms: shot.source_end_ms.max(shot.source_start_ms + 1),
-                        })
-                    });
-                if let Some(mut window) = locked {
-                    if window.span_ms() < shot.duration_ms.max(1) {
-                        if let Some(next) = asset_windows.iter().find(|candidate| {
-                            candidate.start_ms >= window.end_ms
-                                || (candidate.window_id != window.window_id
-                                    && candidate.start_ms == window.end_ms)
-                        }) {
-                            window.end_ms = next.end_ms;
-                            window.window_id = format!("{}+{}", window.window_id, next.window_id);
-                        }
-                    }
-                    windows_by_asset
-                        .entry(shot.asset_id.clone())
-                        .or_default()
-                        .retain(|existing| existing.window_id != window.window_id);
-                    windows_by_asset
-                        .entry(shot.asset_id.clone())
-                        .or_default()
-                        .push(window.clone());
-                    let uncertain = window_motion_uncertain(
-                        &selected_sources,
-                        &shot.asset_id,
-                        &window.window_id,
-                    );
-                    self.pick_map.insert(shot.order_index, (window, uncertain));
-                    pass_a_done.insert(shot.order_index);
-                    continue;
-                }
+            let asset_windows = windows_by_asset
+                .get(&shot.asset_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if let Some(window) = locked_content_window(shot, asset_windows) {
+                let uncertain =
+                    window_motion_uncertain(&selected_sources, &shot.asset_id, &window.window_id);
+                self.pick_map.insert(shot.order_index, (window, uncertain));
+                pass_a_done.insert(shot.order_index);
+                continue;
             }
             pass_a_pending.insert(shot.order_index);
         }
@@ -734,6 +697,56 @@ impl Phase4Session {
     }
 }
 
+/// 有 `segmentId` 就锁在选中片段（或召回给出的双段组合）里，不够长也不拼下一段硬切。
+fn locked_content_window(
+    shot: &StoryboardShot,
+    asset_windows: &[Phase4ContentWindow],
+) -> Option<Phase4ContentWindow> {
+    let segment_id = shot.segment_id.as_deref()?;
+    if let Some(window) = asset_windows
+        .iter()
+        .find(|window| window.window_id == segment_id)
+    {
+        return Some(window.clone());
+    }
+    let parts = segment_id
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() > 1 {
+        let mut matched = parts
+            .iter()
+            .filter_map(|part| {
+                asset_windows
+                    .iter()
+                    .find(|window| window.window_id == *part)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        if matched.len() == parts.len() {
+            matched.sort_by_key(|window| window.start_ms);
+            let start_ms = matched[0].start_ms;
+            let end_ms = matched
+                .last()
+                .map(|window| window.end_ms)
+                .unwrap_or(start_ms + 1);
+            return Some(Phase4ContentWindow {
+                asset_id: shot.asset_id.clone(),
+                window_id: segment_id.to_owned(),
+                start_ms,
+                end_ms: end_ms.max(start_ms + 1),
+            });
+        }
+    }
+    Some(Phase4ContentWindow {
+        asset_id: shot.asset_id.clone(),
+        window_id: segment_id.to_owned(),
+        start_ms: shot.source_start_ms,
+        end_ms: shot.source_end_ms.max(shot.source_start_ms + 1),
+    })
+}
+
 fn window_motion_uncertain(sources: &[StoryboardSource], asset_id: &str, window_id: &str) -> bool {
     let Some(source) = sources.iter().find(|source| source.asset_id == asset_id) else {
         return false;
@@ -1159,7 +1172,7 @@ pub(crate) fn phase4_refine_ranges(
     session: &mut Phase4Session,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     log::info!(
-        "Phase 4: window-select then in-window refine for {} locked shots (local progress retained in-session)",
+        "Phase 4: refine {} selected shot(s) inside locked windows (local progress retained in-session)",
         selected.shots.len()
     );
     session.ensure_initialized(selected, sources)?;
@@ -1910,6 +1923,91 @@ mod tests {
             uncovered_beat_ids: Vec::new(),
             shots,
         }
+    }
+
+    fn source_with_segments(
+        asset_id: &str,
+        segments: Vec<crate::models::SceneSegment>,
+    ) -> StoryboardSource {
+        StoryboardSource {
+            asset_id: asset_id.to_owned(),
+            kind: "video".to_owned(),
+            duration_ms: Some(20_000),
+            scene_segments: segments,
+            ocr_evidence: Vec::new(),
+            visual_evidence: Vec::new(),
+            visual_quality_score: Some(0.5),
+            evidence_embedding: None,
+            keyframe_grid_path: None,
+            keyframes: Vec::new(),
+            source_path: None,
+            segment: None,
+            segment_embedding: None,
+            segment_clip_embedding: None,
+        }
+    }
+
+    fn scene_segment(id: &str, start_ms: i64, end_ms: i64) -> crate::models::SceneSegment {
+        crate::models::SceneSegment {
+            id: id.to_owned(),
+            start_ms,
+            end_ms,
+            scene_duration_ms: Some(end_ms - start_ms),
+            visual_quality_score: None,
+            frames: Vec::new(),
+            visual_evidence: None,
+            motion_score: None,
+            motion_profile: None,
+        }
+    }
+
+    #[test]
+    fn locked_short_segment_does_not_glue_the_next_cut() {
+        let mut selected = content_with_shots(1);
+        selected.shots[0].asset_id = "asset-a".to_owned();
+        selected.shots[0].segment_id = Some("s001".to_owned());
+        selected.shots[0].duration_ms = 4_000;
+        selected.shots[0].source_start_ms = 0;
+        selected.shots[0].source_end_ms = 1_500;
+        let sources = vec![source_with_segments(
+            "asset-a",
+            vec![
+                scene_segment("s001", 0, 1_500),
+                scene_segment("s002", 1_500, 8_000),
+            ],
+        )];
+        let mut session = Phase4Session::new();
+        session.ensure_initialized(&selected, &sources).unwrap();
+        let (window, _) = session.pick_map.get(&1).expect("locked window");
+        assert_eq!(window.window_id, "s001");
+        assert_eq!(window.start_ms, 0);
+        assert_eq!(window.end_ms, 1_500);
+        assert!(session.pass_a_is_complete());
+        assert!(session.pass_a_pending.is_empty());
+    }
+
+    #[test]
+    fn dual_segment_id_unions_only_the_named_cuts() {
+        let mut selected = content_with_shots(1);
+        selected.shots[0].asset_id = "asset-a".to_owned();
+        selected.shots[0].segment_id = Some("s001+s002".to_owned());
+        selected.shots[0].duration_ms = 4_000;
+        selected.shots[0].source_start_ms = 0;
+        selected.shots[0].source_end_ms = 5_000;
+        let sources = vec![source_with_segments(
+            "asset-a",
+            vec![
+                scene_segment("s001", 0, 1_500),
+                scene_segment("s002", 1_500, 5_000),
+                scene_segment("s003", 5_000, 12_000),
+            ],
+        )];
+        let mut session = Phase4Session::new();
+        session.ensure_initialized(&selected, &sources).unwrap();
+        let (window, _) = session.pick_map.get(&1).expect("dual window");
+        assert_eq!(window.window_id, "s001+s002");
+        assert_eq!(window.start_ms, 0);
+        assert_eq!(window.end_ms, 5_000);
     }
 
     fn session_ready_for_pass_b(count: i64) -> (Phase4Session, StoryboardContent) {
