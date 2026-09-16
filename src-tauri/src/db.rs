@@ -11,7 +11,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 17;
+pub(crate) const SCHEMA_VERSION: i64 = 19;
 
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
@@ -396,6 +396,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         "UPDATE operation_logs SET editing_task_id = (SELECT storyboard_versions.editing_task_id FROM timeline_versions JOIN storyboard_versions ON storyboard_versions.id = timeline_versions.storyboard_version_id WHERE timeline_versions.id = operation_logs.entity_id) WHERE editing_task_id IS NULL AND entity_type = 'timeline_version'",
         [],
     ).map_err(|error| error.to_string())?;
+    crate::shared_library::migrate(connection)?;
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",

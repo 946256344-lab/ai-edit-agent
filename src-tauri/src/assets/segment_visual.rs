@@ -254,7 +254,7 @@ pub(crate) fn ensure_segment_visual_evidence(
     for asset_id in asset_ids {
         let metadata_json: Option<String> = connection
             .query_row(
-                "SELECT metadata_json FROM assets WHERE id = ?1 AND project_id = ?2 AND analysis_status = 'ready'",
+                "SELECT metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
                 params![asset_id, project_id],
                 |row| row.get(0),
             )

@@ -159,11 +159,24 @@ pub fn create_timeline_draft(
     project_id: String,
     storyboard_version_id: String,
 ) -> Result<TimelineVersion, String> {
+    create_timeline_draft_with_options(app, project_id, storyboard_version_id, None)
+}
+
+pub(crate) fn create_timeline_draft_with_options(
+    app: AppHandle,
+    project_id: String,
+    storyboard_version_id: String,
+    media_options: Option<crate::media_options::MediaOptions>,
+) -> Result<TimelineVersion, String> {
     let connection = open_connection(&app)?;
     let storyboard = load_storyboard_version(&connection, &storyboard_version_id)?;
     if storyboard.project_id != project_id {
         return Err("Storyboard does not belong to this project.".to_owned());
     }
+    let media_options = media_options.or(crate::media_options::storyboard_options(
+        &connection,
+        &storyboard_version_id,
+    )?);
     // timeline 区间首尾相接，源区间保持不变；后续编辑也只创建新版本，不修改此版本。
     let mut cursor = 0_i64;
     let clips = storyboard
@@ -179,7 +192,11 @@ pub fn create_timeline_draft(
                 source_end_ms: shot.source_end_ms,
                 timeline_start_ms: cursor,
                 timeline_end_ms: end,
-                on_screen_text: shot.on_screen_text.clone(),
+                on_screen_text: if media_options.is_some_and(|options| !options.subtitles) {
+                    String::new()
+                } else {
+                    shot.on_screen_text.clone()
+                },
                 clip_kind: "source".to_owned(),
                 derived_from_shot_index: None,
                 fit_reason: None,
@@ -188,7 +205,11 @@ pub fn create_timeline_draft(
             clip
         })
         .collect::<Vec<_>>();
-    let text_tracks = storyboard_text_tracks(&storyboard);
+    let text_tracks = if media_options.is_some_and(|options| !options.subtitles) {
+        Vec::new()
+    } else {
+        storyboard_text_tracks(&storyboard)
+    };
     let (text_tracks, voiceover_tracks) = inherit_voiceover_from_prior(
         &connection,
         &project_id,
@@ -256,7 +277,7 @@ fn asset_kind_and_metadata(
 ) -> Result<(String, TechnicalMetadata), String> {
     let (kind, metadata_json): (String, String) = connection
         .query_row(
-            "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND project_id = ?2 AND analysis_status = 'ready'",
+            "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
             params![asset_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1004,7 +1025,7 @@ fn validate_music_tracks(
                 return Err("Music cue volume or fades are outside the supported range.".to_owned());
             }
             let (kind, metadata_json): (String, String) = connection.query_row(
-                "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND project_id = ?2 AND analysis_status = 'ready'",
+                "SELECT kind, metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
                 params![cue.asset_id, project_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             ).map_err(|_| "Music asset is unavailable or has not finished analysis.".to_owned())?;

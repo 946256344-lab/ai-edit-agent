@@ -91,6 +91,7 @@ pub(crate) fn phase1_generate_narrative(
     required_script_mode: &str,
     library_inventory: &str,
     feedback: Option<&str>,
+    compose_narration: bool,
 ) -> Result<NarrativeStructure, String> {
     log::info!(
         "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode}, inventory_chars={})",
@@ -103,7 +104,9 @@ pub(crate) fn phase1_generate_narrative(
         )
     });
 
-    let mode_instructions = if required_script_mode == "full_script" {
+    let mode_instructions = if compose_narration {
+        "REQUIRED scriptMode=full_script: the user enabled voiceover for a goal/outline. Write a concise, natural spokenScript based on the brief and real library evidence, not the user's editing instructions. Match the requested duration (default 15-30 seconds). Split exactly this script across beat.narration in order. Each beat should contain about 4-8 seconds of speech; onScreenText is empty. Do not invent unsupported product facts."
+    } else if required_script_mode == "full_script" {
         "REQUIRED scriptMode=full_script (locked by the system because the brief contains substantial speakable copy). Do not choose key_message.\n\
         Put the exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
         targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further."

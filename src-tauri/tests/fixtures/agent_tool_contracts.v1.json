@@ -412,6 +412,17 @@
             "type": "string",
             "optional": true,
             "fallback": "Charlie when ElevenLabs audio-first prepare runs"
+          },
+          "mediaOptions": {
+            "type": ["object", "null"],
+            "optional": true,
+            "properties": {
+              "voiceover": { "type": "boolean" },
+              "subtitles": { "type": "boolean" },
+              "bgm": { "type": "boolean" }
+            },
+            "required": ["voiceover", "subtitles", "bgm"],
+            "additionalProperties": false
           }
         },
         "required": []
@@ -739,6 +750,7 @@
         "properties": {
           "text": { "type": ["string", "null"] },
           "voiceId": { "type": ["string", "null"] },
+          "includeSubtitles": { "type": ["boolean", "null"], "optional": true },
           "timelineVersionId": { "type": ["string", "null"] }
         },
         "required": ["text", "voiceId", "timelineVersionId"]

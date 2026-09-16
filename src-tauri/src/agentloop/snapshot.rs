@@ -110,22 +110,22 @@ fn build_state_snapshot_with_capabilities(
 
     let kind_counts = grouped_counts(
         connection,
-        "SELECT kind, COUNT(*) FROM assets WHERE project_id = ?1 GROUP BY kind",
+        "SELECT kind, COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY kind",
         project_id,
     )?;
     let technical_counts = grouped_counts(
         connection,
-        "SELECT analysis_status, COUNT(*) FROM assets WHERE project_id = ?1 GROUP BY analysis_status",
+        "SELECT analysis_status, COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY analysis_status",
         project_id,
     )?;
     let visual_counts = grouped_counts(
         connection,
-        "SELECT coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued'), COUNT(*) FROM assets WHERE project_id = ?1 AND kind IN ('video', 'image') AND analysis_status = 'ready' GROUP BY coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued')",
+        "SELECT coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued'), COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND kind IN ('video', 'image') AND analysis_status = 'ready' GROUP BY coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued')",
         project_id,
     )?;
     let health_counts = grouped_counts(
         connection,
-        "SELECT coalesce(health.status, 'unchecked'), COUNT(*) FROM assets LEFT JOIN asset_source_health health ON health.asset_id = assets.id WHERE assets.project_id = ?1 GROUP BY coalesce(health.status, 'unchecked')",
+        "SELECT coalesce(health.status, 'unchecked'), COUNT(*) FROM assets LEFT JOIN asset_source_health health ON health.asset_id = assets.id WHERE assets.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY coalesce(health.status, 'unchecked')",
         project_id,
     )?;
 

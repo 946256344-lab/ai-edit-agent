@@ -489,7 +489,7 @@ pub(crate) fn render_preview_inner(
     for (_index, clip) in timeline.clips.iter().enumerate() {
         let (source_reference, kind): (String, String) = connection
             .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                 params![clip.asset_id, timeline.project_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -552,7 +552,7 @@ pub(crate) fn render_preview_inner(
         for clip in &timeline.overlay_clips {
             let (src, kind): (String, String) = connection
                 .query_row(
-                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND project_id = ?2",
+                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                     params![clip.asset_id, timeline.project_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )

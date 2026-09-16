@@ -64,7 +64,7 @@ fn run_asset_health_scan(
     let timestamp = now_millis();
     if connection.execute("UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND tool_name = 'scan_asset_health' AND status = 'queued'", params![timestamp, task_id]).map_err(|error| error.to_string())? == 0 { return Ok(()); }
     let rows = {
-        let mut statement = connection.prepare("SELECT a.id, a.source_reference, h.baseline_size, h.baseline_modified_ms FROM assets a LEFT JOIN asset_source_health h ON h.asset_id = a.id WHERE a.project_id = ?1 ORDER BY a.created_at, a.id").map_err(|error| error.to_string())?;
+        let mut statement = connection.prepare("SELECT a.id, a.source_reference, h.baseline_size, h.baseline_modified_ms FROM assets a LEFT JOIN asset_source_health h ON h.asset_id = a.id WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY a.created_at, a.id").map_err(|error| error.to_string())?;
         let rows = statement
             .query_map(params![project_id], |row| {
                 Ok((
@@ -156,42 +156,42 @@ pub fn get_asset_health_scan_summary(
     let connection = open_connection(&app)?;
     let total: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets WHERE project_id = ?1",
+            "SELECT COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unchecked: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets a WHERE a.project_id = ?1 AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
+            "SELECT COUNT(*) FROM assets a WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let online: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'online'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'online'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let missing: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'missing'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'missing'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let changed: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'changed'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'changed'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unreadable: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'unreadable'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'unreadable'",
             params![project_id],
             |row| row.get(0),
         )
@@ -237,42 +237,42 @@ pub(crate) fn get_asset_health_summary_for_agent(
 ) -> Result<Value, String> {
     let total: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets WHERE project_id = ?1",
+            "SELECT COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unchecked: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets a WHERE a.project_id = ?1 AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
+            "SELECT COUNT(*) FROM assets a WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let online: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'online'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'online'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let missing: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'missing'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'missing'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let changed: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'changed'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'changed'",
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unreadable: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE project_id = ?1 AND status = 'unreadable'",
+            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'unreadable'",
             params![project_id],
             |row| row.get(0),
         )
@@ -280,7 +280,7 @@ pub(crate) fn get_asset_health_summary_for_agent(
     let failure_count = missing + changed + unreadable;
     let last_checked_at: Option<i64> = connection
         .query_row(
-            "SELECT MAX(checked_at) FROM asset_source_health WHERE project_id = ?1",
+            "SELECT MAX(checked_at) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
             params![project_id],
             |row| row.get(0),
         )
@@ -295,7 +295,7 @@ pub(crate) fn get_asset_health_summary_for_agent(
     let reason_counts: Vec<Value> = {
         let mut statement = connection
             .prepare(
-                "SELECT reason_code, COUNT(*) as count FROM asset_source_health WHERE project_id = ?1 AND reason_code IS NOT NULL GROUP BY reason_code",
+                "SELECT reason_code, COUNT(*) as count FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND reason_code IS NOT NULL GROUP BY reason_code",
             )
             .map_err(|error| error.to_string())?;
         let rows = statement

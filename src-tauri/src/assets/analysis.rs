@@ -307,7 +307,7 @@ pub(crate) fn backfill_project_visual_quality(
 ) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, metadata_json FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND json_extract(metadata_json, '$.visualQualityScore') IS NULL",
+            "SELECT id, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND json_extract(metadata_json, '$.visualQualityScore') IS NULL",
         )
         .map_err(|_| "visual_quality_backfill_query_failed".to_owned())?;
     let rows = statement
@@ -345,7 +345,7 @@ pub(crate) fn backfill_project_visual_quality(
             .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
         updated += transaction
             .execute(
-                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND project_id = ?4 AND metadata_json = ?5",
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?4) AND metadata_json = ?5",
                 params![next_json, now_millis(), asset_id, project_id, original_json],
             )
             .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
@@ -930,7 +930,7 @@ pub(crate) fn request_asset_analysis(
     let mut tasks = Vec::new();
     for asset_id in asset_ids {
         let row = transaction.query_row(
-            "SELECT source_reference, analysis_status FROM assets WHERE id = ?1 AND project_id = ?2",
+            "SELECT source_reference, analysis_status FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
             params![asset_id, project_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).optional().map_err(|error| error.to_string())?;
@@ -1022,7 +1022,7 @@ fn query_technical_failed_assets(
     let mut statement = connection
         .prepare(
             "SELECT id, display_name, source_reference FROM assets
-             WHERE project_id = ?1 AND analysis_status = 'failed'
+             WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
              AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
              ORDER BY updated_at DESC, id DESC
              LIMIT ?2",
@@ -1057,7 +1057,7 @@ fn query_visual_failed_assets(
     let mut statement = connection
         .prepare(
             "SELECT id, display_name, source_reference, metadata_json FROM assets
-             WHERE project_id = ?1 AND analysis_status = 'ready' AND kind IN ('video', 'image')
+             WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind IN ('video', 'image')
              AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
              AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0
              ORDER BY updated_at DESC, id DESC
@@ -1109,7 +1109,7 @@ fn classify_asset_for_retry(
         .query_row(
             "SELECT display_name, source_reference, analysis_status, kind, metadata_json,
              coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0)
-             FROM assets WHERE id = ?1 AND project_id = ?2",
+             FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
             params![asset_id, project_id],
             |row| {
                 Ok((
@@ -1714,19 +1714,19 @@ pub fn get_asset_task_center(
 ) -> Result<AssetTaskCenter, String> {
     let connection = open_connection(&app)?;
     let technical = connection.query_row(
-        "SELECT SUM(analysis_status = 'queued'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'failed') FROM assets WHERE project_id = ?1",
+        "SELECT SUM(analysis_status = 'queued'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'failed') FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
         params![project_id],
         |row| Ok(AssetTaskStageCounts { queued: row.get::<_, Option<i64>>(0)?.unwrap_or(0) as usize, running: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, skipped: 0 }),
     ).map_err(|error| error.to_string())?;
     let visual = connection.query_row(
-        "SELECT SUM(coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued') = 'queued'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'running'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'skipped') FROM assets WHERE project_id = ?1 AND kind IN ('video', 'image') AND analysis_status = 'ready'",
+        "SELECT SUM(coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued') = 'queued'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'running'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') = 'skipped') FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND kind IN ('video', 'image') AND analysis_status = 'ready'",
         params![project_id],
         |row| Ok(AssetTaskStageCounts { queued: row.get::<_, Option<i64>>(0)?.unwrap_or(0) as usize, running: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, skipped: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize }),
     ).map_err(|error| error.to_string())?;
     let mut statement = connection.prepare(
-        "SELECT id, display_name, 'technical', 'technical_analysis_failed', updated_at FROM assets WHERE project_id = ?1 AND analysis_status = 'failed'
+        "SELECT id, display_name, 'technical', 'technical_analysis_failed', updated_at FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'failed'
          UNION ALL
-         SELECT id, display_name, 'visual', 'visual_analysis_failed', updated_at FROM assets WHERE project_id = ?1 AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
+         SELECT id, display_name, 'visual', 'visual_analysis_failed', updated_at FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND json_extract(metadata_json, '$.visualAnalysisStatus') = 'failed'
          ORDER BY updated_at DESC LIMIT 50",
     ).map_err(|error| error.to_string())?;
     let recent_failures = statement

@@ -363,7 +363,7 @@ pub(crate) fn backfill_project_embeddings(
 ) -> Result<usize, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, metadata_json FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video'",
+            "SELECT id, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video'",
         )
         .map_err(|_| "semantic_backfill_query_failed".to_owned())?;
     let rows = statement
@@ -407,7 +407,7 @@ pub(crate) fn backfill_project_embeddings(
             .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
         updated += transaction
             .execute(
-                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND project_id = ?4 AND metadata_json = ?5",
+                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?4) AND metadata_json = ?5",
                 params![next_json, now_millis(), asset_id, project_id, original_json],
             )
             .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
@@ -419,7 +419,7 @@ pub(crate) fn backfill_project_embeddings(
     // 顺带补齐已有片段证据的片段向量（本地免费）。
     let mut segment_statement = connection
         .prepare(
-            "SELECT id, metadata_json FROM assets WHERE project_id = ?1 AND analysis_status = 'ready' AND kind = 'video' AND coalesce(json_extract(metadata_json, '$.visualAnalysisVersion'), 0) >= 2",
+            "SELECT id, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce(json_extract(metadata_json, '$.visualAnalysisVersion'), 0) >= 2",
         )
         .map_err(|_| "semantic_backfill_query_failed".to_owned())?;
     let segment_rows = segment_statement

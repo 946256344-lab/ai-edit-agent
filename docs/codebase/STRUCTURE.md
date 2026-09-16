@@ -1,5 +1,11 @@
 # 代码库结构
 
+2026-09-16 共享子素材库：`shared_library.rs` 拥有全局库、成员和项目关联迁移；`project_asset_access` 是项目可用素材范围。`useProjectCreationController` 管理创建草稿，`ProjectCreationModal` 展示命名及默认全选列表。源文件及既有分析保持原位。
+
+2026-09-15 一体化顶栏：关闭系统 decorations，`WorkspaceHeader` 展示窗口按钮，`useWindowController` 调用 Tauri 窗口 API 并同步最大化状态；顶栏和侧栏字标使用原生拖动区域，暖白背景覆盖原顶部玻璃。
+
+2026-09-15 对话媒体开关：`useComposerMediaController` 管理会话内选择，`AgentWorkspace` 展示三个开关与发送快照，`submit_conversation_turn` 将选择写入 `agent_tasks.input_json`。Rust `media_options.rs` 读取分镜 `content_json.mediaOptions`，生成、时间线与自动配音共用该快照控制自动添加。
+
 2026-09-14 暖白创作工作台：`src/light-workspace.css` 以实色侧栏和内容区覆盖原生 Acrylic，只露出顶部玻璃；缩小标题并优先分配预览空间。`src/index.css` 保留透明根背景并使用中性滚动条。本轮不改组件职责和业务接口。
 
 2026-09-13 原生玻璃：`src-tauri/tauri.conf.json` 配置 Windows Acrylic 与透明窗口；`src/index.css` 保持 WebView 根背景透明，`src/light-workspace.css` 提供中性透明白色分层，不在页面内模拟桌面背景。系统标题栏继续负责拖动与窗口操作。

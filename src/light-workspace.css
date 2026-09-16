@@ -1,4 +1,4 @@
-/* 安静的创作工作台：暖白内容、浅灰导航与预览优先；仅顶部露出 Windows Acrylic。 */
+/* 安静的创作工作台：暖白内容、浅灰导航、融合窗口顶栏与预览优先。 */
 :root {
   --ink: #27272d;
   --muted: #696970;
@@ -13,7 +13,7 @@
   display: grid; grid-template-columns: 228px minmax(0, 1fr);
   height: 100dvh; margin: 0; overflow: hidden;
   border: 0; border-radius: 0;
-  background: linear-gradient(to bottom, #ffffffb8 0 48px, var(--paper) 48px);
+  background: var(--paper);
   color: var(--ink); box-shadow: none;
 }
 .workspace-icon { width: 20px; height: 20px; flex: 0 0 20px; vertical-align: middle; }
@@ -77,7 +77,15 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 
 /* 桌面框架内的单一白色画布。 */
 .workspace { height: 100%; grid-column: 2; min-width: 0; background: transparent; overflow: hidden; padding: 0; }
-.topbar { height: 48px; min-height: 48px; flex-shrink: 0; padding: 0 22px; border: 0; background: transparent; }
+.topbar { height: 48px; min-height: 48px; flex-shrink: 0; padding: 0 0 0 22px; gap: 20px; border: 0; background: transparent; user-select: none; }
+.assembly-wordmark { user-select: none; }
+.topbar .saved { margin-left: auto; }
+.window-controls { display: flex; align-self: stretch; flex-shrink: 0; }
+.window-controls button { display: grid; place-items: center; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #66666b; }
+.window-controls button:hover { background: #27272d0d; color: var(--ink); }
+.window-controls .window-close:hover { background: #c42b1c; color: white; }
+.window-controls button:focus-visible { outline-offset: -4px; }
+.window-controls .workspace-icon { width: 16px; height: 16px; }
 .crumbs { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #484848; font-size: 14px; font-weight: 400; }
 .crumbs strong { font-weight: 500; color: #343434; }.crumbs span { color: #a4a4a4; margin: 0 14px; }
 .saved { display: inline-flex; align-items: center; gap: 8px; color: #727272; font-family: inherit; font-size: 13px; white-space: nowrap; }
@@ -123,6 +131,48 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .composer textarea:focus-visible { outline: 0; }.composer textarea::placeholder { color: #969696; }
 .composer span { font-family: inherit; font-size: 11px; color: #8b8b8b; max-width: calc(100% - 58px); line-height: 1.6; }
 .composer .composer-notice { color: #99632f; }
+.composer { container: composer / inline-size; }
+.composer .composer-footer { gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f0eeed; }
+.composer .composer-media-options { justify-content: flex-start; gap: 7px; margin: 0; flex-wrap: wrap; }
+.composer-media-options button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 9px; border: 1px solid #e8e6e3; border-radius: 9px; background: #fbfaf9; color: #92908c; cursor: pointer; transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease; }
+.composer-media-options button > .workspace-icon { width: 14px; height: 14px; flex-shrink: 0; stroke-width: 1.6; }
+.composer .composer-media-label { max-width: none; font-size: 12px; font-weight: 500; letter-spacing: .02em; color: inherit; white-space: nowrap; }
+.composer-media-options button[aria-pressed="true"] { border-color: #e2daed; background: linear-gradient(180deg, #faf7fe, #f1ecf7); color: #76628d; box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px #44345706; }
+.composer-media-options button:hover { border-color: #c9bfd7; background: #f3eef8; color: #665079; }
+.composer-media-options button:focus-visible { outline: 2px solid #a68cc9; outline-offset: 3px; }
+.composer .composer-media-check { display: grid; place-items: center; flex-shrink: 0; width: 13px; height: 13px; max-width: none; margin-left: 2px; border: 1px solid #d9d6d2; border-radius: 50%; background: transparent; color: white; transition: background 160ms ease, border-color 160ms ease; }
+.composer-media-check .workspace-icon { width: 10px; height: 10px; stroke-width: 2.4; opacity: 0; }
+.composer-media-options button[aria-pressed="true"] .composer-media-check { border-color: #8c75a6; background: #8c75a6; }
+.composer-media-options button[aria-pressed="true"] .composer-media-check .workspace-icon { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .composer-media-options button, .composer .composer-media-check { transition: none; } }
+@container composer (max-width: 360px) {
+  .composer .composer-footer { gap: 8px; }
+  .composer .composer-media-options { gap: 5px; }
+  .composer-media-options button { gap: 3px; padding: 0 5px; }
+  .composer-media-options button > .workspace-icon { width: 12px; height: 12px; }
+  .composer .composer-media-check { width: 11px; height: 11px; margin-left: 0; }
+}
+.settings-dialog.project-create-dialog { width: min(520px, calc(100vw - 48px)); padding: 30px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); color: var(--ink); box-shadow: 0 24px 80px #22222224; }
+.project-create-dialog h2 { margin: 8px 0; font-size: 24px; font-weight: 550; letter-spacing: -.5px; }
+.project-create-dialog header p, .library-choice-hint { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.project-create-dialog fieldset { min-width: 0; padding: 0; margin: 24px 0 0; border: 0; }
+.project-name-field { display: grid; gap: 9px; font-size: 13px; }
+.project-name-field input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid #dedbd7; border-radius: 9px; background: white; color: var(--ink); }
+.library-choice-heading { display: flex; align-items: center; justify-content: space-between; margin-top: 25px; font-size: 13px; }
+.library-choice-heading small { margin-left: 8px; color: var(--muted); font-size: 11px; }
+.library-choice-heading button { border: 0; background: transparent; color: var(--accent); padding: 4px 6px; font-size: 11px; }
+.library-choices { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.library-choices > p { padding: 14px; font-size: 12px; color: var(--muted); }
+.library-choice { display: flex; align-items: center; gap: 10px; padding: 13px; font-size: 13px; cursor: pointer; }
+.library-choice + .library-choice { border-top: 1px solid var(--line); }
+.library-choice:has(input:checked) { background: #7057bd06; }
+.library-choice input { accent-color: var(--accent); width: 15px; height: 15px; }
+.library-choice .workspace-icon { color: #9580b2; width: 18px; height: 18px; }
+.library-choice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.library-choice small { color: var(--muted); white-space: nowrap; }
+.project-create-dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
+.project-create-error { font-size: 12px; color: #a12b25; }
+.message-media-options { display: block; margin-top: 8px; color: #858580; font-size: 11px; line-height: 1.6; }
 .send-button { display: grid; place-items: center; min-width: 38px; min-height: 36px; border: 0; border-radius: 10px; padding: 7px; font-size: 11px; background: var(--accent); color: white; }
 .send-button:hover:not(:disabled) { background: #6048a8; }.send-button--stop { background: #f1e5e8; color: #9a5363; padding: 8px 12px; }
 .composer-shortcut { display: block; flex-shrink: 0; margin-top: 10px; line-height: 16px; color: #8c8c8c; font-size: 12px; }

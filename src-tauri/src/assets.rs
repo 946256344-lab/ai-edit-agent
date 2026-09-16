@@ -65,6 +65,11 @@ pub(crate) fn store_assets(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    crate::shared_library::attach_folder(
+        &transaction,
+        project_id,
+        folder_reference.and_then(Path::to_str),
+    )?;
     let mut imported = Vec::with_capacity(sources.len());
     for source in sources {
         let display_name = source
@@ -112,6 +117,7 @@ pub(crate) fn store_assets(
             "INSERT INTO assets (id, project_id, kind, display_name, source_reference, folder_reference, analysis_status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![asset.id, asset.project_id, asset.kind, asset.display_name, source_reference, folder_reference, asset.analysis_status, asset.created_at, asset.updated_at],
         ).map_err(|error| error.to_string())?;
+        transaction.execute("INSERT INTO shared_library_assets (asset_id, library_id) SELECT ?1, id FROM shared_libraries WHERE source_key = ?2", params![asset.id, folder_reference.as_deref().unwrap_or("")]).map_err(|error| error.to_string())?;
         let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
         transaction.execute(
             "INSERT INTO asset_source_health (asset_id, project_id, status, baseline_size, baseline_modified_ms, observed_size, observed_modified_ms, checked_at, updated_at) VALUES (?1, ?2, 'online', ?3, ?4, ?3, ?4, ?5, ?5)",
@@ -224,7 +230,7 @@ fn relink_candidates(
         .collect();
     let mut statement = connection
         .prepare(
-            "SELECT id, display_name, kind, source_reference, folder_reference FROM assets WHERE project_id = ?1",
+            "SELECT id, display_name, kind, source_reference, folder_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -286,7 +292,7 @@ pub fn preview_asset_relink(
     let candidates = relink_candidates(&connection, &project_id, Path::new(&source_directory))?;
     let asset_count: usize = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets WHERE project_id = ?1",
+            "SELECT COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
             params![project_id],
             |row| row.get(0),
         )
@@ -331,7 +337,7 @@ pub fn confirm_asset_relink(
         let new_kind = asset_kind(&source);
         if preserve_analysis {
             transaction.execute(
-                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, updated_at = ?4 WHERE id = ?5 AND project_id = ?6",
+                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, updated_at = ?4 WHERE id = ?5 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?6)",
                 params![source.to_string_lossy(), source_directory.as_str(), new_kind, timestamp, asset_id, project_id],
             ).map_err(|error| error.to_string())?;
         } else {
@@ -340,7 +346,7 @@ pub fn confirm_asset_relink(
                 params![timestamp, project_id, format!("%\"assetId\":\"{asset_id}\"%")],
             ).map_err(|error| error.to_string())?;
             transaction.execute(
-                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, analysis_status = 'queued', metadata_json = '{}', updated_at = ?4 WHERE id = ?5 AND project_id = ?6",
+                "UPDATE assets SET source_reference = ?1, folder_reference = ?2, kind = ?3, analysis_status = 'queued', metadata_json = '{}', updated_at = ?4 WHERE id = ?5 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?6)",
                 params![source.to_string_lossy(), source_directory.as_str(), new_kind, timestamp, asset_id, project_id],
             ).map_err(|error| error.to_string())?;
             let task_id = Uuid::new_v4().to_string();
@@ -374,7 +380,7 @@ fn collectable_project_sources(
 ) -> Result<Vec<(String, String, String)>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, display_name, source_reference FROM assets WHERE project_id=?1 ORDER BY created_at, id",
+            "SELECT id, display_name, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY created_at, id",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -529,7 +535,7 @@ pub(crate) fn search_assets_for_agent(
     }
     let limit = limit.clamp(1, 20);
     let offset = offset.min(10_000);
-    let search_sql = "a.project_id = ?1
+    let search_sql = "a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)
         AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = a.id), 0) = 0
         AND (?2 IS NULL OR a.kind = ?2)
         AND (?3 IS NULL OR coalesce(json_extract(a.metadata_json, '$.durationMs'), 0) >= ?3)
@@ -678,7 +684,7 @@ pub(crate) fn search_asset_segments_for_agent(
     let offset = offset.min(10_000);
     let mut statement = connection.prepare(
         "SELECT a.id, a.display_name, a.kind, a.metadata_json FROM assets a
-         WHERE a.project_id=?1 AND a.analysis_status='ready' AND a.kind IN ('video','image')
+         WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id=?1) AND a.analysis_status='ready' AND a.kind IN ('video','image')
          AND (?2 IS NULL OR a.id=?2)
          AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id=a.id),0)=0
          AND coalesce((SELECT status FROM asset_source_health h WHERE h.asset_id=a.id),'unchecked') NOT IN ('missing','changed','unreadable')

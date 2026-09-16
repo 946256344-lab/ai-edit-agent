@@ -16,6 +16,13 @@ const paths = {
   undo: 'm8 5-5 5 5 5M3 10h12a5 5 0 0 1 0 10h-3',
   redo: 'm16 5 5 5-5 5M21 10H9a5 5 0 0 0 0 10h3',
   close: 'm6 6 12 12M6 18 18 6',
+  minimize: 'M5 12h14',
+  maximize: 'M5 5h14v14H5Z',
+  restore: 'M8 8h11v11H8ZM5 15V5h10',
+  microphone: 'M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5Zm-3 6v1a6 6 0 0 0 12 0v-1M12 18v4M9 22h6',
+  subtitles: 'M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 5h3m4 0h3M7 14h5m3 0h2',
+  music: 'M9 17V5l11-2v12M9 9l11-2M9 17c0 1.7-1.6 3-3.5 3S2 18.7 2 17s1.6-3 3.5-3S9 15.3 9 17Zm11-2c0 1.7-1.6 3-3.5 3S13 16.7 13 15s1.6-3 3.5-3 3.5 1.3 3.5 3Z',
+  check: 'm6 12 4 4 8-8',
 }
 
 export function WorkspaceIcon({ name }: { name: keyof typeof paths }) {

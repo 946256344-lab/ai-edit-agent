@@ -88,6 +88,16 @@ pub(crate) fn run_native_tool_loop(
         request,
     );
     let initial_catalog = full_native_tool_catalog();
+    let media_json: Option<String> = connection
+        .query_row(
+            "SELECT json_extract(input_json, '$.mediaOptions') FROM agent_tasks WHERE id = ?1",
+            params![agent_task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let media_options: Option<crate::media_options::MediaOptions> = media_json
+        .map(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+        .transpose()?;
     let tool_directory = compact_tool_directory(&initial_catalog);
     let mut input = initial_native_input(
         history,
@@ -95,7 +105,14 @@ pub(crate) fn run_native_tool_loop(
         &tool_directory,
         build_state_snapshot(connection, project_id, editing_task_id),
     )?;
-
+    if let Some(options) = media_options {
+        let instruction = format!(
+            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除已有轨道。配音开启且需求不是完整稿时，在 brief 中说明需要创作可念旁白稿。BGM 开启且时间线没有音乐时，先 search_music 再 use_online_music；必须写入音乐后重新 render_preview，失败如实说明。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。",
+            serde_json::to_string(&options).map_err(|error| error.to_string())?
+        );
+        let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
+        input[0]["content"][0]["text"] = json!(format!("{prompt}\n{instruction}"));
+    }
     let mut state = LoopState {
         app,
         connection,
@@ -104,6 +121,7 @@ pub(crate) fn run_native_tool_loop(
         editing_task_id,
         conversation_id,
         task_brief: task_brief.to_owned(),
+        media_options,
         storyboard: storyboard.cloned(),
         timelines: timelines.to_vec(),
         last_outcome: None,
@@ -1113,7 +1131,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             Ok(value)
         }
         "generate_storyboard" => {
-            let allowed = ["brief", "voiceId"];
+            let allowed = ["brief", "voiceId", "mediaOptions"];
             if object.is_empty()
                 || !object.contains_key("brief")
                 || object.keys().any(|key| !allowed.contains(&key.as_str()))
@@ -1279,10 +1297,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
         }
         "synthesize_voiceover" => {
-            if object.len() != 3
-                || !object.contains_key("text")
+            if object.keys().any(|key| {
+                !["text", "voiceId", "timelineVersionId", "includeSubtitles"]
+                    .contains(&key.as_str())
+            }) || !object.contains_key("text")
                 || !object.contains_key("voiceId")
                 || !object.contains_key("timelineVersionId")
+            {
+                return Err(invalid_arguments());
+            }
+            if object
+                .get("includeSubtitles")
+                .is_some_and(|value| !value.is_null() && !value.is_boolean())
             {
                 return Err(invalid_arguments());
             }
@@ -2986,6 +3012,14 @@ mod tests {
         )
         .is_err());
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":null}"#).is_ok());
+        let media = parse_native_arguments("generate_storyboard", r#"{"brief":null,"voiceId":null,"mediaOptions":{"voiceover":true,"subtitles":false,"bgm":true}}"#).unwrap();
+        assert_eq!(media["mediaOptions"]["subtitles"], false);
+        let voice = parse_native_arguments(
+            "synthesize_voiceover",
+            r#"{"text":null,"voiceId":null,"timelineVersionId":null,"includeSubtitles":false}"#,
+        )
+        .unwrap();
+        assert_eq!(voice["includeSubtitles"], false);
         assert!(parse_native_arguments("generate_storyboard", r#"{"brief":""}"#).is_ok());
         assert!(parse_native_arguments("create_timeline_draft", "{}").is_ok());
         assert!(parse_native_arguments("create_timeline_draft", r#"{"projectId":"p"}"#).is_err());

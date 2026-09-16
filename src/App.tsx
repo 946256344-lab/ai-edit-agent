@@ -13,6 +13,10 @@ import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import { useSessionArtworkController } from './hooks/useSessionArtworkController'
+import { useComposerMediaController } from './hooks/useComposerMediaController'
+import { useProjectCreationController } from './hooks/useProjectCreationController'
+import { ProjectCreationModal } from './components/ProjectCreationModal'
+import { useWindowController } from './hooks/useWindowController'
 import type { ConversationMessage, EditingSessionView, WorkspaceView } from './components/workspace-types'
 import { useAgentRunReconciliation } from './hooks/useAgentRunReconciliation'
 import type { PendingAgentEdit } from './hooks/useAgentRunReconciliation'
@@ -54,6 +58,8 @@ function toEditingSession(session: StoredEditingSession): EditingSessionView {
 
 function App() {
   const desktopRuntime = isDesktopRuntime()
+  const projectCreation = useProjectCreationController(createProjectWorkspace)
+  const windowControls = useWindowController(desktopRuntime)
   const [projects, setProjects] = useState<StoredProject[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [editingSessions, setEditingSessions] = useState<EditingSessionView[]>([])
@@ -68,6 +74,7 @@ function App() {
   const [routeStatusDetail, setRouteStatusDetail] = useState<string | null>(null)
   const [routeStatusTone, setRouteStatusTone] = useState<'neutral' | 'info' | 'success' | 'warning'>('neutral')
   const [agentTasks, setAgentTasks] = useState<StoredAgentTask[]>([])
+  const composerMedia = useComposerMediaController(activeEditingSessionId, agentTasks)
   const [storeState, setStoreState] = useState<'browser' | 'ready' | 'unavailable'>(desktopRuntime ? 'unavailable' : 'browser')
   const activeProjectRef = useRef<string | null>(null)
   const activeEditingSessionRef = useRef<string | null>(null)
@@ -192,9 +199,9 @@ function App() {
     return { session, storyboard: artifactSnapshot.storyboard, timeline: artifactSnapshot.timeline }
   }
 
-  async function createProjectWorkspace() {
+  async function createProjectWorkspace(name: string, libraryIds: string[]) {
     if (!desktopRuntime) return
-    const project = await createStoredProject('未命名本地项目')
+    const project = await createStoredProject(name, libraryIds)
     setProjects((current) => [project, ...current])
     const storedSession = await createStoredEditingSession(project.id, '新的剪辑会话')
     const session = toEditingSession(storedSession)
@@ -371,6 +378,7 @@ function App() {
     event.preventDefault()
     const trimmed = input.trim()
     if (!trimmed || isSending || !desktopRuntime) return
+    const mediaOptions = { ...composerMedia.options }
     cancelRequestedRef.current = false
     setIsSending(true)
     setComposerNotice(null)
@@ -398,6 +406,7 @@ function App() {
       setRouteStatusTone('success')
       context = resolved.context
       const { conversationId, projectId, sessionId } = context
+      composerMedia.rememberSent(sessionId, mediaOptions)
       const routedRequest = resolved.route.deferredRequest
         ? `${resolved.route.deferredRequest}\n\n任务归属补充：${trimmed}`
         : trimmed
@@ -425,6 +434,7 @@ function App() {
         resolved.context.timelineVersionId,
         routedRequest,
         resolved.context.routeReceipt,
+        mediaOptions,
       )
       if (turnResult.kind === 'immediate') {
         await appendStoredMessage(conversationId, sessionId, 'agent', turnResult.message)
@@ -536,7 +546,7 @@ function App() {
         }}
         actions={{
           createSession: () => shotReplacement.actions.requestAction(() => void createEditingSessionWorkspace()),
-          createProject: () => shotReplacement.actions.requestAction(() => void createProjectWorkspace()),
+          createProject: () => shotReplacement.actions.requestAction(() => void projectCreation.actions.open()),
           selectProject: (projectId) => shotReplacement.actions.requestAction(() => void selectProject(projectId)),
           selectSession: (sessionId) => shotReplacement.actions.requestAction(() => { setActiveView('chat'); if (activeProjectId) void selectEditingSession(activeProjectId, sessionId) }),
           deleteSession: (sessionId) => void deleteEditingSessionWorkspace(sessionId),
@@ -553,7 +563,7 @@ function App() {
             storeReady: storeState === 'ready',
             view: activeView,
           }}
-          selectView={(view) => shotReplacement.actions.requestAction(() => setActiveView(view))}
+          actions={{ windowControls, selectView: (view) => shotReplacement.actions.requestAction(() => setActiveView(view)) }}
         />
 
         <div className="workspace-canvas">
@@ -582,6 +592,7 @@ function App() {
                 editBusy: shotReplacement.model.phase === 'saving',
                 listenerReady: agentReconciliation.listenerReady,
                 composerNotice,
+                mediaOptions: composerMedia.options,
                 routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
               }}
               actions={{
@@ -590,6 +601,7 @@ function App() {
                   if (composerNotice) setComposerNotice(null)
                 },
                 openArtifacts: () => setActiveView('artifacts'),
+                toggleMedia: composerMedia.toggle,
                 sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage(event)) },
                 stopAgentRun,
               }}
@@ -611,6 +623,7 @@ function App() {
         visibleAssets={assetWorkspace.assets}
       />
       <ProviderSettingsModal controller={provider} />
+      <ProjectCreationModal controller={projectCreation} />
     </main>
   )
 }

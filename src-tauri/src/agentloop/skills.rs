@@ -13,9 +13,10 @@ use crate::music_provider::{attribution_for, download_track, eligible_track, sea
 use crate::preview::render_preview_inner as render_preview;
 use crate::subtitle::{subtitle_style_presets, transcribe_asset};
 use crate::timeline::{
-    change_clip_duration, create_timeline_draft, insert_clips, reorder_clips, replace_clips,
-    replace_music_tracks, replace_text_tracks, select_timeline_candidate, text_recipe_capabilities,
-    text_track_quality_warnings, ClipAdjustment, ClipInsertion, ClipReplacement,
+    change_clip_duration, create_timeline_draft_with_options, insert_clips, reorder_clips,
+    replace_clips, replace_music_tracks, replace_text_tracks, select_timeline_candidate,
+    text_recipe_capabilities, text_track_quality_warnings, ClipAdjustment, ClipInsertion,
+    ClipReplacement,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -527,6 +528,14 @@ pub(super) fn apply_skill(
                 storyboard_text.as_deref(),
             )?;
             let voice_id = args.get("voiceId").and_then(Value::as_str);
+            let include_subtitles = args
+                .get("includeSubtitles")
+                .and_then(Value::as_bool)
+                .unwrap_or(
+                    state
+                        .media_options
+                        .map_or(true, |options| options.subtitles),
+                );
             let (timeline, applied) = crate::voice_provider::synthesize_voiceover_for_timeline(
                 state.app,
                 state.connection,
@@ -537,6 +546,7 @@ pub(super) fn apply_skill(
                 &existing,
                 &text,
                 voice_id,
+                include_subtitles,
             )?;
             let timeline_version_id = timeline.id.clone();
             let version_number = timeline.version_number;
@@ -548,6 +558,8 @@ pub(super) fn apply_skill(
             upsert(&mut state.timelines, timeline.clone());
             let subtitle_note = if applied.subtitle_applied {
                 format!("，对齐字幕 {} 条", applied.subtitle_cue_count)
+            } else if !include_subtitles {
+                "，本轮未自动添加字幕".to_owned()
             } else {
                 "，对齐字幕未写入（旁白已保留）".to_owned()
             };
@@ -633,7 +645,11 @@ pub(super) fn apply_skill(
                         timeline_start_ms: 0,
                         timeline_end_ms: timeline_duration,
                         loop_enabled: source_end < timeline_duration,
-                        volume: 0.35,
+                        volume: if timeline.voiceover_tracks.is_empty() {
+                            0.35
+                        } else {
+                            0.15
+                        },
                         fade_in_ms: 250,
                         fade_out_ms: 350,
                         jianying_compatibility: "not_deliverable".to_owned(),
@@ -846,6 +862,16 @@ pub(super) fn apply_skill(
             "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only."
         })),
         "generate_storyboard" => {
+            let media_options = args
+                .get("mediaOptions")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value::<crate::media_options::MediaOptions>(value.clone())
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?
+                .or(state.media_options);
+            state.media_options = media_options;
             let brief = args
                 .get("brief")
                 .and_then(Value::as_str)
@@ -867,11 +893,18 @@ pub(super) fn apply_skill(
                 state.editing_task_id.to_owned(),
                 brief.to_owned(),
                 voice_id,
+                media_options,
             )?;
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;
             let summary = generated.summary.clone();
-            let completion_gaps = crate::storyboard::storyboard_completion_gaps(&generated);
+            let completion_gaps: Vec<_> = crate::storyboard::storyboard_completion_gaps(&generated)
+                .into_iter()
+                .filter(|gap| {
+                    gap.code != "voiceover_longer_than_picture"
+                        || media_options.map_or(true, |options| options.voiceover)
+                })
+                .collect();
             let mut quality_warnings = completion_gaps
                 .iter()
                 .map(|gap| {
@@ -905,10 +938,11 @@ pub(super) fn apply_skill(
                 {
                     Ok(latest.timeline)
                 }
-                _ => create_timeline_draft(
+                _ => create_timeline_draft_with_options(
                     state.app.clone(),
                     state.project_id.to_owned(),
                     storyboard_version_id.clone(),
+                    media_options,
                 ),
             };
             match timeline_result {
@@ -926,6 +960,7 @@ pub(super) fn apply_skill(
                         state.editing_task_id,
                         state.conversation_id,
                         &timeline,
+                        media_options,
                     ) {
                         Ok(Some((voiced, applied))) => {
                             timeline = voiced;
@@ -942,7 +977,9 @@ pub(super) fn apply_skill(
                             }
                         }
                         Ok(None) => {
-                            if generated.script_mode == "key_message" {
+                            if generated.script_mode == "key_message"
+                                && media_options.map_or(true, |options| options.subtitles)
+                            {
                                 message.push_str("\nkey_message 不配音，已写入字幕标记。");
                             }
                         }
@@ -993,6 +1030,7 @@ pub(super) fn apply_skill(
                                 "previewTimelineVersionId": timeline_version_id,
                                 "versionNumber": version_number,
                                 "qualityWarnings": quality_warnings,
+                                "requestedMedia": media_options,
                             }))
                         }
                         Err(error) => {
@@ -1049,23 +1087,29 @@ pub(super) fn apply_skill(
                 .storyboard
                 .as_ref()
                 .ok_or_else(|| "Create a storyboard before creating a timeline.".to_owned())?;
-            let created = create_timeline_draft(
+            let created = create_timeline_draft_with_options(
                 state.app.clone(),
                 state.project_id.to_owned(),
                 storyboard.id.clone(),
+                state.media_options,
             )?;
             let mut created = created;
+            let mut quality_warnings = Vec::new();
             match crate::voice_provider::auto_synthesize_storyboard_voiceover(
                 &state.app,
                 state.project_id,
                 state.editing_task_id,
                 state.conversation_id,
                 &created,
+                state.media_options,
             ) {
                 Ok(Some((voiced, _))) => created = voiced,
                 Ok(None) => {}
                 Err(error) => {
                     log::warn!("Automatic voiceover after create_timeline_draft skipped: {error}");
+                    quality_warnings.push(
+                        json!({"category": "voiceover", "severity": "warning", "message": error}),
+                    );
                 }
             }
             let timeline_version_id = created.id.clone();
@@ -1082,6 +1126,7 @@ pub(super) fn apply_skill(
             Ok(json!({
                 "tool": "create_timeline_draft",
                 "status": "ok",
+                "qualityWarnings": quality_warnings,
                 "timelineVersionId": timeline_version_id,
                 "versionNumber": version_number
             }))

@@ -37,7 +37,7 @@ pub fn transcribe_asset(
     let connection = open_connection(app)?;
     let (display_name, metadata_json, analysis_status): (String, String, String) = connection
         .query_row(
-            "SELECT display_name, metadata_json, analysis_status FROM assets WHERE id = ?1 AND project_id = ?2",
+            "SELECT display_name, metadata_json, analysis_status FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
             params![asset_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )

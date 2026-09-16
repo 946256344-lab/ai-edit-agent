@@ -23,7 +23,7 @@ use crate::models::{
 };
 
 pub(crate) const ASSET_PAGE_FILTER_SQL: &str = "
-    project_id = ?1
+    id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)
     AND (?2 IS NULL OR display_name LIKE '%' || ?2 || '%' OR id IN (SELECT asset_id FROM asset_user_metadata WHERE note LIKE '%' || ?2 || '%' OR asset_id IN (SELECT ata.asset_id FROM asset_tag_assignments ata JOIN asset_tags t ON t.id = ata.tag_id WHERE t.name LIKE '%' || ?2 || '%')))
     AND (?3 IS NULL OR kind = ?3)
     AND (?4 IS NULL OR analysis_status = ?4)
@@ -126,7 +126,7 @@ pub(crate) fn project_asset_directories(
     project_id: &str,
 ) -> Result<HashMap<String, String>, String> {
     let mut statement = connection
-        .prepare("SELECT id, source_reference, folder_reference FROM assets WHERE project_id = ?1")
+        .prepare("SELECT id, source_reference, folder_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -175,7 +175,7 @@ fn list_assets_snapshot(
          coalesce((SELECT json_group_array(aci.collection_id) FROM asset_collection_items aci WHERE aci.asset_id = assets.id), '[]'),
          coalesce((SELECT status FROM asset_source_health ash WHERE ash.asset_id = assets.id), 'unchecked'),
          (SELECT checked_at FROM asset_source_health ash WHERE ash.asset_id = assets.id)
-         FROM assets WHERE project_id = ?1 ORDER BY created_at DESC",
+         FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY created_at DESC",
     ).map_err(|error| error.to_string())?;
     let rows = statement
         .query_map(params![project_id], |row| {
@@ -293,7 +293,7 @@ pub fn list_asset_page(
     let folder_asset_ids = if let Some(folder) = directory_key.as_deref() {
         let ids = if folder == "__unfiled__" {
             let mut statement = connection
-                .prepare("SELECT id FROM assets WHERE project_id = ?1")
+                .prepare("SELECT id FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)")
                 .map_err(|error| error.to_string())?;
             let ids = statement
                 .query_map(params![project_id], |row| row.get::<_, String>(0))
@@ -419,7 +419,7 @@ pub fn list_asset_page(
 
     let counts = connection
         .query_row(
-            "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < 2) FROM assets WHERE project_id = ?1",
+            "SELECT COUNT(*), SUM(analysis_status = 'ready'), SUM(analysis_status = 'analyzing'), SUM(analysis_status = 'queued'), SUM(analysis_status = 'failed'), SUM(json_extract(metadata_json, '$.visualAnalysisStatus') IN ('queued', 'running')), SUM(kind = 'video' AND analysis_status = 'ready' AND coalesce(json_extract(metadata_json, '$.analysisVersion'), 0) < 2) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
             params![project_id],
             |row| Ok(AssetStatusCounts { total: row.get::<_, i64>(0)? as usize, ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize, analyzing: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize, queued: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize, failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize, visual_pending: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize, segment_pending: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize }),
         )
@@ -510,7 +510,7 @@ fn validate_batch_asset_ids(
     let placeholders = unique_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let mut statement = transaction
         .prepare(&format!(
-            "SELECT id FROM assets WHERE project_id = ?1 AND id IN ({placeholders})"
+            "SELECT id FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND id IN ({placeholders})"
         ))
         .map_err(|error| error.to_string())?;
     let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&project_id];

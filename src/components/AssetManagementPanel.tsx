@@ -68,7 +68,7 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
         <div>
           <span className="panel-kicker">素材</span>
           <strong>{model.page.counts.total} 个本地素材</strong>
-          <p>{model.projectId ? '导入后自动分析。分析完成的素材才能用于剪辑。' : '请选择项目后导入素材。'}</p>
+          <p>{model.projectId ? '显示项目所选素材库。导入文件夹会创建共享子素材库，并用于当前项目。' : '请选择项目后导入素材。'}</p>
         </div>
         <div className="asset-workbench__actions">
           <button className="import-button" onClick={actions.importFiles} disabled={!projectReady}>导入文件</button>
