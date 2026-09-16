@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已合并（2026-09-16，cursor/motion-energy-detail）：素材详情展示硬切片段的运动能量曲线与可用窗。见 docs/changes/2026-09-16-motion-energy-detail.md。
 - [x] 已实现并验证（2026-09-16，codex/project-session-edit）：项目与剪辑会话统一操作菜单、名称编辑；项目确认删除会清理本地索引、派生分析和预览但保留原始媒体与剪映草稿。见 docs/changes/2026-09-16-project-session-edit.md。
 - [x] 已实现（2026-09-15，cursor/motion-energy-trim）：硬切片段内用帧差运动能量曲线砍静止开头与已收敛结尾；对比不够则不切。analysis_version=4，v3 只补曲线不重切。Phase 4 窗用可用区间，不改选镜 JSON。见 docs/changes/2026-09-15-motion-energy-trim.md。
 - [x] 已实现（2026-09-15，cursor/hard-cut-segments）：素材切段只认 FFmpeg 硬切，CLIP 验真伪（相似则丢掉）；CLIP 不可用或无硬切则整条一段，删除按秒均分。analysis_version=3 空闲补跑，不改选镜/视觉 JSON。见 docs/changes/2026-09-15-hard-cut-segments.md。

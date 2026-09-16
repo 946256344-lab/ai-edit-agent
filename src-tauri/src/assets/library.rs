@@ -486,6 +486,12 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
                                 usable_start_ms: profile.map(|item| item.usable_start_ms),
                                 usable_end_ms: profile.map(|item| item.usable_end_ms),
                                 motion_tail_settled: profile.map(|item| item.tail_settled),
+                                motion_uncertain: profile
+                                    .map(|item| item.uncertain)
+                                    .filter(|uncertain| *uncertain),
+                                motion_energy: profile
+                                    .map(|item| item.energy.clone())
+                                    .unwrap_or_default(),
                             }
                         })
                         .collect(),

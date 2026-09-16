@@ -284,6 +284,10 @@ pub struct AssetEvidenceSegment {
     pub usable_end_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motion_tail_settled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion_uncertain: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motion_energy: Vec<MotionEnergySample>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1048,7 +1052,7 @@ pub struct VisualEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssetEvidence, ConversationTurnResult};
+    use super::{AssetEvidence, AssetEvidenceSegment, ConversationTurnResult, MotionEnergySample};
     use serde_json::json;
 
     #[test]
@@ -1073,6 +1077,30 @@ mod tests {
         assert_eq!(serialized["kind"], "video");
         assert_eq!(serialized["mediaPath"], r"D:\素材\原片.mp4");
         assert_eq!(serialized["durationMs"], 12_000);
+    }
+
+    #[test]
+    fn asset_evidence_segment_exposes_motion_energy() {
+        let serialized = serde_json::to_value(AssetEvidenceSegment {
+            id: "s001".to_owned(),
+            start_ms: 0,
+            end_ms: 4_000,
+            frames: Vec::new(),
+            visual_evidence: None,
+            usable_start_ms: Some(400),
+            usable_end_ms: Some(3_200),
+            motion_tail_settled: Some(true),
+            motion_uncertain: None,
+            motion_energy: vec![MotionEnergySample {
+                time_ms: 200,
+                energy: 0.18,
+            }],
+        })
+        .expect("serialize motion energy");
+        assert_eq!(serialized["usableStartMs"], 400);
+        assert_eq!(serialized["motionEnergy"][0]["timeMs"], 200);
+        assert_eq!(serialized["motionEnergy"][0]["energy"], 0.18);
+        assert!(serialized.get("motionUncertain").is_none());
     }
 
     #[test]

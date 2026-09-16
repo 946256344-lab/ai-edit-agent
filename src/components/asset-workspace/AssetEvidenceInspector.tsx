@@ -1,5 +1,5 @@
 // 素材详情：原片预览、源片段播放与真实视觉内容；OCR 按需展开，不修改素材或时间线。
-import { useRef, useState } from 'react'
+import { useRef, useState, type MouseEvent } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { AssetEvidence } from '../../lib/local-store'
 import './asset-evidence.css'
@@ -37,6 +37,12 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
   const segments = evidence.segments ?? []
   const mediaUrl = convertFileSrc(evidence.mediaPath)
   const isVideo = evidence.kind === 'video'
+
+  function seekTo(timeMs: number) {
+    const video = player.current
+    if (!video) return
+    video.currentTime = Math.max(0, timeMs) / 1000
+  }
 
   function playSegment(segment: NonNullable<AssetEvidence['segments']>[number] | null) {
     const startMs = segment?.usableStartMs ?? segment?.startMs ?? 0
@@ -93,9 +99,11 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
                 && (segment.usableStartMs !== segment.startMs || segment.usableEndMs !== segment.endMs)
                 && <small>可用 {formatTimeMs(segment.usableStartMs)} – {formatTimeMs(segment.usableEndMs)}</small>}
               {segment.motionTailSettled === false && <small>结尾未收住</small>}
+              {segment.motionUncertain && <small>边界不确定</small>}
             </span>
             {isVideo && <span className="asset-detail__play-label">播放</span>}
           </button>
+          <MotionEnergyChart segment={segment} onSeek={isVideo && mediaReady && !mediaError ? seekTo : undefined} />
           <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence) : '暂无片段画面描述'}</p>
         </article>)}
       </section>}
@@ -113,5 +121,58 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
         {evidence.ocrEvidence.map(item => <p key={`${item.timeMs}-${item.text}`}><span>{formatTimeMs(item.timeMs)}</span>{item.text}</p>)}
       </details>}
     </section>
+  )
+}
+
+type AssetSegment = NonNullable<AssetEvidence['segments']>[number]
+
+function MotionEnergyChart({
+  segment,
+  onSeek,
+}: {
+  segment: AssetSegment
+  onSeek?: (timeMs: number) => void
+}) {
+  const samples = segment.motionEnergy ?? []
+  if (samples.length < 2) {
+    return <p className="asset-detail__motion-empty">尚无运动能量曲线</p>
+  }
+  const width = 320
+  const height = 52
+  const pad = 3
+  const span = Math.max(1, segment.endMs - segment.startMs)
+  const peak = Math.max(...samples.map(sample => sample.energy), 0.001)
+  const xAt = (timeMs: number) => pad + ((timeMs - segment.startMs) / span) * (width - pad * 2)
+  const yAt = (energy: number) => height - pad - (energy / peak) * (height - pad * 2)
+  const line = samples.map(sample => `${xAt(sample.timeMs).toFixed(1)},${yAt(sample.energy).toFixed(1)}`).join(' ')
+  const area = `${xAt(samples[0].timeMs).toFixed(1)},${height - pad} ${line} ${xAt(samples[samples.length - 1].timeMs).toFixed(1)},${height - pad}`
+  const usableStart = segment.usableStartMs ?? segment.startMs
+  const usableEnd = segment.usableEndMs ?? segment.endMs
+  const usableX = xAt(usableStart)
+  const usableW = Math.max(0, xAt(usableEnd) - usableX)
+  const trimmed = usableStart !== segment.startMs || usableEnd !== segment.endMs
+
+  function handlePointer(event: MouseEvent<SVGSVGElement>) {
+    if (!onSeek) return
+    const box = event.currentTarget.getBoundingClientRect()
+    const ratio = box.width <= 0 ? 0 : (event.clientX - box.left) / box.width
+    onSeek(segment.startMs + Math.round(ratio * span))
+  }
+
+  return (
+    <figure className="asset-detail__motion">
+      <figcaption>运动能量{trimmed ? ' · 色带为可用窗' : ''}</figcaption>
+      <svg
+        className={onSeek ? 'is-seekable' : undefined}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`片段运动能量曲线，从 ${formatTimeMs(segment.startMs)} 到 ${formatTimeMs(segment.endMs)}`}
+        onClick={onSeek ? handlePointer : undefined}
+      >
+        {trimmed && <rect className="asset-detail__motion-usable" x={usableX} y={pad} width={usableW} height={height - pad * 2} rx="2" />}
+        <polygon className="asset-detail__motion-fill" points={area} />
+        <polyline className="asset-detail__motion-line" fill="none" points={line} />
+      </svg>
+    </figure>
   )
 }

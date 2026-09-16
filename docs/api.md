@@ -125,7 +125,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `update_asset_user_metadata_batch` | `{ projectId, assetIds, favorite?, rating?, note?, excluded? }` | `BatchAssetActionResult` | 批量设置收藏、0–5 评分、最多 2000 字符备注和禁止使用；用户字段与分析证据分表保存，审计不保存正文。 |
 | `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
-| `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
+| `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
 | `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 召回并去同/去相似补位到最多 12 个候选，模型从池中选出 2–3 个互异素材后再精修源时间范围，本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
@@ -364,7 +364,8 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 
 `get_asset_evidence(assetId)` 的 `AssetEvidence` 增加 `kind`（video/image/audio/other）和 `mediaPath`（本地源媒体路径）。命令从当前素材记录读取路径，仅将该文件加入本次应用进程的 asset protocol scope；全局目录 scope 不变，不复制、转码或修改源文件。前端路径只用于 `convertFileSrc`，不显示为用户文案。
 
-素材详情以原片预览、源场景片段、视觉分析、折叠 OCR 的顺序展示。有场景分段时仍展示素材级 `visualEvidence`，不将素材级描述冒充某个片段的分析。视频片段使用 `startMs/endMs` 定位和停止播放；若有运动可用窗则播放 `usableStartMs/usableEndMs`。原格式是否可播放取决于 WebView 的媒体解码支持，失败显示不可播放状态。
+素材详情以原片预览、源场景片段、视觉分析、折叠 OCR 的顺序展示。有场景分段时仍展示素材级 `visualEvidence`，不将素材级描述冒充某个片段的分析。视频片段使用 `startMs/endMs` 定位和停止播放；若有运动可用窗则播放 `usableStartMs/usableEndMs`。每个片段可展示 `motionEnergy[]` 曲线，色带标出可用窗；点击曲线可定位预览。原格式是否可播放取决于 WebView 的媒体解码支持，失败显示不可播放状态。
 
 维护记录（2026-09-15）：素材切段只认 FFmpeg 硬切并用 CLIP 验真；无已验证硬切则整条一段。`analysisVersion=3`。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
 维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。`analysisVersion=4`。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
+维护记录（2026-09-16）：素材详情展示片段运动能量曲线与可用窗。见 `docs/changes/2026-09-16-motion-energy-detail.md`。

@@ -353,3 +353,4 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 维护记录（2026-09-04）：可念稿强制 full_script+audio-first；旁白去重与硬门。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
 维护记录（2026-09-15）：素材切段只认已验证硬切，无切不切。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
 维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
+维护记录（2026-09-16）：素材详情展示片段运动能量曲线。见 `docs/changes/2026-09-16-motion-energy-detail.md`。
