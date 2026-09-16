@@ -22,6 +22,8 @@ function visualStatusLabel(status: AssetEvidence['visualAnalysisStatus']) {
 
 function evidenceLabel(item: AssetEvidence['visualEvidence'][number]) {
   return [
+    item.narrativeRole ?? '',
+    item.caption ?? '',
     ...item.subjects, item.scene ?? '', ...item.actions, ...item.products,
     item.shotType ? `景别：${item.shotType}` : '',
     item.cameraMotion ? `运镜：${item.cameraMotion}` : '',

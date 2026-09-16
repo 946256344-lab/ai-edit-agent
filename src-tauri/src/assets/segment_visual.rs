@@ -1,21 +1,16 @@
-//! 片段级视觉分析：按需入队、帧装箱、ensure 等待与永久缓存。
-//! 与素材级 analyze_asset_visual_batch 并存；共用 visual worker 与熔断。
+//! 片段级视觉任务：历史加深队列仍可由 worker 收尾；选片不再等待模型。
+//! 与素材级 analyze_asset_visual_batch 共用 visual worker 与熔断。
 
 use crate::db::{now_millis, open_connection};
 use crate::models::{TechnicalMetadata, VisualEvidence};
 use crate::provider::{
-    complete_visual_model_request, model_response_json_text, post_visual_model_payload,
-    visual_model_retry_after, ModelAccess,
+    complete_visual_model_request, model_response_json_text, post_visual_model_payload, ModelAccess,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Deserializer};
 use serde_json::json;
-use std::{
-    collections::{HashMap, HashSet},
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, fs, time::Duration};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
@@ -158,6 +153,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn asset_needs_segment_visual(metadata: &TechnicalMetadata) -> bool {
     metadata.analysis_version >= CURRENT_ANALYSIS_VERSION
         && metadata.visual_analysis_version < CURRENT_SEGMENT_VISUAL_VERSION
@@ -167,6 +163,7 @@ pub(crate) fn asset_needs_segment_visual(metadata: &TechnicalMetadata) -> bool {
             .any(|segment| !segment.id.is_empty() && !segment.frames.is_empty())
 }
 
+#[allow(dead_code)]
 pub(crate) fn queue_segment_visual_batch(
     app: &AppHandle,
     asset_ids: &[String],
@@ -241,15 +238,14 @@ pub(crate) fn queue_segment_visual_batch(
     Ok(())
 }
 
-/// 按需确保片段视觉证据。超时素材进入 pending，任务继续后台跑。
+/// 选片用第一次段卡即可。这里只补本地片段向量，不再排队或等待模型加深。
 pub(crate) fn ensure_segment_visual_evidence(
     app: &AppHandle,
     project_id: &str,
     asset_ids: &[String],
-    budget: Duration,
+    _budget: Duration,
 ) -> Result<EnsureSegmentVisualResult, String> {
     let mut ready = Vec::new();
-    let mut need = Vec::new();
     let connection = open_connection(app)?;
     for asset_id in asset_ids {
         let metadata_json: Option<String> = connection
@@ -264,67 +260,20 @@ pub(crate) fn ensure_segment_visual_evidence(
             continue;
         };
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-        if metadata.analysis_version < CURRENT_ANALYSIS_VERSION {
-            // 尚未分段：按整条参与。
-            ready.push(asset_id.clone());
-        } else if metadata.visual_analysis_version >= CURRENT_SEGMENT_VISUAL_VERSION {
-            ready.push(asset_id.clone());
-        } else if asset_needs_segment_visual(&metadata) {
-            need.push(asset_id.clone());
-        } else {
-            ready.push(asset_id.clone());
-        }
+        let _ = crate::storyboard::semantic::refresh_segment_embeddings(app, asset_id, &metadata);
+        ready.push(asset_id.clone());
     }
     drop(connection);
-    if need.is_empty() {
-        return Ok(EnsureSegmentVisualResult {
-            ready,
-            pending: Vec::new(),
-        });
-    }
-    queue_segment_visual_batch(app, &need)?;
-    let deadline = Instant::now() + crate::execution_deadline::timeout(budget)?;
-    let mut remaining: HashSet<String> = need.iter().cloned().collect();
-    while !remaining.is_empty() && Instant::now() < deadline {
-        if visual_model_retry_after().is_some() {
-            break;
-        }
-        spawn_visual_analysis_worker(app.clone());
-        let connection = open_connection(app)?;
-        let mut newly_ready = Vec::new();
-        for asset_id in remaining.iter() {
-            let metadata_json: String = connection
-                .query_row(
-                    "SELECT metadata_json FROM assets WHERE id = ?1",
-                    params![asset_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or_default();
-            let metadata: TechnicalMetadata =
-                serde_json::from_str(&metadata_json).unwrap_or_default();
-            if metadata.visual_analysis_version >= CURRENT_SEGMENT_VISUAL_VERSION {
-                newly_ready.push(asset_id.clone());
-            }
-        }
-        drop(connection);
-        for asset_id in newly_ready {
-            remaining.remove(&asset_id);
-            ready.push(asset_id);
-        }
-        if remaining.is_empty() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(200));
-    }
-    let pending = remaining.into_iter().collect::<Vec<_>>();
     log::info!(
-        "ensure_segment_visual_evidence: project={}, requested={}, ready={}, pending={}",
+        "ensure_segment_visual_evidence: project={}, requested={}, ready={}, pending=0",
         project_id,
         asset_ids.len(),
-        ready.len(),
-        pending.len()
+        ready.len()
     );
-    Ok(EnsureSegmentVisualResult { ready, pending })
+    Ok(EnsureSegmentVisualResult {
+        ready,
+        pending: Vec::new(),
+    })
 }
 
 fn segment_visual_model_content(
@@ -413,7 +362,10 @@ pub(crate) fn run_segment_visual_analysis_batch(
     let mut frames: Vec<(String, String, i64, Vec<u8>)> = Vec::new();
     for (asset_id, metadata, _) in &assets {
         for segment in &metadata.scene_segments {
-            if segment.id.is_empty() || segment.visual_evidence.is_some() {
+            if segment.id.is_empty() || segment.frames.is_empty() {
+                continue;
+            }
+            if metadata.visual_analysis_version >= CURRENT_SEGMENT_VISUAL_VERSION {
                 continue;
             }
             for frame in &segment.frames {
@@ -425,15 +377,9 @@ pub(crate) fn run_segment_visual_analysis_batch(
         }
     }
     if frames.is_empty() {
-        // 无需请求：若片段本就齐全则抬版本。
-        for (asset_id, mut metadata, original_json) in assets {
-            let all_ready = metadata
-                .scene_segments
-                .iter()
-                .filter(|segment| !segment.id.is_empty())
-                .all(|segment| segment.visual_evidence.is_some());
-            if all_ready {
-                metadata.visual_analysis_version = CURRENT_SEGMENT_VISUAL_VERSION;
+        // 无需请求：已是片段加深完成的素材保持现状。
+        for (asset_id, metadata, original_json) in assets {
+            if metadata.visual_analysis_version >= CURRENT_SEGMENT_VISUAL_VERSION {
                 let _ = cas_write_metadata(&app, &asset_id, &original_json, &metadata);
             }
         }
@@ -520,6 +466,8 @@ pub(crate) fn run_segment_visual_analysis_batch(
                         shot_type: item.shot_type,
                         camera_motion: item.camera_motion,
                         segment_id: Some(item.segment_id),
+                        narrative_role: None,
+                        caption: None,
                     },
                 );
             }
@@ -535,8 +483,22 @@ pub(crate) fn run_segment_visual_analysis_batch(
             continue;
         };
         for segment in &mut metadata.scene_segments {
-            if let Some(evidence) = segment_map.get(&segment.id) {
-                segment.visual_evidence = Some(evidence.clone());
+            if let Some(mut evidence) = segment_map.get(&segment.id).cloned() {
+                if let Some(previous) = &segment.visual_evidence {
+                    if evidence
+                        .narrative_role
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .is_empty()
+                    {
+                        evidence.narrative_role = previous.narrative_role.clone();
+                    }
+                    if evidence.caption.as_deref().unwrap_or("").trim().is_empty() {
+                        evidence.caption = previous.caption.clone();
+                    }
+                }
+                segment.visual_evidence = Some(evidence);
             }
         }
         metadata.visual_evidence = metadata

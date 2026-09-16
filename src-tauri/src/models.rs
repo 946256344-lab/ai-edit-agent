@@ -940,7 +940,7 @@ pub struct TechnicalMetadata {
     /// 技术分析格式版本。0=旧固定 4 帧；2=真实场景分段。
     #[serde(default)]
     pub(crate) analysis_version: u32,
-    /// 视觉证据格式版本。0/1=素材级单帧；2=片段级证据齐全。
+    /// 视觉证据格式版本。0/1=第一次按段识别；2=历史片段加深（选片不再等待）。
     #[serde(default)]
     pub(crate) visual_analysis_version: u32,
     /// 由本地关键帧清晰度计算得到的素材整体质量分，范围为 0.0-1.0。
@@ -1048,6 +1048,12 @@ pub struct VisualEvidence {
     /// 所属片段 id；素材级旧证据为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) segment_id: Option<String>,
+    /// 模型自拟的叙事功能短语，不是封闭枚举。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) narrative_role: Option<String>,
+    /// 画面上能看见的一句描述。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) caption: Option<String>,
 }
 
 #[cfg(test)]

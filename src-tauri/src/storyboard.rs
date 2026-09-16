@@ -72,15 +72,14 @@ const DUAL_SEGMENT_MAX_PER_ASSET: usize = 6;
 ///
 /// `expand_segments_for` 为 `Some(set)` 时，集合内且已有真实场景分段的视频会展开成
 /// 每片段一条候选（含相邻双段组合）；其余素材保持整条素材候选（`segment = None`）。
-/// 传 `None` 表示全部按整条素材加载，用于 Phase 2a 的素材级粗排与 Phase 4/校验。
+/// 传 `None` 表示全部按整条素材加载，用于 Phase 1 库存摘要与 Phase 4/校验。
 pub(crate) fn storyboard_sources(
     connection: &Connection,
     project_id: &str,
     expand_segments_for: Option<&HashSet<String>>,
 ) -> Result<(Vec<StoryboardSource>, usize), String> {
     let mut statement = connection.prepare(
-        // Top-12 是视觉镜头候选，不以非视频素材补足数量；模型只在技术分析完成的
-        // 可访问视频中判断语义与画面优先级。
+        // 候选入口只接受技术分析完成的可访问视频。
         "SELECT id, kind, metadata_json, source_reference FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce((SELECT excluded FROM asset_user_metadata um WHERE um.asset_id = assets.id), 0) = 0",
     ).map_err(|error| error.to_string())?;
     let rows = statement
@@ -1669,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_gaps_flag_uncovered_min_shots_and_voice_deficit() {
+    fn completion_gaps_flag_uncovered_and_voice_deficit() {
         let content = content("direct");
         let version = StoryboardVersion {
             id: "sb-1".to_owned(),
@@ -1691,7 +1690,7 @@ mod tests {
             .map(|gap: StoryboardCompletionGap| gap.code)
             .collect::<Vec<_>>();
         assert!(codes.contains(&"uncovered_beats".to_owned()));
-        assert!(codes.contains(&"beat_below_min_shots".to_owned()));
+        assert!(!codes.contains(&"beat_below_min_shots".to_owned()));
         assert!(codes.contains(&"voiceover_longer_than_picture".to_owned()));
     }
 
@@ -2649,49 +2648,35 @@ fn generate_storyboard_internal(
         audio_first.is_some()
     );
 
-    // Phase 2a：每 beat 9 条互不相似整片 → 并集 ensure → 有场景段则全部展开（视觉超时不退整条）
-    let beat_asset_ids = phases::phase2_asset_shortlists(
-        &narrative,
-        &sources,
-        &usage_counts,
-        &embeddings,
-        &clip_embeddings,
-    );
-    let coarse_ids = phases::union_shortlist_asset_ids(&beat_asset_ids);
+    // Phase 2：全部就绪视频按段展开，每个 beat 直接取 9 段。
+    let all_ids: Vec<String> = sources
+        .iter()
+        .map(|source| source.asset_id.clone())
+        .collect();
     let ensure = crate::assets::ensure_segment_visual_evidence(
         &app,
         &project_id,
-        &coarse_ids,
+        &all_ids,
         crate::assets::DEFAULT_ENSURE_BUDGET,
     )
     .unwrap_or_default();
     log::info!(
-        "Phase 2a ensure_segment_visual: requested={}, ready={}, pending={}",
-        coarse_ids.len(),
+        "Phase 2 first-pass segment cards: requested={}, ready={}, pending={}",
+        all_ids.len(),
         ensure.ready.len(),
         ensure.pending.len()
     );
-    // 短名单素材有代表帧即可编码 CLIP（不依赖 Agnes 标签）。
-    match clip::refresh_assets_clip_embeddings(&app, &coarse_ids) {
-        Ok(updated) if updated > 0 => {
-            log::info!("Phase 2a CLIP image embeddings updated for {updated} segments.");
-        }
-        Ok(_) => {}
-        Err(error) => log::warn!("Phase 2a CLIP image embedding skipped: {error}"),
-    }
-    crate::execution_deadline::check()?;
-    let expand_set = coarse_ids.iter().cloned().collect::<HashSet<_>>();
+    let expand_set = all_ids.iter().cloned().collect::<HashSet<_>>();
     let connection = open_connection(&app)?;
     let (sources, visual_ready_count) =
         storyboard_sources(&connection, &project_id, Some(&expand_set))?;
     log::info!(
-        "Phase 2b sources after segment expand: total={}, visual_ready={}, expanded_assets={}",
+        "Phase 2 sources after segment expand: total={}, visual_ready={}, assets={}",
         sources.len(),
         visual_ready_count,
         expand_set.len()
     );
-
-    // Phase 2b: 9 条内约 4 段，去似补位到 Top-12（同片最多 2 段）
+    crate::execution_deadline::check()?;
     let initial_timing = audio_first
         .as_ref()
         .and_then(|(target, prepared)| {
@@ -2712,8 +2697,26 @@ fn generate_storyboard_internal(
         &embeddings,
         &clip_embeddings,
         initial_timing,
-        Some(&beat_asset_ids),
     )?;
+    let pool_asset_ids = {
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for pool in &rough.candidate_pools {
+            for candidate in &pool.candidates {
+                if seen.insert(candidate.asset_id.clone()) {
+                    ids.push(candidate.asset_id.clone());
+                }
+            }
+        }
+        ids
+    };
+    match clip::refresh_assets_clip_embeddings(&app, &pool_asset_ids) {
+        Ok(updated) if updated > 0 => {
+            log::info!("Phase 2 CLIP image embeddings updated for {updated} pool segments.");
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("Phase 2 CLIP image embedding skipped: {error}"),
+    }
     if narrative.script_mode == "key_message" {
         let covered: Vec<String> = rough
             .shots
@@ -2731,7 +2734,7 @@ fn generate_storyboard_internal(
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 选 2–3 镜（传输/语义预算分离；失败带 previousShots）
+    // Phase 3: 选 1–3 镜（传输/语义预算分离；失败带 previousShots）
     let selected = {
         let mut repair: Option<RepairPacket> = None;
         let mut selected = None;
@@ -3421,11 +3424,11 @@ pub(crate) fn storyboard_completion_gaps(
             continue;
         }
         let count = shots_per_beat.get(beat.id.as_str()).copied().unwrap_or(0);
-        if count < 2 {
+        if count == 0 {
             gaps.push(StoryboardCompletionGap {
-                code: "beat_below_min_shots".to_owned(),
+                code: "covered_beat_without_shots".to_owned(),
                 message: format!(
-                    "Beat '{}' has {count} shot(s); every covered beat needs at least 2 distinct shots. Use search_asset_segments then insert_clips/replace_clips on the current timeline — do not re-run generate_storyboard just to add shots.",
+                    "Beat '{}' is marked covered but has no shots. Mark it uncovered honestly, or use search_asset_segments then insert_clips/replace_clips on the current timeline — do not re-run generate_storyboard just to add shots.",
                     beat.id
                 ),
             });

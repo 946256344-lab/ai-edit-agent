@@ -135,6 +135,12 @@ pub(crate) fn evidence_text(metadata: &TechnicalMetadata) -> String {
         parts.extend(evidence.subjects.iter().cloned());
         parts.extend(evidence.actions.iter().cloned());
         parts.extend(evidence.products.iter().cloned());
+        if let Some(role) = &evidence.narrative_role {
+            parts.push(role.clone());
+        }
+        if let Some(caption) = &evidence.caption {
+            parts.push(caption.clone());
+        }
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -168,6 +174,12 @@ pub(crate) fn segment_evidence_text(
         parts.extend(evidence.subjects.iter().cloned());
         parts.extend(evidence.actions.iter().cloned());
         parts.extend(evidence.products.iter().cloned());
+        if let Some(role) = &evidence.narrative_role {
+            parts.push(role.clone());
+        }
+        if let Some(caption) = &evidence.caption {
+            parts.push(caption.clone());
+        }
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -376,64 +388,49 @@ pub(crate) fn backfill_project_embeddings(
     drop(statement);
 
     let mut pending = Vec::new();
-    for (asset_id, original_json) in rows {
-        let metadata: TechnicalMetadata = serde_json::from_str(&original_json).unwrap_or_default();
+    for (asset_id, original_json) in &rows {
+        let metadata: TechnicalMetadata = serde_json::from_str(original_json).unwrap_or_default();
         let text = evidence_text(&metadata);
         if !text.trim().is_empty() && !embedding_is_current(&metadata) {
-            pending.push((asset_id, original_json, metadata, text));
+            pending.push((asset_id.clone(), original_json.clone(), metadata, text));
         }
     }
-    if pending.is_empty() {
-        return Ok(0);
-    }
-
-    let embeddings = encode_texts(
-        app,
-        pending.iter().map(|(_, _, _, text)| text.clone()).collect(),
-    )?;
-    if embeddings.len() != pending.len() {
-        return Err("semantic_model_inference_failed".to_owned());
-    }
-
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
     let mut updated = 0;
-    for ((asset_id, original_json, mut metadata, text), embedding) in
-        pending.into_iter().zip(embeddings)
-    {
-        apply_embedding(&mut metadata, &text, embedding);
-        let next_json = serde_json::to_string(&metadata)
+    if !pending.is_empty() {
+        let embeddings = encode_texts(
+            app,
+            pending.iter().map(|(_, _, _, text)| text.clone()).collect(),
+        )?;
+        if embeddings.len() != pending.len() {
+            return Err("semantic_model_inference_failed".to_owned());
+        }
+
+        let transaction = connection
+            .unchecked_transaction()
             .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
-        updated += transaction
-            .execute(
-                "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?4) AND metadata_json = ?5",
-                params![next_json, now_millis(), asset_id, project_id, original_json],
-            )
+        for ((asset_id, original_json, mut metadata, text), embedding) in
+            pending.into_iter().zip(embeddings)
+        {
+            apply_embedding(&mut metadata, &text, embedding);
+            let next_json = serde_json::to_string(&metadata)
+                .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
+            updated += transaction
+                .execute(
+                    "UPDATE assets SET metadata_json = ?1, updated_at = ?2 WHERE id = ?3 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?4) AND metadata_json = ?5",
+                    params![next_json, now_millis(), asset_id, project_id, original_json],
+                )
+                .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
+        }
+        transaction
+            .commit()
             .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
     }
-    transaction
-        .commit()
-        .map_err(|_| "semantic_backfill_write_failed".to_owned())?;
 
-    // 顺带补齐已有片段证据的片段向量（本地免费）。
-    let mut segment_statement = connection
-        .prepare(
-            "SELECT id, metadata_json FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND analysis_status = 'ready' AND kind = 'video' AND coalesce(json_extract(metadata_json, '$.visualAnalysisVersion'), 0) >= 2",
-        )
-        .map_err(|_| "semantic_backfill_query_failed".to_owned())?;
-    let segment_rows = segment_statement
-        .query_map(params![project_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|_| "semantic_backfill_query_failed".to_owned())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "semantic_backfill_query_failed".to_owned())?;
-    drop(segment_statement);
-    for (asset_id, metadata_json) in segment_rows {
-        let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-        let _ = refresh_segment_embeddings(app, &asset_id, &metadata);
-        let _ = crate::storyboard::clip::refresh_segment_clip_embeddings(app, &asset_id, &metadata);
+    // 第一次段卡即可编片段向量，不要求 visualAnalysisVersion=2。
+    for (asset_id, metadata_json) in &rows {
+        let metadata: TechnicalMetadata = serde_json::from_str(metadata_json).unwrap_or_default();
+        let _ = refresh_segment_embeddings(app, asset_id, &metadata);
+        let _ = crate::storyboard::clip::refresh_segment_clip_embeddings(app, asset_id, &metadata);
     }
     Ok(updated)
 }
@@ -522,6 +519,8 @@ mod tests {
                 camera_motion: None,
 
                 segment_id: None,
+                narrative_role: None,
+                caption: None,
             }],
             ocr_evidence: vec![
                 crate::models::OcrEvidence {

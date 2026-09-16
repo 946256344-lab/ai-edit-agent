@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 2 每个 beat 直接从全库段里取 9 条；同片最多 2 段，相似最多 2 条；有 1 条就能拍。见 docs/changes/2026-09-16-phase2-segment-pool.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：Phase 3 覆盖 beat 允许 1 镜；有第二条不相似且对得上才加到 2–3。不再把最少 2 镜当完成门。见 docs/changes/2026-09-16-beat-one-shot-ok.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：选片不再等待片段模型加深；第一次段卡即写片段向量；第二次分析=选中镜头的 Phase 4 多帧精修。见 docs/changes/2026-09-16-visual-second-is-refine.md。
+- [x] 已实现（2026-09-16，cursor/visual-batch-by-segment）：第一次视觉识别按硬切段各送中点 1 帧、6 段一批；模型自拟 `narrativeRole` 与可见 `caption`，Rust 只对上片段并软解析 JSON。见 docs/changes/2026-09-16-visual-batch-by-segment.md。
 - [x] 已合并（2026-09-16，cursor/motion-energy-detail）：素材详情展示硬切片段的运动能量曲线与可用窗。见 docs/changes/2026-09-16-motion-energy-detail.md。
 - [x] 已实现并验证（2026-09-16，codex/project-session-edit）：项目与剪辑会话统一操作菜单、名称编辑；项目确认删除会清理本地索引、派生分析和预览但保留原始媒体与剪映草稿。见 docs/changes/2026-09-16-project-session-edit.md。
 - [x] 已实现（2026-09-15，cursor/motion-energy-trim）：硬切片段内用帧差运动能量曲线砍静止开头与已收敛结尾；对比不够则不切。analysis_version=4，v3 只补曲线不重切。Phase 4 窗用可用区间，不改选镜 JSON。见 docs/changes/2026-09-15-motion-energy-trim.md。
@@ -26,7 +30,7 @@
 - [x] 完成（2026-09-09，feature/segment-phase234）：Phase 2/3/4 以片段为候选单位选镜。见 docs/changes/2026-09-09-segment-phase234.md。
 - [x] 完成（2026-09-09，fix/storyboard-asset-selection-scoring）：Phase 2 跨语言召回与权重重设、Phase 3 补 requiredVisual/visualKeywords；不重跑视觉分析。见 docs/changes/2026-09-09-phase2-cross-lingual-scoring.md。
 - [ ] 后续：视觉分析队列有 queued/failed 未消化素材，需单独补跑或重试策略。
-- [ ] 后续：小素材库下「每 beat ≥2 镜」硬门会逼出凑数镜头，需单独决策是否放开。
+- [x] 已并入 2026-09-16：覆盖 beat 允许 1 镜，见 `docs/changes/2026-09-16-beat-one-shot-ok.md`。
 - [x] 完成（2026-09-09，fix/jianying-deliver-feedback）：成果页剪映交付可见反馈与可读草稿名。见 docs/changes/2026-09-09-jianying-deliver-feedback.md。
 - [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。
 - [x] 完成（2026-09-08，fix/script-mode-before-phase1）：Phase 1 前由系统锁定 scriptMode，模型不得自选配音/标记模式。见 docs/changes/2026-09-08-script-mode-before-phase1.md。

@@ -1466,6 +1466,7 @@ fn run_pending_pass_b(
                 Chosen windows for this batch: {}\n\
                 {feedback_context}\n\n\
                 Each attached image is ONE shot's densified window as a left-to-right, top-to-bottom frame grid. Caption lists timesMs in the same order — temporal sample count is unchanged.\n\
+                Look across the timed cells: if the action already finished or later cells repeat the same information, tighten sourceEndMs; if the action is still unfolding, keep enough of the window to complete it. Do not invent events not visible in the grid.\n\
                 Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
                 Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
                 Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
@@ -1667,6 +1668,7 @@ fn run_pending_pass_c(
                 assetIds stay FINAL. Captions mark UNCERTAIN (full chosen window) or NARROW (tighten inside the listed range only).\n\
                 For NARROW shots, keep sourceStartMs/sourceEndMs inside the NARROW range; prefer complete actions and natural phrase boundaries.\n\
                 Each image is one shot's denser grid; caption lists timesMs L→R, T→B.\n\
+                If later cells repeat the same information or the action already finished, tighten the range; if it is still unfolding, keep enough to complete it.\n\
                 Avoid cutting mid spoken phrase.\n\
                 {}",
                 batch_orders,

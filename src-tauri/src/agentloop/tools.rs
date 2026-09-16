@@ -281,7 +281,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read candidates, and pick a main shot until every beat is filled or honestly uncovered. Phase 3 must expand every covered beat to at least 2 distinct shots from that beat's candidate pool. After the timeline is written, completion gaps (uncovered beats, fewer than 2 shots per covered beat, picture shorter than voice) are returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. For full_script narration, synthesizes voiceover first when a voice Provider is configured so shot selection targets the real audio duration.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read candidates, and pick a main shot until every beat is filled or honestly uncovered. Phase 3 may keep one shot per covered beat; add a second or third only when a distinct non-similar pool asset honestly fits. After the timeline is written, completion gaps (uncovered beats, covered beats with no shots, picture shorter than voice) are returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. For full_script narration, synthesizes voiceover first when a voice Provider is configured so shot selection targets the real audio duration.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
