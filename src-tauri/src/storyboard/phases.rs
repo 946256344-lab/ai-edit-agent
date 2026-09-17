@@ -89,6 +89,7 @@ pub(crate) fn phase1_generate_narrative(
     required_script_mode: &str,
     library_inventory: &str,
     feedback: Option<&str>,
+    voiceover_duration_ms: Option<i64>,
 ) -> Result<NarrativeStructure, String> {
     log::info!(
         "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode}, inventory_chars={})",
@@ -101,10 +102,11 @@ pub(crate) fn phase1_generate_narrative(
         )
     });
 
-    let mode_instructions = if required_script_mode == "full_script" {
+    let mut mode_instructions = if required_script_mode == "full_script" {
         "REQUIRED scriptMode=full_script (the brief is the spoken narration to read). Do not choose key_message.\n\
         Put the exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
         targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further."
+            .to_owned()
     } else {
         "REQUIRED scriptMode=key_message (locked by the system because the brief is a goal/outline/theme, not a spoken script). Do not choose full_script.\n\
         spokenScript=\"\", set every beat.narration to \"\", and write a short on-screen marker in beat.onScreenText in the user's language (one idea per beat, at most 24 visible characters, no emoji).\n\
@@ -112,7 +114,13 @@ pub(crate) fn phase1_generate_narrative(
         If they did not: suggest 15-45 seconds. Each picture shot should last about 2-3 seconds — a 15s cut needs about 5-7 shots, not three 5-second holds. \
         Split beats from distinct ideas; if one beat must cover more than about 3 seconds of picture, it will need 2-3 shots later. \
         Prefer a focused promo over a 60-90s essay; do not pad empty time. This is guidance, not a hard cap."
+            .to_owned()
     };
+    if let Some(duration_ms) = voiceover_duration_ms {
+        mode_instructions.push_str(&format!(
+            "\nA voiceover was already synthesized at {duration_ms}ms. Set targetDurationMs to {duration_ms}. Split spokenScript by meaning across beats so concatenating them still reproduces the script; Rust will map beats onto the TTS timestamps."
+        ));
+    }
 
     let inventory_block = if library_inventory.trim().is_empty() {
         String::new()

@@ -423,6 +423,11 @@
             },
             "required": ["voiceover", "subtitles", "bgm"],
             "additionalProperties": false
+          },
+          "requestedDurationMs": {
+            "type": ["integer", "null"],
+            "optional": true,
+            "fallback": "null when the user did not name a finished duration"
           }
         },
         "required": []

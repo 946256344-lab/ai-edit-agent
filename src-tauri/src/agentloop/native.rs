@@ -107,7 +107,7 @@ pub(crate) fn run_native_tool_loop(
     )?;
     if let Some(options) = media_options {
         let instruction = format!(
-            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。BGM 开启且时间线没有音乐时，先 search_music 再 use_online_music；必须写入音乐后重新 render_preview，失败如实说明。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。",
+            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。用户说了成片秒数时，把 requestedDurationMs 传给 generate_storyboard。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。BGM 开启且时间线没有音乐时，先 search_music 再 use_online_music；必须写入音乐后重新 render_preview，失败如实说明。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。",
             serde_json::to_string(&options).map_err(|error| error.to_string())?
         );
         let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
@@ -641,7 +641,9 @@ fn drive_native_loop(
             if call.name == "generate_storyboard"
                 && matches!(
                     result["code"].as_str(),
-                    Some("storyboard_selection_failed") | Some("storyboard_needs_user_decision")
+                    Some("storyboard_selection_failed")
+                        | Some("storyboard_needs_user_decision")
+                        | Some("storyboard_voiceover_failed")
                 )
             {
                 exhausted_storyboard = Some(result.clone());
@@ -1144,7 +1146,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             Ok(value)
         }
         "generate_storyboard" => {
-            let allowed = ["brief", "voiceId", "mediaOptions"];
+            let allowed = ["brief", "voiceId", "mediaOptions", "requestedDurationMs"];
             if object.is_empty()
                 || !object.contains_key("brief")
                 || object.keys().any(|key| !allowed.contains(&key.as_str()))
@@ -1161,6 +1163,14 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             }
             if let Some(media) = object.get("mediaOptions") {
                 if !(media.is_null() || media.is_object()) {
+                    return Err(invalid_arguments());
+                }
+            }
+            if let Some(duration) = object.get("requestedDurationMs") {
+                if !(duration.is_null()
+                    || duration.as_i64().is_some()
+                    || duration.as_u64().is_some())
+                {
                     return Err(invalid_arguments());
                 }
             }
@@ -3015,6 +3025,35 @@ mod tests {
     }
 
     #[test]
+    fn duration_conflict_asks_which_length_to_keep() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            r#"storyboard_needs_user_decision: spoken audio is 28000ms but the user asked for 15000ms. Ask which duration to keep. facts={"spokenMs":28000,"requestedMs":15000}"#,
+        );
+        assert_eq!(failure["code"], "storyboard_needs_user_decision");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("spoken audio length")));
+        assert!(!failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("shorter than its spoken beat")));
+    }
+
+    #[test]
+    fn voiceover_failure_before_phase1_does_not_start_the_board() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            "storyboard_voiceover_failed: voiceover could not be synthesized before splitting beats (timed out)",
+        );
+        assert_eq!(failure["code"], "storyboard_voiceover_failed");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("before the storyboard started")));
+    }
+
+    #[test]
     fn unconfigured_voice_provider_returns_a_closed_failure() {
         let failure = safe_tool_failure_context(
             "list_voices",
@@ -3096,6 +3135,17 @@ mod tests {
         .unwrap();
         assert_eq!(encoded["mediaOptions"]["voiceover"], true);
         assert_eq!(encoded["mediaOptions"]["bgm"], false);
+        let duration = parse_native_arguments(
+            "generate_storyboard",
+            r#"{"brief":null,"requestedDurationMs":15000}"#,
+        )
+        .unwrap();
+        assert_eq!(duration["requestedDurationMs"], 15000);
+        assert!(parse_native_arguments(
+            "generate_storyboard",
+            r#"{"brief":null,"requestedDurationMs":"15s"}"#
+        )
+        .is_err());
         let voice = parse_native_arguments(
             "synthesize_voiceover",
             r#"{"text":null,"voiceId":null,"timelineVersionId":null,"includeSubtitles":false}"#,

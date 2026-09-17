@@ -92,6 +92,8 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         "voiceover_script_confirmation_required"
     } else if error.starts_with("storyboard_needs_user_decision:") {
         "storyboard_needs_user_decision"
+    } else if error.starts_with("storyboard_voiceover_failed:") {
+        "storyboard_voiceover_failed"
     } else if error.starts_with("voiceover_longer_than_picture:") {
         "voiceover_longer_than_picture"
     } else if error.starts_with("storyboard_source_inventory_unavailable:")
@@ -157,6 +159,21 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("[]");
+        if error.contains("requestedMs") || error.contains("user asked for") {
+            return json!({
+                "status": "failed",
+                "operation": tool,
+                "stage": "storyboard_duration",
+                "code": "storyboard_needs_user_decision",
+                "facts": [
+                    "Spoken audio length disagrees with the duration the user named.",
+                    format!("durations={facts}")
+                ],
+                "retryable": false,
+                "recovery": "Stop this run. Quote the spoken audio length and the user's requested length. Ask which duration to keep. Do not call generate_storyboard again until they answer.",
+                "responseInstruction": "Tell the user generation paused because the spoken voiceover is much longer or shorter than the duration they asked for. Quote both numbers. Ask which to keep. Do not claim a storyboard was saved."
+            });
+        }
         return json!({
             "status": "failed",
             "operation": tool,
@@ -170,6 +187,18 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": false,
             "recovery": "Stop this run. Explain which beat is short and why. Ask the user whether to change duration, pick another clip, or skip that beat. Do not call generate_storyboard again until they answer.",
             "responseInstruction": "Tell the user generation paused on a beat whose footage is shorter than the narration. Quote the beat id and durations from facts. Ask how they want to continue. Do not claim a storyboard was saved."
+        });
+    }
+    if error.starts_with("storyboard_voiceover_failed:") {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "storyboard_voiceover",
+            "code": "storyboard_voiceover_failed",
+            "facts": ["Voiceover could not be synthesized, so beats were not split and no storyboard was saved."],
+            "retryable": false,
+            "recovery": "Stop this run. Explain that voiceover failed before the storyboard started. Do not call generate_storyboard again until the user asks to retry.",
+            "responseInstruction": "Tell the user the video was not generated because voiceover could not be synthesized. Do not claim a storyboard was saved."
         });
     }
     if error.starts_with("no_timeline:") {
@@ -921,6 +950,10 @@ pub(super) fn apply_skill(
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned);
+            let requested_duration_ms = args
+                .get("requestedDurationMs")
+                .and_then(Value::as_i64)
+                .filter(|ms| *ms > 0);
             let generated = crate::storyboard::generate_storyboard_for_agent(
                 state.app.clone(),
                 state.project_id.to_owned(),
@@ -928,6 +961,7 @@ pub(super) fn apply_skill(
                 brief.to_owned(),
                 voice_id,
                 media_options,
+                requested_duration_ms,
             )?;
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;

@@ -562,6 +562,25 @@ pub(crate) mod fish_audio {
         Ok(json!({ "voices": voices }))
     }
 
+    fn shift_timed_units(alignment: &Value, key: &str, offset: f64) -> Vec<Value> {
+        alignment
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .map(|mut unit| {
+                if let Some(start) = unit.get("start").and_then(Value::as_f64) {
+                    unit["start"] = json!(start + offset);
+                }
+                if let Some(end) = unit.get("end").and_then(Value::as_f64) {
+                    unit["end"] = json!(end + offset);
+                }
+                unit
+            })
+            .collect()
+    }
+
     pub(crate) fn synthesize(text: &str, reference_id: Option<&str>) -> Result<Value, String> {
         let mut body =
             json!({ "text": text, "format": "mp3", "sample_rate": 44100, "mp3_bitrate": 128 });
@@ -610,33 +629,23 @@ pub(crate) mod fish_audio {
         if audio.is_empty() {
             return Err("Fish Audio did not return audio.".to_owned());
         }
-        let segments = alignments
-            .into_values()
-            .flat_map(|alignment| {
-                let offset = alignment
-                    .get("offset")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0);
-                alignment
-                    .get("segments")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |mut segment| {
-                        if let Some(start) = segment.get("start").and_then(Value::as_f64) {
-                            segment["start"] = json!(start + offset);
-                        }
-                        if let Some(end) = segment.get("end").and_then(Value::as_f64) {
-                            segment["end"] = json!(end + offset);
-                        }
-                        segment
-                    })
-            })
-            .collect::<Vec<_>>();
+        let mut segments = Vec::new();
+        let mut words = Vec::new();
+        for alignment in alignments.into_values() {
+            let offset = alignment
+                .get("offset")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            segments.extend(shift_timed_units(&alignment, "segments", offset));
+            words.extend(shift_timed_units(&alignment, "words", offset));
+        }
+        let mut alignment = json!({ "segments": segments });
+        if !words.is_empty() {
+            alignment["words"] = json!(words);
+        }
         Ok(json!({
             "audio_base64": base64::engine::general_purpose::STANDARD.encode(audio),
-            "alignment": { "segments": segments }
+            "alignment": alignment
         }))
     }
 

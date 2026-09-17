@@ -46,38 +46,79 @@ fn spoken(text: &str) -> String {
     text.chars().filter(|ch| ch.is_alphanumeric()).collect()
 }
 
-pub(crate) fn from_alignment(
+/// 把句级片段按字数比例拆成字符时段，供拍边界落在句中时使用。
+fn expand_units_to_chars(units: Vec<(String, i64, i64)>) -> Vec<(String, i64, i64)> {
+    let mut expanded = Vec::new();
+    for (text, start_ms, end_ms) in units {
+        let chars = text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>();
+        if chars.len() <= 1 {
+            expanded.push((text, start_ms, end_ms));
+            continue;
+        }
+        let span = (end_ms - start_ms).max(0);
+        let count = chars.len() as i64;
+        for (index, ch) in chars.into_iter().enumerate() {
+            let index = index as i64;
+            let start = start_ms + span * index / count;
+            let end = start_ms + span * (index + 1) / count;
+            expanded.push((ch, start, end.max(start)));
+        }
+    }
+    expanded
+}
+
+fn timed_text_units(alignment: &Value, key: &str) -> Option<Vec<(String, i64, i64)>> {
+    let items = alignment
+        .get(key)?
+        .as_array()
+        .filter(|items| !items.is_empty())?;
+    items
+        .iter()
+        .map(|item| {
+            Some((
+                spoken(item["text"].as_str().or_else(|| item["word"].as_str())?),
+                (item["start"].as_f64()? * 1000.0).round() as i64,
+                (item["end"].as_f64()? * 1000.0).round() as i64,
+            ))
+        })
+        .collect()
+}
+
+fn character_units(alignment: &Value) -> Option<Vec<(String, i64, i64)>> {
+    alignment["characters"]
+        .as_array()
+        .filter(|items| !items.is_empty())?
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| {
+            Some((
+                spoken(ch.as_str()?),
+                (alignment["character_start_times_seconds"][i].as_f64()? * 1000.0).round() as i64,
+                (alignment["character_end_times_seconds"][i].as_f64()? * 1000.0).round() as i64,
+            ))
+        })
+        .collect()
+}
+
+fn alignment_unit_sources(alignment: &Value) -> Vec<Vec<(String, i64, i64)>> {
+    let mut sources = Vec::new();
+    if let Some(units) = timed_text_units(alignment, "words") {
+        sources.push(units);
+    }
+    if let Some(units) = timed_text_units(alignment, "segments") {
+        sources.push(expand_units_to_chars(units));
+    }
+    if let Some(units) = character_units(alignment) {
+        sources.push(units);
+    }
+    sources
+}
+
+fn map_units_to_beats(
     beats: &[StoryboardBeat],
-    alignment: &Value,
+    units: Vec<(String, i64, i64)>,
     duration_ms: i64,
 ) -> Option<SpeechTiming> {
-    // 一个单元是 Provider 实际给出的字符或片段；不把片段均分成假字符时间戳。
-    let units: Vec<(String, i64, i64)> = if let Some(segments) = alignment["segments"].as_array() {
-        segments
-            .iter()
-            .map(|segment| {
-                Some((
-                    spoken(segment["text"].as_str()?),
-                    (segment["start"].as_f64()? * 1000.0).round() as i64,
-                    (segment["end"].as_f64()? * 1000.0).round() as i64,
-                ))
-            })
-            .collect::<Option<_>>()?
-    } else {
-        alignment["characters"]
-            .as_array()?
-            .iter()
-            .enumerate()
-            .map(|(i, ch)| {
-                Some((
-                    spoken(ch.as_str()?),
-                    (alignment["character_start_times_seconds"][i].as_f64()? * 1000.0).round()
-                        as i64,
-                    (alignment["character_end_times_seconds"][i].as_f64()? * 1000.0).round() as i64,
-                ))
-            })
-            .collect::<Option<_>>()?
-    };
     let units = units
         .into_iter()
         .filter(|(text, _, _)| !text.is_empty())
@@ -141,6 +182,17 @@ pub(crate) fn from_alignment(
         })
         .collect();
     Some(result)
+}
+
+pub(crate) fn from_alignment(
+    beats: &[StoryboardBeat],
+    alignment: &Value,
+    duration_ms: i64,
+) -> Option<SpeechTiming> {
+    // 优先词级时间戳；没有或对不上原文时，把句级片段按字数插值成字符边界。
+    alignment_unit_sources(alignment)
+        .into_iter()
+        .find_map(|units| map_units_to_beats(beats, units, duration_ms))
 }
 
 /// key_message：每 beat 可读性下限 + 按比例分配剩余目标时长。
@@ -400,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn segment_timestamps_assign_unequal_beats_without_inventing_character_times() {
+    fn segment_timestamps_map_beats_and_interpolate_mid_sentence() {
         let alignment = json!({"segments": [
             {"text":"你好。", "start":0.2, "end":1.0},
             {"text":"展示产品细节。", "start":1.4, "end":4.0}
@@ -411,7 +463,28 @@ mod tests {
         assert_eq!(timing.duration("b"), Some(3100));
         assert_eq!(timing.pauses_ms, vec![1200]);
         let merged = json!({"segments":[{"text":"你好。展示产品细节。","start":0.2,"end":4.0}]});
-        assert!(from_alignment(&beats(), &merged, 4300).is_none());
+        let interpolated = from_alignment(&beats(), &merged, 4300).unwrap();
+        assert_eq!(interpolated.kind, SpeechTimingKind::Voice);
+        assert!(interpolated.duration("a").unwrap() > 0);
+        assert!(interpolated.duration("b").unwrap() > interpolated.duration("a").unwrap());
+        assert_eq!(
+            interpolated.duration("a").unwrap() + interpolated.duration("b").unwrap(),
+            4300
+        );
+    }
+
+    #[test]
+    fn word_timestamps_are_preferred_over_merged_segments() {
+        let alignment = json!({
+            "words": [
+                {"text":"你好", "start":0.2, "end":1.0},
+                {"text":"展示产品细节", "start":1.4, "end":4.0}
+            ],
+            "segments":[{"text":"你好。展示产品细节。","start":0.2,"end":4.0}]
+        });
+        let timing = from_alignment(&beats(), &alignment, 4300).unwrap();
+        assert_eq!(timing.duration("a"), Some(1200));
+        assert_eq!(timing.duration("b"), Some(3100));
     }
 
     #[test]

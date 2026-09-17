@@ -281,7 +281,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read candidates, and pick shots until every beat is filled or honestly uncovered. Aim for about 2-3 seconds per shot; if a beat lasts longer than about 3 seconds, add a second or third distinct non-similar pool asset rather than holding one clip. After the timeline is written, completion gaps (uncovered beats, covered beats with no shots, picture shorter than voice) are returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must already be the approved spoken script; if the user only gave a theme, draft the script, ask the user to confirm, and do not call this tool until they agree. For full_script narration, synthesizes voiceover first when a voice Provider is configured so shot selection targets the real audio duration.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, read candidates, and pick shots until every beat is filled or honestly uncovered. Aim for about 2-3 seconds per shot; if a beat lasts longer than about 3 seconds, add a second or third distinct non-similar pool asset rather than holding one clip. After the timeline is written, completion gaps (uncovered beats, covered beats with no shots, picture shorter than voice) are returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must already be the approved spoken script; if the user only gave a theme, draft the script, ask the user to confirm, and do not call this tool until they agree. Voiceover synthesizes the approved brief before beats are split; if that fails, do not generate. When the user named a finished duration, pass it as requestedDurationMs.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
@@ -305,9 +305,15 @@ fn main_chain_function_tools() -> Vec<Value> {
                     },
                     "required": ["voiceover", "subtitles", "bgm"],
                     "additionalProperties": false
+                },
+                "requestedDurationMs": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 120_000,
+                    "description": "Finished duration the user named, in milliseconds. Null if they did not name one. Compared with spoken audio when voiceover is on."
                 }
             }),
-            vec!["brief", "voiceId", "mediaOptions"],
+            vec!["brief", "voiceId", "mediaOptions", "requestedDurationMs"],
         ),
         function_tool(
             CREATE_TIMELINE_DRAFT,

@@ -789,6 +789,12 @@ fn brief_has_substantial_speakable_copy(brief: &str) -> bool {
 
 /// 配音开着时，brief 至少要有约一句可念的话，才当作已有旁白稿。
 /// 主题型剪辑要求通常更短；用户已同意的旁白稿通常更长。
+fn spoken_duration_conflicts(spoken_ms: i64, requested_ms: i64) -> bool {
+    let spoken = spoken_ms.max(1);
+    let delta = (spoken - requested_ms).unsigned_abs() as i64;
+    delta * 10 > spoken * 3
+}
+
 fn brief_has_voiceover_script(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 3_000
 }
@@ -1427,8 +1433,8 @@ mod tests {
         brief_has_voiceover_script, decide_script_mode, enforce_decided_script_mode,
         estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
         normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
-        short_brief_duration_issue, storyboard_completion_gaps, storyboard_sources,
-        storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
+        short_brief_duration_issue, spoken_duration_conflicts, storyboard_completion_gaps,
+        storyboard_sources, storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
         MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
@@ -2151,6 +2157,13 @@ mod tests {
     }
 
     #[test]
+    fn spoken_duration_conflict_uses_thirty_percent_of_audio() {
+        assert!(!spoken_duration_conflicts(28_000, 24_000));
+        assert!(spoken_duration_conflicts(28_000, 15_000));
+        assert!(spoken_duration_conflicts(10_000, 20_000));
+    }
+
+    #[test]
     fn full_script_prefers_spoken_script_over_paraphrased_beats() {
         let brief = std::iter::repeat("word")
             .take(80)
@@ -2537,6 +2550,7 @@ pub fn generate_storyboard(
         voice_id.as_deref(),
         true,
         None,
+        None,
     )
 }
 
@@ -2550,6 +2564,7 @@ pub(crate) fn generate_storyboard_for_agent(
     brief: String,
     voice_id: Option<String>,
     media_options: Option<crate::media_options::MediaOptions>,
+    requested_duration_ms: Option<i64>,
 ) -> Result<StoryboardVersion, String> {
     generate_storyboard_internal(
         app,
@@ -2559,6 +2574,7 @@ pub(crate) fn generate_storyboard_for_agent(
         voice_id.as_deref(),
         false,
         media_options,
+        requested_duration_ms,
     )
 }
 
@@ -2570,6 +2586,7 @@ fn generate_storyboard_internal(
     voice_id: Option<&str>,
     schedule_visual_analysis: bool,
     media_options: Option<crate::media_options::MediaOptions>,
+    requested_duration_ms: Option<i64>,
 ) -> Result<StoryboardVersion, String> {
     crate::execution_deadline::check()?;
     log::info!(
@@ -2691,19 +2708,53 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1：配音开着时 brief 已是可念稿，照念 full_script；否则仍按朗读时长锁定模式。
+    // Phase 1：配音开着时 brief 已是可念稿，先 TTS 再拆拍；否则仍按朗读时长锁定模式。
     let required_script_mode = if media_options.is_some_and(|options| options.voiceover) {
         "full_script"
     } else {
         decide_script_mode(brief)
     };
     log::info!("Phase 1 script mode locked by system: {required_script_mode}");
+    let mut audio_first: Option<(i64, crate::voice_provider::AudioFirstPrepared)> = None;
+    let voiceover_wanted = required_script_mode == "full_script"
+        && media_options.map_or(true, |options| options.voiceover);
+    if voiceover_wanted {
+        match crate::voice_provider::prepare_audio_first(&app, &project_id, brief, voice_id) {
+            Ok(prepared) => {
+                let hard_target = prepared
+                    .duration_ms
+                    .saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
+                log::info!(
+                    "Audio-first prepared before Phase 1: duration={}ms hard_target={}ms reused={}",
+                    prepared.duration_ms,
+                    hard_target,
+                    prepared.reused_cache
+                );
+                if let Some(requested) = requested_duration_ms.filter(|value| *value > 0) {
+                    if spoken_duration_conflicts(prepared.duration_ms, requested) {
+                        let spoken = prepared.duration_ms;
+                        return Err(format!(
+                            "storyboard_needs_user_decision: spoken audio is {spoken}ms but the user asked for {requested}ms. Ask which duration to keep. facts={{\"spokenMs\":{spoken},\"requestedMs\":{requested}}}"
+                        ));
+                    }
+                }
+                audio_first = Some((hard_target, prepared));
+            }
+            Err(error) => {
+                log::error!("Audio-first prepare failed; storyboard will not start: {error}");
+                return Err(format!(
+                    "storyboard_voiceover_failed: voiceover could not be synthesized before splitting beats ({error})"
+                ));
+            }
+        }
+    }
     let library_inventory = phases::build_library_inventory_summary(&sources);
     log::info!(
         "Phase 1 library inventory prepared: chars={}",
         library_inventory.chars().count()
     );
     let mut phase1_feedback = None;
+    let voiceover_duration_ms = audio_first.as_ref().map(|(_, prepared)| prepared.duration_ms);
     let narrative = (0..MAX_PHASE1_REVISIONS).find_map(|revision| {
         log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
         match phases::phase1_generate_narrative(
@@ -2712,6 +2763,7 @@ fn generate_storyboard_internal(
             required_script_mode,
             &library_inventory,
             phase1_feedback.as_deref(),
+            voiceover_duration_ms,
         ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
@@ -2773,15 +2825,7 @@ fn generate_storyboard_internal(
     let mut narrative = narrative;
     crate::execution_deadline::check()?;
     enforce_decided_script_mode(brief, required_script_mode, &mut narrative);
-    // Audio-first: when full_script beats carry narration, pre-synthesize to obtain exact duration and override target duration so Phase 2/3 select shots around the true voiceover length. Non-critical: if TTS fails, keep estimated duration.
-    let mut audio_first: Option<(i64, crate::voice_provider::AudioFirstPrepared)> = None;
-    let voiceover_script = resolve_voiceover_script(
-        brief,
-        &narrative.script_mode,
-        &narrative.spoken_script,
-        &narrative.beats,
-    );
-    // 语义编码不依赖音频时长，与 TTS 同时执行；最终排序等待两者完成。
+    // 配音已在 Phase 1 前合成；这里只做语义/CLIP 编码。
     let (embeddings, clip_embeddings) = std::thread::scope(|scope| {
         let deadline = crate::execution_deadline::current();
         let embedding_job = scope.spawn({
@@ -2802,36 +2846,6 @@ fn generate_storyboard_internal(
                 clip::encode_beats(&app, &beats)
             }
         });
-        if narrative.script_mode == "full_script"
-            && media_options.map_or(true, |options| options.voiceover)
-        {
-            if let Some(narration_text) = voiceover_script.as_ref().filter(|text| !text.is_empty())
-            {
-                match crate::voice_provider::prepare_audio_first(
-                    &app,
-                    &project_id,
-                    narration_text,
-                    voice_id,
-                ) {
-                    Ok(prepared) => {
-                        let hard_target = prepared
-                            .duration_ms
-                            .saturating_add(crate::timeline_voice::VOICEOVER_TAIL_MS);
-                        log::info!(
-                        "Audio-first prepared: duration={}ms hard_target={}ms reused={} chars={}",
-                        prepared.duration_ms,
-                        hard_target,
-                        prepared.reused_cache,
-                        narration_text.chars().count()
-                    );
-                        audio_first = Some((hard_target, prepared));
-                    }
-                    Err(e) => {
-                        log::warn!("Audio-first prepare skipped (keeping estimate): {e}");
-                    }
-                }
-            }
-        }
         let embeddings = embedding_job
             .join()
             .map_err(|_| "Semantic encoding worker failed.".to_owned())?;
