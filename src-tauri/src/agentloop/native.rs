@@ -3009,6 +3009,24 @@ mod tests {
     }
 
     #[test]
+    fn insufficient_footage_asks_the_user_instead_of_failing_selection() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]",
+        );
+        assert_eq!(failure["code"], "storyboard_needs_user_decision");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("import more clips")));
+        assert!(!failure["facts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|value| value.as_str().is_some_and(|text| text.contains("shorter than"))));
+    }
+
+    #[test]
     fn short_window_asks_the_user_instead_of_failing_selection() {
         let failure = safe_tool_failure_context(
             "generate_storyboard",

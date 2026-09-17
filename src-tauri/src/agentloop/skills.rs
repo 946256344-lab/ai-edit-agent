@@ -159,6 +159,20 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("[]");
+        if error.contains("not enough playable footage") {
+            return json!({
+                "status": "failed",
+                "operation": tool,
+                "stage": "storyboard_selection",
+                "code": "storyboard_needs_user_decision",
+                "facts": [
+                    "Storyboard generation stopped because no playable shot could be selected from the ready library."
+                ],
+                "retryable": false,
+                "recovery": "Stop this run. Ask the user whether to import more clips, skip beats, or change duration. Do not call generate_storyboard again until they answer.",
+                "responseInstruction": "Tell the user generation paused because there was not enough matching footage. Ask whether to import more clips, skip beats, or change duration. Do not claim a storyboard was saved."
+            });
+        }
         if error.contains("requestedMs") || error.contains("user asked for") {
             return json!({
                 "status": "failed",

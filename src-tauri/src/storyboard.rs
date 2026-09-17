@@ -2853,7 +2853,7 @@ fn generate_storyboard_internal(
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 选 1–3 镜；窗短于旁白时再问选片模型，不把拉窗丢给 Phase 4。
+    // Phase 3: 每拍单独看 9 图、默认一镜；窗短于旁白时再问选片模型，不把拉窗丢给 Phase 4。
     let selected = {
         let mut repair: Option<RepairPacket> = None;
         let mut selected = None;
@@ -2862,7 +2862,7 @@ fn generate_storyboard_internal(
         loop {
             crate::execution_deadline::check()?;
             let attempt = budget.semantic_attempt_number();
-            log::info!("Phase 3 attempt {attempt}: select 2-3 assets per beat");
+            log::info!("Phase 3 attempt {attempt}: select one shot per beat");
             match phases::phase3_select(&access, brief, &rough, repair.as_ref()) {
                 Ok((mut candidate, mut issues)) => {
                     let alignment = audio_first
@@ -2963,6 +2963,13 @@ fn generate_storyboard_internal(
                 log::error!("{message}");
                 return message;
             }
+            if issues.iter().any(|issue| issue.kind == "insufficient_footage") {
+                let message =
+                    "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]"
+                        .to_owned();
+                log::error!("{message}");
+                return message;
+            }
             let summary = partial_candidate_summary(
                 "Phase 3",
                 last_candidate.as_ref(),
@@ -2988,6 +2995,12 @@ fn generate_storyboard_internal(
         selected.shots.len(),
         selected.uncovered_beat_ids.len()
     );
+    if selected.shots.is_empty() {
+        return Err(
+            "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]"
+                .to_owned(),
+        );
+    }
     narrative.beats = selected.beats.clone();
     if narrative.script_mode == "key_message" {
         let covered: Vec<String> = selected
