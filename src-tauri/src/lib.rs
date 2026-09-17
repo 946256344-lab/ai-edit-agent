@@ -46,6 +46,8 @@ mod projects;
 mod provider;
 /// 启动/发行就绪检查：媒体 runtime、目录、凭据与剪映前置。
 mod release_readiness;
+/// 发行后本地选镜模型（BGE/CLIP ONNX）下载、校验与路径解析。
+mod runtime_models;
 mod shared_library;
 /// 粗剪镜头的持久化推荐池与单候选试选预览。
 mod shot_replacement;
@@ -152,6 +154,8 @@ pub fn run() {
             preview_cache::get_preview_cache_status,
             preview_cache::clear_preview_cache,
             release_readiness::get_release_readiness,
+            runtime_models::get_runtime_model_status,
+            runtime_models::start_runtime_model_download,
             jianying::create_jianying_draft,
             jianying::get_jianying_registration_status,
             agent::submit_conversation_turn,

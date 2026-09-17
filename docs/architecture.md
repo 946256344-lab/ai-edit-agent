@@ -75,7 +75,7 @@ Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保
 | Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
-| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 安装包内置中文向量模型；`visualKeywords` 跨语言词面；不可用时词面降级 |
+| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 本机中文向量（安装后下载或开发预置）；`visualKeywords` 跨语言词面；不可用时词面降级 |
 | 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
 | Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
 | Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
@@ -348,7 +348,7 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 
 已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
 
-- `bge-small-zh-v1.5` ONNX 模型和本地推理运行时已随生产安装包分发，运行时不联网下载。CLIP ViT-B/32（Qdrant 图文）同样离线加载：配置进仓库，ONNX 权重用 `scripts/fetch-clip-models.ps1` 拉取后打进安装包；缺失时 Phase 2 仅跳过 CLIP 加权。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
+- `bge-small-zh-v1.5` 与 CLIP ViT-B/32 的 **ONNX 大文件**不进安装包：启动后若缺失则后台下载到 `app_data/runtime-models/`，SHA-256 校验后加载；小配置/tokenizer 仍随包。下载不阻塞工作台；缺失时 Phase 2 分别降级为词面或跳过 CLIP 加权。开发机仍可用仓库内/ `scripts/fetch-clip-models.ps1` 预拉。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
 - Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 

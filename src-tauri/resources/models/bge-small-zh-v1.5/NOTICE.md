@@ -8,4 +8,4 @@
 - Full upstream MIT terms: `LICENSE`
 - Bundled `onnx/model.onnx` SHA-256: `69A0B846F4F116B5E6AABF9546EA6754D02264F3211A13A1BD69B31B8040749A`
 
-The files in this directory are redistributed only as the local semantic retrieval runtime for Assembly Video Agent. They are not downloaded while the application is running.
+The files in this directory are redistributed only as the local semantic retrieval runtime for Assembly Video Agent. The large `onnx/model.onnx` is not bundled in the installer; release builds download it into app data after install. Developers may keep a copy under this tree for local runs.

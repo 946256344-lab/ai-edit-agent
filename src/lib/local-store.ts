@@ -522,6 +522,32 @@ export async function getReleaseReadiness() {
   return invoke<ReleaseReadinessReport>('get_release_readiness')
 }
 
+export type RuntimeModelArtifactStatus = {
+  id: string
+  title: string
+  state: string
+  bytesDownloaded: number
+  bytesTotal: number | null
+  error: string | null
+}
+
+export type RuntimeModelStatus = {
+  overall: string
+  currentId: string | null
+  message: string
+  artifacts: RuntimeModelArtifactStatus[]
+}
+
+export async function getRuntimeModelStatus() {
+  requireDesktopRuntime()
+  return invoke<RuntimeModelStatus>('get_runtime_model_status')
+}
+
+export async function startRuntimeModelDownload() {
+  requireDesktopRuntime()
+  return invoke<RuntimeModelStatus>('start_runtime_model_download')
+}
+
 export async function createJianyingDraft(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingDraftResult>('create_jianying_draft', { timelineVersionId }) }
 
 export async function getJianyingRegistrationStatus(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingRegistrationStatus | null>('get_jianying_registration_status', { timelineVersionId }) }

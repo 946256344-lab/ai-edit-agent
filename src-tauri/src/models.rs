@@ -965,7 +965,7 @@ pub struct TechnicalMetadata {
     /// 由本地关键帧清晰度计算得到的素材整体质量分，范围为 0.0-1.0。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) visual_quality_score: Option<f64>,
-    /// 视觉证据文本的本地语义向量；模型文件随安装包分发，不在运行时下载。
+    /// 视觉证据文本的本地语义向量；ONNX 权重优先来自运行时下载目录。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) evidence_embedding: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

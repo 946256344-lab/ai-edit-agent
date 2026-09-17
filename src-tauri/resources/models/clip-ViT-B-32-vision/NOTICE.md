@@ -1,12 +1,13 @@
 # CLIP ViT-B/32 (Qdrant ONNX)
 
-Bundled for offline Phase 2 image–text ranking.
+Used for offline Phase 2 image–text ranking.
 
 - Vision: `Qdrant/clip-ViT-B-32-vision`
 - Text: `Qdrant/clip-ViT-B-32-text`
 
-ONNX weights are **not** committed (each file exceeds GitHub’s 100MB limit).
-Fetch them with:
+ONNX weights are **not** committed (each file exceeds GitHub’s 100MB limit) and are **not** bundled in the installer.
+Release builds download them into the app data `runtime-models` directory on first need.
+Developers can also prefetch with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1

@@ -41,6 +41,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 
 ### 2. 生产化媒体与模型接入
 
+- 本地选镜 ONNX（BGE/CLIP）改为瘦安装包 + 应用内后台下载（进行中，见 `docs/changes/2026-09-17-runtime-model-download.md`）。
 - 捆绑或可靠供应媒体运行时和 Python/Jianying 适配器依赖。
 - 实现自定义模型 API 适配器，继续保持 Provider 可替换。
 - 实现收集项目媒体、缺失文件恢复策略、质量评分和语义重复检测。

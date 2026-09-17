@@ -92,6 +92,17 @@ Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-
 
 交互与验证记录见 `docs/changes/2026-09-09-light-workspace-shot-replacement.md`。
 
+## 2026-09-17：运行时下载本地选镜模型
+
+安装包不再捆绑 BGE/CLIP 的三个 `model.onnx`。新增：
+
+| 命令 | 参数 | 返回 | 说明 |
+|------|------|------|------|
+| `get_runtime_model_status` | 无 | `RuntimeModelStatus` | 三项权重状态与总体 `idle/pending/downloading/ready/failed`；不写副作用。 |
+| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 幂等启动后台下载到 `app_data/runtime-models/`；已在下或已齐则返回当前状态。 |
+
+事件 `runtime-model-progress` 推送同结构进度。`initialize_local_store` 在缺权重时自动开下，不阻塞。路径解析优先 `app_data`，其次安装包/开发目录。见 `docs/changes/2026-09-17-runtime-model-download.md`。
+
 ## 2026-09-09：发行就绪检查
 
 新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、Python/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`。
@@ -193,6 +204,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_preview_cache_status` | `{ projectId }` | `PreviewCacheStatus { projectId, bytesUsed, limitBytes, fileCount }` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
 | `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
 | `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message`（`status`=`ok|warn|fail`）。不探测源媒体内容，不写库。 |
+| `get_runtime_model_status` | 无 | `RuntimeModelStatus { overall, currentId, message, artifacts[] }` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。 |
+| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；幂等；不挡 UI。 |
 | `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
@@ -268,7 +281,7 @@ Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Age
 
 **Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`），再注入本地库视觉/OCR 库存摘要（高频 tags/scenes/OCR，约 3500 字符帽），让模型只在该模式下拆 beats，且 `requiredVisual`/`visualKeywords` 须贴近库存、禁止编造库中没有的主体（时长由模型按用户要求或内容决定，120 秒为安全上限；`full_script` 可先 TTS 锁定 `targetDurationMs`；`key_message` 每 beat 写 ≤24 字 `onScreenText`、`narration` 留空，可读性下限相对目标时长硬门）。Phase 2 **仅本地**：硬过滤就绪视频后按段排序，每个 beat 取 9 段（同片最多 2，相似最多 2）；有 1 条就能覆盖，0 条才 uncovered；`key_message` 写入可读性节奏计划。Phase 3 模型从该池选出 **1–3 个互异 assetId（含顺序；有第二条不相似且对得上才加镜）**（附带候选 **关键帧 2×2 网格** 做画面判断），可诚实 uncovered；不过关本步重试；选片后重建节奏计划。Phase 4 **是选中镜头的第二次视觉分析**：有 `segmentId` 则跳过 Pass A，窗口锁在该段运动可用区间，不够长也不拼下一段硬切；网格多帧判断动作是否做完并改 `sourceStart/End`。无片段锁定时才用关键帧建窗。`full_script` 旁白托底 / `key_message` 节奏 fit，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（保留 P1/audio-first 的 `targetDurationMs`/`scriptMode`；`full_script` 仅 lead 回填旁白且只拦画面过长，画面不足走 `qualityWarnings`；`key_message` lead 写 beat 标记且对称校验总时长）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue）。成功后收尾检查 uncovered / 无镜头的覆盖 beat / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
 
-`storyboard/scoring.rs` 的语义分为 0–50：有效的 512 维 `bge-small-zh-v1.5` 向量与词面命中各最多 25 分（缺一侧时另一侧放大到 50）；另加 CLIP 图文 0–25（beat 的 `visualKeywords`/`requiredVisual` ↔ 片段代表帧，模型为 `Qdrant/clip-ViT-B-32-*`，缺失时为 0）。词面查询优先使用 Phase 1 产出的英文 `visualKeywords`，并与素材英文标签对齐；中文双字仅在证据含 CJK 时参与。另加画面质量 0–10、时长匹配 0–10、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–5。无视觉证据且无有效 OCR 的素材排在有证据候选之后。OCR 乱码在向量文本、词面 blob 与相似去重中过滤。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果取最多 9 段（同片最多 2，相似最多 2），候选池携带分数分解（含 `clip`）；Phase 3 池卡片含 `requiredVisual`/`visualKeywords`/`narration`/`onScreenText` 与 `retrievalScore`，关键帧网格上限 60；从该池选 1–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。40% 次数上限按已经实际选中的镜头数动态计算。文本向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`；CLIP 图像向量写入 `asset_segment_embeddings`（model=`Qdrant/clip-ViT-B-32-vision`），不序列化进 Provider payload。CLIP ONNX 权重需本机 `scripts/fetch-clip-models.ps1` 拉取后随安装包分发（因体积不进 git）。
+`storyboard/scoring.rs` 的语义分为 0–50：有效的 512 维 `bge-small-zh-v1.5` 向量与词面命中各最多 25 分（缺一侧时另一侧放大到 50）；另加 CLIP 图文 0–25（beat 的 `visualKeywords`/`requiredVisual` ↔ 片段代表帧，模型为 `Qdrant/clip-ViT-B-32-*`，缺失时为 0）。词面查询优先使用 Phase 1 产出的英文 `visualKeywords`，并与素材英文标签对齐；中文双字仅在证据含 CJK 时参与。另加画面质量 0–10、时长匹配 0–10、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–5。无视觉证据且无有效 OCR 的素材排在有证据候选之后。OCR 乱码在向量文本、词面 blob 与相似去重中过滤。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果取最多 9 段（同片最多 2，相似最多 2），候选池携带分数分解（含 `clip`）；Phase 3 池卡片含 `requiredVisual`/`visualKeywords`/`narration`/`onScreenText` 与 `retrievalScore`，关键帧网格上限 60；从该池选 1–3 个互异 `assetId`，且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。40% 次数上限按已经实际选中的镜头数动态计算。文本向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`；CLIP 图像向量写入 `asset_segment_embeddings`（model=`Qdrant/clip-ViT-B-32-vision`），不序列化进 Provider payload。CLIP ONNX 权重由安装后应用内下载到 `app_data/runtime-models/`（或开发机用 `scripts/fetch-clip-models.ps1` 预拉）；因体积不进 git 与安装包。
 
 `get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
 

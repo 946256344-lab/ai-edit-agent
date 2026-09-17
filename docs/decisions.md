@@ -2,6 +2,10 @@
 
 本文只记录今天仍然影响开发的决定；历史 ADR 仍可在仓库历史中查阅，不再作为必读规则。
 
+## 瘦安装包与运行时模型下载（2026-09-17）
+
+安装包不再捆绑 BGE/CLIP 的 `model.onnx` 大文件。应用启动后若本机缺失，则后台从固定 HuggingFace URL 下载到 `%APPDATA%/<app>/runtime-models/`，校验 SHA-256 后供选镜加载；tokenizer/config 仍随包。下载不阻塞工作台；缺失时 BGE 降级词面、CLIP 加权为 0。不静默换源。FFmpeg/Tesseract/Python 仍不在本期自动下载。
+
 ## 默认直推 master（2026-09-16）
 
 单 Agent 默认在 `master` 提交并推送。不为每个改动建分支、开 PR，也不在每次提交前跑完整 `harness:test` / `cargo test` / `npm run build`。多个 Agent 并行时才用独立分支和 worktree。提交钩子只拒绝 detached HEAD，并检查文档同步。

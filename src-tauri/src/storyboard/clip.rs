@@ -1,8 +1,9 @@
 //! 本地 CLIP ViT-B/32：beat 文案 ↔ 片段代表帧的图文相似度。
-//! 模型随安装包分发，不联网下载；向量写入 asset_segment_embeddings（独立 model 名），缺失时评分回退到 bge/词面。
+//! 权重优先来自 app_data 运行时下载，其次安装包/开发目录；向量写入 asset_segment_embeddings，缺失时评分回退到 bge/词面。
 
 use crate::db::now_millis;
 use crate::models::TechnicalMetadata;
+use crate::runtime_models;
 use fastembed::{
     ImageEmbedding, ImageInitOptionsUserDefined, InitOptionsUserDefined, Pooling, TextEmbedding,
     TokenizerFiles, UserDefinedEmbeddingModel, UserDefinedImageEmbeddingModel,
@@ -11,8 +12,8 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use tauri::{AppHandle, Manager};
+use std::sync::Mutex;
+use tauri::AppHandle;
 
 pub(crate) const CLIP_VISION_MODEL: &str = "Qdrant/clip-ViT-B-32-vision";
 pub(crate) const CLIP_TEXT_MODEL: &str = "Qdrant/clip-ViT-B-32-text";
@@ -21,42 +22,43 @@ pub(crate) const CLIP_VERSION: u32 = 1;
 const VISION_RESOURCE_DIRECTORY: &str = "resources/models/clip-ViT-B-32-vision";
 const TEXT_RESOURCE_DIRECTORY: &str = "resources/models/clip-ViT-B-32-text";
 /// Qdrant/clip-ViT-B-32-vision model.onnx SHA-256
-const VISION_MODEL_SHA256: &str =
+pub(crate) const VISION_MODEL_SHA256: &str =
     "c68d3d9a200ddd2a8c8a5510b576d4c94d1ae383bf8b36dd8c084f94e1fb4d63";
 /// Qdrant/clip-ViT-B-32-text model.onnx SHA-256
-const TEXT_MODEL_SHA256: &str = "4dbe762b11e36488304471e439cde89da053ad7acaddbf9e096745d142ec8d8b";
+pub(crate) const TEXT_MODEL_SHA256: &str =
+    "4dbe762b11e36488304471e439cde89da053ad7acaddbf9e096745d142ec8d8b";
 const CLIP_BATCH_SIZE: usize = 8;
 const MAX_CLIP_TEXT_CHARS: usize = 500;
 
-static VISION_MODEL: OnceLock<Result<ImageEmbedding, String>> = OnceLock::new();
-static TEXT_MODEL: OnceLock<Result<TextEmbedding, String>> = OnceLock::new();
+enum VisionSlot {
+    Untried,
+    Failed(String),
+    Ready(&'static ImageEmbedding),
+}
+
+enum TextSlot {
+    Untried,
+    Failed(String),
+    Ready(&'static TextEmbedding),
+}
+
+fn vision_slot() -> &'static Mutex<VisionSlot> {
+    static SLOT: Mutex<VisionSlot> = Mutex::new(VisionSlot::Untried);
+    &SLOT
+}
+
+fn text_slot() -> &'static Mutex<TextSlot> {
+    static SLOT: Mutex<TextSlot> = Mutex::new(TextSlot::Untried);
+    &SLOT
+}
 
 fn bundled_directory(
     app: &AppHandle,
     resource: &str,
     required_file: &str,
 ) -> Result<PathBuf, String> {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "clip_model_resource_unavailable".to_owned())?;
-    let packaged = resource_dir.join(resource);
-    if packaged.join(required_file).is_file() {
-        return Ok(packaged);
-    }
-    let leaf = resource.rsplit('/').next().unwrap_or(resource);
-    let flattened = resource_dir.join("models").join(leaf);
-    if flattened.join(required_file).is_file() {
-        return Ok(flattened);
-    }
-    #[cfg(debug_assertions)]
-    {
-        let development = Path::new(env!("CARGO_MANIFEST_DIR")).join(resource);
-        if development.join(required_file).is_file() {
-            return Ok(development);
-        }
-    }
-    Err("clip_model_resource_unavailable".to_owned())
+    runtime_models::resolve_model_directory(app, resource, required_file)
+        .map_err(|_| "clip_model_resource_unavailable".to_owned())
 }
 
 pub(crate) fn bundled_models_present(app: &AppHandle) -> Result<bool, String> {
@@ -64,6 +66,20 @@ pub(crate) fn bundled_models_present(app: &AppHandle) -> Result<bool, String> {
         bundled_directory(app, VISION_RESOURCE_DIRECTORY, "model.onnx").is_ok()
             && bundled_directory(app, TEXT_RESOURCE_DIRECTORY, "model.onnx").is_ok(),
     )
+}
+
+/// 下载完成后清掉失败缓存，允许再次加载。
+pub(crate) fn invalidate_failed_model_caches() {
+    if let Ok(mut slot) = vision_slot().lock() {
+        if matches!(*slot, VisionSlot::Failed(_)) {
+            *slot = VisionSlot::Untried;
+        }
+    }
+    if let Ok(mut slot) = text_slot().lock() {
+        if matches!(*slot, TextSlot::Failed(_)) {
+            *slot = TextSlot::Untried;
+        }
+    }
 }
 
 fn read_model_file(directory: &Path, relative_path: &str) -> Result<Vec<u8>, String> {
@@ -129,23 +145,61 @@ fn load_text_from_directory(directory: &Path) -> Result<TextEmbedding, String> {
 }
 
 fn vision_model(app: &AppHandle) -> Result<&'static ImageEmbedding, String> {
-    VISION_MODEL
-        .get_or_init(|| {
-            bundled_directory(app, VISION_RESOURCE_DIRECTORY, "model.onnx")
-                .and_then(|path| load_vision_from_directory(&path))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    let mut slot = vision_slot()
+        .lock()
+        .map_err(|_| "clip_vision_model_load_failed".to_owned())?;
+    match &*slot {
+        VisionSlot::Ready(model) => return Ok(*model),
+        VisionSlot::Failed(error) => {
+            if bundled_directory(app, VISION_RESOURCE_DIRECTORY, "model.onnx").is_err() {
+                return Err(error.clone());
+            }
+            *slot = VisionSlot::Untried;
+        }
+        VisionSlot::Untried => {}
+    }
+    match bundled_directory(app, VISION_RESOURCE_DIRECTORY, "model.onnx")
+        .and_then(|path| load_vision_from_directory(&path))
+    {
+        Ok(model) => {
+            let leaked: &'static ImageEmbedding = Box::leak(Box::new(model));
+            *slot = VisionSlot::Ready(leaked);
+            Ok(leaked)
+        }
+        Err(error) => {
+            *slot = VisionSlot::Failed(error.clone());
+            Err(error)
+        }
+    }
 }
 
 fn text_model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
-    TEXT_MODEL
-        .get_or_init(|| {
-            bundled_directory(app, TEXT_RESOURCE_DIRECTORY, "model.onnx")
-                .and_then(|path| load_text_from_directory(&path))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    let mut slot = text_slot()
+        .lock()
+        .map_err(|_| "clip_text_model_load_failed".to_owned())?;
+    match &*slot {
+        TextSlot::Ready(model) => return Ok(*model),
+        TextSlot::Failed(error) => {
+            if bundled_directory(app, TEXT_RESOURCE_DIRECTORY, "model.onnx").is_err() {
+                return Err(error.clone());
+            }
+            *slot = TextSlot::Untried;
+        }
+        TextSlot::Untried => {}
+    }
+    match bundled_directory(app, TEXT_RESOURCE_DIRECTORY, "model.onnx")
+        .and_then(|path| load_text_from_directory(&path))
+    {
+        Ok(model) => {
+            let leaked: &'static TextEmbedding = Box::leak(Box::new(model));
+            *slot = TextSlot::Ready(leaked);
+            Ok(leaked)
+        }
+        Err(error) => {
+            *slot = TextSlot::Failed(error.clone());
+            Err(error)
+        }
+    }
 }
 
 fn beat_clip_query(beat: &crate::models::StoryboardBeat) -> String {

@@ -1,8 +1,9 @@
-//! 使用安装包内置的中文文本向量模型，为 beat 与本地视觉证据提供离线语义召回。
-//! 模型不联网下载；向量带模型、版本、维度和来源指纹，失效时回退词面排序。
+//! 使用本机中文文本向量模型，为 beat 与本地视觉证据提供离线语义召回。
+//! 权重优先来自 app_data 运行时下载，其次安装包/开发目录；向量带模型指纹，失效时回退词面排序。
 
 use crate::db::now_millis;
 use crate::models::TechnicalMetadata;
+use crate::runtime_models;
 use fastembed::{
     InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
 };
@@ -10,44 +11,45 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use tauri::{AppHandle, Manager};
+use std::sync::Mutex;
+use tauri::AppHandle;
 
 pub(crate) const EMBEDDING_MODEL: &str = "BAAI/bge-small-zh-v1.5";
 pub(crate) const EMBEDDING_DIMENSIONS: usize = 512;
 pub(crate) const EMBEDDING_VERSION: u32 = 3;
 const MODEL_RESOURCE_DIRECTORY: &str = "resources/models/bge-small-zh-v1.5";
-const MODEL_SHA256: &str = "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a";
+pub(crate) const MODEL_SHA256: &str =
+    "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a";
 const EMBEDDING_BATCH_SIZE: usize = 32;
 const MAX_EMBEDDING_TEXT_CHARS: usize = 4_000;
 
-static MODEL: OnceLock<Result<TextEmbedding, String>> = OnceLock::new();
+enum ModelSlot {
+    Untried,
+    Failed(String),
+    Ready(&'static TextEmbedding),
+}
+
+fn model_slot() -> &'static Mutex<ModelSlot> {
+    static SLOT: Mutex<ModelSlot> = Mutex::new(ModelSlot::Untried);
+    &SLOT
+}
 
 fn bundled_model_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|_| "semantic_model_resource_unavailable".to_owned())?;
-    let packaged = resource_dir.join(MODEL_RESOURCE_DIRECTORY);
-    if packaged.join("onnx/model.onnx").is_file() {
-        return Ok(packaged);
-    }
-    let flattened = resource_dir.join("models/bge-small-zh-v1.5");
-    if flattened.join("onnx/model.onnx").is_file() {
-        return Ok(flattened);
-    }
-    #[cfg(debug_assertions)]
-    {
-        let development = Path::new(env!("CARGO_MANIFEST_DIR")).join(MODEL_RESOURCE_DIRECTORY);
-        if development.join("onnx/model.onnx").is_file() {
-            return Ok(development);
-        }
-    }
-    Err("semantic_model_resource_unavailable".to_owned())
+    runtime_models::resolve_model_directory(app, MODEL_RESOURCE_DIRECTORY, "onnx/model.onnx")
+        .map_err(|_| "semantic_model_resource_unavailable".to_owned())
 }
 
 pub(crate) fn bundled_model_present(app: &AppHandle) -> Result<bool, String> {
     Ok(bundled_model_directory(app).is_ok())
+}
+
+/// 下载完成后清掉失败缓存，允许再次加载。
+pub(crate) fn invalidate_failed_model_cache() {
+    if let Ok(mut slot) = model_slot().lock() {
+        if matches!(*slot, ModelSlot::Failed(_)) {
+            *slot = ModelSlot::Untried;
+        }
+    }
 }
 
 fn read_model_file(directory: &Path, relative_path: &str) -> Result<Vec<u8>, String> {
@@ -76,12 +78,30 @@ fn load_model_from_directory(directory: &Path) -> Result<TextEmbedding, String> 
 }
 
 fn model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
-    MODEL
-        .get_or_init(|| {
-            bundled_model_directory(app).and_then(|path| load_model_from_directory(&path))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    let mut slot = model_slot()
+        .lock()
+        .map_err(|_| "semantic_model_load_failed".to_owned())?;
+    match &*slot {
+        ModelSlot::Ready(model) => return Ok(*model),
+        ModelSlot::Failed(error) => {
+            if bundled_model_directory(app).is_err() {
+                return Err(error.clone());
+            }
+            *slot = ModelSlot::Untried;
+        }
+        ModelSlot::Untried => {}
+    }
+    match bundled_model_directory(app).and_then(|path| load_model_from_directory(&path)) {
+        Ok(model) => {
+            let leaked: &'static TextEmbedding = Box::leak(Box::new(model));
+            *slot = ModelSlot::Ready(leaked);
+            Ok(leaked)
+        }
+        Err(error) => {
+            *slot = ModelSlot::Failed(error.clone());
+            Err(error)
+        }
+    }
 }
 
 fn encode_texts(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {

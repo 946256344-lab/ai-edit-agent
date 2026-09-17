@@ -190,12 +190,27 @@ fn semantic_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
             "ok",
             "本地语义模型资源可用。",
         ),
-        Ok(false) | Err(_) => check(
-            "semantic_model",
-            "本地语义模型",
-            "warn",
-            "本地语义模型资源缺失。选镜仍可进行，但会降级为词面匹配。",
-        ),
+        Ok(false) | Err(_) => {
+            let downloading = crate::runtime_models::get_runtime_model_status(app.clone())
+                .ok()
+                .map(|status| matches!(status.overall.as_str(), "downloading" | "pending"))
+                .unwrap_or(false);
+            if downloading {
+                check(
+                    "semantic_model",
+                    "本地语义模型",
+                    "warn",
+                    "正在下载本地语义模型。选镜仍可进行，完成前会降级为词面匹配。",
+                )
+            } else {
+                check(
+                    "semantic_model",
+                    "本地语义模型",
+                    "warn",
+                    "本地语义模型资源缺失。选镜仍可进行，但会降级为词面匹配。可在提醒条中重试下载。",
+                )
+            }
+        }
     }
 }
 
@@ -211,12 +226,27 @@ fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                 crate::storyboard::clip::CLIP_TEXT_MODEL
             ),
         ),
-        Ok(false) | Err(_) => check(
-            "clip_model",
-            "本地 CLIP 模型",
-            "warn",
-            "CLIP 图文模型资源缺失。选镜仍可进行，但不会用画面向量加权。运行 scripts/fetch-clip-models.ps1 拉取。",
-        ),
+        Ok(false) | Err(_) => {
+            let downloading = crate::runtime_models::get_runtime_model_status(app.clone())
+                .ok()
+                .map(|status| matches!(status.overall.as_str(), "downloading" | "pending"))
+                .unwrap_or(false);
+            if downloading {
+                check(
+                    "clip_model",
+                    "本地 CLIP 模型",
+                    "warn",
+                    "正在下载 CLIP 图文模型。选镜仍可进行，完成前不会用画面向量加权。",
+                )
+            } else {
+                check(
+                    "clip_model",
+                    "本地 CLIP 模型",
+                    "warn",
+                    "CLIP 图文模型资源缺失。选镜仍可进行，但不会用画面向量加权。可在提醒条中重试下载。",
+                )
+            }
+        }
     }
 }
 

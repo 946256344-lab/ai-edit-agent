@@ -1,6 +1,7 @@
-# Fetch bundled CLIP ViT-B/32 ONNX models (Qdrant).
-# Large files are gitignored (>100MB GitHub limit). Run before tauri:dev / tauri:build
-# when CLIP ranking is desired.
+# Fetch CLIP ViT-B/32 ONNX models (Qdrant) for local/dev use.
+# Release installs download these into app_data via runtime_models; this script
+# is for developers who want weights under src-tauri/resources before tauri:dev.
+# Large files are gitignored (>100MB GitHub limit).
 #
 # Usage (from repo root):
 #   powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1

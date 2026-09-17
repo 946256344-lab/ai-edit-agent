@@ -68,7 +68,8 @@
       "allowedPaths": [
         "src-tauri/src/oauth.rs",
         "src-tauri/src/music_provider.rs",
-        "src-tauri/src/provider.rs"
+        "src-tauri/src/provider.rs",
+        "src-tauri/src/outbound_http.rs"
       ]
     }
   }

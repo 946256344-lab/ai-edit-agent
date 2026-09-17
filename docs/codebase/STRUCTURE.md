@@ -83,7 +83,7 @@ src/main.tsx
 | `preview_audio.rs` | 旁白与 BGM 混音；禁止 `-shortest` |
 | `jianying.rs` | 新草稿创建和延迟注册 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
-| `oauth.rs`、`custom_api.rs`、`music_provider.rs` | 外部集成和凭据；ElevenLabs 密钥/HTTP 在 `music_provider.rs` |
+| `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
 | `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
 | `db.rs`、`models.rs`、`audit.rs`、`process.rs` | 数据库、边界类型、审计、外部进程基础设施 |
 

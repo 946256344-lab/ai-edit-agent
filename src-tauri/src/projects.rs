@@ -208,6 +208,13 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
         step_start.elapsed()
     );
 
+    let step_start = std::time::Instant::now();
+    crate::runtime_models::maybe_start_runtime_model_download(&app);
+    log::info!(
+        "[PERF] initialize_local_store: runtime_model_download kickoff took {:?}",
+        step_start.elapsed()
+    );
+
     log::info!(
         "[PERF] initialize_local_store: total time {:?}",
         start.elapsed()
