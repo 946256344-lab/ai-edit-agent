@@ -90,6 +90,8 @@ pub(super) fn persisted_artifact_for_tool(
 pub(super) fn safe_step_error_code(error: &str) -> &'static str {
     if error.starts_with("voiceover_script_confirmation_required") {
         "voiceover_script_confirmation_required"
+    } else if error.starts_with("storyboard_needs_user_decision:") {
+        "storyboard_needs_user_decision"
     } else if error.starts_with("voiceover_longer_than_picture:") {
         "voiceover_longer_than_picture"
     } else if error.starts_with("storyboard_source_inventory_unavailable:")
@@ -146,6 +148,28 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": false,
             "recovery": "Draft a complete spoken voiceover script in the user's language, show it to the user, and ask whether they agree. Do not call generate_storyboard in this turn. After they agree, call generate_storyboard with that approved script as brief.",
             "responseInstruction": "Write a spoken narration draft for the user's theme, quote it clearly, and ask them to confirm before generating the video. Do not claim a storyboard or voiceover was created."
+        });
+    }
+    if error.starts_with("storyboard_needs_user_decision:") {
+        let facts = error
+            .split("facts=")
+            .nth(1)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("[]");
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "storyboard_selection",
+            "code": "storyboard_needs_user_decision",
+            "facts": [
+                "Storyboard generation stopped because a selected clip is shorter than its spoken beat.",
+                "Local selection already tried swapping or moving words once to a neighbor beat.",
+                format!("beats={facts}")
+            ],
+            "retryable": false,
+            "recovery": "Stop this run. Explain which beat is short and why. Ask the user whether to change duration, pick another clip, or skip that beat. Do not call generate_storyboard again until they answer.",
+            "responseInstruction": "Tell the user generation paused on a beat whose footage is shorter than the narration. Quote the beat id and durations from facts. Ask how they want to continue. Do not claim a storyboard was saved."
         });
     }
     if error.starts_with("no_timeline:") {

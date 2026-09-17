@@ -231,7 +231,7 @@ impl SpeechTiming {
                 .map(|shot| shot.duration_ms)
                 .sum::<i64>();
             let expected = beat.end_ms - beat.start_ms;
-            if actual != expected {
+            if actual == 0 && expected > 0 {
                 let affected = content
                     .shots
                     .iter()
@@ -240,7 +240,20 @@ impl SpeechTiming {
                     .collect::<Vec<_>>()
                     .join(", ");
                 return Err(format!(
-                    "beat_audio_timing: beat '{}' needs {expected}ms of non-overlapping source ranges for its planned/verified beat timing, but has {actual}ms. Choose other windows within the locked assets. Affected shot indices: {affected}.",
+                    "beat_audio_timing: beat '{}' needs {expected}ms of picture but has no shots. Affected shot indices: {affected}.",
+                    beat.beat_id
+                ));
+            }
+            if actual > expected {
+                let affected = content
+                    .shots
+                    .iter()
+                    .filter(|shot| shot.beat_id == beat.beat_id)
+                    .map(|shot| shot.order_index.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "beat_audio_timing: beat '{}' has {actual}ms of picture for a {expected}ms spoken beat. Trim source windows. Affected shot indices: {affected}.",
                     beat.beat_id
                 ));
             }
@@ -306,20 +319,19 @@ pub(crate) fn fit_shots_scoped(
             issues.push(StoryboardIssue::new(
                 "beat_audio_window_shortfall",
                 format!(
-                    "Beat '{}' requires {}ms from planned/verified beat timing; choose longer content windows for its existing shots.",
-                    beat.beat_id, duration
+                    "Beat '{}' requires {}ms from planned/verified beat timing; locked usable windows only sum to {}ms. Leave cuts at capacity; selection (not refine) decides whether to swap or ask the user.",
+                    beat.beat_id,
+                    duration,
+                    capacities.iter().sum::<i64>()
                 ),
-                true,
+                false,
             )
             .for_shots(
                 indices
                     .iter()
                     .map(|&i| content.shots[i].order_index)
                     .collect(),
-            )
-            .allowing(vec![
-                "choose longer source windows for this beat without swapping assets",
-            ]));
+            ));
             continue;
         }
         let original_total = indices
@@ -477,22 +489,14 @@ mod tests {
             .iter()
             .all(|shot| shot.source_start_ms >= 500 && shot.source_end_ms <= 3500));
         timing.beats[0].end_ms = 7000;
-        assert_eq!(
-            fit_shots(&mut content, &timing, &windows)[0].kind,
-            "beat_audio_window_shortfall"
-        );
+        let shortfall = fit_shots(&mut content, &timing, &windows);
+        assert_eq!(shortfall[0].kind, "beat_audio_window_shortfall");
+        assert!(!shortfall[0].needs_model_decision);
         assert_eq!(
             content.shots.iter().map(|s| s.duration_ms).sum::<i64>(),
             5000
         );
-        assert!(timing
-            .validate(&content)
-            .unwrap_err()
-            .starts_with("beat_audio_timing:"));
-        assert!(timing
-            .validate(&content)
-            .unwrap_err()
-            .contains("Affected shot indices:"));
+        assert!(timing.validate(&content).is_ok());
     }
 
     #[test]

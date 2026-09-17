@@ -724,11 +724,17 @@ fn compact_candidate_card(
         })
         .take(12)
         .collect();
+    let usable_ms = source
+        .segment
+        .as_ref()
+        .map(|segment| segment.span_ms())
+        .or(source.duration_ms);
     let mut card = json!({
         "candidateIndex": index,
         "assetId": source.asset_id,
         "kind": source.kind,
         "durationMs": source.segment.as_ref().map(|segment| segment.span_ms()).or(source.duration_ms),
+        "usableMs": usable_ms,
         "hasKeyframeGrid": source.keyframe_grid_path.is_some(),
         "keyframeGridAttached": keyframe_grid_attached,
         "keyframeTimesMs": source.keyframes.iter().map(|frame| frame.time_ms).collect::<Vec<_>>(),
@@ -762,6 +768,7 @@ fn phase3_pool_cards(
     pools: &[BeatCandidatePool],
     beats: &[StoryboardBeat],
     attached_asset_ids: &HashSet<String>,
+    speech_timing: &super::timing::SpeechTiming,
 ) -> Vec<Value> {
     pools
         .iter()
@@ -789,6 +796,7 @@ fn phase3_pool_cards(
                 "requiredVisual": beat.map(|item| item.required_visual.as_str()).unwrap_or(""),
                 "visualKeywords": beat.map(|item| item.visual_keywords.clone()).unwrap_or_default(),
                 "narration": beat.map(|item| item.narration.as_str()).unwrap_or(""),
+                "narrationMs": speech_timing.duration(&pool.beat_id),
                 "onScreenText": beat.map(|item| item.on_screen_text.as_str()).unwrap_or(""),
                 "candidates": cards
             }))
@@ -2123,7 +2131,7 @@ mod tests {
             candidates: (0..12).map(|i| source(&format!("a{i}"))).collect(),
             scores: vec![],
         };
-        let cards = phase3_pool_cards(&[pool], &[], &HashSet::new());
+        let cards = phase3_pool_cards(&[pool], &[], &HashSet::new(), &Default::default());
         assert_eq!(cards.len(), 1);
         assert_eq!(
             cards[0]["candidates"].as_array().map(|items| items.len()),
@@ -2153,6 +2161,7 @@ pub(crate) fn phase3_select(
         &rough.candidate_pools,
         &rough.beats,
         &attached_asset_ids,
+        &rough.speech_timing,
     ))
     .unwrap_or_else(|_| "[]".to_owned());
     let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
@@ -2171,7 +2180,8 @@ pub(crate) fn phase3_select(
         Candidate pools (pick ONLY from each beat's candidates): {candidate_cards_json}\n\
         {feedback_context}\n\n\
         Keyframe grids are attached below for some candidate assetIds (2x2 overview). Candidates with keyframeGridAttached=false have no image in this request — judge them from visualTags only.\n\
-        Each pool lists requiredVisual, visualKeywords, narration/onScreenText for that beat. Use those frames and tags to judge which assets best match each beat's purpose/requiredVisual/visualKeywords.\n\
+        Each pool lists requiredVisual, visualKeywords, narration/onScreenText and narrationMs for that beat. Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
+        If a beat's narrationMs is longer than the selected candidate's usableMs, do not add a second shot. Either pick another candidateIndex 0-4 with enough usableMs, or move words once to the previous or next beat by returning narration on those two selections. Concatenating all beat narrations (with spaces) must still equal the spoken script.\n\
         retrievalScore and matchedKeywords are a local shortlist hint only — final choice must follow visible evidence in the frames/tags, not the score alone.\n\
         Select the entire sequence together, including transitions across beat boundaries. Match the actual visual evidence first.\n\
         Prefer an establishing view followed by an informative detail, preserve complete actions, and keep subject/screen direction coherent. Avoid consecutive near-identical views; choose an opening that shows the subject and an ending that shows the result. Do not invent camera motion or events absent from the frames.\n\
@@ -2185,8 +2195,8 @@ pub(crate) fn phase3_select(
         Return candidateIndexes using the exact zero-based candidateIndex values from that beat's pool, in playback order. Rust resolves the asset, segment and source range.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then candidateIndexes must be [].\n\
         Do NOT return assetIds, segmentIds or source ranges. sceneSegments describe context, not additional selectable candidates.\n\n\
-        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"candidateIndexes\":[0],\"uncovered\":false}}]}}\n\
-        Include exactly one selection object per covered beat id listed above.",
+        Return JSON only: {{\"selections\":[{{\"beatId\":\"...\",\"candidateIndexes\":[0],\"uncovered\":false,\"narration\":null}}]}}\n\
+        Include exactly one selection object per covered beat id listed above. Omit narration unless you are moving words to a neighbor beat.",
         rough.title,
         rough.summary,
         rough.target_duration_ms,
@@ -2323,6 +2333,8 @@ struct Phase3BeatSelection {
     candidate_indexes: Vec<usize>,
     #[serde(default)]
     uncovered: bool,
+    #[serde(default)]
+    narration: Option<String>,
 }
 
 fn covered_beat_ids(rough: &RoughStoryboard) -> Vec<String> {
@@ -2466,13 +2478,23 @@ fn assemble_phase3_selection(
         }
     }
 
+    let mut beats = rough.beats.clone();
+    for (beat_id, selection) in &by_beat {
+        let Some(narration) = selection.narration.as_ref() else {
+            continue;
+        };
+        if let Some(beat) = beats.iter_mut().find(|beat| beat.id == *beat_id) {
+            beat.narration = narration.clone();
+        }
+    }
+
     Ok(StoryboardContent {
         brief: brief.to_owned(),
         title: rough.title.clone(),
         summary: rough.summary.clone(),
         target_duration_ms: rough.target_duration_ms,
         script_mode: rough.script_mode.clone(),
-        beats: rough.beats.clone(),
+        beats,
         uncovered_beat_ids: uncovered,
         shots,
     })

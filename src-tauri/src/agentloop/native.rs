@@ -638,7 +638,11 @@ fn drive_native_loop(
             } else {
                 execute(&call, tool_step_number)?
             };
-            if call.name == "generate_storyboard" && result["code"] == "storyboard_selection_failed"
+            if call.name == "generate_storyboard"
+                && matches!(
+                    result["code"].as_str(),
+                    Some("storyboard_selection_failed") | Some("storyboard_needs_user_decision")
+                )
             {
                 exhausted_storyboard = Some(result.clone());
             }
@@ -646,6 +650,9 @@ fn drive_native_loop(
             let result_status = result["status"].as_str();
             if result_status == Some("needs_confirmation") {
                 storyboard_confirmation_pending = true;
+                receipt.needs_confirmation = true;
+            }
+            if result["code"] == "storyboard_needs_user_decision" {
                 receipt.needs_confirmation = true;
             }
             if is_project_observation && result_status == Some("ok") {
@@ -2989,6 +2996,22 @@ mod tests {
         assert!(failure["responseInstruction"]
             .as_str()
             .is_some_and(|text| text.contains("confirm")));
+    }
+
+    #[test]
+    fn short_window_asks_the_user_instead_of_failing_selection() {
+        let failure = safe_tool_failure_context(
+            "generate_storyboard",
+            r#"storyboard_needs_user_decision: a locked shot is shorter than its spoken beat after model repair. Ask the user how to continue. Do not persist this board. facts=[{"beatId":"engineered-together","narrationMs":3370}]"#,
+        );
+        assert_eq!(failure["code"], "storyboard_needs_user_decision");
+        assert_eq!(failure["retryable"], false);
+        assert!(failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("Ask the user")));
+        assert!(!failure["recovery"]
+            .as_str()
+            .is_some_and(|text| text.contains("partialCandidateSummary")));
     }
 
     #[test]

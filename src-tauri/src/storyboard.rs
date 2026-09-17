@@ -3,6 +3,7 @@
 
 pub(crate) mod clip;
 mod keyframes;
+mod length;
 pub(crate) mod multimodal;
 pub(crate) mod phase4;
 pub(crate) mod phases;
@@ -951,7 +952,8 @@ pub(crate) fn resolve_voiceover_script(
 /// Phase5 失败是否属于精修可修（应回 Phase4）；否则视为结构/硬边界，不要空转 Phase4。
 fn phase5_should_retry_phase4(error: &str) -> bool {
     if error.starts_with("beat_audio_timing:") {
-        return true;
+        // 窗已经是锁段可用上限时，再回 Phase 4 只能空转拉窗。
+        return false;
     }
     let lower = error.to_ascii_lowercase();
     if lower.contains("between 1 and") && (lower.contains("shots") || lower.contains("beats")) {
@@ -2194,6 +2196,9 @@ mod tests {
         assert!(phase5_should_retry_phase4(
             "Storyboard cannot reuse overlapping video source ranges across beats."
         ));
+        assert!(!phase5_should_retry_phase4(
+            "beat_audio_timing: beat 'engineered-together' needs 3370ms of picture but has no shots. Affected shot indices: 6."
+        ));
     }
 
     #[test]
@@ -2943,17 +2948,30 @@ fn generate_storyboard_internal(
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 选 1–3 镜（传输/语义预算分离；失败带 previousShots）
+    // Phase 3: 选 1–3 镜；窗短于旁白时再问选片模型，不把拉窗丢给 Phase 4。
     let selected = {
         let mut repair: Option<RepairPacket> = None;
         let mut selected = None;
+        let mut last_candidate: Option<StoryboardContent> = None;
         let mut budget = StepRetryBudget::new("Phase 3");
         loop {
             crate::execution_deadline::check()?;
             let attempt = budget.semantic_attempt_number();
             log::info!("Phase 3 attempt {attempt}: select 2-3 assets per beat");
             match phases::phase3_select(&access, brief, &rough, repair.as_ref()) {
-                Ok((candidate, issues)) => {
+                Ok((mut candidate, mut issues)) => {
+                    let alignment = audio_first
+                        .as_ref()
+                        .map(|(duration, prepared)| (&prepared.alignment, *duration));
+                    issues.extend(crate::storyboard::length::sync_narration_and_timing(
+                        &mut candidate,
+                        &mut rough,
+                        alignment,
+                    ));
+                    issues.extend(crate::storyboard::length::collect_usable_window_shortfalls(
+                        &candidate, &rough,
+                    ));
+                    last_candidate = Some(candidate.clone());
                     log::info!(
                         "Phase 3 candidate: shots={}, uncovered={}, issues={}",
                         candidate.shots.len(),
@@ -3030,9 +3048,19 @@ fn generate_storyboard_internal(
             }
         }
         selected.ok_or_else(|| {
+            let issues = repair.as_ref().map(|packet| packet.issues.as_slice()).unwrap_or(&[]);
+            if crate::storyboard::length::remaining_shortfall_issues(issues) {
+                let message = crate::storyboard::length::user_decision_error(
+                    last_candidate.as_ref(),
+                    &rough,
+                    issues,
+                );
+                log::error!("{message}");
+                return message;
+            }
             let summary = partial_candidate_summary(
                 "Phase 3",
-                None,
+                last_candidate.as_ref(),
                 &rough.uncovered_beat_ids,
                 repair.as_ref(),
             );
@@ -3055,6 +3083,7 @@ fn generate_storyboard_internal(
         selected.shots.len(),
         selected.uncovered_beat_ids.len()
     );
+    narrative.beats = selected.beats.clone();
     if narrative.script_mode == "key_message" {
         let covered: Vec<String> = selected
             .beats
