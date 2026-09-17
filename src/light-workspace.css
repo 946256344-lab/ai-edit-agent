@@ -108,6 +108,8 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .cut-heading > div { min-width: 0; }
 .cut-heading h1 { margin: 0 0 6px; font: 600 24px/1.35 "Segoe UI", "Microsoft YaHei", sans-serif; letter-spacing: -.4px; color: #1b1b1b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cut-heading p { margin: 0; color: #6e6e6e; font-size: 12px; letter-spacing: .2px; }
+.storyboard-version-picker { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; color: #6e6e6e; font-size: 12px; }
+.storyboard-version-picker select { min-width: 88px; border: 1px solid #d8d4cc; border-radius: 6px; background: #fff; color: #1b1b1b; padding: 4px 8px; font-size: 12px; }
 .deliver-button { flex-shrink: 0; align-self: center; margin-top: 0; }
 .paired-workspace { display: grid; grid-template-columns: minmax(280px, 2.6fr) 8px minmax(240px, 1fr); flex: 1; min-height: 0; padding: 0 24px 20px; }
 .paired-workspace[inert] { display: none; }

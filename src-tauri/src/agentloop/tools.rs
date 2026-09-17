@@ -147,7 +147,7 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             GET_STORYBOARD,
-            "Read the current scoped storyboard version and its evidence-bound shot selections, if present.",
+            "Read the currently opened scoped storyboard version and its evidence-bound shot selections, if present. This is the version the user last opened, not always the latest.",
             json!({}),
             Vec::new(),
         ),
@@ -281,7 +281,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, look at up to nine candidate images, and pick one shot; replacements may only come from the first five. Aim for about 2-3 seconds per shot and one shot per beat; a second distinct non-similar clip is allowed only when two assets honestly fit, never to pad time. After the timeline is written, this tool renders preview and creates a new Jianying draft when clips are playable; qualityWarnings do not block preview. Completion gaps are still returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must already be the approved spoken script; if the user only gave a theme, draft the script, ask the user to confirm, and do not call this tool until they agree. Voiceover synthesizes the approved brief before beats are split; if that fails, do not generate. When the user named a finished duration, pass it as requestedDurationMs. When voiceover is off, do not write on-screen title markers unless the user asked for titles. Do not rewrite spoken narration on an existing storyboard after voiceover exists; later edits may change picture only.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, look at up to nine candidate images, and pick one shot; replacements may only come from the first five. Aim for about 2-3 seconds per shot and one shot per beat; a second distinct non-similar clip is allowed only when two assets honestly fit, never to pad time. After the timeline is written, this tool renders preview and creates a new Jianying draft when clips are playable; qualityWarnings do not block preview. Completion gaps are still returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must already be the approved spoken script; if the user only gave a theme, draft the script, ask the user to confirm, and do not call this tool until they agree. Voiceover synthesizes the approved brief before beats are split; if that fails, do not generate. When the user named a finished duration, pass it as requestedDurationMs. When voiceover is off, do not write on-screen title markers unless the user asked for titles. Do not rewrite spoken narration on an existing storyboard after voiceover exists; later edits may change picture only. Always create a new storyboard version and switch the opened version to it.",
             json!({
                 "brief": {
                     "type": ["string", "null"],

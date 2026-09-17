@@ -143,6 +143,8 @@ pub fn run() {
             assets::library::get_asset_evidence,
             storyboard::generate_storyboard,
             storyboard::get_latest_storyboard,
+            storyboard::list_storyboard_versions,
+            storyboard::get_storyboard_version,
             timeline::create_timeline_draft,
             timeline::get_latest_timeline,
             timeline::list_timeline_versions,

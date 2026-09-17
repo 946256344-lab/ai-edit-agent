@@ -61,6 +61,7 @@ pub(super) fn build_state_snapshot(
     connection: &Connection,
     project_id: &str,
     editing_task_id: &str,
+    opened_storyboard_id: Option<&str>,
 ) -> Result<String, String> {
     let custom_model = crate::custom_api::custom_api_configured_for_snapshot()?;
     let oauth_model = if custom_model {
@@ -78,6 +79,7 @@ pub(super) fn build_state_snapshot(
         connection,
         project_id,
         editing_task_id,
+        opened_storyboard_id,
         capabilities,
         database_directory(connection),
     )
@@ -87,6 +89,7 @@ fn build_state_snapshot_with_capabilities(
     connection: &Connection,
     project_id: &str,
     editing_task_id: &str,
+    opened_storyboard_id: Option<&str>,
     capabilities: SnapshotCapabilities,
     data_directory: Option<PathBuf>,
 ) -> Result<String, String> {
@@ -129,7 +132,12 @@ fn build_state_snapshot_with_capabilities(
         project_id,
     )?;
 
-    let mut storyboard = latest_storyboard(connection, project_id, editing_task_id)?;
+    let mut storyboard = scoped_storyboard(
+        connection,
+        project_id,
+        editing_task_id,
+        opened_storyboard_id,
+    )?;
     if !storyboard.id.is_empty() {
         storyboard.pending_confirmation = connection
             .query_row(
@@ -234,6 +242,39 @@ fn grouped_counts(connection: &Connection, sql: &str, project_id: &str) -> Resul
         .collect::<Result<BTreeMap<_, _>, _>>()
         .map_err(|_| "State snapshot counts could not be read.".to_owned())?;
     Ok(Counts { values })
+}
+
+fn scoped_storyboard(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+    opened_storyboard_id: Option<&str>,
+) -> Result<StoryboardSummary, String> {
+    if let Some(storyboard_id) = opened_storyboard_id.filter(|id| !id.is_empty()) {
+        let opened = connection
+            .query_row(
+                "SELECT id, version_number, content_json FROM storyboard_versions WHERE id = ?1 AND project_id = ?2 AND editing_task_id = ?3",
+                params![storyboard_id, project_id, editing_task_id],
+                |row| {
+                    let content: String = row.get(2)?;
+                    let parsed: Value = serde_json::from_str(&content)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                    Ok(StoryboardSummary {
+                        id: row.get(0)?,
+                        version: row.get(1)?,
+                        shots: parsed["shots"].as_array().map_or(0, Vec::len),
+                        uncovered: parsed["uncoveredBeatIds"].as_array().map_or(0, Vec::len),
+                        pending_confirmation: false,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| "State snapshot storyboard could not be read.".to_owned())?;
+        if let Some(opened) = opened {
+            return Ok(opened);
+        }
+    }
+    latest_storyboard(connection, project_id, editing_task_id)
 }
 
 fn latest_storyboard(
@@ -511,6 +552,7 @@ mod tests {
             &connection,
             "project-1",
             "task-1",
+            None,
             SnapshotCapabilities {
                 model: true,
                 voiceover: false,
@@ -570,6 +612,7 @@ mod tests {
             &connection,
             "project-1",
             "task-1",
+            None,
             SnapshotCapabilities {
                 model: true,
                 voiceover: true,
@@ -597,6 +640,7 @@ mod tests {
             &connection,
             "project-1",
             "task-1",
+            None,
             SnapshotCapabilities {
                 model: true,
                 voiceover: true,
@@ -606,6 +650,40 @@ mod tests {
         )
         .expect("rebuild snapshot after preview removal");
         assert!(without_preview.contains("preview: 不存在(已探测磁盘)"));
+        drop(connection);
+        fs::remove_dir_all(root).expect("remove snapshot fixture directory");
+    }
+
+    #[test]
+    fn snapshot_uses_opened_storyboard_instead_of_latest() {
+        let (connection, root) = fixture_connection();
+        seed_scope(&connection, "打开旧版");
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, status, content_json, created_at)
+                VALUES
+                    ('storyboard-old', 'project-1', 'task-1', 2, 'draft', '{"shots":[{}],"uncoveredBeatIds":[]}', 2),
+                    ('storyboard-new', 'project-1', 'task-1', 4, 'draft', '{"shots":[{},{},{}],"uncoveredBeatIds":["beat-a"]}', 3);
+                "#,
+            )
+            .expect("seed storyboard versions");
+        let snapshot = build_state_snapshot_with_capabilities(
+            &connection,
+            "project-1",
+            "task-1",
+            Some("storyboard-old"),
+            SnapshotCapabilities {
+                model: false,
+                voiceover: false,
+                jamendo: false,
+            },
+            Some(root.clone()),
+        )
+        .expect("build opened snapshot");
+        assert!(snapshot.contains("storyboard: v2, shots=1, uncovered=0"));
+        assert!(!snapshot.contains("shots=3"));
+        assert!(!snapshot.contains("storyboard-old"));
         drop(connection);
         fs::remove_dir_all(root).expect("remove snapshot fixture directory");
     }
@@ -629,6 +707,7 @@ mod tests {
             &connection,
             "project-1",
             "task-1",
+            None,
             SnapshotCapabilities {
                 model: false,
                 voiceover: false,

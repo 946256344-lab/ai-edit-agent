@@ -27,7 +27,7 @@ use crate::models::{
     TimelineContent,
 };
 use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -3286,32 +3286,90 @@ pub fn get_latest_storyboard(
     editing_task_id: String,
 ) -> Result<Option<StoryboardVersion>, String> {
     let connection = open_connection(&app)?;
-    connection.query_row(
-        "SELECT id, version_number, content_json, created_at FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC LIMIT 1",
-        params![project_id, editing_task_id],
-        |row| {
-            let content: StoryboardContent = serde_json::from_str(&row.get::<_, String>(2)?)
-                .map_err(|e| {
-                    log::warn!("Storyboard content could not be deserialized: {e}");
-                    rusqlite::Error::InvalidQuery
-                })?;
-            Ok(StoryboardVersion {
-                id: row.get(0)?,
-                project_id: project_id.clone(),
-                editing_task_id: editing_task_id.clone(),
-                version_number: row.get(1)?,
-                brief: content.brief,
-                title: content.title,
-                summary: content.summary,
-                target_duration_ms: content.target_duration_ms,
-                script_mode: content.script_mode,
-                beats: content.beats,
-                uncovered_beat_ids: content.uncovered_beat_ids,
-                shots: content.shots,
-                created_at: row.get(3)?,
-            })
-        },
-    ).optional().map_err(|_| "Storyboard version could not be read.".to_owned())
+    storyboard_versions_for_task(&connection, &project_id, &editing_task_id)?
+        .into_iter()
+        .next()
+        .map_or(Ok(None), |version| Ok(Some(version)))
+}
+
+#[tauri::command]
+pub fn list_storyboard_versions(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+) -> Result<Vec<StoryboardVersion>, String> {
+    let connection = open_connection(&app)?;
+    let task_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM editing_tasks WHERE id = ?1 AND project_id = ?2)",
+            params![editing_task_id, project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !task_exists {
+        return Err("Editing task does not belong to the current project.".to_owned());
+    }
+    storyboard_versions_for_task(&connection, &project_id, &editing_task_id)
+}
+
+#[tauri::command]
+pub fn get_storyboard_version(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    storyboard_version_id: String,
+) -> Result<StoryboardVersion, String> {
+    let connection = open_connection(&app)?;
+    let version = load_storyboard_version(&connection, &storyboard_version_id)?;
+    if version.project_id != project_id || version.editing_task_id != editing_task_id {
+        return Err("Storyboard does not belong to the current editing task.".to_owned());
+    }
+    Ok(version)
+}
+
+fn storyboard_versions_for_task(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+) -> Result<Vec<StoryboardVersion>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, version_number, content_json, created_at FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project_id, editing_task_id], |row| {
+            map_scoped_storyboard_row(project_id, editing_task_id, row)
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Storyboard versions could not be read.".to_owned())
+}
+
+fn map_scoped_storyboard_row(
+    project_id: &str,
+    editing_task_id: &str,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StoryboardVersion> {
+    let content: StoryboardContent = serde_json::from_str(&row.get::<_, String>(2)?).map_err(|error| {
+        log::warn!("Storyboard content could not be deserialized: {error}");
+        rusqlite::Error::InvalidQuery
+    })?;
+    Ok(StoryboardVersion {
+        id: row.get(0)?,
+        project_id: project_id.to_owned(),
+        editing_task_id: editing_task_id.to_owned(),
+        version_number: row.get(1)?,
+        brief: content.brief,
+        title: content.title,
+        summary: content.summary,
+        target_duration_ms: content.target_duration_ms,
+        script_mode: content.script_mode,
+        beats: content.beats,
+        uncovered_beat_ids: content.uncovered_beat_ids,
+        shots: content.shots,
+        created_at: row.get(3)?,
+    })
 }
 
 fn finalize_audio_first_timeline(

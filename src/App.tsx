@@ -607,6 +607,24 @@ function App() {
             <p>{artifactWorkspace.timeline
               ? `${(artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1)} 秒 · ${artifactWorkspace.timeline.clips.length} 个镜头 · 第 ${artifactWorkspace.timeline.versionNumber} 版`
               : analysisGate.waiting ? '等待素材分析完成…' : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
+            {artifactWorkspace.storyboardVersions.length > 0 && (
+              <label className="storyboard-version-picker">
+                故事版
+                <select
+                  value={artifactWorkspace.storyboard?.id ?? ''}
+                  onChange={(event) => {
+                    const nextId = event.target.value
+                    if (nextId) shotReplacement.actions.requestAction(() => void artifactWorkspace.actions.openStoryboard(nextId))
+                  }}
+                >
+                  {artifactWorkspace.storyboardVersions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      v{version.versionNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <button className="outline-button deliver-button" disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || artifactWorkspace.model.busy.creatingJianyingDraft || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'} onClick={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.createJianyingDraft(timeline))}>{artifactWorkspace.model.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>
         </header>}

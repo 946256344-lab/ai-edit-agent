@@ -15,6 +15,7 @@ use crate::provider::{
 };
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
@@ -103,7 +104,12 @@ pub(crate) fn run_native_tool_loop(
         history,
         request,
         &tool_directory,
-        build_state_snapshot(connection, project_id, editing_task_id),
+        build_state_snapshot(
+            connection,
+            project_id,
+            editing_task_id,
+            storyboard.as_ref().map(|board| board.id.as_str()),
+        ),
     )?;
     if let Some(options) = media_options {
         let instruction = format!(
@@ -189,11 +195,15 @@ pub(crate) fn run_native_tool_loop(
         }
         result
     };
+    let opened_storyboard_id = RefCell::new(storyboard.as_ref().map(|board| board.id.clone()));
     let mut execute = |call: &FunctionCall, step_number: usize| -> Result<Value, String> {
-        execute_native_tool(&mut state, call, step_number)
+        let result = execute_native_tool(&mut state, call, step_number)?;
+        opened_storyboard_id.replace(state.storyboard.as_ref().map(|board| board.id.clone()));
+        Ok(result)
     };
     let mut refresh_snapshot = || {
-        build_state_snapshot(connection, project_id, editing_task_id)
+        let opened = opened_storyboard_id.borrow();
+        build_state_snapshot(connection, project_id, editing_task_id, opened.as_deref())
             .map(|snapshot| Some(render_snapshot_message(&snapshot)))
             .map_err(|_| "native_state_snapshot_refresh_failed".to_owned())
     };

@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-17：列出并打开故事版版本
+
+新增只读命令 `list_storyboard_versions` 与 `get_storyboard_version`。工作台记住当前打开的故事版；Agent 快照和 `get_storyboard` 使用该版本，不是永远最新一版。`generate_storyboard` 仍始终新建版本并切到新版。见 `docs/changes/2026-09-17-storyboard-versions.md`。
+
 ## 2026-09-17：生成后自动预览并新建剪映草稿
 
 公开 Tauri 命令不变。Agent `generate_storyboard` 在时间线有可播镜头时自动 `render_preview` 并 `create_jianying_draft`（只新建、不覆盖）。`qualityWarnings` 不再推迟预览。已有配音后禁止改旁白。见 `docs/changes/2026-09-17-auto-preview-jianying.md`。
@@ -209,6 +213,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
 | `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 从段里取最多 9 个候选，模型从池中选出 1–3 个互异素材（有第二条不相似且对得上才加镜）后再精修源时间范围，本地校验后创建任务内版本。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
+| `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按版本号倒序。 |
+| `get_storyboard_version` | `{ projectId, editingTaskId, storyboardVersionId }` | `StoryboardVersion` | 读取指定故事版；必须属于当前项目和剪辑任务。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
 | `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
 | `list_timeline_versions` | `{ projectId, editingTaskId, storyboardVersionId }` | `TimelineVersion[]` | 返回同一项目、剪辑任务与 storyboard 内的时间线版本，按版本号倒序。 |
@@ -338,7 +344,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
 | `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `segmentId`、`sourceStartMs/sourceEndMs`、`shotType`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。用第一次段卡检索，不触发模型加深；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
-| `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
+| `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前打开的作用域化产物详情，不是永远最新一版。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
 | `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 对照可用窗与旁白时长 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并**新建**剪映草稿（不覆盖旧草稿）；预览或剪映失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat / 画面短于旁白等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。选中段可用窗短于该拍旁白且模型换片/拨词仍不够时，返回 `storyboard_needs_user_decision`（`retryable=false`），不落库，由 Agent 问用户；本轮不再调用 `generate_storyboard`。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |

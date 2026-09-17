@@ -7,11 +7,12 @@ import {
   createTimelineDraft,
   generateStoryboard,
   getJianyingRegistrationStatus,
-  getLatestStoryboard,
   getLatestTimeline,
   getAssetEvidence,
+  getStoryboardVersion,
   listAgentTasks,
   listOperationLogs,
+  listStoryboardVersions,
   listTimelineVersions,
   renderPreview,
   synthesizeStoryboardVoiceover,
@@ -31,6 +32,7 @@ export type TimelineState = 'not-created' | 'draft' | 'preview-generating' | 'pr
 
 export type ArtifactSessionSnapshot = {
   storyboard: StoryboardVersion | null
+  storyboardVersions: StoryboardVersion[]
   timeline: TimelineVersion | null
   preview: PreviewResult | null
   timelineState: TimelineState
@@ -124,8 +126,10 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [jianyingNoticeTone, setJianyingNoticeTone] = useState<'info' | 'error'>('info')
   const [operationLogs, setOperationLogs] = useState<StoredOperationLog[]>([])
   const [timelineVersions, setTimelineVersions] = useState<TimelineVersion[]>([])
+  const [storyboardVersions, setStoryboardVersions] = useState<StoryboardVersion[]>([])
   const activeTimelineRef = useRef<string | null>(null)
   const snapshotSessionRef = useRef<string | null>(null)
+  const openedStoryboardIdsRef = useRef<Map<string, string>>(new Map())
 
   // 镜头条按时间线读取源区间内关键帧，不依赖素材库当前目录和分页。
   useEffect(() => {
@@ -178,9 +182,11 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   function reset() {
     snapshotSessionRef.current = null
     activeTimelineRef.current = null
+    openedStoryboardIdsRef.current.clear()
     setStoryboard(null)
     setStoryboardBrief('')
     setStoryboardError(null)
+    setStoryboardVersions([])
     setTimeline(null)
     applyPreview(null)
     setTimelineState('not-created')
@@ -194,6 +200,13 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     if (result.storyboard) {
       setStoryboard(result.storyboard)
       setStoryboardBrief(result.storyboard.brief)
+      setStoryboardVersions((current) => [
+        result.storyboard!,
+        ...current.filter((version) => version.id !== result.storyboard?.id),
+      ])
+      if (options.sessionId) {
+        openedStoryboardIdsRef.current.set(options.sessionId, result.storyboard.id)
+      }
       setTimeline(null)
       setTimelineState('not-created')
     }
@@ -213,11 +226,14 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   }
 
   async function loadSession(projectId: string, sessionId: string): Promise<ArtifactSessionSnapshot> {
-    const latestStoryboard = await getLatestStoryboard(projectId, sessionId)
+    const versions = await listStoryboardVersions(projectId, sessionId)
+    const remembered = openedStoryboardIdsRef.current.get(sessionId)
+    const opened = versions.find((version) => version.id === remembered) ?? versions[0] ?? null
+    if (opened) openedStoryboardIdsRef.current.set(sessionId, opened.id)
     const [latestTimeline, nextOperationLogs, nextTimelineVersions] = await Promise.all([
-      latestStoryboard ? getLatestTimeline(projectId, latestStoryboard.id) : Promise.resolve(null),
+      opened ? getLatestTimeline(projectId, opened.id) : Promise.resolve(null),
       listOperationLogs(projectId, sessionId),
-      latestStoryboard ? listTimelineVersions(projectId, sessionId, latestStoryboard.id) : Promise.resolve([]),
+      opened ? listTimelineVersions(projectId, sessionId, opened.id) : Promise.resolve([]),
     ])
     const registration = latestTimeline
       ? await getJianyingRegistrationStatus(latestTimeline.timeline.id)
@@ -232,7 +248,8 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
             ? 'draft'
             : 'not-created'
     return {
-      storyboard: latestStoryboard,
+      storyboard: opened,
+      storyboardVersions: versions,
       timeline: latestTimeline?.timeline ?? null,
       preview: latestTimeline?.preview ?? null,
       timelineState: nextTimelineState,
@@ -244,6 +261,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   function applySessionSnapshot(snapshot: ArtifactSessionSnapshot) {
     setStoryboard(snapshot.storyboard)
     setStoryboardBrief(snapshot.storyboard?.brief ?? '')
+    setStoryboardVersions(snapshot.storyboardVersions)
     setTimeline(snapshot.timeline)
     activeTimelineRef.current = snapshot.timeline?.id ?? null
     if (snapshot.preview || snapshotSessionRef.current !== options.activeSessionRef.current) applyPreview(snapshot.preview)
@@ -251,6 +269,43 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     setTimelineState(snapshot.timelineState)
     setOperationLogs(snapshot.operationLogs)
     setTimelineVersions(snapshot.timelineVersions)
+  }
+
+  async function openStoryboard(storyboardVersionId: string) {
+    if (!options.projectId || !options.sessionId || isGeneratingStoryboard) return
+    const projectId = options.projectId
+    const sessionId = options.sessionId
+    const selected =
+      storyboardVersions.find((version) => version.id === storyboardVersionId) ??
+      (await getStoryboardVersion(projectId, sessionId, storyboardVersionId))
+    if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+    openedStoryboardIdsRef.current.set(sessionId, selected.id)
+    setStoryboard(selected)
+    setStoryboardBrief(selected.brief)
+    setStoryboardError(null)
+    const [latestTimeline, nextTimelineVersions] = await Promise.all([
+      getLatestTimeline(projectId, selected.id),
+      listTimelineVersions(projectId, sessionId, selected.id),
+    ])
+    if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+    const registration = latestTimeline
+      ? await getJianyingRegistrationStatus(latestTimeline.timeline.id)
+      : null
+    setTimeline(latestTimeline?.timeline ?? null)
+    activeTimelineRef.current = latestTimeline?.timeline.id ?? null
+    applyPreview(latestTimeline?.preview ?? null)
+    setTimelineVersions(nextTimelineVersions)
+    setTimelineState(
+      registration?.status === 'pending'
+        ? 'jianying-pending'
+        : registration?.status === 'registered'
+          ? 'jianying'
+          : latestTimeline?.preview
+            ? 'preview-ready'
+            : latestTimeline
+              ? 'draft'
+              : 'not-created',
+    )
   }
 
   async function refreshAudit(
@@ -284,7 +339,9 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     try {
       const generated = await generateStoryboard(projectId, sessionId, brief)
       if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+      openedStoryboardIdsRef.current.set(sessionId, generated.id)
       setStoryboard(generated)
+      setStoryboardVersions((current) => [generated, ...current.filter((version) => version.id !== generated.id)])
       setTimeline(null)
       applyPreview(null)
       setTimelineState('not-created')
@@ -510,6 +567,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   // 返回后台任务 ID，供 App 层注册 pendingEdit 并驱动 reconciliation 轮询。
   return {
     storyboard,
+    storyboardVersions,
     timeline,
     preview,
     previewNonce,
@@ -526,6 +584,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       shotImages: shotImages?.timelineId === timeline?.id ? shotImages?.images ?? {} : {},
       thumbnailNotice: shotImages?.timelineId === timeline?.id ? shotImages?.error : null,
       storyboard,
+      storyboardVersions,
       storyboardBrief,
       storyboardError,
       timeline,
@@ -546,6 +605,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     actions: {
       setStoryboardBrief,
       generateStoryboard: () => void createStoryboard(),
+      openStoryboard: (storyboardVersionId: string) => void openStoryboard(storyboardVersionId),
       createTimeline: () => void createTimeline(),
       renderPreview: () => void createPreview(),
       createJianyingDraft: (override?: TimelineVersion) => void deliverJianyingDraft(override),
