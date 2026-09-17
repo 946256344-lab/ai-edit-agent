@@ -68,7 +68,7 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 ## 12. key_message 只出字幕标记不配音（2026-09-08）
 
-`key_message` 是短目标/提纲成片：Phase 1 为每个 beat 写屏幕标记 `onScreenText`（≤24 可见字符），`narration` 留空；镜头时长按标记可读性与目标时长分配（`SpeechTiming.kind=pacing`）。时间线为每个 beat 写一条跨该 beat 镜头的标记字幕，**不自动配音**。显式 `synthesize_voiceover` 仍可用，但不得朗读 `onScreenText`，仅在 beats 仍有 narration 时合成。`full_script` 继续走口播 + audio-first + 自动配音。
+`key_message` 是短目标/提纲成片：Phase 1 默认不写 `onScreenText`，除非用户明确要求屏幕字；`narration` 留空。镜头时长按目标时长均分到各拍（无标记时每拍约 2 秒底）。时间线**不自动配音**。显式 `synthesize_voiceover` 仍可用，但不得朗读 `onScreenText`，仅在 beats 仍有 narration 时合成。`full_script` 继续走口播 + audio-first + 自动配音。
 
 ## 13. scriptMode 由系统在 Phase 1 前锁定（2026-09-08）
 

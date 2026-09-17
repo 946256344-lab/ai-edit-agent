@@ -90,6 +90,7 @@ pub(crate) fn phase1_generate_narrative(
     library_inventory: &str,
     feedback: Option<&str>,
     voiceover_duration_ms: Option<i64>,
+    requested_duration_ms: Option<i64>,
 ) -> Result<NarrativeStructure, String> {
     log::info!(
         "Phase 1: Generating narrative structure from brief (required_script_mode={required_script_mode}, inventory_chars={})",
@@ -105,20 +106,23 @@ pub(crate) fn phase1_generate_narrative(
     let mut mode_instructions = if required_script_mode == "full_script" {
         "REQUIRED scriptMode=full_script (the brief is the spoken narration to read). Do not choose key_message.\n\
         Put the exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
-        targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Aim for about 4-8 seconds of spoken narration per beat; if a beat contains more than two spoken clauses, split it further."
+        targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Split by meaning, not punctuation. Aim for about 2-3 seconds of spoken narration per beat; duration can wobble. Later selection uses one picture shot per beat."
             .to_owned()
     } else {
         "REQUIRED scriptMode=key_message (locked by the system because the brief is a goal/outline/theme, not a spoken script). Do not choose full_script.\n\
-        spokenScript=\"\", set every beat.narration to \"\", and write a short on-screen marker in beat.onScreenText in the user's language (one idea per beat, at most 24 visible characters, no emoji).\n\
-        Punchy on-screen markers only (no voiceover). Follow the user's duration if they named one (3-120 seconds). \
-        If they did not: suggest 15-45 seconds. Each picture shot should last about 2-3 seconds — a 15s cut needs about 5-7 shots, not three 5-second holds. \
-        Split beats from distinct ideas; if one beat must cover more than about 3 seconds of picture, it will need 2-3 shots later. \
+        spokenScript=\"\", set every beat.narration to \"\", and set every beat.onScreenText to \"\" unless the user explicitly asked for on-screen titles.\n\
+        Follow the user's duration if they named one (3-120 seconds). \
+        If they did not: suggest 15-45 seconds. Each beat should last about 2-3 seconds of picture — split ideas rather than holding one shot for 5 seconds. \
         Prefer a focused promo over a 60-90s essay; do not pad empty time. This is guidance, not a hard cap."
             .to_owned()
     };
     if let Some(duration_ms) = voiceover_duration_ms {
         mode_instructions.push_str(&format!(
             "\nA voiceover was already synthesized at {duration_ms}ms. Set targetDurationMs to {duration_ms}. Split spokenScript by meaning across beats so concatenating them still reproduces the script; Rust will map beats onto the TTS timestamps."
+        ));
+    } else if let Some(duration_ms) = requested_duration_ms {
+        mode_instructions.push_str(&format!(
+            "\nThe user asked for a finished video of {duration_ms}ms. Set targetDurationMs to {duration_ms}. Split into beats of about 2-3 seconds."
         ));
     }
 
@@ -140,9 +144,9 @@ pub(crate) fn phase1_generate_narrative(
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
-        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn.\n\
+        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn, about 2-3 seconds.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
-        targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or readable marker pacing (key_message).\n\
+        targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or the user's duration / 15-45s guidance (key_message).\n\
         {feedback_context}{inventory_block}"
     );
 
@@ -2160,7 +2164,7 @@ pub(crate) fn phase3_select(
     repair: Option<&RepairPacket>,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     log::info!(
-        "Phase 3: Selecting 1-3 assets per beat from {} pools (with keyframe grids)",
+        "Phase 3: Selecting one shot per beat from {} pools (with keyframe grids)",
         rough.candidate_pools.len()
     );
 
@@ -2198,8 +2202,8 @@ pub(crate) fn phase3_select(
         Hard rule: later beats MAY reuse another segment of an already used assetId, including adjacent shots, but only when the segments do not overlap and are not visually similar to ANY already selected shot.\n\
         Hard rule: never pick a candidate that is visually similar to an already selected shot (same or different assetId).\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list. With {covered_n} covered beats, that means at most {max_uses_if_one} uses if every beat has 1 shot, at most {max_uses_if_two} uses if every beat has 2 shots, or at most {max_uses_if_three} uses if every beat has 3 shots. Prefer marking the weakest beat uncovered=true over violating this limit when the pools cannot supply enough distinct assets.\n\
-        For EACH covered beat, choose 1 to 3 candidates with DISTINCT assetIds from that beat's pool, in playback order.\n\
-        Pace shots at about 2-3 seconds each. If this beat's planned duration is longer than about 3 seconds, add a second or third distinct, non-similar shot rather than holding one clip for 5+ seconds. Do not pad with similar segments.\n\
+        For EACH covered beat, choose ONE candidate from that beat's pool. A second distinct, non-similar asset is allowed only when two clips honestly fit this beat; never pad with a similar hold, and never add a third shot just to fill time. Split the beat instead.\n\
+        Picture shots should last about 2-3 seconds. Do not hold one clip for 5+ seconds.\n\
         Return candidateIndexes using the exact zero-based candidateIndex values from that beat's pool, in playback order. Rust resolves the asset, segment and source range.\n\
         You may mark a covered beat as uncovered=true only when none of its candidates honestly fit; then candidateIndexes must be [].\n\
         Do NOT return assetIds, segmentIds or source ranges. sceneSegments describe context, not additional selectable candidates.\n\n\

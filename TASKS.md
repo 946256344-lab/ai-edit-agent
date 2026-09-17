@@ -3,7 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-09-17，feature/agent-led-storyboard）：细拍、一拍一镜、模型主导生成。PR1 短窗问用户已提交。PR2：配音先于拆拍，失败不生成；词级时间戳或句内插值；`requestedDurationMs` 冲突先问。见 docs/changes/2026-09-17-tts-before-phase1.md。
+- [ ] 进行中（2026-09-17，feature/agent-led-storyboard）：细拍、一拍一镜、模型主导生成。PR1 短窗问用户、PR2 配音先于拆拍已提交。PR3：约 2–3 秒语义细拍、默认一镜，去掉 8 秒/最少拍数硬打回，关配音默认不写屏幕标记。见 docs/changes/2026-09-17-fine-beats-one-shot.md。
 - [x] 已实现（2026-09-17）：瘦安装包；BGE/CLIP 三个 `model.onnx` 安装后应用内后台下载到 app_data，校验哈希；下载不挡工作台，缺失降级。见 docs/changes/2026-09-17-runtime-model-download.md。
 - [x] 已实现并验证（2026-09-16）：素材分析四态进度与筛选、导入弹窗与预计时间、后台/取消/继续、失败重试，剪辑请求等待首次分析完成，素材重命名/批量选择/保留源文件移除；前端构建、Rust 编译、隔离交互及契约测试通过。已有字幕测试与 harness 失败见 docs/changes/2026-09-16-asset-analysis-progress.md。
 - [x] 已实现（2026-09-16）：默认在 master 提交推送；并行任务才开分支。见 docs/changes/2026-09-16-simplify-git-workflow.md。

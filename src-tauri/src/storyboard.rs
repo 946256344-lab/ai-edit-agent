@@ -38,7 +38,6 @@ use uuid::Uuid;
 /// provider never blocks the agent loop forever.
 const STORYBOARD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PHASE1_REVISIONS: usize = 3;
-const MAX_BEAT_SPOKEN_MS: i64 = 8_000;
 /// 本地处理安全上限（非创作规格）；80s 成片允许更密的切镜。
 const MAX_STORYBOARD_SHOTS: usize = 100;
 const MAX_STORYBOARD_BEATS: usize = 100;
@@ -401,7 +400,7 @@ fn storyboard_usage_counts(
 pub(crate) fn validate_storyboard(
     content: &StoryboardContent,
     sources: &[StoryboardSource],
-    brief: &str,
+    _brief: &str,
 ) -> Result<(), String> {
     if content.shots.is_empty() || content.shots.len() > MAX_STORYBOARD_SHOTS {
         return Err(storyboard_repair_message(
@@ -442,21 +441,6 @@ pub(crate) fn validate_storyboard(
             content.shots.iter().map(|shot| shot.order_index).collect(),
         ));
     }
-    if content.script_mode == "full_script" {
-        // 镜头数下限按未截断的朗读时长计算，避免短文案被强制拆成多个镜头。
-        let raw_estimated_duration = estimated_storyboard_duration_ms(brief);
-        let minimum_shot_count = ((raw_estimated_duration + 7_999) / 8_000).max(1) as usize;
-        if content.shots.len() < minimum_shot_count {
-            return Err(storyboard_repair_message(
-                format!(
-                    "Storyboard has too few shots for the supplied full-script narration. Estimated narration duration is about {} ms, so the storyboard should contain at least {} shots to keep each shot near 8 seconds or less.",
-                    raw_estimated_duration,
-                    minimum_shot_count
-                ),
-                content.shots.iter().map(|shot| shot.order_index).collect(),
-            ));
-        }
-    }
     if content.beats.is_empty() || content.beats.len() > MAX_STORYBOARD_BEATS {
         return Err(storyboard_repair_message(
             format!(
@@ -474,17 +458,6 @@ pub(crate) fn validate_storyboard(
         {
             return Err(storyboard_repair_message(
                 "Storyboard beats are invalid.",
-                content.shots.iter().map(|shot| shot.order_index).collect(),
-            ));
-        }
-        if estimated_storyboard_duration_ms(&beat.narration) > MAX_BEAT_SPOKEN_MS {
-            return Err(storyboard_repair_message(
-                format!(
-                    "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
-                    beat.id,
-                    estimated_storyboard_duration_ms(&beat.narration),
-                    MAX_BEAT_SPOKEN_MS
-                ),
                 content.shots.iter().map(|shot| shot.order_index).collect(),
             ));
         }
@@ -778,6 +751,7 @@ fn estimated_storyboard_duration_ms(brief: &str) -> i64 {
     (words * 300.0).round() as i64
 }
 
+#[cfg(test)]
 fn minimum_storyboard_duration(brief: &str) -> i64 {
     estimated_storyboard_duration_ms(brief).clamp(10_000, 120_000)
 }
@@ -851,56 +825,29 @@ fn short_brief_duration_issue(
     (!issues.is_empty()).then(|| issues.join("; "))
 }
 
-/// key_message：每 beat 需有 ≤24 字屏幕标记；Σ 可读性下限不得超过目标软帽。
-/// 可念稿 brief 在 Phase 1 前已由系统锁成 full_script，此处通常不会再进入。
-/// 时长跟所选 target 走，不再夹 15 秒硬帽。
+/// key_message：默认不写屏幕标记。模型若写了，只拦超过 24 字的标记。
 fn key_message_marker_issue(
-    brief: &str,
-    narrative: &mut phases::NarrativeStructure,
+    _brief: &str,
+    narrative: &phases::NarrativeStructure,
 ) -> Option<String> {
     if narrative.script_mode != "key_message" {
         return None;
     }
-    if brief_has_substantial_speakable_copy(brief) {
-        return None;
-    }
     let mut issues = Vec::new();
-    let mut floor_sum = 0_i64;
-    for beat in &mut narrative.beats {
-        if beat.on_screen_text.trim().is_empty() {
-            let fallback = subtitle_text_from_narration(&beat.narration);
-            if !fallback.is_empty() {
-                beat.on_screen_text = fallback.chars().take(24).collect();
-            }
-        }
+    for beat in &narrative.beats {
         let marker = beat.on_screen_text.trim();
         if marker.is_empty() {
-            issues.push(format!(
-                "Beat '{}' is missing onScreenText; key_message beats need a short on-screen marker (≤24 visible characters).",
-                beat.id
-            ));
             continue;
         }
         let visible = marker.chars().filter(|ch| !ch.is_whitespace()).count();
         if visible > 24 {
             issues.push(format!(
-                "Beat '{}' onScreenText has {visible} visible characters; keep markers at most 24.",
+                "Beat '{}' onScreenText has {visible} visible characters; keep titles at most 24.",
                 beat.id
             ));
         }
-        floor_sum += crate::storyboard::timing::marker_readability_floor_ms(marker);
     }
-    if !issues.is_empty() {
-        return Some(issues.join("; "));
-    }
-    let soft_limit = ((narrative.target_duration_ms.max(1) as f64) * 1.2).round() as i64;
-    if floor_sum > soft_limit {
-        return Some(format!(
-            "key_message marker readability floors sum to about {floor_sum} ms but targetDurationMs is {} ms (limit {soft_limit} ms); shorten onScreenText markers or reduce beats",
-            narrative.target_duration_ms
-        ));
-    }
-    None
+    (!issues.is_empty()).then(|| issues.join("; "))
 }
 
 /// 按系统已锁定的 scriptMode 补齐 spokenScript / 目标时长；不再依赖模型自选后再升/降级。
@@ -1133,8 +1080,6 @@ fn normalize_storyboard_candidate_scoped(
         .map(|beat| {
             let marker = if !beat.on_screen_text.trim().is_empty() {
                 beat.on_screen_text.trim().to_owned()
-            } else if !beat.narration.trim().is_empty() {
-                subtitle_text_from_narration(&beat.narration)
             } else {
                 String::new()
             };
@@ -1963,31 +1908,25 @@ mod tests {
     }
 
     #[test]
-    fn key_message_rejects_markers_that_exceed_target_pacing() {
-        // 5 个合法长度标记的可读性下限之和会超过 12s 目标的 1.2 倍软帽。
+    fn key_message_rejects_markers_longer_than_twenty_four_characters() {
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
-            beats: (0..5)
-                .map(|index| StoryboardBeat {
-                    id: format!("b{index}"),
-                    purpose: "p".to_owned(),
-                    required_visual: "v".to_owned(),
-                    visual_keywords: vec![],
-                    narration: String::new(),
-                    on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWX".to_owned(),
-                })
-                .collect(),
+            beats: vec![StoryboardBeat {
+                id: "a".to_owned(),
+                purpose: "p".to_owned(),
+                required_visual: "v".to_owned(),
+                visual_keywords: vec![],
+                narration: String::new(),
+                on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWXY".to_owned(),
+            }],
         };
         let issue = key_message_marker_issue("帮我做个短片", &mut narrative)
-            .expect("overlong key_message markers should be rejected");
-        assert!(
-            issue.contains("readability") || issue.contains("shorten") || issue.contains("marker"),
-            "issue={issue}"
-        );
+            .expect("overlong titles should be rejected");
+        assert!(issue.contains("24") || issue.contains("characters"), "issue={issue}");
     }
 
     #[test]
@@ -2033,7 +1972,7 @@ mod tests {
     }
 
     #[test]
-    fn longer_runtime_brief_still_requires_key_message_markers() {
+    fn key_message_allows_empty_on_screen_text() {
         let mut narrative = NarrativeStructure {
             title: "t".to_owned(),
             summary: "s".to_owned(),
@@ -2049,24 +1988,6 @@ mod tests {
                 on_screen_text: String::new(),
             }],
         };
-        let missing = key_message_marker_issue("帮我做个长一点的短片", &mut narrative)
-            .expect("longer runtime must not skip empty-marker checks");
-        assert!(
-            missing.contains("onScreenText") || missing.contains("marker"),
-            "issue={missing}"
-        );
-
-        // 5×24 字标记的可读性下限约 16.7s，低于 1.2×60s。
-        narrative.beats = (0..5)
-            .map(|index| StoryboardBeat {
-                id: format!("b{index}"),
-                purpose: "p".to_owned(),
-                required_visual: "v".to_owned(),
-                visual_keywords: vec![],
-                narration: String::new(),
-                on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWX".to_owned(),
-            })
-            .collect();
         assert!(key_message_marker_issue("帮我做个长一点的短片", &mut narrative).is_none());
     }
 
@@ -2246,13 +2167,12 @@ mod tests {
     }
 
     #[test]
-    fn full_script_rejects_too_few_shots_for_long_narration() {
+    fn full_script_allows_one_shot_for_long_narration() {
         let brief = std::iter::repeat("word")
             .take(120)
             .collect::<Vec<_>>()
             .join(" ");
-        // 120 词 ≈ 36s，至少 5 个镜头。content 只有 1 个镜头。
-        assert!(validate_storyboard(&content("direct"), &[source()], &brief).is_err());
+        assert!(validate_storyboard(&content("direct"), &[source()], &brief).is_ok());
     }
 
     #[test]
@@ -2293,14 +2213,13 @@ mod tests {
     }
 
     #[test]
-    fn beat_narration_longer_than_limit_is_rejected() {
+    fn beat_narration_longer_than_eight_seconds_is_allowed() {
         let mut storyboard = content("direct");
-        // 40 个词 ≈ 12s，超过 8s 上限。
         storyboard.beats[0].narration = std::iter::repeat("word")
             .take(40)
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(validate_storyboard(&storyboard, &[source()], "brief").is_err());
+        assert!(validate_storyboard(&storyboard, &[source()], "brief").is_ok());
     }
 
     #[test]
@@ -2764,46 +2683,18 @@ fn generate_storyboard_internal(
             &library_inventory,
             phase1_feedback.as_deref(),
             voiceover_duration_ms,
+            requested_duration_ms.filter(|value| *value > 0),
         ) {
             Ok(candidate) => {
                 let mut candidate = candidate;
                 enforce_decided_script_mode(brief, required_script_mode, &mut candidate);
-                let estimated_duration = minimum_storyboard_duration(brief);
-                let minimum_shot_count =
-                    ((estimated_duration + 7_999) / 8_000).max(1) as usize;
-                let beat_issue = (candidate.script_mode == "full_script"
-                    && candidate.beats.len() < minimum_shot_count)
-                    .then(|| {
-                        format!(
-                            "Storyboard should contain at least {} beats for the estimated {} ms of full-script narration; only {} beats were provided.",
-                            minimum_shot_count, estimated_duration, candidate.beats.len()
-                        )
-                    });
-                let narration_issue = (candidate.script_mode == "full_script")
-                    .then(|| {
-                        candidate.beats.iter().find(|beat| {
-                            estimated_storyboard_duration_ms(&beat.narration) > MAX_BEAT_SPOKEN_MS
-                        })
-                    })
-                    .flatten()
-                    .map(|beat| {
-                        format!(
-                            "Beat '{}' narration reads for about {} ms, exceeding the {} ms per-beat limit; split it into shorter beats.",
-                            beat.id,
-                            estimated_storyboard_duration_ms(&beat.narration),
-                            MAX_BEAT_SPOKEN_MS
-                        )
-                    });
                 let duration_issue = if media_options.is_some_and(|options| options.voiceover) {
                     None
                 } else {
                     short_brief_duration_issue(brief, &candidate, required_script_mode)
                 };
-                let key_message_issue = key_message_marker_issue(brief, &mut candidate);
-                let issue = beat_issue
-                    .or(narration_issue)
-                    .or(duration_issue)
-                    .or(key_message_issue);
+                let key_message_issue = key_message_marker_issue(brief, &candidate);
+                let issue = duration_issue.or(key_message_issue);
                 if issue.is_none() {
                     Some(candidate)
                 } else {
