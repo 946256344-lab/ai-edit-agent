@@ -363,6 +363,31 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           '本地预览已经生成，可以直接查看。',
         )
       }
+      try {
+        const draft = await createJianyingDraft(previewTimeline.id)
+        if (options.activeProjectRef.current !== projectId || options.activeSessionRef.current !== sessionId) return
+        const draftName = draftNameFromResult(draft.draftDirectory)
+        const pending = draft.registrationStatus === 'pending'
+        setTimelineState(pending ? 'jianying-pending' : 'jianying')
+        setJianyingNoticeTone('info')
+        setJianyingNotice(
+          pending
+            ? `草稿「${draftName}」已写好，但剪映正在运行，列表还不会刷新。请完全退出剪映后再打开，即可看到。`
+            : `草稿「${draftName}」已生成并注册。请在剪映本地草稿箱中查找该名称；若剪映已打开，请重启后再看。`,
+        )
+        if (options.session?.conversationId) {
+          await options.appendAgentMessage(
+            options.session.conversationId,
+            sessionId,
+            pending
+              ? `剪映草稿「${draftName}」已生成，等待退出剪映后自动注册。`
+              : `剪映草稿「${draftName}」已交付，可在剪映本地草稿中打开。`,
+          )
+        }
+      } catch (error) {
+        setJianyingNoticeTone('error')
+        setJianyingNotice(jianyingDeliverErrorMessage(error))
+      }
     } catch {
       if (options.activeProjectRef.current === projectId && options.activeSessionRef.current === sessionId) {
         setStoryboardError('没能生成可用镜头方案；没有修改现有版本。请确认素材分析已完成后重试。')

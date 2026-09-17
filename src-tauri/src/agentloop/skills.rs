@@ -543,6 +543,61 @@ pub(super) fn upsert_timeline(timelines: &mut Vec<TimelineVersion>, updated: Tim
     upsert(timelines, updated)
 }
 
+fn deliver_playable_preview_and_jianying(
+    app: tauri::AppHandle,
+    timeline: &TimelineVersion,
+    message: &mut String,
+) -> (
+    Option<crate::models::PreviewResult>,
+    Option<crate::models::JianyingDraftResult>,
+    Option<String>,
+    Option<String>,
+) {
+    if timeline.clips.is_empty() {
+        message.push_str(" 时间线没有可播镜头，跳过预览和剪映草稿。");
+        return (
+            None,
+            None,
+            Some("preview skipped: timeline has no playable clips".to_owned()),
+            None,
+        );
+    }
+    let (preview, preview_error) = match render_preview(app.clone(), timeline.id.clone()) {
+        Ok(preview) => {
+            message.push_str("\n预览也已生成。");
+            (Some(preview), None)
+        }
+        Err(error) => {
+            message.push_str(" 但预览生成失败，请稍后重试。 ");
+            (None, Some(error))
+        }
+    };
+    let (jianying_draft, jianying_error) = match create_jianying_draft(app, timeline.id.clone()) {
+        Ok(draft) => {
+            let draft_name = Path::new(&draft.draft_directory)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Assembly Video Agent");
+            if draft.registration_status == "pending" {
+                message.push_str(&format!(
+                    " 已新建剪映草稿\u{201c}{draft_name}\u{201d}，剪映正在运行，退出后会自动完成注册。"
+                ));
+            } else {
+                message.push_str(&format!(
+                    " 已新建剪映草稿\u{201c}{draft_name}\u{201d}，可在剪映本地草稿中查看。"
+                ));
+            }
+            (Some(draft), None)
+        }
+        Err(error) => {
+            let brief = error.chars().take(160).collect::<String>();
+            message.push_str(&format!(" 剪映草稿未创建：{brief}。"));
+            (None, Some(error))
+        }
+    };
+    (preview, jianying_draft, preview_error, jianying_error)
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 技能执行器
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1086,62 +1141,40 @@ pub(super) fn apply_skill(
                     }
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
-                    // 收尾缺口才推迟预览；自动配音 fit 失败只进 qualityWarnings，不挡预览。
-                    let preview_result = if completion_gaps.is_empty() {
-                        render_preview(state.app.clone(), timeline_version_id.clone())
-                    } else {
-                        // 缺口未闭合时先跳过预览，避免把不完整时间线当作成片收据。
-                        Err("preview deferred until completion gaps are repaired".to_owned())
-                    };
-                    match preview_result {
-                        Ok(preview) => {
-                            message.push_str("预览也已生成。");
-                            state.last_outcome = Some(AgentEditResult {
-                                agent_task_id,
-                                message,
-                                storyboard: Some(generated),
-                                timeline: Some(timeline),
-                                preview: Some(preview),
-                                jianying_draft: None,
-                            });
-                            Ok(json!({
-                                "tool": "generate_storyboard",
-                                "status": "ok",
-                                "storyboardVersionId": storyboard_version_id,
-                                "timelineVersionId": timeline_version_id,
-                                "previewTimelineVersionId": timeline_version_id,
-                                "versionNumber": version_number,
-                                "qualityWarnings": quality_warnings,
-                                "requestedMedia": media_options,
-                            }))
-                        }
-                        Err(error) => {
-                            if quality_warnings.is_empty() {
-                                message.push_str(" 但预览生成失败，请稍后重试。 ");
-                            } else {
-                                message.push_str(
-                                    " 预览已推迟，请先用 insert_clips/change_clip_duration/replace_clips 补齐缺口后再渲染。",
-                                );
-                            }
-                            state.last_outcome = Some(AgentEditResult {
-                                agent_task_id,
-                                message,
-                                storyboard: Some(generated),
-                                timeline: Some(timeline),
-                                preview: None,
-                                jianying_draft: None,
-                            });
-                            Ok(json!({
-                                "tool": "generate_storyboard",
-                                "status": "ok",
-                                "storyboardVersionId": storyboard_version_id,
-                                "timelineVersionId": timeline_version_id,
-                                "versionNumber": version_number,
-                                "previewError": error,
-                                "qualityWarnings": quality_warnings,
-                            }))
-                        }
+                    // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
+                    let (preview, jianying_draft, preview_error, jianying_error) =
+                        deliver_playable_preview_and_jianying(
+                            state.app.clone(),
+                            &timeline,
+                            &mut message,
+                        );
+                    let mut result = json!({
+                        "tool": "generate_storyboard",
+                        "status": "ok",
+                        "storyboardVersionId": storyboard_version_id,
+                        "timelineVersionId": timeline_version_id,
+                        "versionNumber": version_number,
+                        "qualityWarnings": quality_warnings,
+                        "requestedMedia": media_options,
+                    });
+                    if preview.is_some() {
+                        result["previewTimelineVersionId"] = json!(timeline_version_id);
                     }
+                    if let Some(error) = preview_error {
+                        result["previewError"] = json!(error);
+                    }
+                    if let Some(error) = jianying_error {
+                        result["jianyingError"] = json!(error);
+                    }
+                    state.last_outcome = Some(AgentEditResult {
+                        agent_task_id,
+                        message,
+                        storyboard: Some(generated),
+                        timeline: Some(timeline),
+                        preview,
+                        jianying_draft,
+                    });
+                    Ok(result)
                 }
                 Err(error) => {
                     message.push_str("\n\n时间线自动生成失败，请稍后重试。 ");

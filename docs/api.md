@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-17：生成后自动预览并新建剪映草稿
+
+公开 Tauri 命令不变。Agent `generate_storyboard` 在时间线有可播镜头时自动 `render_preview` 并 `create_jianying_draft`（只新建、不覆盖）。`qualityWarnings` 不再推迟预览。已有配音后禁止改旁白。见 `docs/changes/2026-09-17-auto-preview-jianying.md`。
+
 ## 2026-09-17：Phase 3 每拍单独看 9 图
 
 公开 Tauri 命令不变。Phase 3 每一拍单独看最多 9 张候选图，主选/替补只允许序号 0–4。失败只重试该拍。整条选不出镜头时返回 `storyboard_needs_user_decision`。见 `docs/changes/2026-09-17-per-beat-p3.md`。
@@ -337,7 +341,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前 task 的最新作用域化产物详情。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
-| `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 对照可用窗与旁白时长 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。若存在 uncovered / 无镜头的覆盖 beat / 画面短于旁白等缺口，结果仍为 `status=ok` 但带 `qualityWarnings` 并推迟 preview，由精炼续步补齐。选中段可用窗短于该拍旁白且模型换片/拨词仍不够时，返回 `storyboard_needs_user_decision`（`retryable=false`），不落库，由 Agent 问用户；本轮不再调用 `generate_storyboard`。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
+| `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 对照可用窗与旁白时长 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并**新建**剪映草稿（不覆盖旧草稿）；预览或剪映失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat / 画面短于旁白等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。选中段可用窗短于该拍旁白且模型换片/拨词仍不够时，返回 `storyboard_needs_user_decision`（`retryable=false`），不落库，由 Agent 问用户；本轮不再调用 `generate_storyboard`。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |

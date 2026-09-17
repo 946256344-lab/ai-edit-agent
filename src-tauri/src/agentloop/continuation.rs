@@ -222,7 +222,7 @@ fn refine_message(facts: &[RefineFact]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "The last function succeeded and left a real artifact, but completeness warnings remain ({summary}). Do not treat this as a finished edit. Call an allowed function to adjust clips, text, duration, or voiceover, then re-render preview if one already exists. Do not recreate a storyboard that is waiting for confirmation. If the warnings cannot be improved, a later natural-language explanation will be accepted."
+        "The last function succeeded and left a real artifact, but completeness warnings remain ({summary}). Do not treat this as a finished edit. Call an allowed function to adjust clips or duration, then re-render preview if needed. Do not rewrite spoken narration after voiceover exists. Do not recreate a storyboard that is waiting for confirmation. If the warnings cannot be improved, a later natural-language explanation will be accepted."
     )
 }
 
