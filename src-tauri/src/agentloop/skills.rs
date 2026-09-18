@@ -4,6 +4,7 @@
 //! 结果或更新 `LoopState::last_outcome`。工具白名单、作用域校验和审计记录由调用方
 //! (`runtime.rs`) 在调用前后负责。
 
+use crate::handoff::deliver::deliver_to_editor;
 use crate::jianying::create_jianying_draft;
 use crate::models::{
     AgentEditResult, ClipAdjustmentParams, ClipInsertionParams, ClipReplacementParams, MusicCue,
@@ -543,7 +544,7 @@ pub(super) fn upsert_timeline(timelines: &mut Vec<TimelineVersion>, updated: Tim
     upsert(timelines, updated)
 }
 
-fn deliver_playable_preview_and_jianying(
+fn deliver_playable_preview_and_editor(
     app: tauri::AppHandle,
     timeline: &TimelineVersion,
     message: &mut String,
@@ -554,7 +555,7 @@ fn deliver_playable_preview_and_jianying(
     Option<String>,
 ) {
     if timeline.clips.is_empty() {
-        message.push_str(" 时间线没有可播镜头，跳过预览和剪映草稿。");
+        message.push_str(" 时间线没有可播镜头，跳过预览和编辑器交付。");
         return (
             None,
             None,
@@ -572,30 +573,18 @@ fn deliver_playable_preview_and_jianying(
             (None, Some(error))
         }
     };
-    let (jianying_draft, jianying_error) = match create_jianying_draft(app, timeline.id.clone()) {
-        Ok(draft) => {
-            let draft_name = Path::new(&draft.draft_directory)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Assembly Video Agent");
-            if draft.registration_status == "pending" {
-                message.push_str(&format!(
-                    " 已新建剪映草稿\u{201c}{draft_name}\u{201d}，剪映正在运行，退出后会自动完成注册。"
-                ));
-            } else {
-                message.push_str(&format!(
-                    " 已新建剪映草稿\u{201c}{draft_name}\u{201d}，可在剪映本地草稿中查看。"
-                ));
-            }
-            (Some(draft), None)
+    let (jianying_draft, editor_error) = match deliver_to_editor(app, timeline.id.clone(), None) {
+        Ok(result) => {
+            message.push_str(&format!(" {}", result.message));
+            (result.jianying, None)
         }
         Err(error) => {
             let brief = error.chars().take(160).collect::<String>();
-            message.push_str(&format!(" 剪映草稿未创建：{brief}。"));
+            message.push_str(&format!(" 编辑器交付未完成：{brief}。"));
             (None, Some(error))
         }
     };
-    (preview, jianying_draft, preview_error, jianying_error)
+    (preview, jianying_draft, preview_error, editor_error)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1142,8 +1131,8 @@ pub(super) fn apply_skill(
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
                     // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
-                    let (preview, jianying_draft, preview_error, jianying_error) =
-                        deliver_playable_preview_and_jianying(
+                    let (preview, jianying_draft, preview_error, editor_error) =
+                        deliver_playable_preview_and_editor(
                             state.app.clone(),
                             &timeline,
                             &mut message,
@@ -1163,7 +1152,7 @@ pub(super) fn apply_skill(
                     if let Some(error) = preview_error {
                         result["previewError"] = json!(error);
                     }
-                    if let Some(error) = jianying_error {
+                    if let Some(error) = editor_error {
                         result["jianyingError"] = json!(error);
                     }
                     state.last_outcome = Some(AgentEditResult {

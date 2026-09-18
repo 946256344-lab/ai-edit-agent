@@ -11,6 +11,7 @@ import { RoughCutPreview } from './components/RoughCutPreview'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
+import { EditorOutputPort } from './components/EditorOutputPort'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import { useSessionArtworkController } from './hooks/useSessionArtworkController'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
@@ -92,16 +93,9 @@ function App() {
     activeProjectRef,
     activeSessionRef: activeEditingSessionRef,
     setAgentTasks,
-    setMessages,
     appendAgentMessage: (conversationId, sessionId, content) => (
       appendStoredMessage(conversationId, sessionId, 'agent', content)
     ),
-    setSessionBrief: (sessionId, brief) => {
-      setEditingSessions((current) => current.map((session) => (
-        session.id === sessionId ? { ...session, brief } : session
-      )))
-    },
-    selectView: setActiveView,
   })
   const agentReconciliation = useAgentRunReconciliation({
     desktopRuntime,
@@ -479,7 +473,6 @@ function App() {
         projectId,
         sessionId,
         conversationId,
-        resolved.context.storyboardVersionId,
       )
     } catch (error) {
       setIsSending(false)
@@ -626,7 +619,15 @@ function App() {
               </label>
             )}
           </div>
-          <button className="outline-button deliver-button" disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || artifactWorkspace.model.busy.creatingJianyingDraft || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'} onClick={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.createJianyingDraft(timeline))}>{artifactWorkspace.model.busy.creatingJianyingDraft ? '正在生成草稿…' : '生成剪映草稿 ↗'}</button>
+          <EditorOutputPort
+            linkers={artifactWorkspace.model.editorCatalog.linkers}
+            selectedId={artifactWorkspace.model.selectedEditorId}
+            deliverLabel={artifactWorkspace.model.deliverLabel}
+            disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'}
+            busy={artifactWorkspace.model.busy.delivering}
+            onSelect={(editorId) => artifactWorkspace.actions.setOutputEditor(editorId)}
+            onDeliver={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.deliverToEditor(timeline))}
+          />
         </header>}
         {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
         <PairedWorkspace
@@ -659,7 +660,7 @@ function App() {
                   setInput(value)
                   if (composerNotice) setComposerNotice(null)
                 },
-                openArtifacts: () => setActiveView('artifacts'),
+                openArtifacts: () => setActiveView('chat'),
                 toggleMedia: composerMedia.toggle,
                 sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage()) },
                 retryAnalysis: assetWorkspace.actions.retryFailed,

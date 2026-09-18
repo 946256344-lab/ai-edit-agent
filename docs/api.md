@@ -1,5 +1,17 @@
 # API 与工具契约
 
+## 2026-09-18：去掉输出端口落地后的旧残留
+
+前端不再封装 `create_jianying_draft` / `generate_storyboard` / `synthesize_storyboard_voiceover`。工作台交付只走 `deliver_to_editor`。公开 Tauri 命令保留。见 `docs/changes/2026-09-18-remove-legacy-editor-remnants.md`。
+
+## 2026-09-18：输出端口可选编辑器
+
+新增 `list_editor_linkers`、`set_output_editor`、`deliver_to_editor`。项目 `settings_json.outputEditor` 记住选择。剪映写草稿；FCPXML / OTIO 写出导入文件；CapCut 列出但未实现。`create_jianying_draft` 仍可强制交付剪映。自动预览后的交付走当前选择。见 `docs/changes/2026-09-18-editor-output-port.md`。
+
+## 2026-09-18：剪映改为编辑器链接器
+
+公开命令仍是 `create_jianying_draft`。内部时间线先投影为 `HandoffPlan`，剪映链接器再写成现有 Python 适配器 JSON。主镜头补 `sourceEndMs`。旁白轨进入计划但不写入剪映草稿。见 `docs/changes/2026-09-18-editor-linker.md`。
+
 ## 2026-09-18：源窗短于口播时放慢
 
 公开命令不变。选中片段可用窗短于该拍旁白时，成片时长仍跟口播时钟，预览和剪映按源窗放慢，不再换片或问用户。见 `docs/changes/2026-09-18-slow-clip-to-cover-narration.md`。
@@ -251,7 +263,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
-| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 与前端成果工作区在 storyboard 成功后自动串联 timeline 与 preview；`src/lib/local-store.ts` 不再封装此命令。 |
+| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 成功后自动串联 timeline、preview 与所选输出端口；`src/lib/local-store.ts` 不再封装此命令。 |
 | `submit_conversation_turn` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `{ kind: 'run', agentTaskId }`（保留 `immediate` 兼容变体） | 后端先消费一次性 route receipt，随后普通聊天、澄清、项目事实和工具执行统一创建 Agent task 并进入 NativeToolLoop；不调用对话分类模型、不返回 route/goal decision，也不预选首个工具。异步终态先幂等写入原 conversation，再发出 `agent-edit-completed`。 |
 | `cancel_agent_edit` | `{ projectId, editingTaskId, conversationId, agentTaskId }` | `void` | 将作用域内仍为 `queued`/`running` 的 Agent 任务标为 `cancelled`；NativeToolLoop 在下一步检查点停止并写入取消终态与回复。已是 `cancelled` 视为成功；其他终态不可取消。 |
 | `get_experimental_openai_oauth_status` | 无 | `ExperimentalOAuthStatus` | 仅从 Windows Credential Manager 读取连接状态。 |
@@ -272,6 +284,9 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `import_fish_audio_api_key_from_environment` | 无 | `FishAudioStatus` | 从本机 `FISH_API_KEY` 导入一次。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
+| `list_editor_linkers` | `{ projectId }` | `EditorLinkerCatalog` | 列出输出端口（剪映 / CapCut / FCPXML / OTIO）及当前项目选择。 |
+| `set_output_editor` | `{ projectId, editorId }` | `EditorLinkerCatalog` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
+| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。 |
 
 `agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
 
@@ -367,7 +382,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前打开的作用域化产物详情，不是永远最新一版。 |
 | `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
-| `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 源窗短于旁白则放慢已选镜头 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并**新建**剪映草稿（不覆盖旧草稿）；预览或剪映失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat 等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
+| `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 源窗短于旁白则放慢已选镜头 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并按项目输出端口交付（剪映新建草稿，或写出 FCPXML/OTIO；不覆盖旧草稿）；预览或交付失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat 等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
 | `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
@@ -418,6 +433,8 @@ NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 stric
 preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成本地 540 x 960 H.264 MP4。存在已启用 `textTracks` 时，后端会生成 ASS 并以 FFmpeg/libass 叠加文本；当前允许 `sans_bold`、`sans_clean`、`serif_editorial`、`mono_tech` 字体 key 及 `fade`、`slide_up`、`slide_down`、`pop`、`wipe` 基础动态。结果包含黑帧扫描、精确重复源范围、低分辨率视觉相似候选、节奏异常与文本安全区/可读时长检查。当前不混音、不做多帧语义重复检测，也不提供取消语义。
 
 ## Jianying draft 创建规则
+
+内部时间线先投影为编辑器无关的 `HandoffPlan`（源窗、槽位、裁剪、文本、音乐、旁白）。输出端口按项目选择交付：剪映链接器写成草稿；FCPXML/OTIO 写出导入文件。旁白轨当前不写入剪映草稿（预览仍混音）。`create_jianying_draft` 仍可强制交付剪映。
 
 `JianyingDraftResult` 会返回草稿目录和内容文件路径，仅供本地桌面流程使用，调用方不得将其记录到日志、浏览器存储或文档。
 

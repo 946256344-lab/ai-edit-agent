@@ -12,10 +12,6 @@
       "maxTopLevelProps": 2
     },
     {
-      "path": "src/components/ArtifactsWorkspace.tsx",
-      "maxTopLevelProps": 2
-    },
-    {
       "path": "src/components/AssetManagementPanel.tsx",
       "maxTopLevelProps": 2
     },
@@ -34,7 +30,9 @@
   ],
   "directoryBudgets": [],
   "forbiddenPaths": [
-    "src/components/ConversationWorkspace.tsx"
+    "src/components/ConversationWorkspace.tsx",
+    "src/components/ArtifactsWorkspace.tsx",
+    "src/components/AgentAuditPanel.tsx"
   ],
   "forbiddenText": [
     {

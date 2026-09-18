@@ -20,7 +20,9 @@ mod custom_api;
 mod db;
 /// 同步 Agent 子步骤共享截止时间，后台分析保持独立。
 mod execution_deadline;
-/// 单向 Jianying draft 创建与延迟注册。
+/// 编辑器无关交接计划；链接器只消费本结构，不替换内部时间线。
+mod handoff;
+/// 剪映链接器：单向 draft 创建与延迟注册。
 mod jianying;
 /// 对话媒体开关和分镜生成选项快照。
 mod media_options;
@@ -160,6 +162,9 @@ pub fn run() {
             runtime_models::start_runtime_model_download,
             jianying::create_jianying_draft,
             jianying::get_jianying_registration_status,
+            handoff::deliver::list_editor_linkers,
+            handoff::deliver::set_output_editor,
+            handoff::deliver::deliver_to_editor,
             agent::submit_conversation_turn,
             agent::execute_agent_edit,
             agent::cancel_agent_edit,

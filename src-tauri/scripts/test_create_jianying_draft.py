@@ -15,6 +15,7 @@ from create_jianying_draft import (
     add_text_tracks,
     clip_source_duration_us,
     escape_text_material_unicode,
+    fit_adjacent_cue_range,
     fit_source_duration,
     jianying_is_running,
     main,
@@ -80,6 +81,14 @@ class JianyingProcessDetectionTests(unittest.TestCase):
 
 
 class TextTrackExportTests(unittest.TestCase):
+    def test_snaps_a_one_millisecond_karaoke_boundary(self):
+        start_ms, duration_ms = fit_adjacent_cue_range(16_239, 16_400, 16_240)
+        self.assertEqual((start_ms, duration_ms), (16_240, 160))
+
+    def test_rejects_a_real_overlapping_text_cue(self):
+        with self.assertRaises(RuntimeError):
+            fit_adjacent_cue_range(1_000, 2_000, 1_500)
+
     @patch("create_jianying_draft.add_supported_text_animation")
     @patch("create_jianying_draft.jianying_text_shadow", return_value=None)
     @patch("create_jianying_draft.jianying_text_background", return_value=None)

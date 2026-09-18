@@ -251,7 +251,31 @@ export type VoiceoverApplyResult = {
 export type JianyingDraftResult = {
   draftDirectory: string
   draftContentPath: string
-  registrationStatus: 'pending' | 'registered'
+  registrationStatus: 'pending' | 'registered' | string
+}
+
+export type EditorLinkerInfo = {
+  id: string
+  label: string
+  summary: string
+  implemented: boolean
+  available: boolean
+  deliveryKind: 'dropInDraft' | 'importFile' | string
+}
+
+export type EditorLinkerCatalog = {
+  selectedId: string
+  linkers: EditorLinkerInfo[]
+}
+
+export type EditorDeliveryResult = {
+  editorId: string
+  deliveryKind: string
+  status: string
+  displayName: string
+  message: string
+  outputPath: string | null
+  jianying: JianyingDraftResult | null
 }
 
 export type JianyingRegistrationStatus = {
@@ -466,7 +490,6 @@ export async function addAssetsToCollection(projectId: string, collectionId: str
 export async function getAssetEvidence(assetId: string) { requireDesktopRuntime(); return invoke<AssetEvidence>('get_asset_evidence', { assetId })
 }
 
-export async function generateStoryboard(projectId: string, editingTaskId: string, brief: string) { requireDesktopRuntime(); return invoke<StoryboardVersion>('generate_storyboard', { projectId, editingTaskId, brief }) }
 export async function getLatestStoryboard(projectId: string, editingTaskId: string) { requireDesktopRuntime(); return invoke<StoryboardVersion | null>('get_latest_storyboard', { projectId, editingTaskId }) }
 export async function listStoryboardVersions(projectId: string, editingTaskId: string) {
   requireDesktopRuntime()
@@ -477,22 +500,14 @@ export async function getStoryboardVersion(projectId: string, editingTaskId: str
   return invoke<StoryboardVersion>('get_storyboard_version', { projectId, editingTaskId, storyboardVersionId })
 }
 export async function createTimelineDraft(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<TimelineVersion>('create_timeline_draft', { projectId, storyboardVersionId }) }
-export async function synthesizeStoryboardVoiceover(projectId: string, editingTaskId: string, conversationId: string, timelineVersionId: string) { requireDesktopRuntime(); return invoke<VoiceoverApplyResult>('synthesize_storyboard_voiceover', { projectId, editingTaskId, conversationId, timelineVersionId }) }
 
 export async function getLatestTimeline(projectId: string, storyboardVersionId: string) { requireDesktopRuntime(); return invoke<LatestTimeline | null>('get_latest_timeline', { projectId, storyboardVersionId }) }
-
-export async function listTimelineVersions(projectId: string, editingTaskId: string, storyboardVersionId: string) {
-  requireDesktopRuntime()
-  return invoke<TimelineVersion[]>('list_timeline_versions', { projectId, editingTaskId, storyboardVersionId })
-}
 
 export async function listAgentTasks(projectId: string, editingTaskId: string, conversationId?: string) { requireDesktopRuntime(); return invoke<StoredAgentTask[]>('list_agent_tasks', { projectId, editingTaskId, conversationId }) }
 
 export async function listAgentRunSteps(projectId: string, editingTaskId: string, agentTaskId: string) { requireDesktopRuntime(); return invoke<StoredAgentRunStep[]>('list_agent_run_steps', { projectId, editingTaskId, agentTaskId }) }
 
 export async function listAgentDiagnostics(projectId: string, editingTaskId: string, agentTaskId: string) { requireDesktopRuntime(); return invoke<StoredAgentDiagnostic[]>('list_agent_diagnostics', { projectId, editingTaskId, agentTaskId }) }
-
-export async function listOperationLogs(projectId: string, editingTaskId: string, agentTaskId?: string) { requireDesktopRuntime(); return invoke<StoredOperationLog[]>('list_operation_logs', { projectId, editingTaskId, agentTaskId }) }
 
 export async function renderPreview(timelineVersionId: string) { requireDesktopRuntime(); return invoke<PreviewResult>('render_preview', { timelineVersionId }) }
 
@@ -556,7 +571,20 @@ export async function startRuntimeModelDownload() {
   return invoke<RuntimeModelStatus>('start_runtime_model_download')
 }
 
-export async function createJianyingDraft(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingDraftResult>('create_jianying_draft', { timelineVersionId }) }
+export async function listEditorLinkers(projectId: string) {
+  requireDesktopRuntime()
+  return invoke<EditorLinkerCatalog>('list_editor_linkers', { projectId })
+}
+
+export async function setOutputEditor(projectId: string, editorId: string) {
+  requireDesktopRuntime()
+  return invoke<EditorLinkerCatalog>('set_output_editor', { projectId, editorId })
+}
+
+export async function deliverToEditor(timelineVersionId: string, editorId?: string | null) {
+  requireDesktopRuntime()
+  return invoke<EditorDeliveryResult>('deliver_to_editor', { timelineVersionId, editorId: editorId ?? null })
+}
 
 export async function getJianyingRegistrationStatus(timelineVersionId: string) { requireDesktopRuntime(); return invoke<JianyingRegistrationStatus | null>('get_jianying_registration_status', { timelineVersionId }) }
 

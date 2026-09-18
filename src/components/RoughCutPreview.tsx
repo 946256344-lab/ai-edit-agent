@@ -16,7 +16,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   const pendingDialog = useRef<HTMLDialogElement>(null)
   const [playhead, setPlayhead] = useState(0)
   const { shot, prepared, phase, recommendations, selectedId } = replacement
-  const busy = phase === 'saving' || phase === 'rendering' || artifact.busy.renderingPreview || artifact.busy.creatingJianyingDraft || agentBusy
+  const busy = phase === 'saving' || phase === 'rendering' || artifact.busy.renderingPreview || artifact.busy.delivering || agentBusy
   const clips = artifact.timeline?.clips ?? []
   const currentClip = clips.find((clip) => playhead >= clip.timelineStartMs && playhead < clip.timelineEndMs) ?? clips[0]
   const stalePreview = artifact.preview && artifact.preview.timelineVersionId !== artifact.timeline?.id
@@ -71,8 +71,8 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
           </div>
         </>
       )}
-      {(replacement.notice || stalePreview || artifact.jianyingNotice || artifact.thumbnailNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>当前画面为上一版，请更新预览以查看已保存的修改。</p>}{artifact.jianyingNotice && <p>{artifact.jianyingNotice}</p>}{artifact.thumbnailNotice && <p>{artifact.thumbnailNotice}</p>}</div>}
-      <footer className="preview-footer"><span>{shot ? '保存后才会修改粗剪' : '粗剪完成后，在剪映继续精修'}</span>{shot && <div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>取消</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? '保存中…' : '保存修改'}</button></div>}</footer>
+      {(replacement.notice || stalePreview || artifact.deliveryNotice || artifact.thumbnailNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>当前画面为上一版，请更新预览以查看已保存的修改。</p>}{artifact.deliveryNotice && <p>{artifact.deliveryNotice}</p>}{artifact.thumbnailNotice && <p>{artifact.thumbnailNotice}</p>}</div>}
+      <footer className="preview-footer"><span>{shot ? '保存后才会修改粗剪' : '粗剪完成后，输出到所选编辑器继续精修'}</span>{shot && <div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>取消</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? '保存中…' : '保存修改'}</button></div>}</footer>
       <dialog ref={pendingDialog} aria-labelledby="pending-title" className="pending-dialog" onCancel={actions.replacement.keepEditing}><h3 id="pending-title">还有未保存的镜头修改</h3><p>先保存这次试选，还是放弃后继续？</p><button className="primary-button" disabled={!prepared || phase !== 'idle'} onClick={actions.replacement.saveAndContinue}>保存并继续</button><button className="outline-button" onClick={actions.replacement.discardAndContinue}>放弃并继续</button><button className="text-button" onClick={actions.replacement.keepEditing}>继续编辑</button></dialog>
     </section>
   )

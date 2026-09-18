@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已验证（2026-09-18）：本机可新建剪映草稿。当天时间线已注册 `123-0c9499f5`；逐字字幕 1ms 边界由适配器收齐。见 docs/changes/2026-09-18-verify-jianying-draft.md。
+- [x] 已实现（2026-09-18）：去掉输出端口落地后的旧残留。未挂载成果页、前端剪映包装与重复源采集。见 docs/changes/2026-09-18-remove-legacy-editor-remnants.md。
+- [x] 已实现（2026-09-18）：输出端口可选编辑器。项目记住选择；剪映/FCPXML/OTIO 可交付，CapCut 未实现。见 docs/changes/2026-09-18-editor-output-port.md。
+- [x] 已实现（2026-09-18）：剪映改为编辑器链接器。内部时间线投影为 HandoffPlan；剪映是唯一实现；不改公开命令。见 docs/changes/2026-09-18-editor-linker.md。
 - [x] 已实现（2026-09-18）：CLIP 可用时无片段图向量的候选不能靠卡片文字进前 9；P3 以网格为准；整片候选 P4 锁在 P3 源窗、不再 Pass A 另切窗。见 docs/changes/2026-09-18-grid-over-caption.md。
 - [x] 已实现（2026-09-18）：源窗短于该拍旁白时放慢已选镜头，不换更长的错片。见 docs/changes/2026-09-18-slow-clip-to-cover-narration.md。
 - [ ] 进行中（2026-09-17，feature/agent-led-storyboard）：细拍、一拍一镜、模型主导生成。PR1–PR6 已实现；P3 可见描述+现拼网格已复测（10 拍全附图；5 合格 / 2 勉强 / 3 偏题）。下一步：池内更贴 requiredVisual 的条仍可能落选。见 docs/changes/2026-09-17-p3-visible-select.md。

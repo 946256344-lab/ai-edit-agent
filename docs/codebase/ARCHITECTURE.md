@@ -8,7 +8,7 @@
 - TypeScript bridge 把前端调用限制为命名 Tauri 命令。
 - Rust 是可信执行边界：校验作用域、访问 SQLite/文件、运行媒体进程、调用 Provider、创建版本和审计。
 - 模型只在封闭技能空间中选择动作；真实产物完成门由 Rust 判断。
-- storyboard、timeline、preview、Jianying draft 是逐级派生关系；内部 timeline 是事实来源。
+- storyboard、timeline、preview、编辑器链接器交付物是逐级派生关系；内部 timeline 是事实来源。输出端口可选剪映 / FCPXML / OTIO。
 - 编码 Agent 的上下文按根/React/Rust 三层加载；机器 harness 只强制可确定的跨层所有权，不能替代领域测试。
 
 ## 2）总览
@@ -23,7 +23,7 @@ flowchart LR
   AGENT --> DOMAIN["素材 / storyboard / timeline"]
   DOMAIN --> MEDIA["FFprobe / FFmpeg / Tesseract"]
   AGENT --> MODEL["OAuth 或自定义 Provider"]
-  DOMAIN --> DRAFT["local preview / Jianying draft"]
+  DOMAIN --> DRAFT["local preview / 所选编辑器交付"]
   CMD -. "事件仅通知" .-> CTRL
 ```
 
@@ -89,7 +89,8 @@ flowchart TD
   EVIDENCE --> STORY["storyboard 提案+Rust 校验+版本"]
   STORY --> TL["内部 timeline 新版本"]
   TL --> PREVIEW["540x960 local preview + QC"]
-  TL --> JY["唯一 Jianying draft"]
+  TL --> HANDOFF["HandoffPlan"]
+  HANDOFF --> JY["所选编辑器链接器"]
 ```
 
 素材列表读取持久化投影，不逐条探测源路径。健康检查、重链路、分析、下载和交付都是独立具名副作用。
@@ -112,7 +113,7 @@ flowchart TD
 
 | 模式 | 位置 | 目的 |
 | --- | --- | --- |
-| Adapter | `local-store.ts`、`provider.rs`、`jianying.rs` | 隔离 IPC、模型协议和外部草稿格式 |
+| Adapter | `local-store.ts`、`provider.rs`、`handoff/`、`jianying.rs` | 隔离 IPC、模型协议和外部编辑器格式 |
 | Append-only version | storyboard/timeline 表与创建函数 | 不覆盖历史创作产物 |
 | Transactional finalization | `agent::finalize_agent_task` | 任务、回复、conversation 和审计同一事务；提交后再通知 |
 | Event + polling reconciliation | `useAgentRunReconciliation` | 事件提供低延迟，SQLite 提供恢复事实 |

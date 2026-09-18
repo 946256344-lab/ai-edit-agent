@@ -1,6 +1,6 @@
-"""由 Rust 交付边界调用的单向 Jianying 适配器。
+"""由剪映链接器调用的单向草稿适配器。
 
-适配器读取版本化本地 JSON 交接数据，创建唯一新草稿，并且只在 Jianying 关闭时注册。
+适配器读取 HandoffPlan 投影后的版本化 JSON，创建唯一新草稿，并且只在 Jianying 关闭时注册。
 它不是应用入口，绝不能覆盖已有 Jianying 项目，也不负责反向同步用户在 Jianying 内的编辑。
 """
 
@@ -36,10 +36,26 @@ from pyJianYingDraft import (
 
 
 SOURCE_DURATION_TOLERANCE_US = 50_000
+TEXT_CUE_BOUNDARY_TOLERANCE_MS = 1
 
 
 def to_microseconds(milliseconds):
     return milliseconds * 1000
+
+
+def fit_adjacent_cue_range(start_ms, end_ms, previous_end_ms):
+    """口播逐字对齐常把后一字 start 设成前一字 end-1ms；剪映同轨不能重叠。"""
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    if previous_end_ms is not None and start_ms < previous_end_ms:
+        overlap_ms = previous_end_ms - start_ms
+        if overlap_ms > TEXT_CUE_BOUNDARY_TOLERANCE_MS:
+            raise RuntimeError("Text cue overlaps a previous cue.")
+        start_ms = previous_end_ms
+    duration_ms = end_ms - start_ms
+    if duration_ms <= 0:
+        raise RuntimeError("Text cue duration must be positive.")
+    return start_ms, duration_ms
 
 
 def clip_source_duration_us(clip, material):
@@ -213,10 +229,12 @@ def add_text_tracks(script, tracks):
         layer = int(track.get("layer", 0))
         track_name = f"assembly-text-layer-{layer}-{track_index}"
         script.add_track(TrackType.text, track_name=track_name, relative_index=layer)
+        previous_end_ms = None
         for cue in track.get("cues", []):
-            duration_ms = int(cue["endMs"]) - int(cue["startMs"])
-            if duration_ms <= 0:
-                raise RuntimeError("Text cue duration must be positive.")
+            start_ms, duration_ms = fit_adjacent_cue_range(
+                cue["startMs"], cue["endMs"], previous_end_ms
+            )
+            previous_end_ms = int(cue["endMs"])
             style_data = cue.get("style", {})
             layout = cue.get("layout", {})
             style = TextStyle(
@@ -231,7 +249,7 @@ def add_text_tracks(script, tracks):
             )
             segment = TextSegment(
                 cue["text"],
-                Timerange(to_microseconds(int(cue["startMs"])), to_microseconds(duration_ms)),
+                Timerange(to_microseconds(start_ms), to_microseconds(duration_ms)),
                 font=jianying_font(style_data.get("fontKey")),
                 style=style,
                 clip_settings=ClipSettings(

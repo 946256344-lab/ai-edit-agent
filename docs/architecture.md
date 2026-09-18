@@ -1,5 +1,17 @@
 # 架构
 
+## 输出端口可选编辑器（2026-09-18）
+
+项目记住输出编辑器。剪映写草稿；FCPXML / OTIO 写出导入文件；CapCut 尚未实现。内部时间线先投影为 `HandoffPlan`。见 `docs/changes/2026-09-18-editor-output-port.md`。
+
+## 剪映草稿已在本机核验（2026-09-18）
+
+剪映链接器可在本机草稿库新建并注册。逐字口播字幕相邻 1ms 重叠由适配器收成互不重叠，真重叠仍失败。见 `docs/changes/2026-09-18-verify-jianying-draft.md`。
+
+## 剪映是编辑器链接器（2026-09-18）
+
+内部时间线是事实源。交付前投影为 `HandoffPlan`；剪映链接器只新建草稿。FCPXML / OTIO 由输出端口写出导入文件。旁白写入计划但不进剪映草稿。见 `docs/changes/2026-09-18-editor-linker.md`、`docs/changes/2026-09-18-editor-output-port.md`。
+
 ## 源窗短于口播时放慢（2026-09-18）
 
 成片时长跟口播时钟。选中片段可用窗不够长时放慢该镜头，不换更长的片。预览 `setpts` 拉长，剪映草稿按源窗对槽位变速。见 `docs/changes/2026-09-18-slow-clip-to-cover-narration.md`。
@@ -106,7 +118,7 @@ React 19 + TypeScript + Vite
 `- src-tauri/             Rust 命令、SQLite、媒体工具与 OAuth 边界
   |- src/agent.rs         自然语言编辑控制器
   |- src/taskrouter.rs    项目内任务归属解析与任务状态快照
-  |- src/{projects,assets,storyboard,timeline,preview,jianying,audit}.rs  领域命令
+  |- src/{projects,assets,storyboard,timeline,preview,handoff,jianying,audit}.rs  领域命令
   |- src/db.rs + models.rs SQLite 迁移与领域类型
   |- src/provider.rs      实验性模型请求封装
   |- src/process.rs       无窗口外部命令
@@ -138,7 +150,7 @@ Project (项目)
 
 Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话并签发一次性 receipt；receipt 消费后，所有对话类型都直接进入同一个 NativeToolLoop。
 
-前端按”入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview、Jianying 状态及交付动作；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。Agent、素材、成果三种顶层模式互斥渲染为 `AgentWorkspace`、`AssetManagementPanel` 和 `ArtifactsWorkspace`；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
+前端按”入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview 与输出端口交付；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。粗剪工作台并排渲染 `AgentWorkspace` 与 `RoughCutPreview`，素材库以覆盖层打开；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
 
 Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许作用域内的本地派生媒体协议。
 
@@ -148,10 +160,10 @@ Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、stor
 Windows 桌面应用（Tauri + React）
 |
 |- 展示层（已实现）
-|  |- 互斥的 Agent、素材、成果顶层模式
+|  |- 粗剪工作台：对话与预览并排，顶栏选择输出编辑器
 |  |- Agent：会话、路由提示、可折叠执行任务卡与 composer
-|  |- 素材：完整宽度的可开合目录、直属素材、健康恢复与证据 Inspector
-|  |- 成果：唯一 Workflow、storyboard、timeline/审计与 preview
+|  |- 素材：覆盖层素材库、健康恢复与证据 Inspector
+|  |- 预览：粗剪播放、换镜与输出端口交付
 |  `- 项目与 Provider 状态
 |
 |- 本地 Agent 控制器（已实现基础）
@@ -161,7 +173,7 @@ Windows 桌面应用（Tauri + React）
 |
 |- 本地工具服务（部分实现）
 |  |- 导入、FFprobe/FFmpeg/Tesseract 分析、时间线、preview
-|  |- Jianying 仅视频适配器
+|  |- 编辑器链接器（剪映草稿 / FCPXML / OTIO）
 |  `- 音频、字幕、ElevenLabs 配音、生产运行时供应 TODO
 |
 |- 模型 Provider（部分实现）
@@ -189,7 +201,7 @@ Windows 桌面应用（Tauri + React）
   -> 缺少真实画面证据的信息点只作为未覆盖项保存，绝不作为 `insufficient` 镜头写入时间线
   -> 创建源时间绑定的内部时间线版本
   -> FFmpeg 渲染 540 x 960 本地 preview 并执行质量检查
-  -> 可选地创建新的 Jianying Pro 8.0 仅视频草稿
+  -> 内部时间线投影为 HandoffPlan，由剪映链接器新建唯一草稿
 ```
 
 视觉建议是 AI 建议，不是经验证的媒体事实。文本语义召回和关键帧清晰度评分已经实现；跨镜头的多帧视觉重复检测仍为 `TODO`。
@@ -201,7 +213,7 @@ storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只�
 - 源文件默认仅被引用。素材列表不对每条源路径做同步探测，避免失联盘符或网络路径拖住 UI；分析、storyboard、preview 和 Jianying draft 在实际使用前检测可用性。缺失素材会保留记录，但不能进入新的 storyboard 或 preview。
 - 用户可主动选择新的素材根目录触发两阶段重新定位：预览阶段只扫描候选目录并以唯一的旧相对路径和媒体类型匹配，不修改项目；人工素材工作区的确认阶段固定保留已有分析证据并只更新路径，避免恢复位置时意外触发重新分析。后端仍保留显式 `preserveAnalysis` 契约供受限 Agent/诊断流程使用。无法唯一验证的素材保持原引用，绝不按文件名猜测或自动错连。
 - 应用绝不修改源媒体。
-- 内部时间线是事实来源；Jianying draft 是单向交付物，不回读用户在 Jianying 中的编辑。
+- 内部时间线是事实来源；编辑器交付物由链接器单向写出，不回读用户在目标编辑器中的修改。
 - OAuth 凭据只保存在 Windows Credential Manager，绝不进入 SQLite、浏览器存储、项目文件或日志。
 - 模型仅接收获批的精简提示、证据文本和低分辨率派生帧，绝不接收原始媒体或本机路径。
 
@@ -310,7 +322,7 @@ Provider 重试位于工具执行之后的独立模型请求边界，只重发�
 
 Native 工具 `read_logs` 是普通只读诊断能力，模型可在需要判断故障和修改方向时自主加载；用户明确禁止读取日志时 Rust 执行门拒绝。Rust 固定读取 `tauri-plugin-log` 在 `app_log_dir` 中的当前活动应用日志，模型不能提交路径或读取轮转历史。参数为 nullable 的 1-based `startLine`/`endLine`，两者均空时返回末尾最多 100 行，显式闭区间同样最多 100 行；结果受 3500 字符预算、单行 500 字符预算并提供下一页行号。包含凭据形态、URL、UNC 或完整 Windows 路径的行整体遮蔽，其他真实错误和阶段信息保持可读。该工具不读取 `target/native-provider-full-trace.jsonl`，不满足项目事实观察门，也不新增日志持久化。
 
-Jianying 适配器在 Rust 中预校验所有源引用，将版本化 JSON 输入写到应用数据目录后交给 Python 适配器，并在执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。
+剪映链接器先把内部时间线投影为 `HandoffPlan`，在 Rust 中预校验源引用，再把剪映专用 JSON 写到应用数据目录交给 Python 适配器，执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。旁白轨进入 HandoffPlan，当前不写入剪映草稿。
 
 Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑 `AgentStateSnapshot`，以当前项目/任务/会话、素材分析可用性、真实产物存在性、已执行步骤、剩余步数与未满足条件作为权威状态；确定性前置条件提示只约束真实依赖，不强制所有合法编辑经过 storyboard。循环技能和显式直通技能均持久化步骤开始/终态；应用中断后运行进入 `needs_review`，未完成步骤标记为 `interrupted_requires_review`，但不自动重放。
 
@@ -332,7 +344,7 @@ Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑
 
 ## 配音（Fish Audio / ElevenLabs，2026-09-07）
 
-分镜完成后，若 storyboard 为 `full_script`、有旁白、语音 Provider 已配置、且时间线尚无旁白轨，则 **自动合成配音**：Agent `generate_storyboard` 与前端成果区共用 `auto_synthesize_storyboard_voiceover`（文本优先 beats）。**`key_message` 不自动配音**，默认不写屏幕标记字幕。合成失败只提示，不挡预览；`voiceover_longer_than_picture` 写入 `qualityWarnings`；已有旁白轨则跳过。有大段可朗读文案时 Phase1 **之前**由系统锁定 `full_script`（模型不得改选），并走 audio-first：配音开启时先按已确认 brief 合成，失败则不生成；时间戳优先词级，没有则句内按字数插值。其后自动配音因已有轨而跳过。
+分镜完成后，若 storyboard 为 `full_script`、有旁白、语音 Provider 已配置、且时间线尚无旁白轨，则 **自动合成配音**：Agent `generate_storyboard` 调用 `auto_synthesize_storyboard_voiceover`（文本优先 beats）。**`key_message` 不自动配音**，默认不写屏幕标记字幕。合成失败只提示，不挡预览；`voiceover_longer_than_picture` 写入 `qualityWarnings`；已有旁白轨则跳过。有大段可朗读文案时 Phase1 **之前**由系统锁定 `full_script`（模型不得改选），并走 audio-first：配音开启时先按已确认 brief 合成，失败则不生成；时间戳优先词级，没有则句内按字数插值。其后自动配音因已有轨而跳过。
 
 显式 `synthesize_voiceover` / `synthesize_storyboard_voiceover` 仍可用。文案只来自请求 `text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager。**优先 Fish Audio**；传输不可用/超时/5xx/429 且 ElevenLabs 已配置时可回退（401/密钥错误不回退）。配音时长是时钟：旁白 cue 等于完整音频，画面不得短于口播（禁止冻帧垫片）。**旁白轨必写**；字幕只使用 TTS alignment 且尽力提交，失败保留旁白并记 warning。快照用 `voiceoverCues` 与 `配音能力` 区分「已写入」与「已配置」。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。
 

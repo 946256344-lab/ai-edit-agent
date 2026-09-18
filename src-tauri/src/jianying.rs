@@ -1,7 +1,10 @@
-//! Jianying draft 的单向创建、回滚与延迟注册边界。
-//! 每次交付创建唯一新目录，绝不覆盖或反向同步已有 Jianying 项目。
+//! 剪映链接器：把 HandoffPlan 写成唯一新草稿，绝不覆盖或反向同步已有工程。
 
 use crate::db::{now_millis, open_connection};
+use crate::handoff::{
+    build_handoff_plan, jianying_create_draft_input, JianyingDraftDestination,
+};
+use crate::handoff::deliver::collect_export_sources;
 use crate::models::{JianyingDraftResult, JianyingRegistrationStatus, TimelineVersion};
 use crate::process::hidden_command;
 use crate::timeline::load_timeline_version;
@@ -9,7 +12,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{PathBuf},
     process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     thread,
@@ -374,7 +377,10 @@ pub fn create_jianying_draft(
     app: AppHandle,
     timeline_version_id: String,
 ) -> Result<JianyingDraftResult, String> {
-    log::info!("Starting Jianying draft creation.");
+    log::info!(
+        "Starting {} draft creation.",
+        crate::handoff::EditorId::Jianying.as_str()
+    );
     let connection = open_connection(&app)?;
     let timeline = load_timeline_version(&connection, &timeline_version_id)?;
     if !text_tracks_are_ready_for_jianying(&timeline) {
@@ -387,108 +393,20 @@ pub fn create_jianying_draft(
         "Jianying Pro 8.0 draft library is unavailable. Open Jianying Pro and create a local draft before creating a draft here."
             .to_owned()
     })?;
-    let mut clips = Vec::with_capacity(timeline.clips.len());
-    for (index, clip) in timeline.clips.iter().enumerate() {
-        let (source_reference, kind): (String, String) = connection
-            .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
-                params![clip.asset_id, timeline.project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|_| "Timeline references an unavailable asset.".to_owned())?;
-        if kind != "video" {
-            return Err(
-                "Jianying draft export currently supports video timeline clips only.".to_owned(),
-            );
-        }
-        if !Path::new(&source_reference).is_file() {
-            return Err(format!(
-                "Timeline source media file {} is unavailable. Re-import or relink the missing asset before creating a Jianying draft.",
-                index + 1
-            ));
-        }
-        clips.push(serde_json::json!({
-            "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,
-            "timelineStartMs": clip.timeline_start_ms, "timelineEndMs": clip.timeline_end_ms,
-            "cropFocus": clip.crop_focus,
-        }));
-    }
-    let mut music_tracks = Vec::with_capacity(timeline.music_tracks.len());
-    for track in &timeline.music_tracks {
-        let mut cues = Vec::with_capacity(track.cues.len());
-        for cue in &track.cues {
-            let (source_reference, kind): (String, String) = connection
-                .query_row(
-                    "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) AND analysis_status = 'ready'",
-                    params![cue.asset_id, timeline.project_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .map_err(|_| "Music asset is unavailable or has not finished analysis.".to_owned())?;
-            if kind != "audio" || !Path::new(&source_reference).is_file() {
-                return Err("Music source media is unavailable. Re-import or relink it before creating a Jianying draft.".to_owned());
-            }
-            let mut cue_json = serde_json::to_value(cue).map_err(|error| error.to_string())?;
-            let cue_json = cue_json
-                .as_object_mut()
-                .ok_or_else(|| "Could not prepare the music cue for Jianying.".to_owned())?;
-            cue_json.insert(
-                "sourceReference".to_owned(),
-                serde_json::Value::String(source_reference.replace('\\', "/")),
-            );
-            cues.push(serde_json::Value::Object(cue_json.clone()));
-        }
-        music_tracks.push(serde_json::json!({
-            "id": track.id,
-            "enabled": track.enabled,
-            "cues": cues,
-        }));
-    }
-    let mut overlay_clips = Vec::with_capacity(timeline.overlay_clips.len());
-    for (index, clip) in timeline.overlay_clips.iter().enumerate() {
-        let (source_reference, kind): (String, String) = connection
-            .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
-                params![clip.asset_id, timeline.project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|_| "Timeline overlay references an unavailable asset.".to_owned())?;
-        if kind != "video" {
-            return Err(format!("Overlay clip {} is not a video asset.", index + 1));
-        }
-        if !Path::new(&source_reference).is_file() {
-            return Err(format!(
-                "Overlay source media file {} is unavailable.",
-                index + 1
-            ));
-        }
-        overlay_clips.push(serde_json::json!({
-            "sourceReference": source_reference.replace('\\', "/"), "sourceStartMs": clip.source_start_ms,
-            "sourceEndMs": clip.source_end_ms,
-            "timelineStartMs": clip.timeline_start_ms, "timelineEndMs": clip.timeline_end_ms,
-            "cropFocus": clip.crop_focus,
-        }));
-    }
+    let sources = collect_export_sources(&connection, &timeline, false)?;
+    let plan = build_handoff_plan(&timeline, &sources)?;
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");
-    let duration_ms = timeline
-        .clips
-        .iter()
-        .map(|clip| clip.timeline_end_ms)
-        .chain(timeline.overlay_clips.iter().map(|c| c.timeline_end_ms))
-        .max()
-        .unwrap_or(0);
-    let input = serde_json::json!({
-        "inputFormatVersion": 2,
-        "operation": "createDraft",
-        "draftRoot": draft_root,
-        "draftName": draft_name,
-        "draftRegistryPath": draft_registry_path,
-        "clips": clips,
-        "overlayClips": overlay_clips,
-        "textTracks": timeline.text_tracks,
-        "musicTracks": music_tracks
-    });
+    let duration_ms = plan.duration_ms;
+    let input = jianying_create_draft_input(
+        &plan,
+        &JianyingDraftDestination {
+            draft_root: draft_root.clone(),
+            draft_name: draft_name.clone(),
+            draft_registry_path: draft_registry_path.clone(),
+        },
+    );
     let result = run_jianying_adapter(&app, &input).map_err(|error| {
         log::error!("Jianying draft adapter failed.");
         format!("Jianying draft adapter could not create a draft: {error}")

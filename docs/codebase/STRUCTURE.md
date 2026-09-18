@@ -41,7 +41,7 @@
 3. `src/main.tsx` 将 `<App />` 挂载到 WebView。
 4. `src/App.tsx` 调用 `initializeLocalStore()`，再加载首个项目和剪辑任务。
 5. `projects::initialize_local_store` 执行中断任务恢复、素材分析恢复和 Jianying 注册恢复。
-6. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由 `jianying.rs` 以版本化 JSON handoff 调用。
+6. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由剪映链接器以版本化 JSON 调用。FCPXML/OTIO 由 `handoff/` 直接写出。
 
 ## 3）前端边界
 
@@ -81,7 +81,8 @@ src/main.tsx
 | `timeline_voice.rs` | 旁白写入、画面补尾、系统字幕替换 |
 | `preview.rs` | FFmpeg 渲染、文本/音乐合成、质量检查 |
 | `preview_audio.rs` | 旁白与 BGM 混音；禁止 `-shortest` |
-| `jianying.rs` | 新草稿创建和延迟注册 |
+| `handoff/` | 编辑器无关交接计划、输出端口选择与 FCPXML/OTIO 写出 |
+| `jianying.rs` | 剪映链接器：新草稿创建和延迟注册 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
 | `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
@@ -102,7 +103,7 @@ src/main.tsx
 3. `src/App.tsx`：前端如何选择项目、任务和工作区。
 4. `src/lib/local-store.ts`：前后端方法映射。
 5. `taskrouter.rs` → `agent.rs` → `agentloop.rs`：一次自然语言请求。
-6. `assets.rs` → `storyboard.rs` → `timeline.rs` → `preview.rs` → `jianying.rs`：一次产物链路。
+6. `assets.rs` → `storyboard.rs` → `timeline.rs` → `preview.rs` → `handoff/` / `jianying.rs`：一次产物链路。
 7. `db.rs` 与 `models.rs`：持久化事实和序列化形状。
 
 ## 7）证据

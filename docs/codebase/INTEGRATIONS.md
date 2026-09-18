@@ -12,7 +12,8 @@
 | ElevenLabs | HTTP API | 旁白 TTS、音色列表、alignment 字幕 | xi-api-key | 高 | `voice_provider.rs` |
 | FFmpeg / FFprobe | 本机进程 | 分析、抽帧、preview、质量检查 | 无 | 高 | `assets.rs`、`preview.rs` |
 | Tesseract | 本机进程 | OCR | 无 | 中 | `assets.rs` |
-| Python + pyJianYingDraft | 本机适配器 | Jianying draft 文件生成 | 无 | 高、实验性 | `jianying.rs`、`create_jianying_draft.py` |
+| Python + pyJianYingDraft | 本机适配器 | 剪映链接器写出草稿；同轨字幕 1ms 边界收齐 | 无 | 高、实验性 | `handoff/`、`jianying.rs`、`create_jianying_draft.py` |
+| FCPXML / OTIO 文件 | 本机导入文件 | Premiere / Resolve / Final Cut 交接 | 无 | 中 | `handoff/fcpxml.rs`、`handoff/otio.rs` |
 | Jianying Pro | 本地应用/文件格式 | 草稿注册和后续人工编辑 | 本机用户 | 高、单向 | `jianying.rs` |
 | BGE-small-zh + ONNX Runtime | 安装包内本地模型 | storyboard 中文语义召回 | 无、离线 | 中 | `storyboard/semantic.rs`、`tauri.conf.json` |
 | CLIP ViT-B/32 + ONNX Runtime | 安装包内本地模型（ONNX 需 fetch 脚本） | storyboard 图文召回加权 | 无、离线 | 中 | `storyboard/clip.rs`、`scripts/fetch-clip-models.ps1` |
@@ -26,7 +27,7 @@
 | 应用数据目录 | 缩略图、关键帧、preview、下载音频 | `assets`、`preview`、Tauri asset 协议 | 磁盘增长与运行时迁移 | `tauri.conf.json` |
 | 源媒体路径 | 只保存引用，不复制/改写 | `assets.rs` | 盘符/网络盘失联、隐私 | `docs/api.md` |
 | Windows Credential Manager | API key/token/client ID | `keyring::Entry` | 损坏时必须失败封闭 | `custom_api.rs`、`oauth.rs` |
-| Jianying 草稿目录/注册表 | 单向交付物 | Rust + Python adapter | 版本兼容、注册并发 | `jianying.rs` |
+| 目标编辑器草稿/导入文件 | 单向交付物 | `handoff/` + 链接器 | 版本兼容、注册并发 | `handoff/`、`jianying.rs` |
 
 SQLite 每次打开启用 5 秒 busy timeout、WAL、`synchronous=NORMAL` 和 foreign keys；schema 当前为 v14，迁移只增不删。
 
