@@ -794,6 +794,7 @@ pub struct StoryboardShot {
     #[serde(default)]
     pub crop_focus: Option<[f64; 2]>,
     pub order_index: i64,
+    /// 成片占用时长（口播/节奏时钟）。可以长于源窗，此时按源窗/成片时长放慢。
     pub duration_ms: i64,
     pub purpose: String,
     pub on_screen_text: String,

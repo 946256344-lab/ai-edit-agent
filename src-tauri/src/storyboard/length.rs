@@ -1,9 +1,8 @@
-//! P3 之后、P4 之前：用可用运动窗对照该拍旁白时长。
-//! 短了交给选片模型换前 5 条或拨一次邻词；仍不行就问用户，不让 P4 去拉窗。
+//! 口播时钟对照源窗：短了就放慢镜头，不换片、不补镜、不拼下一段硬切。
 
 use super::phases::{BeatCandidatePool, RoughStoryboard};
 use super::repair::StoryboardIssue;
-use super::timing;
+use super::timing::{self, SpeechTiming};
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
 use serde_json::{json, Value};
 
@@ -17,6 +16,77 @@ pub(crate) fn usable_ms(source: &StoryboardSource) -> i64 {
         .or(source.duration_ms)
         .unwrap_or(0)
         .max(0)
+}
+
+pub(crate) fn source_span_ms(shot: &StoryboardShot) -> i64 {
+    (shot.source_end_ms - shot.source_start_ms).max(0)
+}
+
+/// 改切点时保住成片时长。口播可以长于源窗，由预览/剪映放慢，不要把 `durationMs` 写回源跨度。
+pub(crate) fn set_source_range(shot: &mut StoryboardShot, start: i64, end: i64) {
+    let on_screen = shot.duration_ms.max(1);
+    shot.source_start_ms = start;
+    shot.source_end_ms = end.max(start + 1);
+    shot.duration_ms = on_screen;
+}
+
+/// 每拍成片时长对齐口播/节奏。源窗不够长时保留源窗并放慢，够长则按 1 倍速裁到口播时长。
+pub(crate) fn stretch_shots_to_speech_timing(
+    content: &mut StoryboardContent,
+    timing: &SpeechTiming,
+) {
+    if timing.beats.is_empty() {
+        return;
+    }
+    for beat in &timing.beats {
+        let needed = beat.end_ms.saturating_sub(beat.start_ms);
+        if needed < 1 {
+            continue;
+        }
+        let indices = content
+            .shots
+            .iter()
+            .enumerate()
+            .filter(|(_, shot)| shot.beat_id == beat.beat_id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            continue;
+        }
+        let source_total = indices
+            .iter()
+            .map(|&index| source_span_ms(&content.shots[index]).max(1))
+            .sum::<i64>()
+            .max(1);
+        let mut remaining = needed;
+        for (offset, &index) in indices.iter().enumerate() {
+            let span = source_span_ms(&content.shots[index]).max(1);
+            let share = if offset + 1 == indices.len() {
+                remaining.max(1)
+            } else {
+                let proportional =
+                    ((needed as i128 * span as i128) / source_total as i128) as i64;
+                proportional
+                    .max(1)
+                    .min(remaining.saturating_sub((indices.len() - offset - 1) as i64))
+            };
+            let shot = &mut content.shots[index];
+            if share > span {
+                log::info!(
+                    "Beat '{}' shot {} slowing {}ms source to {}ms on-screen ({:.2}x)",
+                    beat.beat_id,
+                    shot.order_index,
+                    span,
+                    share,
+                    span as f64 / share as f64
+                );
+            } else if share < span {
+                shot.source_end_ms = shot.source_start_ms + share;
+            }
+            shot.duration_ms = share;
+            remaining = remaining.saturating_sub(share);
+        }
+    }
 }
 
 pub(crate) fn usable_ms_for_shot(
@@ -37,82 +107,13 @@ pub(crate) fn usable_ms_for_shot(
         .unwrap_or_else(|| (shot.source_end_ms - shot.source_start_ms).max(0))
 }
 
-/// 已选镜头可用窗之和短于该拍口播/节奏时长时，生成需模型换片或拨词的问题。
+/// 源窗短于口播时放慢已选镜头，不再把短窗交回选片模型换片。
 pub(crate) fn collect_usable_window_shortfalls(
-    content: &StoryboardContent,
+    content: &mut StoryboardContent,
     rough: &RoughStoryboard,
 ) -> Vec<StoryboardIssue> {
-    if rough.speech_timing.beats.is_empty() {
-        return Vec::new();
-    }
-    let mut issues = Vec::new();
-    for beat in &rough.speech_timing.beats {
-        if content
-            .uncovered_beat_ids
-            .iter()
-            .any(|id| id == &beat.beat_id)
-        {
-            continue;
-        }
-        let needed = beat.end_ms.saturating_sub(beat.start_ms);
-        if needed < 1 {
-            continue;
-        }
-        let shots = content
-            .shots
-            .iter()
-            .filter(|shot| shot.beat_id == beat.beat_id)
-            .collect::<Vec<_>>();
-        if shots.is_empty() {
-            continue;
-        }
-        let available: i64 = shots
-            .iter()
-            .map(|shot| usable_ms_for_shot(shot, &rough.candidate_pools))
-            .sum();
-        if available >= needed {
-            continue;
-        }
-        let affected = shots.iter().map(|shot| shot.order_index).collect();
-        let top5 = top5_usable_summary(&beat.beat_id, &rough.candidate_pools);
-        issues.push(
-            StoryboardIssue::new(
-                "beat_audio_window_shortfall",
-                format!(
-                    "Beat '{}' needs {needed}ms of picture; selected usable window is {available}ms. Swap to a candidateIndex 0-{TOP_ALTERNATE_INDEX} with usableMs >= {needed}, or move words only to the previous or next beat (return narration on those two selections). Concatenating beat narrations must still equal the spoken script. Do not add a second shot and do not glue the next hard cut. Top 5 usableMs: {top5}",
-                    beat.beat_id
-                ),
-                true,
-            )
-            .for_shots(affected)
-            .allowing(vec![
-                format!("replace this beat's candidateIndex with 0-{TOP_ALTERNATE_INDEX} whose usableMs covers the narration"),
-                "or move words once to the previous or next beat by returning narration on those two selections".to_owned(),
-            ]),
-        );
-    }
-    issues
-}
-
-fn top5_usable_summary(beat_id: &str, pools: &[BeatCandidatePool]) -> String {
-    let Some(pool) = pools.iter().find(|pool| pool.beat_id == beat_id) else {
-        return "[]".to_owned();
-    };
-    let items = pool
-        .candidates
-        .iter()
-        .take(TOP_ALTERNATE_INDEX + 1)
-        .enumerate()
-        .map(|(index, candidate)| {
-            format!(
-                "#{} {} {}ms",
-                index,
-                candidate.asset_id,
-                usable_ms(candidate)
-            )
-        })
-        .collect::<Vec<_>>();
-    items.join(", ")
+    stretch_shots_to_speech_timing(content, &rough.speech_timing);
+    Vec::new()
 }
 
 /// 模型改了拍旁白时：只允许一对相邻拍、全文拼接不变；有 TTS 则重算每拍起止。
@@ -387,9 +388,9 @@ mod tests {
     }
 
     #[test]
-    fn short_locked_window_against_3370ms_narration_is_a_shortfall() {
+    fn short_locked_window_slows_instead_of_asking_to_swap() {
         let rough = rough_with_pool(2_000, 3_370);
-        let content = StoryboardContent {
+        let mut content = StoryboardContent {
             brief: String::new(),
             title: "t".into(),
             summary: String::new(),
@@ -399,22 +400,17 @@ mod tests {
             uncovered_beat_ids: vec![],
             shots: vec![shot(6, "engineered-together", "short", 0, 2_000)],
         };
-        let issues = collect_usable_window_shortfalls(&content, &rough);
-        assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].kind, "beat_audio_window_shortfall");
-        assert!(issues[0].needs_model_decision);
-        assert!(issues[0].message.contains("3370ms"));
-        assert!(issues[0].message.contains("2000ms"));
-        let error = user_decision_error(Some(&content), &rough, &issues);
-        assert!(error.starts_with("storyboard_needs_user_decision:"));
-        assert!(error.contains("engineered-together"));
-        assert!(error.contains("3370"));
+        let issues = collect_usable_window_shortfalls(&mut content, &rough);
+        assert!(issues.is_empty());
+        assert_eq!(content.shots[0].source_start_ms, 0);
+        assert_eq!(content.shots[0].source_end_ms, 2_000);
+        assert_eq!(content.shots[0].duration_ms, 3_370);
     }
 
     #[test]
-    fn long_enough_usable_window_is_not_a_shortfall() {
+    fn long_enough_usable_window_trims_to_narration() {
         let rough = rough_with_pool(8_000, 3_370);
-        let content = StoryboardContent {
+        let mut content = StoryboardContent {
             brief: String::new(),
             title: "t".into(),
             summary: String::new(),
@@ -424,7 +420,9 @@ mod tests {
             uncovered_beat_ids: vec![],
             shots: vec![shot(1, "engineered-together", "long", 0, 8_000)],
         };
-        assert!(collect_usable_window_shortfalls(&content, &rough).is_empty());
+        assert!(collect_usable_window_shortfalls(&mut content, &rough).is_empty());
+        assert_eq!(content.shots[0].duration_ms, 3_370);
+        assert_eq!(content.shots[0].source_end_ms - content.shots[0].source_start_ms, 3_370);
     }
 
     #[test]

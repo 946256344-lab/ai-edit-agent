@@ -210,21 +210,18 @@ impl Phase4Session {
             return Err("Phase 4 could not build content windows.".to_owned());
         }
 
-        let mut pass_a_pending = HashSet::new();
+        let pass_a_pending = HashSet::new();
         let mut pass_a_done = HashSet::new();
         for shot in &selected.shots {
             let asset_windows = windows_by_asset
                 .get(&shot.asset_id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            if let Some(window) = locked_content_window(shot, asset_windows) {
-                let uncertain =
-                    window_motion_uncertain(&selected_sources, &shot.asset_id, &window.window_id);
-                self.pick_map.insert(shot.order_index, (window, uncertain));
-                pass_a_done.insert(shot.order_index);
-                continue;
-            }
-            pass_a_pending.insert(shot.order_index);
+            let window = locked_content_window(shot, asset_windows);
+            let uncertain =
+                window_motion_uncertain(&selected_sources, &shot.asset_id, &window.window_id);
+            self.pick_map.insert(shot.order_index, (window, uncertain));
+            pass_a_done.insert(shot.order_index);
         }
 
         let pass_a_asset_ids = selected
@@ -275,7 +272,7 @@ impl Phase4Session {
         self.initialized = true;
         if self.pass_a_pending.is_empty() {
             log::info!(
-                "Phase 4 pass A skipped: all {} shots locked to Phase 3 segments",
+                "Phase 4 pass A skipped: all {} shots locked to Phase 3 windows",
                 selected.shots.len()
             );
         }
@@ -346,11 +343,6 @@ impl Phase4Session {
             self.pass_c_modes.remove(order);
             self.pass_b_done.remove(order);
             self.pass_b_pending.insert(*order);
-            if repick_windows {
-                self.pass_a_done.remove(order);
-                self.pass_a_pending.insert(*order);
-                self.invalidate_shot_materials(*order);
-            }
         }
         if repick_windows {
             self.ranges_seeded = false;
@@ -449,6 +441,7 @@ impl Phase4Session {
         self.materials.insert(key, blocks);
     }
 
+    #[allow(dead_code)] // 窗已锁定后修复不再清 Pass A 缓存；保留给仍走 Pass A 的脚本路径。
     pub(crate) fn invalidate_shot_materials(&mut self, order_index: i64) {
         let prefix_b = format!("{order_index}:");
         self.materials.retain(|key, _| match key.pass {
@@ -551,15 +544,15 @@ impl Phase4Session {
         for shot in &mut content.shots {
             if !self.pass_b_done.contains(&shot.order_index) {
                 if let Some((window, uncertain)) = self.pick_map.get(&shot.order_index) {
-                    let target = shot.duration_ms.max(1).min(window.span_ms().max(1));
+                    let on_screen = shot.duration_ms.max(1);
+                    let source_len = on_screen.min(window.span_ms().max(1));
                     let start = window
                         .mid_ms()
-                        .saturating_sub(target / 2)
+                        .saturating_sub(source_len / 2)
                         .clamp(window.start_ms, window.end_ms.saturating_sub(1));
-                    let end = (start + target).min(window.end_ms).max(start + 1);
-                    shot.source_start_ms = start;
-                    shot.source_end_ms = end;
-                    shot.duration_ms = end - start;
+                    let end = (start + source_len).min(window.end_ms).max(start + 1);
+                    crate::storyboard::length::set_source_range(shot, start, end);
+                    shot.duration_ms = on_screen;
                     let locked = selected
                         .shots
                         .iter()
@@ -698,16 +691,26 @@ impl Phase4Session {
 }
 
 /// 有 `segmentId` 就锁在选中片段（或召回给出的双段组合）里，不够长也不拼下一段硬切。
+/// 整片候选锁在 P3 写下的源窗，不再走 Pass A 按关键帧另切窗。
 fn locked_content_window(
     shot: &StoryboardShot,
     asset_windows: &[Phase4ContentWindow],
-) -> Option<Phase4ContentWindow> {
-    let segment_id = shot.segment_id.as_deref()?;
+) -> Phase4ContentWindow {
+    let Some(segment_id) = shot.segment_id.as_deref().filter(|id| !id.is_empty()) else {
+        let start_ms = shot.source_start_ms.max(0);
+        let end_ms = shot.source_end_ms.max(start_ms + 1);
+        return Phase4ContentWindow {
+            asset_id: shot.asset_id.clone(),
+            window_id: format!("{}:p3", shot.asset_id),
+            start_ms,
+            end_ms,
+        };
+    };
     if let Some(window) = asset_windows
         .iter()
         .find(|window| window.window_id == segment_id)
     {
-        return Some(window.clone());
+        return window.clone();
     }
     let parts = segment_id
         .split('+')
@@ -731,20 +734,20 @@ fn locked_content_window(
                 .last()
                 .map(|window| window.end_ms)
                 .unwrap_or(start_ms + 1);
-            return Some(Phase4ContentWindow {
+            return Phase4ContentWindow {
                 asset_id: shot.asset_id.clone(),
                 window_id: segment_id.to_owned(),
                 start_ms,
                 end_ms: end_ms.max(start_ms + 1),
-            });
+            };
         }
     }
-    Some(Phase4ContentWindow {
+    Phase4ContentWindow {
         asset_id: shot.asset_id.clone(),
         window_id: segment_id.to_owned(),
         start_ms: shot.source_start_ms,
         end_ms: shot.source_end_ms.max(shot.source_start_ms + 1),
-    })
+    }
 }
 
 fn window_motion_uncertain(sources: &[StoryboardSource], asset_id: &str, window_id: &str) -> bool {
@@ -956,7 +959,7 @@ fn apply_shot_patches(
         slot.segment_id = original.segment_id.clone();
         slot.source_start_ms = patch.source_start_ms;
         slot.source_end_ms = patch.source_end_ms;
-        slot.duration_ms = (patch.source_end_ms - patch.source_start_ms).max(1);
+        slot.duration_ms = original.duration_ms.max(1);
         if let Some(crop) = patch.crop_focus {
             slot.crop_focus = Some(crop);
         }
@@ -1982,6 +1985,42 @@ mod tests {
         assert_eq!(window.window_id, "s001");
         assert_eq!(window.start_ms, 0);
         assert_eq!(window.end_ms, 1_500);
+        assert!(session.pass_a_is_complete());
+        assert!(session.pass_a_pending.is_empty());
+    }
+
+    #[test]
+    fn whole_asset_skips_pass_a_and_locks_phase3_window() {
+        let mut selected = content_with_shots(1);
+        selected.shots[0].asset_id = "asset-a".to_owned();
+        selected.shots[0].segment_id = None;
+        selected.shots[0].duration_ms = 2_500;
+        selected.shots[0].source_start_ms = 0;
+        selected.shots[0].source_end_ms = 5_340;
+        let mut source = source_with_segments("asset-a", Vec::new());
+        source.duration_ms = Some(5_340);
+        source.keyframes = vec![
+            crate::models::KeyframeMetadata {
+                time_ms: 0,
+                image_path: "k0.jpg".to_owned(),
+            },
+            crate::models::KeyframeMetadata {
+                time_ms: 2_670,
+                image_path: "k1.jpg".to_owned(),
+            },
+            crate::models::KeyframeMetadata {
+                time_ms: 5_240,
+                image_path: "k2.jpg".to_owned(),
+            },
+        ];
+        let mut session = Phase4Session::new();
+        session
+            .ensure_initialized(&selected, &[source])
+            .unwrap();
+        let (window, _) = session.pick_map.get(&1).expect("locked P3 window");
+        assert_eq!(window.window_id, "asset-a:p3");
+        assert_eq!(window.start_ms, 0);
+        assert_eq!(window.end_ms, 5_340);
         assert!(session.pass_a_is_complete());
         assert!(session.pass_a_pending.is_empty());
     }

@@ -1,7 +1,7 @@
 //! 多模态选镜：关键帧网格生成与视觉输入构建。
 //!
 //! 负责从已提取的关键帧拼接成网格图，并为模型准备多模态输入。
-//! Phase 3 附带候选 2×2 网格；Phase 4 用导入关键帧建粗窗，再在窗内加密抽帧。
+//! Phase 3 按候选段帧（缺则现抽）拼 2×2 网格；Phase 4 用导入关键帧建粗窗，再在窗内加密抽帧。
 
 use crate::models::StoryboardSource;
 use crate::process::{hidden_command, run_hidden_command_with_timeout};
@@ -552,6 +552,162 @@ pub fn build_multimodal_content(
     Ok(blocks)
 }
 
+const PHASE3_GRID_CELLS: usize = 4;
+
+/// 为一条 Phase 3 候选准备网格：优先该段已有帧，缺文件则在候选时间窗内现抽，最后才用整片旧网格。
+pub(crate) fn ensure_phase3_candidate_grid(
+    app: Option<&AppHandle>,
+    candidate: &StoryboardSource,
+) -> Option<PathBuf> {
+    let (start_ms, end_ms) = candidate_source_window(candidate);
+    let existing = existing_candidate_frames(candidate, start_ms, end_ms);
+    let frame_paths = if existing.is_empty() {
+        extract_candidate_frames(app, candidate, start_ms, end_ms)
+    } else {
+        existing
+    };
+    let picked = pick_even_paths(&frame_paths, PHASE3_GRID_CELLS);
+    if !picked.is_empty() {
+        if let Some(grid) = compose_candidate_grid(app, candidate, start_ms, end_ms, &picked) {
+            return Some(grid);
+        }
+    }
+    candidate
+        .keyframe_grid_path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+fn candidate_source_window(candidate: &StoryboardSource) -> (i64, i64) {
+    if let Some(segment) = &candidate.segment {
+        return (segment.start_ms.max(0), segment.end_ms.max(segment.start_ms + 1));
+    }
+    let end = candidate.duration_ms.unwrap_or(0).max(0);
+    (0, end.max(1))
+}
+
+fn existing_candidate_frames(
+    candidate: &StoryboardSource,
+    start_ms: i64,
+    end_ms: i64,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(segment) = &candidate.segment {
+        for path in &segment.frame_paths {
+            push_readable_path(&mut paths, path);
+        }
+    }
+    if paths.is_empty() {
+        for frame in &candidate.keyframes {
+            let in_window = candidate.segment.is_none()
+                || (frame.time_ms >= start_ms && frame.time_ms < end_ms);
+            if in_window {
+                push_readable_path(&mut paths, &frame.image_path);
+            }
+        }
+    }
+    paths
+}
+
+fn extract_candidate_frames(
+    app: Option<&AppHandle>,
+    candidate: &StoryboardSource,
+    start_ms: i64,
+    end_ms: i64,
+) -> Vec<PathBuf> {
+    let Some(app) = app else {
+        return Vec::new();
+    };
+    let Some(source) = candidate.source_path.as_deref().map(Path::new) else {
+        return Vec::new();
+    };
+    if !source.is_file() {
+        return Vec::new();
+    }
+    let times = sample_times_in_span(start_ms, end_ms, PHASE3_GRID_CELLS);
+    if times.is_empty() {
+        return Vec::new();
+    }
+    extract_frames_at_times(app, &candidate.asset_id, source, &times, "phase3_grid")
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+fn compose_candidate_grid(
+    app: Option<&AppHandle>,
+    candidate: &StoryboardSource,
+    start_ms: i64,
+    end_ms: i64,
+    frames: &[PathBuf],
+) -> Option<PathBuf> {
+    let directory = phase3_grid_directory(app, candidate, frames.first()?)?;
+    let stem = candidate
+        .segment
+        .as_ref()
+        .map(|segment| segment.id.as_str())
+        .filter(|id| !id.is_empty())
+        .unwrap_or("whole");
+    let output = directory.join(format!("{stem}_{start_ms}_{end_ms}_grid.jpg"));
+    if output.is_file() {
+        return Some(output);
+    }
+    compose_timed_frame_grid(frames, &output, 2)
+}
+
+fn phase3_grid_directory(
+    app: Option<&AppHandle>,
+    candidate: &StoryboardSource,
+    fallback_frame: &Path,
+) -> Option<PathBuf> {
+    if let Some(app) = app {
+        let directory = app
+            .path()
+            .app_data_dir()
+            .ok()?
+            .join("derived")
+            .join(&candidate.asset_id)
+            .join("phase3_grids");
+        std::fs::create_dir_all(&directory).ok()?;
+        return Some(directory);
+    }
+    fallback_frame.parent().map(Path::to_path_buf)
+}
+
+fn push_readable_path(paths: &mut Vec<PathBuf>, raw: &str) {
+    let path = PathBuf::from(raw);
+    if path.is_file() && !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+pub(crate) fn sample_times_in_span(start_ms: i64, end_ms: i64, count: usize) -> Vec<i64> {
+    let start = start_ms.max(0);
+    let last = end_ms.saturating_sub(1).max(start);
+    if count <= 1 || last <= start {
+        return vec![start];
+    }
+    (0..count)
+        .map(|index| start + (last - start) * index as i64 / (count as i64 - 1))
+        .collect()
+}
+
+fn pick_even_paths(paths: &[PathBuf], max: usize) -> Vec<PathBuf> {
+    if paths.is_empty() || max == 0 {
+        return Vec::new();
+    }
+    if paths.len() <= max {
+        return paths.to_vec();
+    }
+    if max == 1 {
+        return vec![paths[paths.len() / 2].clone()];
+    }
+    (0..max)
+        .map(|index| paths[index * (paths.len() - 1) / (max - 1)].clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +806,58 @@ mod tests {
         let composed = image::open(&grid).unwrap();
         assert_eq!(composed.width(), 960);
         assert_eq!(composed.height(), 360);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn sample_times_cover_the_span_inclusively() {
+        assert_eq!(sample_times_in_span(1000, 5000, 4), vec![1000, 2333, 3666, 4999]);
+        assert_eq!(sample_times_in_span(800, 800, 4), vec![800]);
+    }
+
+    #[test]
+    fn phase3_grid_uses_existing_segment_frames_and_skips_missing_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "phase3-grid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut frames = Vec::new();
+        for index in 0..3 {
+            let path = directory.join(format!("cell_{index}.jpg"));
+            let img = RgbImage::from_pixel(32, 32, Rgb([index as u8 * 40, 80, 80]));
+            img.save(&path).unwrap();
+            frames.push(path.to_string_lossy().into_owned());
+        }
+        frames.push(directory.join("missing.jpg").to_string_lossy().into_owned());
+        let candidate = StoryboardSource {
+            asset_id: "asset-grid".to_owned(),
+            kind: "video".to_owned(),
+            duration_ms: Some(8_000),
+            scene_segments: Vec::new(),
+            ocr_evidence: Vec::new(),
+            visual_evidence: Vec::new(),
+            visual_quality_score: None,
+            evidence_embedding: None,
+            keyframe_grid_path: Some(directory.join("stale_grid.jpg").to_string_lossy().into_owned()),
+            keyframes: Vec::new(),
+            source_path: None,
+            segment: Some(crate::models::CandidateSegment {
+                id: "s002".to_owned(),
+                start_ms: 2000,
+                end_ms: 5000,
+                frame_paths: frames,
+                shot_type: None,
+                camera_motion: None,
+            }),
+            segment_embedding: None,
+            segment_clip_embedding: None,
+        };
+        let grid = ensure_phase3_candidate_grid(None, &candidate).expect("composed from existing frames");
+        assert!(grid.is_file());
         let _ = std::fs::remove_dir_all(&directory);
     }
 }

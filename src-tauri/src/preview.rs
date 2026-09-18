@@ -31,15 +31,34 @@ pub(crate) fn render_timeline_clip(
     clip: &TimelineClip,
     destination: &Path,
 ) -> Result<(), String> {
-    // 用源范围与时间线槽位中较短的一段作为 -t，避免 FFmpeg 在源素材耗尽后
-    // 填充黑帧或静帧（源时长 < 槽位时长时会发生这种情况）。
+    // 用源范围播放，时间线槽位更长时按源窗/槽位放慢，避免黑帧或静帧。
     let timeline_duration_ms = clip.timeline_end_ms - clip.timeline_start_ms;
-    let source_duration_ms = clip.source_end_ms - clip.source_start_ms;
+    let source_duration_ms = (clip.source_end_ms - clip.source_start_ms).max(0);
     let freeze = clip.clip_kind == "freeze_frame";
-    let duration = if freeze {
+    let output_duration = if freeze {
+        timeline_duration_ms as f64 / 1000.0
+    } else if kind == "image" {
+        timeline_duration_ms.max(1) as f64 / 1000.0
+    } else if timeline_duration_ms > source_duration_ms && source_duration_ms > 0 {
         timeline_duration_ms as f64 / 1000.0
     } else {
-        timeline_duration_ms.min(source_duration_ms) as f64 / 1000.0
+        timeline_duration_ms.min(source_duration_ms).max(1) as f64 / 1000.0
+    };
+    let input_duration = if freeze || kind == "image" {
+        output_duration
+    } else if timeline_duration_ms > source_duration_ms && source_duration_ms > 0 {
+        source_duration_ms as f64 / 1000.0
+    } else {
+        output_duration
+    };
+    let slow_factor = if !freeze
+        && kind == "video"
+        && timeline_duration_ms > source_duration_ms
+        && source_duration_ms > 0
+    {
+        timeline_duration_ms as f64 / source_duration_ms as f64
+    } else {
+        1.0
     };
     let mut command = hidden_command("ffmpeg");
     command.args(["-y", "-hide_banner", "-loglevel", "error"]);
@@ -60,7 +79,7 @@ pub(crate) fn render_timeline_clip(
         command
             .args(["-loop", "1", "-i"])
             .arg(&frame_path)
-            .args(["-t", &format!("{duration:.3}")]);
+            .args(["-t", &format!("{output_duration:.3}")]);
     } else if kind == "video" {
         command
             .args([
@@ -69,24 +88,31 @@ pub(crate) fn render_timeline_clip(
                 "-i",
             ])
             .arg(source)
-            .args(["-t", &format!("{duration:.3}")]);
+            .args(["-t", &format!("{input_duration:.3}")]);
     } else if kind == "image" {
         command
             .args(["-loop", "1", "-i"])
             .arg(source)
-            .args(["-t", &format!("{duration:.3}")]);
+            .args(["-t", &format!("{output_duration:.3}")]);
     } else {
         return Err("Timeline clip uses unsupported media.".to_owned());
     }
     let [x, y] = clip.crop_focus.unwrap_or([0.5, 0.5]);
+    let setpts = if (slow_factor - 1.0).abs() > 0.001 {
+        format!("setpts=PTS*{slow_factor:.6},")
+    } else {
+        String::new()
+    };
     let filter = format!(
-        "scale=540:960:force_original_aspect_ratio=increase,crop=540:960:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
+        "{setpts}scale=540:960:force_original_aspect_ratio=increase,crop=540:960:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
         x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)
     );
     let status = command
         .args([
             "-vf",
             &filter,
+            "-t",
+            &format!("{output_duration:.3}"),
             "-an",
             "-c:v",
             "libx264",

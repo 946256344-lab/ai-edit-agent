@@ -38,6 +38,9 @@ use uuid::Uuid;
 /// provider never blocks the agent loop forever.
 const STORYBOARD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PHASE1_REVISIONS: usize = 3;
+/// 细拍目标：约 2–3 秒一拍。平均明显长于约 4 秒则软反馈再拆，不整单失败。
+const TARGET_BEAT_MS: i64 = 2_500;
+const COARSE_AVERAGE_BEAT_MS: i64 = 4_000;
 /// 本地处理安全上限（非创作规格）；80s 成片允许更密的切镜。
 const MAX_STORYBOARD_SHOTS: usize = 100;
 const MAX_STORYBOARD_BEATS: usize = 100;
@@ -528,18 +531,14 @@ pub(crate) fn validate_storyboard(
             if shot.source_start_ms < 0
                 || shot.source_end_ms <= shot.source_start_ms
                 || shot.source_end_ms > duration
+                || shot.duration_ms < 1
             {
                 return Err(storyboard_repair_message(
                     "Storyboard referenced an invalid video time range.",
                     vec![shot.order_index],
                 ));
             }
-            if shot.duration_ms > shot.source_end_ms - shot.source_start_ms {
-                return Err(storyboard_repair_message(
-                    "Storyboard shot duration exceeds its verified video source range.",
-                    vec![shot.order_index],
-                ));
-            }
+            // durationMs 是成片/口播时钟，可以长于源窗；预览和剪映按源窗对时钟放慢。
         } else if source.kind != "image" || shot.source_start_ms != 0 || shot.source_end_ms != 0 {
             return Err(storyboard_repair_message(
                 "Storyboard image references must use a zero source range.",
@@ -825,6 +824,35 @@ fn short_brief_duration_issue(
     (!issues.is_empty()).then(|| issues.join("; "))
 }
 
+fn expected_beat_count(duration_ms: i64) -> i64 {
+    ((duration_ms.max(1) + TARGET_BEAT_MS / 2) / TARGET_BEAT_MS).clamp(2, 100)
+}
+
+/// 一拍一镜后，镜头时长等于拍的口播时长。拍拆成主题幕就会每镜拖到 5–8 秒。
+fn coarse_beat_issue(
+    narrative: &phases::NarrativeStructure,
+    voiceover_duration_ms: Option<i64>,
+) -> Option<String> {
+    if narrative.beats.is_empty() {
+        return None;
+    }
+    let total = voiceover_duration_ms
+        .filter(|ms| *ms > 0)
+        .unwrap_or(narrative.target_duration_ms);
+    if total < 3_000 {
+        return None;
+    }
+    let count = narrative.beats.len() as i64;
+    let average = total / count.max(1);
+    if average <= COARSE_AVERAGE_BEAT_MS {
+        return None;
+    }
+    let expected = expected_beat_count(total);
+    Some(format!(
+        "Beats are too coarse: {count} beats for a {total}ms video (about {average}ms each). Aim for about {expected} beats of 2-3 seconds. Split by meaning units, not thematic acts (intro/problem/proof/value). Duration can wobble; do not split inside a word. Concatenating beat narrations must still reproduce spokenScript."
+    ))
+}
+
 /// key_message：默认不写屏幕标记。模型若写了，只拦超过 24 字的标记。
 fn key_message_marker_issue(
     _brief: &str,
@@ -971,19 +999,19 @@ fn normalize_storyboard_candidate_scoped(
             if source.kind == "video" {
                 let original_start = shot.source_start_ms;
                 let original_end = shot.source_end_ms;
+                let on_screen = shot.duration_ms.max(1);
                 let duration = source.duration_ms.unwrap_or(0).max(1);
                 let preferred_span = (original_end - original_start).max(1);
-                let desired_duration = shot.duration_ms.min(preferred_span).clamp(1, duration);
+                let source_need = preferred_span.min(on_screen).clamp(1, duration);
                 let range_already_valid = original_start >= 0
                     && original_end > original_start
-                    && original_end <= duration
-                    && desired_duration <= original_end - original_start;
+                    && original_end <= duration;
                 let (start, end) = if range_already_valid {
                     (original_start, original_end)
                 } else {
                     choose_storyboard_video_range(
                         source,
-                        desired_duration,
+                        source_need,
                         original_start,
                         original_end,
                     )
@@ -1000,9 +1028,8 @@ fn normalize_storyboard_candidate_scoped(
                         end
                     );
                 }
-                shot.source_start_ms = start;
-                shot.source_end_ms = end;
-                shot.duration_ms = (end - start).min(desired_duration).max(1);
+                crate::storyboard::length::set_source_range(shot, start, end);
+                shot.duration_ms = on_screen;
             } else {
                 shot.source_start_ms = 0;
                 shot.source_end_ms = 0;
@@ -1174,7 +1201,8 @@ fn resolve_overlapping_video_ranges_scoped(
             continue;
         }
         let duration = source.duration_ms.unwrap_or(0).max(1);
-        let need = shot.duration_ms.clamp(1, duration);
+        let on_screen = shot.duration_ms.max(1);
+        let need = crate::storyboard::length::source_span_ms(shot).clamp(1, duration);
         let occupied = used.entry(shot.asset_id.clone()).or_default();
         let mut start = shot.source_start_ms.max(0);
         let mut end = shot.source_end_ms.min(duration).max(start + 1);
@@ -1190,9 +1218,8 @@ fn resolve_overlapping_video_ranges_scoped(
                 end = free_end;
             }
         }
-        shot.source_start_ms = start;
-        shot.source_end_ms = end.min(duration).max(start + 1);
-        shot.duration_ms = (shot.source_end_ms - shot.source_start_ms).min(need).max(1);
+        crate::storyboard::length::set_source_range(shot, start, end.min(duration).max(start + 1));
+        shot.duration_ms = on_screen;
         occupied.push((shot.source_start_ms, shot.source_end_ms));
     }
     let asset_ids = used.keys().cloned().collect::<Vec<_>>();
@@ -1260,10 +1287,13 @@ fn pack_video_asset_shots(
         } else {
             (start + slice).min(duration)
         };
-        shots[index].source_start_ms = start.min(duration.saturating_sub(1));
-        shots[index].source_end_ms = end.max(shots[index].source_start_ms + 1).min(duration);
-        shots[index].duration_ms =
-            (shots[index].source_end_ms - shots[index].source_start_ms).max(1);
+        let on_screen = shots[index].duration_ms.max(1);
+        crate::storyboard::length::set_source_range(
+            &mut shots[index],
+            start.min(duration.saturating_sub(1)),
+            end.max(start + 1).min(duration),
+        );
+        shots[index].duration_ms = on_screen;
     }
 }
 
@@ -1375,8 +1405,9 @@ fn choose_storyboard_video_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        brief_has_voiceover_script, decide_script_mode, enforce_decided_script_mode,
-        estimated_storyboard_duration_ms, key_message_marker_issue, minimum_storyboard_duration,
+        brief_has_voiceover_script, coarse_beat_issue, decide_script_mode,
+        enforce_decided_script_mode, estimated_storyboard_duration_ms, expected_beat_count,
+        key_message_marker_issue, minimum_storyboard_duration,
         normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
         short_brief_duration_issue, spoken_duration_conflicts, storyboard_completion_gaps,
         storyboard_sources, storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
@@ -2212,6 +2243,52 @@ mod tests {
         assert!(validate_storyboard(&storyboard, &sources, &brief).is_ok());
     }
 
+    fn narrative_with_beats(count: usize, target_duration_ms: i64) -> NarrativeStructure {
+        NarrativeStructure {
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms,
+            spoken_script: "script".to_owned(),
+            script_mode: "full_script".to_owned(),
+            beats: (0..count)
+                .map(|index| StoryboardBeat {
+                    id: format!("beat-{index}"),
+                    purpose: "p".to_owned(),
+                    required_visual: "v".to_owned(),
+                    visual_keywords: vec![],
+                    narration: "一句旁白。".to_owned(),
+                    on_screen_text: String::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn expected_beat_count_is_about_two_to_three_seconds() {
+        assert_eq!(expected_beat_count(26_205), 10);
+        assert_eq!(expected_beat_count(8_000), 3);
+    }
+
+    #[test]
+    fn four_thematic_beats_on_a_26s_voiceover_are_too_coarse() {
+        let narrative = narrative_with_beats(4, 26_205);
+        let issue = coarse_beat_issue(&narrative, Some(26_205)).expect("coarse 4-act split");
+        assert!(issue.contains("4 beats"), "issue={issue}");
+        assert!(issue.contains("10 beats"), "issue={issue}");
+    }
+
+    #[test]
+    fn ten_beats_on_a_26s_voiceover_are_fine_enough() {
+        let narrative = narrative_with_beats(10, 26_205);
+        assert!(coarse_beat_issue(&narrative, Some(26_205)).is_none());
+    }
+
+    #[test]
+    fn two_beats_on_an_8s_cut_are_allowed_wobble() {
+        let narrative = narrative_with_beats(2, 8_000);
+        assert!(coarse_beat_issue(&narrative, None).is_none());
+    }
+
     #[test]
     fn beat_narration_longer_than_eight_seconds_is_allowed() {
         let mut storyboard = content("direct");
@@ -2695,12 +2772,25 @@ fn generate_storyboard_internal(
                 };
                 let key_message_issue = key_message_marker_issue(brief, &candidate);
                 let issue = duration_issue.or(key_message_issue);
-                if issue.is_none() {
-                    Some(candidate)
-                } else {
-                    log::warn!("Phase 1 narrative rejected: {}", issue.clone().unwrap_or_default());
-                    phase1_feedback = issue;
+                if let Some(issue) = issue {
+                    log::warn!("Phase 1 narrative rejected: {issue}");
+                    phase1_feedback = Some(issue);
                     None
+                } else if let Some(coarse) =
+                    coarse_beat_issue(&candidate, voiceover_duration_ms)
+                {
+                    if revision + 1 < MAX_PHASE1_REVISIONS {
+                        log::warn!("Phase 1 beats too coarse, asking for a finer split: {coarse}");
+                        phase1_feedback = Some(coarse);
+                        None
+                    } else {
+                        log::warn!(
+                            "Phase 1 keeping coarse beats after last revision: {coarse}"
+                        );
+                        Some(candidate)
+                    }
+                } else {
+                    Some(candidate)
                 }
             }
             Err(error) => {
@@ -2853,7 +2943,7 @@ fn generate_storyboard_internal(
         rough.uncovered_beat_ids.len()
     );
 
-    // Phase 3: 每拍单独看 9 图、默认一镜；窗短于旁白时再问选片模型，不把拉窗丢给 Phase 4。
+    // Phase 3: 每拍单独看 9 图、默认一镜；源窗短于旁白时放慢已选镜头，不换片。
     let selected = {
         let mut repair: Option<RepairPacket> = None;
         let mut selected = None;
@@ -2863,7 +2953,7 @@ fn generate_storyboard_internal(
             crate::execution_deadline::check()?;
             let attempt = budget.semantic_attempt_number();
             log::info!("Phase 3 attempt {attempt}: select one shot per beat");
-            match phases::phase3_select(&access, brief, &rough, repair.as_ref()) {
+            match phases::phase3_select(&app, &access, brief, &rough, repair.as_ref()) {
                 Ok((mut candidate, mut issues)) => {
                     let alignment = audio_first
                         .as_ref()
@@ -2874,7 +2964,7 @@ fn generate_storyboard_internal(
                         alignment,
                     ));
                     issues.extend(crate::storyboard::length::collect_usable_window_shortfalls(
-                        &candidate, &rough,
+                        &mut candidate, &rough,
                     ));
                     last_candidate = Some(candidate.clone());
                     log::info!(

@@ -2,8 +2,8 @@
 //
 // Phase 1: 叙事结构（注入本地库库存摘要，约束 requiredVisual/visualKeywords）
 // Phase 2: 全库段排序，每 beat 取 9 段（同片最多 2，相似最多 2）
-// Phase 3: 每拍单独看最多 9 张图，默认一镜；替补只从前 5 条里选
-// Phase 4: 选内容窗 → 段内精修切点（禁止换片）
+// Phase 3: 每拍单独看最多 9 张图，默认一镜；替补只从前 5 条里选；网格按该条时间窗现拼
+// Phase 4: 锁在 P3 窗内精修切点（禁止换片；整片也不再 Pass A 另切窗）
 // Phase 5: 由调用方执行 normalize + validate_storyboard
 
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
@@ -117,12 +117,15 @@ pub(crate) fn phase1_generate_narrative(
             .to_owned()
     };
     if let Some(duration_ms) = voiceover_duration_ms {
+        let beats = super::expected_beat_count(duration_ms);
+        let secs = (duration_ms + 500) / 1000;
         mode_instructions.push_str(&format!(
-            "\nA voiceover was already synthesized at {duration_ms}ms. Set targetDurationMs to {duration_ms}. Split spokenScript by meaning across beats so concatenating them still reproduces the script; Rust will map beats onto the TTS timestamps."
+            "\nA voiceover was already synthesized at {duration_ms}ms (~{secs}s). Set targetDurationMs to {duration_ms}. Write about {beats} beats (2-3 seconds of speech each), not 3-5 thematic acts. One picture shot is cut per beat, so a 6-second beat becomes a 6-second hold. Split spokenScript by meaning across beats so concatenating them still reproduces the script; Rust will map beats onto the TTS timestamps."
         ));
     } else if let Some(duration_ms) = requested_duration_ms {
+        let beats = super::expected_beat_count(duration_ms);
         mode_instructions.push_str(&format!(
-            "\nThe user asked for a finished video of {duration_ms}ms. Set targetDurationMs to {duration_ms}. Split into beats of about 2-3 seconds."
+            "\nThe user asked for a finished video of {duration_ms}ms. Set targetDurationMs to {duration_ms}. Write about {beats} beats of about 2-3 seconds. One picture shot is cut per beat."
         ));
     }
 
@@ -144,7 +147,7 @@ pub(crate) fn phase1_generate_narrative(
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
-        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn, about 2-3 seconds.\n\
+        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn, about 2-3 seconds. Do not collapse a whole product act (intro / problem / proof / CTA) into one beat — one picture shot is cut per beat, so a 6-second beat becomes a 6-second hold.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or the user's duration / 15-45s guidance (key_message).\n\
         {feedback_context}{inventory_block}"
@@ -364,30 +367,49 @@ pub(crate) fn phase2_rough_shot_selection(
             beat_clip.map(Vec::as_slice),
         );
         let (pool, scores, library_exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE);
+        let sample = pool
+            .iter()
+            .zip(scores.iter())
+            .enumerate()
+            .map(|(index, (candidate, score))| {
+                let segment = candidate
+                    .segment
+                    .as_ref()
+                    .map(|segment| segment.id.as_str())
+                    .unwrap_or("-");
+                format!(
+                    "#{index}:{}/{segment}(sem={:.1}/lex={:.1}/clip={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
+                    candidate.asset_id,
+                    score.semantic,
+                    score.lexical,
+                    score.clip,
+                    score.quality,
+                    score.duration,
+                    score.freshness,
+                    score.total,
+                    if score.has_evidence { "" } else { ",noEv" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         log::info!(
             "Beat '{}': poolSize={}, libraryExhausted={}, sample={}",
             beat.id,
             pool.len(),
             library_exhausted,
-            pool.iter()
-                .zip(scores.iter())
-                .take(8)
-                .map(|(candidate, score)| {
-                    format!(
-                        "{}(sem={:.1}/lex={:.1}/clip={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
-                        candidate.asset_id,
-                        score.semantic,
-                        score.lexical,
-                        score.clip,
-                        score.quality,
-                        score.duration,
-                        score.freshness,
-                        score.total,
-                        if score.has_evidence { "" } else { ",noEv" }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
+            sample
+        );
+        crate::storyboard::provider_trace::append_pool_trace(
+            "Phase 2",
+            &beat.id,
+            &json!({
+                "purpose": beat.purpose,
+                "narration": beat.narration,
+                "requiredVisual": beat.required_visual,
+                "visualKeywords": beat.visual_keywords,
+                "libraryExhausted": library_exhausted,
+                "candidates": pool_trace_candidates(&pool, &scores),
+            }),
         );
         if pool.is_empty() {
             log::warn!(
@@ -736,6 +758,11 @@ fn compact_candidate_card(
         })
         .take(12)
         .collect();
+    let evidence = candidate_evidence_summary(source);
+    let stored_grid_readable = source
+        .keyframe_grid_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).is_file());
     let usable_ms = source
         .segment
         .as_ref()
@@ -747,13 +774,18 @@ fn compact_candidate_card(
         "kind": source.kind,
         "durationMs": source.segment.as_ref().map(|segment| segment.span_ms()).or(source.duration_ms),
         "usableMs": usable_ms,
-        "hasKeyframeGrid": source.keyframe_grid_path.is_some(),
+        "hasKeyframeGrid": keyframe_grid_attached || stored_grid_readable,
         "keyframeGridAttached": keyframe_grid_attached,
         "keyframeTimesMs": source.keyframes.iter().map(|frame| frame.time_ms).collect::<Vec<_>>(),
         "sceneSegments": source.scene_segments.iter().take(8).map(|segment| {
             json!({"id": segment.id, "startMs": segment.start_ms, "endMs": segment.end_ms})
         }).collect::<Vec<_>>(),
-        "visualTags": visual_tags
+        "visualTags": visual_tags,
+        "visibleCaption": evidence.get("caption").cloned().unwrap_or(Value::Null),
+        "narrativeRole": evidence.get("narrativeRole").cloned().unwrap_or(Value::Null),
+        "scene": evidence.get("scene").cloned().unwrap_or(Value::Null),
+        "subjects": evidence.get("subjects").cloned().unwrap_or_else(|| json!([])),
+        "actions": evidence.get("actions").cloned().unwrap_or_else(|| json!([])),
     });
     if let Some(segment) = &source.segment {
         card["segmentId"] = json!(segment.id);
@@ -779,7 +811,7 @@ const PHASE3_MAX_ALTERNATES: usize = 3;
 fn phase3_pool_cards(
     pools: &[BeatCandidatePool],
     beats: &[StoryboardBeat],
-    attached_asset_ids: &HashSet<String>,
+    attached_indexes: &HashSet<usize>,
     speech_timing: &super::timing::SpeechTiming,
 ) -> Vec<Value> {
     pools
@@ -797,7 +829,7 @@ fn phase3_pool_cards(
                     compact_candidate_card(
                         index,
                         candidate,
-                        attached_asset_ids.contains(&candidate.asset_id),
+                        attached_indexes.contains(&index),
                         pool.scores.get(index),
                     )
                 })
@@ -1178,6 +1210,8 @@ mod tests {
         .unwrap();
         assert_eq!(selected.shots[0].asset_id, "whole");
         assert_eq!(selected.shots[0].segment_id, None);
+        assert_eq!(selected.shots[0].source_start_ms, 0);
+        assert_eq!(selected.shots[0].source_end_ms, 10_000);
         assert_eq!(selected.shots[1].segment_id.as_deref(), Some("s002"));
         assert_eq!(selected.shots[1].source_start_ms, 5000);
         assert_eq!(selected.shots[1].source_end_ms, 7000);
@@ -2152,12 +2186,43 @@ mod tests {
         assert_eq!(cards[0]["candidates"][0]["keyframeGridAttached"], false);
         assert_eq!(cards[0]["requiredVisual"], "");
     }
+
+    #[test]
+    fn phase3_pool_cards_include_visible_caption() {
+        let mut candidate = source("a0");
+        candidate.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["packed units".to_owned()],
+            scene: Some("warehouse aisle".to_owned()),
+            actions: vec!["stacked".to_owned()],
+            products: vec![],
+            quality_notes: vec![],
+            shot_type: None,
+            camera_motion: None,
+            segment_id: None,
+            narrative_role: Some("establishing stored goods".to_owned()),
+            caption: Some("Rows of wrapped packs with a shipping overlay.".to_owned()),
+        }];
+        let pool = BeatCandidatePool {
+            beat_id: "beat-1".to_owned(),
+            beat_purpose: "purpose".to_owned(),
+            candidates: vec![candidate],
+            scores: vec![],
+        };
+        let cards = phase3_pool_cards(&[pool], &[], &HashSet::new(), &Default::default());
+        assert_eq!(
+            cards[0]["candidates"][0]["visibleCaption"],
+            "Rows of wrapped packs with a shipping overlay."
+        );
+        assert_eq!(cards[0]["candidates"][0]["scene"], "warehouse aisle");
+    }
 }
 
 /// Phase 3: 每个 beat 单独看最多 9 张候选图，默认选 1 镜（替补只从前 5 条里选）。
 ///
 /// 返回 `(候选, 校验问题)`：`Err` 仅表示传输/解析失败；语义问题进 `issues`。
 pub(crate) fn phase3_select(
+    app: &AppHandle,
     access: &ModelAccess,
     brief: &str,
     rough: &RoughStoryboard,
@@ -2189,6 +2254,7 @@ pub(crate) fn phase3_select(
                 candidate_indexes: Vec::new(),
                 uncovered: true,
                 narration: None,
+                match_level: None,
             });
             continue;
         };
@@ -2199,6 +2265,7 @@ pub(crate) fn phase3_select(
                 candidate_indexes: Vec::new(),
                 uncovered: true,
                 narration: None,
+                match_level: None,
             });
             continue;
         }
@@ -2207,6 +2274,7 @@ pub(crate) fn phase3_select(
         for attempt in 1..=3 {
             crate::execution_deadline::check()?;
             match select_one_beat(
+                app,
                 access,
                 brief,
                 rough,
@@ -2241,6 +2309,7 @@ pub(crate) fn phase3_select(
             candidate_indexes: Vec::new(),
             uncovered: true,
             narration: None,
+            match_level: None,
         });
         if last_error.is_some() {
             log::warn!(
@@ -2358,6 +2427,7 @@ fn previous_beat_selections(
                     uncovered: candidate_indexes.is_empty(),
                     candidate_indexes,
                     narration: None,
+                    match_level: None,
                 },
             )
         })
@@ -2394,6 +2464,7 @@ fn refs_from_selection(
 }
 
 fn select_one_beat(
+    app: &AppHandle,
     access: &ModelAccess,
     brief: &str,
     rough: &RoughStoryboard,
@@ -2402,11 +2473,11 @@ fn select_one_beat(
     repair: Option<&RepairPacket>,
     attempt: usize,
 ) -> Result<Phase3BeatSelection, String> {
-    let (keyframe_blocks, attached_asset_ids) = phase3_keyframe_image_blocks_for_pool(pool);
+    let (keyframe_blocks, attached_indexes) = phase3_keyframe_image_blocks_for_pool(app, pool);
     let candidate_cards_json = serde_json::to_string(&phase3_pool_cards(
         std::slice::from_ref(pool),
         &rough.beats,
-        &attached_asset_ids,
+        &attached_indexes,
         &rough.speech_timing,
     ))
     .unwrap_or_else(|_| "[]".to_owned());
@@ -2437,16 +2508,20 @@ fn select_one_beat(
         Beat timing plan: {}\n\
         Candidate pool for this beat: {candidate_cards_json}\n\
         {feedback_context}\n\n\
-        Keyframe grids for this beat's candidates are attached below (up to 9). Candidates with keyframeGridAttached=false have no image — judge them from visualTags only.\n\
+        Keyframe grids for this beat's candidates are attached below (up to 9). Each image is this candidate's own time window, not a stand-in for the whole file.\n\
+        Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
-        If narrationMs is longer than the selected candidate's usableMs, do not add a second shot. Pick another candidateIndex 0-4 with enough usableMs, or return uncovered=true.\n\
-        Match the actual visual evidence first. Do not invent camera motion or events absent from the frames.\n\
+        If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
+        Selection order: (1) look at the attached frames first; visibleCaption/scene/subjects/actions are unverified labels — if they conflict with the frames, trust the frames; (2) prefer the candidate whose frames best cover this beat's requiredVisual; (3) if none cover it literally, pick the closest honest scene-setting clip from this pool.\n\
+        Narration is what will be spoken and how long the picture must last. Do not pick a clip only because it echoes abstract wording in the narration or brief.\n\
+        Do not invent camera motion or events absent from the frames. Do not treat a caption as true when the grid shows something else.\n\
         Hard rule: candidateIndexes must be DISTINCT assetIds from THIS beat's pool. Indexes must be 0-4; candidates 5-8 are context only.\n\
         Hard rule: do not pick a candidate visually similar to an already selected shot.\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list.\n\
         Choose ONE candidate. A second distinct, non-similar asset is allowed only when two clips honestly fit; never pad.\n\
         Picture shots should last about 2-3 seconds.\n\
-        Return JSON only: {{\"selections\":[{{\"beatId\":\"{}\",\"candidateIndexes\":[0],\"uncovered\":false,\"narration\":null}}]}}\n\
+        matchLevel must be 'direct' when the chosen frames visibly cover requiredVisual, otherwise 'contextual'.\n\
+        Return JSON only: {{\"selections\":[{{\"beatId\":\"{}\",\"candidateIndexes\":[0],\"uncovered\":false,\"matchLevel\":\"contextual\",\"narration\":null}}]}}\n\
         Include exactly one selection object for this beat. Omit narration unless moving words to a neighbor beat.",
         rough.title,
         rough.summary,
@@ -2491,32 +2566,126 @@ fn select_one_beat(
         .ok_or_else(|| "Phase 3 response did not contain JSON.".to_owned())?;
     let parsed: Phase3SelectResponse = serde_json::from_str(&text)
         .map_err(|_| "Phase 3 JSON did not match selection schema.".to_owned())?;
-    parsed
+    let selection = parsed
         .selections
         .into_iter()
         .find(|item| item.beat_id == pool.beat_id)
-        .ok_or_else(|| format!("Phase 3 selection missing covered beat '{}'.", pool.beat_id))
+        .ok_or_else(|| format!("Phase 3 selection missing covered beat '{}'.", pool.beat_id))?;
+    let grid_attached = attached_indexes;
+    let selected = selection
+        .candidate_indexes
+        .iter()
+        .filter_map(|index| {
+            let candidate = pool.candidates.get(*index)?;
+            Some(json!({
+                "candidateIndex": index,
+                "assetId": candidate.asset_id,
+                "segmentId": candidate.segment.as_ref().map(|segment| segment.id.clone()),
+                "keyframeGridAttached": grid_attached.contains(index),
+                "matchLevel": normalize_phase3_match_level(selection.match_level.as_deref()),
+                "evidence": candidate_evidence_summary(candidate),
+            }))
+        })
+        .collect::<Vec<_>>();
+    crate::storyboard::provider_trace::append_pool_trace(
+        "Phase 3",
+        &pool.beat_id,
+        &json!({
+            "attempt": attempt,
+            "uncovered": selection.uncovered,
+            "candidateIndexes": selection.candidate_indexes,
+            "selected": selected,
+            "attachedGridCount": grid_attached.len(),
+            "pool": pool_trace_candidates(pool.candidates.as_slice(), pool.scores.as_slice()),
+        }),
+    );
+    Ok(selection)
 }
 
-/// 为这一拍附上最多 9 张候选关键帧网格。
-fn phase3_keyframe_image_blocks_for_pool(pool: &BeatCandidatePool) -> (Vec<Value>, HashSet<String>) {
-    use crate::storyboard::multimodal::read_input_image;
-    use std::path::Path;
+fn pool_trace_candidates(
+    pool: &[StoryboardSource],
+    scores: &[scoring::CandidateScore],
+) -> Vec<Value> {
+    pool.iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let score = scores.get(index);
+            json!({
+                "candidateIndex": index,
+                "assetId": candidate.asset_id,
+                "segmentId": candidate.segment.as_ref().map(|segment| segment.id.clone()),
+                "rangeMs": candidate.segment.as_ref().map(|segment| {
+                    json!([segment.start_ms, segment.end_ms])
+                }),
+                "hasKeyframeGrid": candidate.keyframe_grid_path.as_deref().is_some_and(|path| Path::new(path).is_file()),
+                "evidence": candidate_evidence_summary(candidate),
+                "score": score.map(|score| json!({
+                    "total": (score.total * 10.0).round() / 10.0,
+                    "semantic": (score.semantic * 10.0).round() / 10.0,
+                    "lexical": (score.lexical * 10.0).round() / 10.0,
+                    "clip": (score.clip * 10.0).round() / 10.0,
+                    "quality": (score.quality * 10.0).round() / 10.0,
+                    "duration": (score.duration * 10.0).round() / 10.0,
+                    "freshness": (score.freshness * 10.0).round() / 10.0,
+                    "hasEvidence": score.has_evidence,
+                    "matchedKeywords": score.matched_keywords,
+                })),
+            })
+        })
+        .collect()
+}
+
+fn candidate_evidence_summary(candidate: &StoryboardSource) -> Value {
+    let evidence = candidate
+        .segment
+        .as_ref()
+        .and_then(|segment| {
+            candidate
+                .visual_evidence
+                .iter()
+                .find(|item| item.segment_id.as_deref() == Some(segment.id.as_str()))
+                .or_else(|| candidate.visual_evidence.first())
+        })
+        .or_else(|| candidate.visual_evidence.first());
+    match evidence {
+        Some(evidence) => json!({
+            "scene": evidence.scene,
+            "caption": evidence.caption,
+            "narrativeRole": evidence.narrative_role,
+            "subjects": evidence.subjects.iter().take(4).cloned().collect::<Vec<_>>(),
+            "actions": evidence.actions.iter().take(3).cloned().collect::<Vec<_>>(),
+        }),
+        None => json!({
+            "scene": null,
+            "caption": null,
+            "narrativeRole": null,
+            "subjects": [],
+            "actions": [],
+        }),
+    }
+}
+
+/// 为这一拍附上最多 9 张候选网格：按该条时间窗现拼，缺文件则现抽。
+fn phase3_keyframe_image_blocks_for_pool(
+    app: &AppHandle,
+    pool: &BeatCandidatePool,
+) -> (Vec<Value>, HashSet<usize>) {
+    use crate::storyboard::multimodal::{ensure_phase3_candidate_grid, read_input_image};
 
     let mut blocks = Vec::new();
     let mut attached = HashSet::new();
-    for (index, candidate) in pool
+    let considered = pool
         .candidates
-        .iter()
-        .take(crate::storyboard::multimodal::PHASE3_MAX_GRID_IMAGES)
-        .enumerate() {
-        let Some(grid_path) = candidate.keyframe_grid_path.as_deref() else {
+        .len()
+        .min(crate::storyboard::multimodal::PHASE3_MAX_GRID_IMAGES);
+    for (index, candidate) in pool.candidates.iter().take(considered).enumerate() {
+        let Some(grid_path) = ensure_phase3_candidate_grid(Some(app), candidate) else {
             continue;
         };
-        let Some(image) = read_input_image(Path::new(grid_path)) else {
+        let Some(image) = read_input_image(&grid_path) else {
             continue;
         };
-        attached.insert(candidate.asset_id.clone());
+        attached.insert(index);
         blocks.push(json!({
             "type": "input_text",
             "text": format!("Keyframe grid (2x2) for candidateIndex={index} assetId={}", candidate.asset_id)
@@ -2524,9 +2693,10 @@ fn phase3_keyframe_image_blocks_for_pool(pool: &BeatCandidatePool) -> (Vec<Value
         blocks.push(image);
     }
     log::info!(
-        "Phase 3 beat '{}' attached {} keyframe grid image(s)",
+        "Phase 3 beat '{}' attached {}/{} candidate grid image(s)",
         pool.beat_id,
-        blocks.len() / 2
+        attached.len(),
+        considered
     );
     (blocks, attached)
 }
@@ -2547,6 +2717,15 @@ struct Phase3BeatSelection {
     uncovered: bool,
     #[serde(default)]
     narration: Option<String>,
+    #[serde(default)]
+    match_level: Option<String>,
+}
+
+fn normalize_phase3_match_level(value: Option<&str>) -> String {
+    match value.map(|item| item.trim().to_ascii_lowercase()) {
+        Some(level) if level == "direct" => "direct".to_owned(),
+        _ => "contextual".to_owned(),
+    }
 }
 
 fn covered_beat_ids(rough: &RoughStoryboard) -> Vec<String> {
@@ -2619,30 +2798,16 @@ fn assemble_phase3_selection(
                 format!("Phase 3 candidateIndex {index} is outside beat '{beat_id}' candidate pool.")
             })?;
             let duration = (per_beat_budget / part_count.max(1)).clamp(1_200, 6_000);
-            let (provisional_start, provisional_end, segment_span) =
+            let (provisional_start, provisional_end) =
                 if let Some(segment) = candidate.segment.as_ref() {
                     (
                         segment.start_ms,
                         segment.end_ms.max(segment.start_ms + 1),
-                        Some(segment.span_ms()),
                     )
                 } else {
-                    (0, duration, None)
+                    let asset_end = candidate.duration_ms.unwrap_or(duration).max(1);
+                    (0, asset_end)
                 };
-            let source_duration = segment_span
-                .or(candidate.duration_ms)
-                .unwrap_or(duration)
-                .max(1);
-            let source_end = if segment_span.is_some() {
-                provisional_end
-            } else {
-                (provisional_start + duration.min(source_duration)).max(provisional_start + 1)
-            };
-            let shot_duration = if segment_span.is_some() {
-                (source_end - provisional_start).clamp(1, duration.max(1))
-            } else {
-                (source_end - provisional_start).max(1)
-            };
             let split_role = if part_count <= 1 {
                 "lead"
             } else if part_offset == 0 {
@@ -2655,7 +2820,7 @@ fn assemble_phase3_selection(
             shots.push(StoryboardShot {
                 crop_focus: None,
                 order_index,
-                duration_ms: shot_duration,
+                duration_ms: duration,
                 purpose: beat
                     .map(|item| item.purpose.clone())
                     .unwrap_or_else(|| pool.map(|p| p.beat_purpose.clone()).unwrap_or_default()),
@@ -2678,14 +2843,14 @@ fn assemble_phase3_selection(
                 },
                 asset_id: candidate.asset_id.clone(),
                 source_start_ms: provisional_start,
-                source_end_ms: source_end,
+                source_end_ms: provisional_end,
                 reason: if candidate.segment.is_some() {
                     "Phase 3 selected segment; ranges pending Phase 4 refine.".to_owned()
                 } else {
-                    "Phase 3 selected asset; ranges pending Phase 4.".to_owned()
+                    "Phase 3 selected whole asset; Phase 4 refines inside this window.".to_owned()
                 },
                 beat_id: beat_id.clone(),
-                match_level: "contextual".to_owned(),
+                match_level: normalize_phase3_match_level(selection.match_level.as_deref()),
                 beat_part_index: (part_offset as i64) + 1,
                 beat_part_count: part_count,
                 split_role: split_role.to_owned(),
@@ -2786,7 +2951,7 @@ pub(crate) fn clamp_shots_to_chosen_windows_scoped(
         }
         shot.source_start_ms = start;
         shot.source_end_ms = end;
-        shot.duration_ms = (end - start).max(1);
+        // 成片时长保持口播时钟；源窗被钳在可用区间内，短了就放慢。
     }
 }
 
@@ -2851,7 +3016,7 @@ pub(crate) fn resolve_overlaps_within_chosen_windows_scoped(
                     shot.order_index,
                     shot.source_start_ms,
                     shot.source_end_ms,
-                    shot.duration_ms.max(1),
+                    crate::storyboard::length::source_span_ms(shot).max(1),
                     bounds,
                 )
             };
@@ -2888,9 +3053,7 @@ pub(crate) fn resolve_overlaps_within_chosen_windows_scoped(
                     );
                 }
             }
-            shot.source_start_ms = start;
-            shot.source_end_ms = end;
-            shot.duration_ms = (end - start).max(1);
+            crate::storyboard::length::set_source_range(shot, start, end);
             occupied.push((start, end));
         }
         // 窗内仍交叠：仅当参与均分的镜头都可改写才 pack，避免顺带改冻结镜头。
@@ -3025,9 +3188,7 @@ fn pack_overlapping_shots_within_windows(
                     );
                 }
             }
-            shot.source_start_ms = next_start;
-            shot.source_end_ms = next_end;
-            shot.duration_ms = (next_end - next_start).max(1);
+            crate::storyboard::length::set_source_range(shot, next_start, next_end);
         }
     }
 }
@@ -3065,9 +3226,9 @@ pub(crate) fn apply_narration_phrase_duration_floor_scoped(
         }
         let new_end = (shot.source_start_ms + need_ms).min(window.end_ms);
         if new_end > shot.source_end_ms {
-            shot.source_end_ms = new_end;
-            shot.duration_ms = shot.source_end_ms - shot.source_start_ms;
+            crate::storyboard::length::set_source_range(shot, shot.source_start_ms, new_end);
         }
+        shot.duration_ms = need_ms;
     }
 }
 

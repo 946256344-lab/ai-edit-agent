@@ -42,6 +42,29 @@ def to_microseconds(milliseconds):
     return milliseconds * 1000
 
 
+def clip_source_duration_us(clip, material):
+    """成片槽位可以长于源窗；源窗按 sourceStart/End，由 VideoSegment 自行算速度。"""
+    source_start_us = to_microseconds(int(clip["sourceStartMs"]))
+    source_span_ms = int(clip["sourceEndMs"]) - int(clip["sourceStartMs"])
+    timeline_duration_us = to_microseconds(
+        int(clip["timelineEndMs"]) - int(clip["timelineStartMs"])
+    )
+    if source_span_ms <= 0:
+        return fit_source_duration(source_start_us, timeline_duration_us, material.duration)
+    source_duration_us = to_microseconds(source_span_ms)
+    available_us = material.duration - source_start_us
+    if available_us <= 0:
+        raise RuntimeError("Timeline clip starts at or beyond the source media duration.")
+    if source_duration_us <= available_us:
+        return source_duration_us
+    overflow_us = source_duration_us - available_us
+    if overflow_us > SOURCE_DURATION_TOLERANCE_US:
+        raise RuntimeError(
+            f"Timeline clip exceeds the source media duration by {overflow_us / 1000:.0f} ms."
+        )
+    return available_us
+
+
 def fit_source_duration(source_start_us, requested_duration_us, material_duration_us):
     if requested_duration_us <= 0:
         raise RuntimeError("Timeline clip duration must be positive.")
@@ -236,7 +259,7 @@ def add_overlay_tracks(script, clips):
         timeline_duration_us = to_microseconds(clip["timelineEndMs"] - clip["timelineStartMs"])
         source_start_us = to_microseconds(clip["sourceStartMs"])
         material = VideoMaterial(str(source))
-        source_duration_us = fit_source_duration(source_start_us, timeline_duration_us, material.duration)
+        source_duration_us = clip_source_duration_us(clip, material)
         prepared.append((clip, material, timeline_duration_us, source_start_us, source_duration_us))
     script.add_track(TrackType.video, track_name="overlay-main")
     for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared:
@@ -442,11 +465,7 @@ def main():
         )
         source_start_us = to_microseconds(clip["sourceStartMs"])
         material = VideoMaterial(str(source))
-        source_duration_us = fit_source_duration(
-            source_start_us,
-            timeline_duration_us,
-            material.duration,
-        )
+        source_duration_us = clip_source_duration_us(clip, material)
         prepared_clips.append(
             (clip, material, timeline_duration_us, source_start_us, source_duration_us)
         )

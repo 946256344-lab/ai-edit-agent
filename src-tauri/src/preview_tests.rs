@@ -1,5 +1,5 @@
 // preview.rs 的独立测试模块，通过 #[path] 挂载。
-// 覆盖：render_timeline_clip 源范围截断、FFmpeg 片段渲染/拼接、音乐混音、ASS 文字轨渲染。
+// 覆盖：render_timeline_clip 短源窗放慢、FFmpeg 片段渲染/拼接、音乐混音、ASS 文字轨渲染。
 use super::*;
 use crate::models::{MusicCue, MusicTrack, TextLayout, TextStyle};
 use crate::preview_audio::mix_preview_audio;
@@ -166,15 +166,14 @@ fn ffmpeg_renders_a_source_bound_vertical_clip() {
     let _ = fs::remove_dir_all(directory);
 }
 
-// 源时长短于时间线槽位时，渲染时长必须被收敛到源范围上限，
-// 而不是静默地用黑帧或静帧填满剩余槽位。
+// 源时长短于时间线槽位时，按源窗对成片时长放慢，而不是黑帧或静帧。
 #[test]
-fn render_timeline_clip_clamps_duration_to_source_range() {
+fn render_timeline_clip_slows_short_source_to_timeline_slot() {
     let directory = std::env::temp_dir().join(format!(
-        "assembly-video-agent-clamp-test-{}",
+        "assembly-video-agent-slow-test-{}",
         Uuid::new_v4()
     ));
-    fs::create_dir_all(&directory).expect("create temporary clamp test directory");
+    fs::create_dir_all(&directory).expect("create temporary slow test directory");
     let source = directory.join("source.mp4");
     // 生成 2 秒合成源
     let source_status = hidden_command("ffmpeg")
@@ -200,7 +199,7 @@ fn render_timeline_clip_clamps_duration_to_source_range() {
         "ffmpeg must generate a 2-second test source"
     );
     let destination = directory.join("clip.mp4");
-    // 源范围 500 ms（250–750 ms），时间线槽位 3000 ms；渲染应截止于源范围。
+    // 源范围 500 ms（250–750 ms），时间线槽位 3000 ms；渲染应放慢铺满槽位。
     let clip = TimelineClip {
         shot_index: 1,
         asset_id: "test".to_owned(),
@@ -211,7 +210,7 @@ fn render_timeline_clip_clamps_duration_to_source_range() {
         on_screen_text: String::new(),
         ..Default::default()
     };
-    render_timeline_clip(&source, "video", &clip, &destination).expect("render source-bound clip");
+    render_timeline_clip(&source, "video", &clip, &destination).expect("render slowed clip");
     assert!(
         destination.is_file(),
         "timeline render must create an MP4 clip"
@@ -227,16 +226,15 @@ fn render_timeline_clip_clamps_duration_to_source_range() {
         ])
         .arg(&destination)
         .output()
-        .expect("run ffprobe on clamped clip");
-    assert!(probe.status.success(), "ffprobe must read the clamped clip");
+        .expect("run ffprobe on slowed clip");
+    assert!(probe.status.success(), "ffprobe must read the slowed clip");
     let rendered_duration = String::from_utf8_lossy(&probe.stdout)
         .trim()
         .parse::<f64>()
-        .expect("parse clamped clip duration");
-    // 渲染时长必须约等于 0.5 s（源范围），而不是 3.0 s（时间线槽位）。
+        .expect("parse slowed clip duration");
     assert!(
-        (0.4..=0.7).contains(&rendered_duration),
-        "rendered clip must be clamped to the 500 ms source range, got {rendered_duration:.3}s"
+        (2.8..=3.2).contains(&rendered_duration),
+        "rendered clip must stretch to the 3000 ms timeline slot, got {rendered_duration:.3}s"
     );
     let _ = fs::remove_dir_all(directory);
 }

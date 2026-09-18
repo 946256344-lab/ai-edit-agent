@@ -3,7 +3,9 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
-- [ ] 进行中（2026-09-17，feature/agent-led-storyboard）：细拍、一拍一镜、模型主导生成。PR1–PR6 已实现：短窗问用户、配音先于拆拍、细拍默认一镜、每拍单独 9 图、生成后自动预览并新建剪映、列出并打开故事版版本。见 docs/changes/2026-09-17-storyboard-versions.md。
+- [x] 已实现（2026-09-18）：CLIP 可用时无片段图向量的候选不能靠卡片文字进前 9；P3 以网格为准；整片候选 P4 锁在 P3 源窗、不再 Pass A 另切窗。见 docs/changes/2026-09-18-grid-over-caption.md。
+- [x] 已实现（2026-09-18）：源窗短于该拍旁白时放慢已选镜头，不换更长的错片。见 docs/changes/2026-09-18-slow-clip-to-cover-narration.md。
+- [ ] 进行中（2026-09-17，feature/agent-led-storyboard）：细拍、一拍一镜、模型主导生成。PR1–PR6 已实现；P3 可见描述+现拼网格已复测（10 拍全附图；5 合格 / 2 勉强 / 3 偏题）。下一步：池内更贴 requiredVisual 的条仍可能落选。见 docs/changes/2026-09-17-p3-visible-select.md。
 - [x] 已实现（2026-09-17）：瘦安装包；BGE/CLIP 三个 `model.onnx` 安装后应用内后台下载到 app_data，校验哈希；下载不挡工作台，缺失降级。见 docs/changes/2026-09-17-runtime-model-download.md。
 - [x] 已实现并验证（2026-09-16）：素材分析四态进度与筛选、导入弹窗与预计时间、后台/取消/继续、失败重试，剪辑请求等待首次分析完成，素材重命名/批量选择/保留源文件移除；前端构建、Rust 编译、隔离交互及契约测试通过。已有字幕测试与 harness 失败见 docs/changes/2026-09-16-asset-analysis-progress.md。
 - [x] 已实现（2026-09-16）：默认在 master 提交推送；并行任务才开分支。见 docs/changes/2026-09-16-simplify-git-workflow.md。

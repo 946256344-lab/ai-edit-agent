@@ -13,6 +13,7 @@ from pyJianYingDraft import TrackType
 from create_jianying_draft import (
     add_music_tracks,
     add_text_tracks,
+    clip_source_duration_us,
     escape_text_material_unicode,
     fit_source_duration,
     jianying_is_running,
@@ -42,6 +43,16 @@ class SourceDurationBoundaryTests(unittest.TestCase):
     def test_rejects_a_material_source_overrun(self):
         with self.assertRaises(RuntimeError):
             fit_source_duration(6_670_000, 2_681_000, 9_300_000)
+
+    def test_keeps_a_shorter_source_window_for_slow_motion(self):
+        material = Mock(duration=10_000_000)
+        clip = {
+            "sourceStartMs": 1000,
+            "sourceEndMs": 3700,
+            "timelineStartMs": 0,
+            "timelineEndMs": 5300,
+        }
+        self.assertEqual(clip_source_duration_us(clip, material), 2_700_000)
 
 
 class JianyingProcessDetectionTests(unittest.TestCase):

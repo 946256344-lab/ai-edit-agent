@@ -38,7 +38,7 @@ pub(crate) fn clip_key(source: &Path, kind: &str, clip: &TimelineClip) -> Result
         .map_err(|error| error.to_string())?
         .as_nanos();
     Ok(key(&json!({
-        "renderer": "vertical-540x960-30-x264-v2",
+        "renderer": "vertical-540x960-30-x264-v3-slow",
         "source": source, "size": metadata.len(), "modified": modified.to_string(),
         "kind": kind, "clipKind": clip.clip_kind,
         "start": clip.source_start_ms, "end": clip.source_end_ms,

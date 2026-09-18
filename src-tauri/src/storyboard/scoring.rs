@@ -41,18 +41,23 @@ impl CandidateScore {
     }
 }
 
+/// 有 CLIP 查询但本条没有片段图向量时，词面/语义只当弱提示。
+/// 避免整片假卡靠文字压过带真图向量的段。
+const MISSING_CLIP_TEXT_HINT_CAP: f64 = 5.0;
+
 /// 为所有候选片段打分并排序（降序）。
 ///
 /// 评分维度：
 /// - 语义相关性（0-50分）：余弦与词面各最多 25；缺一侧时另一侧放大到 50
 /// - CLIP 图文（0-25分）：beat 文案与片段代表帧；缺模型/向量时为 0
+/// - 有 CLIP 查询但候选没有片段图向量时，词面/语义各最多 5 分
 /// - 画面质量（0-10分）：来自 visual_quality_score
 /// - 时长匹配度（0-10分）：候选时长与目标时长的适配度
 /// - 当前 Storyboard 复用惩罚（每次 -15 分）：已经选过的素材累计降权
 /// - 连续复用惩罚（额外 -30 分）：避免相邻镜头继续使用同一视频
 /// - 新鲜度（0-5分）：根据项目内使用次数降权
 ///
-/// 无视觉证据且无有效 OCR 的素材排在有证据候选之后。
+/// 无视觉证据且无有效 OCR 的素材排在有证据候选之后；CLIP 查询可用时按总分排，避免假卡靠「有证据」压过带图向量的段。
 pub(crate) fn rank_segment_candidates(
     candidates: Vec<StoryboardSource>,
     beat: &StoryboardBeat,
@@ -81,16 +86,21 @@ pub(crate) fn rank_segment_candidates(
         })
         .collect();
 
-    scored.sort_by(
-        |a, b| match b.score.has_evidence.cmp(&a.score.has_evidence) {
+    scored.sort_by(|a, b| {
+        let evidence_order = if beat_clip_embedding.is_some() {
+            std::cmp::Ordering::Equal
+        } else {
+            b.score.has_evidence.cmp(&a.score.has_evidence)
+        };
+        match evidence_order {
             std::cmp::Ordering::Equal => b
                 .score
                 .total
                 .partial_cmp(&a.score.total)
                 .unwrap_or(std::cmp::Ordering::Equal),
             other => other,
-        },
-    );
+        }
+    });
     scored
 }
 
@@ -106,6 +116,8 @@ fn calculate_candidate_score(
     let has_evidence = candidate_has_evidence(candidate);
     let (semantic, lexical, matched_keywords) =
         semantic_match_parts(candidate, beat, beat_embedding);
+    let (semantic, lexical) =
+        cap_text_without_clip(candidate, beat_clip_embedding, semantic, lexical);
     let clip = clip_match_score(candidate, beat_clip_embedding);
 
     let quality = candidate.visual_quality_score.unwrap_or(0.5) * 10.0;
@@ -141,6 +153,22 @@ fn calculate_candidate_score(
         shot_type,
         has_evidence,
         matched_keywords,
+    }
+}
+
+fn cap_text_without_clip(
+    candidate: &StoryboardSource,
+    beat_clip_embedding: Option<&[f32]>,
+    semantic: f64,
+    lexical: f64,
+) -> (f64, f64) {
+    if beat_clip_embedding.is_some() && candidate.segment_clip_embedding.is_none() {
+        (
+            semantic.min(MISSING_CLIP_TEXT_HINT_CAP),
+            lexical.min(MISSING_CLIP_TEXT_HINT_CAP),
+        )
+    } else {
+        (semantic, lexical)
     }
 }
 
@@ -762,5 +790,61 @@ mod tests {
         assert!(match_score.clip > other_score.clip);
         assert!(match_score.total > other_score.total);
         assert!((match_score.clip - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn whole_asset_text_cannot_outrank_clip_when_image_vector_is_missing() {
+        let mut whole = make_source("whole", "video", Some(10_000), 0.9);
+        whole.visual_evidence = vec![crate::models::VisualEvidence {
+            time_ms: Some(0),
+            subjects: vec!["orange cables".to_owned()],
+            scene: Some("interior of electrical enclosure with cable routing".to_owned()),
+            actions: vec!["cables routed through trays".to_owned()],
+            products: vec![],
+            quality_notes: vec![],
+            shot_type: None,
+            camera_motion: None,
+            segment_id: None,
+            narrative_role: None,
+            caption: Some(
+                "Thick orange high-voltage cables are neatly bundled in trays.".to_owned(),
+            ),
+        }];
+        let mut segment = make_source("segment", "video", Some(10_000), 0.4);
+        segment.segment = Some(crate::models::CandidateSegment {
+            id: "s001".to_owned(),
+            start_ms: 0,
+            end_ms: 3_000,
+            frame_paths: vec![],
+            shot_type: None,
+            camera_motion: None,
+        });
+        segment.segment_clip_embedding = Some(vec![1.0, 0.0, 0.0]);
+        let beat = StoryboardBeat {
+            id: "beat-cables".to_owned(),
+            purpose: "show routed high-voltage cables".to_owned(),
+            required_visual: "orange high-voltage cables routed through cable trays".to_owned(),
+            visual_keywords: vec!["cables".to_owned(), "tray".to_owned(), "orange".to_owned()],
+            narration: String::new(),
+            on_screen_text: String::new(),
+        };
+        let beat_clip = [1.0_f32, 0.0, 0.0];
+        let ranked = rank_segment_candidates(
+            vec![whole, segment],
+            &beat,
+            3_000,
+            &[],
+            &std::collections::HashMap::new(),
+            None,
+            Some(&beat_clip),
+        );
+        assert_eq!(ranked[0].source.asset_id, "segment");
+        let whole_score = ranked
+            .iter()
+            .find(|item| item.source.asset_id == "whole")
+            .expect("whole-asset still in ranking");
+        assert!(whole_score.score.lexical <= MISSING_CLIP_TEXT_HINT_CAP + 0.01);
+        assert!(whole_score.score.semantic <= MISSING_CLIP_TEXT_HINT_CAP + 0.01);
+        assert_eq!(whole_score.score.clip, 0.0);
     }
 }

@@ -364,17 +364,13 @@ pub(crate) fn fit_shots_scoped(
             })
             .collect::<Vec<_>>();
         let duration = beat.end_ms - beat.start_ms;
-        if capacities.iter().any(|capacity| *capacity < 1)
-            || capacities.iter().sum::<i64>() < duration
-            || duration < indices.len() as i64
-        {
+        if capacities.iter().any(|capacity| *capacity < 1) || duration < indices.len() as i64 {
             issues.push(StoryboardIssue::new(
                 "beat_audio_window_shortfall",
                 format!(
-                    "Beat '{}' requires {}ms from planned/verified beat timing; locked usable windows only sum to {}ms. Leave cuts at capacity; selection (not refine) decides whether to swap or ask the user.",
+                    "Beat '{}' requires {}ms from planned/verified beat timing; locked usable windows are empty. Leave cuts at capacity.",
                     beat.beat_id,
                     duration,
-                    capacities.iter().sum::<i64>()
                 ),
                 false,
             )
@@ -398,10 +394,8 @@ pub(crate) fn fit_shots_scoped(
             let end = if offset + 1 == indices.len() {
                 beat.end_ms
             } else {
-                let min =
-                    (cursor + 1).max(beat.end_ms - capacities[offset + 1..].iter().sum::<i64>());
-                let max = (cursor + capacities[offset])
-                    .min(beat.end_ms - (indices.len() - offset - 1) as i64);
+                let min = cursor + 1;
+                let max = beat.end_ms - (indices.len() - offset - 1) as i64;
                 let proposed =
                     (beat.start_ms + duration * original_cursor / original_total).clamp(min, max);
                 timing
@@ -414,11 +408,26 @@ pub(crate) fn fit_shots_scoped(
             };
             let span = end - cursor;
             let (window, _) = &windows[&shot.order_index];
-            shot.source_start_ms = shot
-                .source_start_ms
-                .clamp(window.start_ms, window.end_ms - span);
-            shot.source_end_ms = shot.source_start_ms + span;
+            let source_len = span.min(capacities[offset].max(1));
+            shot.source_start_ms = shot.source_start_ms.clamp(
+                window.start_ms,
+                window
+                    .end_ms
+                    .saturating_sub(source_len)
+                    .max(window.start_ms),
+            );
+            shot.source_end_ms = shot.source_start_ms + source_len;
             shot.duration_ms = span;
+            if span > source_len {
+                log::info!(
+                    "Beat '{}' shot {} slowing {}ms source to {}ms on-screen ({:.2}x)",
+                    beat.beat_id,
+                    shot.order_index,
+                    source_len,
+                    span,
+                    source_len as f64 / span as f64
+                );
+            }
             cursor = end;
         }
     }
@@ -563,12 +572,15 @@ mod tests {
             .all(|shot| shot.source_start_ms >= 500 && shot.source_end_ms <= 3500));
         timing.beats[0].end_ms = 7000;
         let shortfall = fit_shots(&mut content, &timing, &windows);
-        assert_eq!(shortfall[0].kind, "beat_audio_window_shortfall");
-        assert!(!shortfall[0].needs_model_decision);
+        assert!(shortfall.is_empty());
         assert_eq!(
             content.shots.iter().map(|s| s.duration_ms).sum::<i64>(),
-            5000
+            7000
         );
+        assert!(content
+            .shots
+            .iter()
+            .all(|shot| shot.source_end_ms - shot.source_start_ms <= 3000));
         assert!(timing.validate(&content).is_ok());
     }
 
