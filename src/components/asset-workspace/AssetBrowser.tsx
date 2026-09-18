@@ -1,6 +1,7 @@
 // 显示当前目录的直属素材卡片；默认只展示用户可读状态，不承担目录过滤或后台轮询。
 import type { AssetLibraryEditController } from '../../hooks/useAssetLibraryEditController'
 import type { AssetAnalysisState, StoredAsset } from '../../lib/local-store'
+import type { ReactNode } from 'react'
 import { analysisLabels } from '../../lib/asset-analysis'
 
 export type AssetView = {
@@ -63,9 +64,10 @@ type AssetBrowserProps = {
   assets: AssetView[]
   filtered?: boolean
   onInspect: (id: string) => void
+  analysis?: ReactNode
 }
 
-export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, filtered, onInspect, editing }: AssetBrowserProps) {
+export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, filtered, onInspect, editing, analysis }: AssetBrowserProps) {
   return (
     <section className="asset-list-card">
       <header className="asset-list-card__head">
@@ -75,6 +77,7 @@ export function AssetBrowser({ title, breadcrumb, matchingAssetCount, assets, fi
         </div>
         <small>{assets.length} / {matchingAssetCount}</small>
       </header>
+      {analysis}
       {assets.length > 0 && <div className="asset-edit-toolbar"><button onClick={editing.actions.selectAll}>{editing.model.selectedIds.length === assets.length ? '取消全选' : '全选当前列表'}</button><span>已选 {editing.model.selectedIds.length} 项</span><button disabled={!editing.model.selectedIds.length || editing.model.busy} onClick={editing.actions.remove}>移出素材库</button></div>}
       {assets.length > 0 ? (
         <div className="asset-list-card__body">

@@ -14,6 +14,8 @@ mod assets;
 mod audit;
 /// Storyboard 确认后的自动化流程：timeline + preview 依次执行。
 mod confirmation;
+/// CapCut 链接器：按本机注册表识别草稿库并单向新建。
+mod capcut;
 /// 自定义 OpenAI 兼容凭据命令与配置。
 mod custom_api;
 /// SQLite 位置、连接策略与只追加 schema 迁移。

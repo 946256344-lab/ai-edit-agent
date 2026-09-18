@@ -6,6 +6,7 @@ use super::{
 };
 use crate::db::{now_millis, open_connection};
 use crate::jianying::{create_jianying_draft, draft_location_available};
+use crate::capcut;
 use crate::models::{JianyingDraftResult, TimelineVersion};
 use crate::timeline::load_timeline_version;
 use rusqlite::params;
@@ -57,6 +58,7 @@ pub fn list_editor_linkers(
     ensure_project(&connection, &project_id)?;
     let selected = read_output_editor(&connection, &project_id);
     let jianying_available = draft_location_available();
+    let capcut_available = capcut::draft_location_available();
     Ok(EditorLinkerCatalog {
         selected_id: selected.as_str().to_owned(),
         linkers: all_editor_ids()
@@ -70,7 +72,7 @@ pub fn list_editor_linkers(
                     implemented: caps.implemented,
                     available: match id {
                         EditorId::Jianying => jianying_available,
-                        EditorId::CapCut => false,
+                        EditorId::CapCut => capcut_available,
                         EditorId::Fcpxml | EditorId::Otio => caps.implemented,
                     },
                     delivery_kind: match caps.delivery {
@@ -125,7 +127,7 @@ pub fn deliver_to_editor(
     drop(connection);
     match editor {
         EditorId::Jianying => wrap_jianying(create_jianying_draft(app, timeline_version_id)?),
-        EditorId::CapCut => Err("CapCut 输出尚未实现。".to_owned()),
+        EditorId::CapCut => wrap_capcut(capcut::create_capcut_draft(app, timeline_version_id)?),
         EditorId::Fcpxml | EditorId::Otio => write_import_file(app, &timeline, editor),
     }
 }
@@ -149,6 +151,28 @@ fn wrap_jianying(draft: JianyingDraftResult) -> Result<EditorDeliveryResult, Str
         display_name,
         output_path: Some(draft.draft_directory.clone()),
         jianying: Some(draft),
+    })
+}
+
+fn wrap_capcut(draft: JianyingDraftResult) -> Result<EditorDeliveryResult, String> {
+    let display_name = Path::new(&draft.draft_directory)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("CapCut 草稿")
+        .to_owned();
+    let pending = draft.registration_status == "pending";
+    Ok(EditorDeliveryResult {
+        editor_id: EditorId::CapCut.as_str().to_owned(),
+        delivery_kind: "dropInDraft".to_owned(),
+        status: draft.registration_status.clone(),
+        message: if pending {
+            format!("草稿「{display_name}」已写好，CapCut 正在运行，退出后会自动完成注册。")
+        } else {
+            format!("草稿「{display_name}」已生成，可在 CapCut 本地草稿中打开。")
+        },
+        display_name,
+        output_path: Some(draft.draft_directory.clone()),
+        jianying: None,
     })
 }
 

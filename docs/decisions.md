@@ -4,11 +4,11 @@
 
 ## 输出端口可选编辑器（2026-09-18）
 
-输出编辑器是项目级选择，记在 `settings_json.outputEditor`。当前可交付：剪映（投放草稿）、FCPXML（Premiere / Resolve / Final Cut 导入）、OTIO（Resolve 导入）。CapCut 只展示、拒绝写出。文件导出不弹窗，写到本机 `editor-handoffs`。失败可见，不静默换端口。
+输出编辑器是项目级选择，记在 `settings_json.outputEditor`。当前可交付：剪映（投放草稿）、CapCut（投放草稿）、FCPXML（Premiere / Resolve / Final Cut 导入）、OTIO（Resolve 导入）。文件导出不弹窗，写到本机 `editor-handoffs`。失败可见，不静默换端口。CapCut / 剪映草稿库都从该设备 `%LOCALAPPDATA%` 注册表识别，不写死盘符。
 
 ## 剪映是编辑器链接器（2026-09-18）
 
-内部时间线是唯一剪辑事实。交付前投影为 `HandoffPlan`，由链接器写成目标编辑器格式。当前可交付剪映草稿与 FCPXML/OTIO 文件；CapCut 未实现。只新建、不覆盖、不回读。不把 OTIO 当成产品模型。链接器能力对不上就拒绝或保持未交付，不静默降级。
+内部时间线是唯一剪辑事实。交付前投影为 `HandoffPlan`，由链接器写成目标编辑器格式。当前可交付剪映草稿、CapCut 草稿与 FCPXML/OTIO 文件。只新建、不覆盖、不回读。不把 OTIO 当成产品模型。链接器能力对不上就拒绝或保持未交付，不静默降级。
 
 ## 源窗短于口播时放慢（2026-09-18）
 
@@ -97,7 +97,6 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 ## 14. 当前未完成事项
 
 - 安装包还没有完整捆绑 FFmpeg、Tesseract、Python 和编辑器链接器运行时。
-- CapCut 链接器尚未实现。
 - 最终视频导出尚未实现。
 - 多轨媒体能力仍在迭代。
 - 官方模型 OAuth 契约和部分外部 Provider 能力仍需真实环境验证。

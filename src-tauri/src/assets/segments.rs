@@ -3,9 +3,15 @@
 //! 硬切确定后由 motion 模块写帧差能量，只收缩可用窗。
 
 use crate::models::{KeyframeMetadata, SceneSegment};
-use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
+use crate::process::{
+    hidden_command, media_open_args, run_hidden_command_with_timeout, HiddenCommandError,
+};
 use crate::storyboard::semantic::cosine_similarity;
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 use tauri::AppHandle;
 
 /// 已验证硬切分段；低于此版本的就绪视频需要重切。
@@ -16,7 +22,10 @@ pub(crate) const SCENE_DETECT_BUDGET: Duration = Duration::from_secs(60);
 const SCENE_THRESHOLD: &str = "0.30";
 /// 闪光等碎段才合并；不把真硬切为凑数量合掉。
 const MIN_SEGMENT_MS: i64 = 400;
-const LONG_VIDEO_MS: i64 = 180_000;
+/// 全帧补扫上限：超过 1 分钟即使本机也不整段解码。
+const FULL_FRAME_MAX_MS: i64 = 60_000;
+const KEYFRAME_PASS_BUDGET: Duration = Duration::from_secs(20);
+const FULL_DECODE_MIN_REMAINING: Duration = Duration::from_secs(15);
 const FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_KEYFRAMES_FOR_GRID: usize = 8;
 const MAX_SAMPLE_FRAMES: usize = 8;
@@ -30,26 +39,78 @@ pub(crate) fn detect_scene_cuts(source: &Path, duration_ms: i64, budget: Duratio
     if duration_ms <= 0 {
         return Vec::new();
     }
-    let cuts = if duration_ms > LONG_VIDEO_MS {
-        let coarse = run_scene_detect(source, budget, true);
-        if !coarse.is_empty() {
-            coarse
-        } else {
-            run_scene_detect(source, budget, false)
-        }
+    let remote = is_remote_source(source);
+    let may_refine = should_consider_full_frame(duration_ms, remote);
+    let keyframe_budget = if may_refine {
+        budget.min(KEYFRAME_PASS_BUDGET)
     } else {
-        run_scene_detect(source, budget, false)
+        budget
     };
-    let duration_ms = duration_ms.max(0);
+    let started = Instant::now();
+    let mut cuts = cuts_or_empty(run_scene_detect(source, keyframe_budget, true));
+    let remaining = budget.saturating_sub(started.elapsed());
+    if should_full_frame_refine(duration_ms, cuts.len(), remaining, remote) {
+        log::info!(
+            "Scene detect full-frame refine for {}ms local clip with {} keyframe cut(s)",
+            duration_ms,
+            cuts.len()
+        );
+        if let SceneDetectResult::Done(extra) = run_scene_detect(source, remaining, false) {
+            cuts.extend(extra);
+            cuts.sort_unstable();
+            cuts.dedup();
+        }
+    }
     cuts.into_iter()
         .filter(|cut| *cut > 0 && *cut < duration_ms)
         .collect()
 }
 
-fn run_scene_detect(source: &Path, budget: Duration, skip_non_keyframes: bool) -> Vec<i64> {
+fn is_remote_source(path: &Path) -> bool {
+    let raw = path.to_string_lossy();
+    let stripped = raw
+        .strip_prefix(r"\\?\")
+        .or_else(|| raw.strip_prefix("//?/"))
+        .unwrap_or(raw.as_ref());
+    stripped.starts_with(r"\\")
+        || stripped.starts_with("//")
+        || stripped.starts_with("UNC\\")
+        || stripped.starts_with("UNC/")
+}
+
+fn should_consider_full_frame(duration_ms: i64, remote: bool) -> bool {
+    !remote && duration_ms > 0 && duration_ms <= FULL_FRAME_MAX_MS
+}
+
+fn should_full_frame_refine(
+    duration_ms: i64,
+    keyframe_cut_count: usize,
+    remaining: Duration,
+    remote: bool,
+) -> bool {
+    should_consider_full_frame(duration_ms, remote)
+        && keyframe_cut_count <= 1
+        && remaining > FULL_DECODE_MIN_REMAINING
+}
+
+fn cuts_or_empty(result: SceneDetectResult) -> Vec<i64> {
+    match result {
+        SceneDetectResult::Done(cuts) => cuts,
+        SceneDetectResult::TimedOut | SceneDetectResult::Failed => Vec::new(),
+    }
+}
+
+enum SceneDetectResult {
+    Done(Vec<i64>),
+    TimedOut,
+    Failed,
+}
+
+fn run_scene_detect(source: &Path, budget: Duration, skip_non_keyframes: bool) -> SceneDetectResult {
     let filter = format!("fps=3,scale=160:-2,select='gt(scene\\,{SCENE_THRESHOLD})',showinfo");
     let mut command = hidden_command("ffmpeg");
     command.args(["-hide_banner", "-loglevel", "info"]);
+    command.args(media_open_args());
     if skip_non_keyframes {
         command.args(["-skip_frame", "nokey"]);
     }
@@ -64,18 +125,18 @@ fn run_scene_detect(source: &Path, budget: Duration, skip_non_keyframes: bool) -
                 "Scene detection timed out for {} (skip_non_keyframes={skip_non_keyframes}).",
                 source.display()
             );
-            return Vec::new();
+            return SceneDetectResult::TimedOut;
         }
         Err(HiddenCommandError::Failed) => {
             log::warn!(
                 "Scene detection failed to start for {} (skip_non_keyframes={skip_non_keyframes}).",
                 source.display()
             );
-            return Vec::new();
+            return SceneDetectResult::Failed;
         }
     };
     let stderr = String::from_utf8_lossy(&output.stderr);
-    parse_showinfo_pts_times(&stderr)
+    SceneDetectResult::Done(parse_showinfo_pts_times(&stderr))
 }
 
 fn parse_showinfo_pts_times(stderr: &str) -> Vec<i64> {
@@ -195,29 +256,33 @@ fn frame_quality_score(path: &Path) -> Option<f64> {
         .map(normalize_laplacian_variance)
 }
 
-fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> Result<bool, String> {
+fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
     let time_seconds = (time_ms.max(0) as f64) / 1000.0;
     let mut command = hidden_command("ffmpeg");
     command
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            &format!("{time_seconds:.3}"),
-            "-i",
-        ])
+        .args(["-y", "-hide_banner", "-loglevel", "error"])
+        .args(media_open_args())
+        .args(["-ss", &format!("{time_seconds:.3}"), "-i"])
         .arg(source)
         .args(["-frames:v", "1", "-vf", "scale=320:-2"])
         .arg(destination);
-    run_hidden_command_with_timeout(&mut command, FRAME_FFMPEG_TIMEOUT).map_err(
-        |error| match error {
-            HiddenCommandError::TimedOut => "Segment frame extraction timed out.".to_owned(),
-            HiddenCommandError::Failed => "Segment frame extraction could not start.".to_owned(),
-        },
-    )?;
-    Ok(destination.is_file())
+    match run_hidden_command_with_timeout(&mut command, FRAME_FFMPEG_TIMEOUT) {
+        Ok(_) => destination.is_file(),
+        Err(HiddenCommandError::TimedOut) => {
+            log::warn!(
+                "Segment frame extraction timed out at {time_ms}ms for {}.",
+                source.display()
+            );
+            false
+        }
+        Err(HiddenCommandError::Failed) => {
+            log::warn!(
+                "Segment frame extraction could not start at {time_ms}ms for {}.",
+                source.display()
+            );
+            false
+        }
+    }
 }
 
 fn sample_times_for_segment(start_ms: i64, end_ms: i64) -> Vec<i64> {
@@ -289,8 +354,8 @@ fn verify_hard_cuts(
         }
         let before_path = derived_dir.join(format!("cut_before_{cut}.jpg"));
         let after_path = derived_dir.join(format!("cut_after_{cut}.jpg"));
-        let extracted = extract_frame(source, before_ms, &before_path).unwrap_or(false)
-            && extract_frame(source, after_ms, &after_path).unwrap_or(false);
+        let extracted = extract_frame(source, before_ms, &before_path)
+            && extract_frame(source, after_ms, &after_path);
         let before_bytes = extracted.then(|| fs::read(&before_path).ok()).flatten();
         let after_bytes = extracted.then(|| fs::read(&after_path).ok()).flatten();
         let _ = fs::remove_file(&before_path);
@@ -363,7 +428,7 @@ pub(crate) fn analyze_video_segments(
         for (frame_index, time_ms) in sample_times.iter().enumerate() {
             let destination =
                 derived_dir.join(format!("seg_{segment_id}_{:02}.jpg", frame_index + 1));
-            if extract_frame(source, *time_ms, &destination)? {
+            if extract_frame(source, *time_ms, &destination) {
                 if let Some(score) = frame_quality_score(&destination) {
                     quality_scores.push(score);
                 }
@@ -456,5 +521,32 @@ mod tests {
         assert!(times.len() <= MAX_SAMPLE_FRAMES);
         assert_eq!(*times.first().unwrap(), 250);
         assert_eq!(*times.last().unwrap(), 119_750);
+    }
+
+    #[test]
+    fn remote_unc_paths_are_detected() {
+        assert!(is_remote_source(Path::new(
+            r"\\Shared-huiquan\share\DJI_0125.MP4"
+        )));
+        assert!(is_remote_source(Path::new(r"\\?\UNC\server\share\a.mp4")));
+        assert!(is_remote_source(Path::new("//server/share/a.mp4")));
+        assert!(!is_remote_source(Path::new(r"C:\media\DJI_0125.MP4")));
+        assert!(!is_remote_source(Path::new(r"D:\自动剪辑系统\clip.mp4")));
+    }
+
+    #[test]
+    fn full_frame_refine_only_for_short_local_sparse_cuts() {
+        let enough = Duration::from_secs(20);
+        assert!(should_full_frame_refine(12_000, 0, enough, false));
+        assert!(should_full_frame_refine(60_000, 1, enough, false));
+        assert!(!should_full_frame_refine(12_000, 2, enough, false));
+        assert!(!should_full_frame_refine(60_001, 0, enough, false));
+        assert!(!should_full_frame_refine(12_000, 0, enough, true));
+        assert!(!should_full_frame_refine(
+            12_000,
+            0,
+            Duration::from_secs(10),
+            false
+        ));
     }
 }

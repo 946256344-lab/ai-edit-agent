@@ -1,7 +1,8 @@
-"""由剪映链接器调用的单向草稿适配器。
+"""由剪映 / CapCut 链接器调用的单向草稿适配器。
 
-适配器读取 HandoffPlan 投影后的版本化 JSON，创建唯一新草稿，并且只在 Jianying 关闭时注册。
-它不是应用入口，绝不能覆盖已有 Jianying 项目，也不负责反向同步用户在 Jianying 内的编辑。
+适配器读取 HandoffPlan 投影后的版本化 JSON，在本机已识别的草稿库创建唯一新草稿，
+并且只在对应编辑器关闭时注册。草稿根目录来自该设备注册表，不写死盘符。
+它不是应用入口，绝不能覆盖已有工程，也不负责反向同步用户在编辑器内的改动。
 """
 
 import json
@@ -15,24 +16,48 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from pyJianYingDraft import (
-    AudioMaterial,
-    AudioSegment,
-    ClipSettings,
-    DraftFolder,
-    FontType,
-    TextBackground,
-    TextBorder,
-    TextIntro,
-    TextOutro,
-    TextSegment,
-    TextShadow,
-    TextStyle,
-    Timerange,
-    TrackType,
-    VideoMaterial,
-    VideoSegment,
-)
+AudioMaterial = AudioSegment = ClipSettings = DraftFolder = FontType = None
+TextBackground = TextBorder = TextIntro = TextOutro = TextSegment = TextShadow = None
+TextStyle = Timerange = TrackType = VideoMaterial = VideoSegment = None
+
+
+_bound_editor = None
+
+
+def bind_sdk(editor):
+    """按本机所选编辑器绑定 SDK。换设备不改代码，只换本机安装的包与草稿注册表。"""
+    global AudioMaterial, AudioSegment, ClipSettings, DraftFolder, FontType
+    global TextBackground, TextBorder, TextIntro, TextOutro, TextSegment, TextShadow
+    global TextStyle, Timerange, TrackType, VideoMaterial, VideoSegment, _bound_editor
+    if editor == _bound_editor:
+        return editor
+    if editor == "capcut":
+        import pycapcut as pkg
+    elif editor == "jianying":
+        import pyJianYingDraft as pkg
+    else:
+        raise RuntimeError("Draft adapter received an unsupported editor.")
+    AudioMaterial = pkg.AudioMaterial
+    AudioSegment = pkg.AudioSegment
+    ClipSettings = pkg.ClipSettings
+    DraftFolder = pkg.DraftFolder
+    FontType = pkg.FontType
+    TextBackground = pkg.TextBackground
+    TextBorder = pkg.TextBorder
+    TextIntro = pkg.TextIntro
+    TextOutro = pkg.TextOutro
+    TextSegment = pkg.TextSegment
+    TextShadow = getattr(pkg, "TextShadow", None)
+    TextStyle = pkg.TextStyle
+    Timerange = pkg.Timerange
+    TrackType = pkg.TrackType
+    VideoMaterial = pkg.VideoMaterial
+    VideoSegment = pkg.VideoSegment
+    _bound_editor = editor
+    return editor
+
+
+bind_sdk("jianying")
 
 
 SOURCE_DURATION_TOLERANCE_US = 50_000
@@ -187,7 +212,7 @@ def jianying_text_background(style_data):
 
 
 def jianying_text_shadow(style_data):
-    if not style_data.get("shadow", False):
+    if not style_data.get("shadow", False) or TextShadow is None:
         return None
     return TextShadow()
 
@@ -247,18 +272,22 @@ def add_text_tracks(script, tracks):
                 auto_wrapping=True,
                 max_line_width=float(layout.get("maxWidth", 0.82)),
             )
-            segment = TextSegment(
-                cue["text"],
-                Timerange(to_microseconds(start_ms), to_microseconds(duration_ms)),
-                font=jianying_font(style_data.get("fontKey")),
-                style=style,
-                clip_settings=ClipSettings(
+            segment_kwargs = {
+                "font": jianying_font(style_data.get("fontKey")),
+                "style": style,
+                "clip_settings": ClipSettings(
                     transform_x=(float(layout.get("x", 0.5)) - 0.5) * 2,
                     transform_y=(0.5 - float(layout.get("y", 0.5))) * 2,
                 ),
-                border=jianying_text_border(style_data),
-                background=jianying_text_background(style_data),
-                shadow=jianying_text_shadow(style_data),
+                "border": jianying_text_border(style_data),
+                "background": jianying_text_background(style_data),
+            }
+            if TextShadow is not None:
+                segment_kwargs["shadow"] = jianying_text_shadow(style_data)
+            segment = TextSegment(
+                cue["text"],
+                Timerange(to_microseconds(start_ms), to_microseconds(duration_ms)),
+                **segment_kwargs,
             )
             add_supported_text_animation(segment, cue.get("entrance"), "in")
             add_supported_text_animation(segment, cue.get("exit"), "out")
@@ -329,14 +358,23 @@ def add_music_tracks(script, tracks):
                 remaining_us -= segment_duration_us
 
 
-def jianying_is_running():
+def editor_process_name(editor):
+    return "CapCut.exe" if editor == "capcut" else "JianyingPro.exe"
+
+
+def process_is_running(image_name):
     result = subprocess.run(
-        ["tasklist", "/FI", "IMAGENAME eq JianyingPro.exe", "/FO", "CSV", "/NH"],
+        ["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/FO", "CSV", "/NH"],
         check=False,
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    return b"jianyingpro.exe" in (result.stdout or b"").lower()
+    needle = image_name.lower().encode("ascii", "ignore")
+    return needle in (result.stdout or b"").lower()
+
+
+def jianying_is_running():
+    return process_is_running("JianyingPro.exe")
 
 
 @contextmanager
@@ -425,8 +463,10 @@ def register_draft(registry_path, root, draft_path, draft_name, duration_ms):
         )
 
 
-def register_when_safe(registry_path, root, draft_path, draft_name, duration_ms):
-    if jianying_is_running():
+def register_when_safe(
+    registry_path, root, draft_path, draft_name, duration_ms, process_name="JianyingPro.exe"
+):
+    if process_is_running(process_name):
         return "pending"
     register_draft(registry_path, root, draft_path, draft_name, duration_ms)
     return "registered"
@@ -446,6 +486,8 @@ def main():
     payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
     if payload.get("inputFormatVersion") not in (1, 2):
         raise RuntimeError("Jianying draft adapter received an unsupported input format.")
+    editor = bind_sdk(payload.get("editor", "jianying"))
+    process_name = editor_process_name(editor)
     operation = payload.get("operation", "createDraft")
     root = Path(payload["draftRoot"])
     draft_name = payload["draftName"]
@@ -457,7 +499,7 @@ def main():
         draft_path = Path(payload["draftDirectory"])
         if not (draft_path / "draft_content.json").is_file():
             raise RuntimeError("Pending Jianying draft content is unavailable.")
-        if jianying_is_running():
+        if process_is_running(process_name):
             raise RuntimeError("Jianying Pro is still running; registration remains pending.")
         register_draft(
             registry_path,
@@ -519,6 +561,7 @@ def main():
             draft_path,
             draft_name,
             duration_ms,
+            editor_process_name(editor),
         )
     except BaseException:
         shutil.rmtree(draft_path, ignore_errors=True)

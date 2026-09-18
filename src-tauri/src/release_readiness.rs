@@ -293,6 +293,16 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
 
     checks.push(provider_check());
     checks.extend(jianying_checks(&app));
+    checks.push(if crate::capcut::draft_location_available() {
+        check("capcut", "CapCut 草稿位置", "ok", "已找到本机 CapCut 草稿目录。")
+    } else {
+        check(
+            "capcut",
+            "CapCut 草稿位置",
+            "warn",
+            "未找到 CapCut 草稿目录。仍可预览；换设备后请先打开一次 CapCut 并创建本地草稿。",
+        )
+    });
     checks.push(semantic_model_check(&app));
     checks.push(clip_model_check(&app));
 

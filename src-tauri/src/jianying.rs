@@ -47,7 +47,7 @@ fn sanitize_draft_name_fragment(raw: &str) -> String {
     trimmed.chars().take(36).collect::<String>()
 }
 
-fn unique_draft_name(connection: &rusqlite::Connection, project_id: &str) -> String {
+pub(crate) fn unique_draft_name(connection: &rusqlite::Connection, project_id: &str) -> String {
     let project_name = connection
         .query_row(
             "SELECT name FROM projects WHERE id = ?1",
@@ -63,11 +63,15 @@ fn unique_draft_name(connection: &rusqlite::Connection, project_id: &str) -> Str
 }
 
 fn find_jianying_draft_location() -> Option<(PathBuf, PathBuf)> {
+    find_lveditor_draft_location("JianyingPro")
+}
+
+pub(crate) fn find_lveditor_draft_location(product_dir: &str) -> Option<(PathBuf, PathBuf)> {
     let registry_path = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|directory| {
             directory
-                .join("JianyingPro")
+                .join(product_dir)
                 .join("User Data")
                 .join("Projects")
                 .join("com.lveditor.draft")
@@ -122,7 +126,7 @@ fn jianying_adapter_script(app: &AppHandle) -> Result<PathBuf, String> {
     }
 }
 
-fn run_jianying_adapter(
+pub(crate) fn run_jianying_adapter(
     app: &AppHandle,
     input: &serde_json::Value,
 ) -> Result<JianyingDraftResult, String> {
@@ -146,7 +150,7 @@ fn run_jianying_adapter(
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|_| {
-                "Python with pyJianYingDraft is unavailable on this computer.".to_owned()
+                "Python with a draft SDK (pyJianYingDraft or pycapcut) is unavailable on this computer.".to_owned()
             })?;
         child
             .wait_with_output()
@@ -364,7 +368,7 @@ pub(crate) fn resume_pending_jianying_registrations(app: &AppHandle) -> Result<(
     Ok(())
 }
 
-fn text_tracks_are_ready_for_jianying(timeline: &TimelineVersion) -> bool {
+pub(crate) fn text_tracks_are_ready_for_jianying(timeline: &TimelineVersion) -> bool {
     timeline
         .text_tracks
         .iter()

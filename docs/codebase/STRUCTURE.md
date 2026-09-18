@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-18 素材分析提示：导入弹窗保留 `AssetAnalysisModal` / `AssetAnalysisProgress`；侧栏 `AppSidebar` 素材库入口用环境状态点；发送时 `AnalysisIncompleteDialog` 确认是否只用已分析素材；素材库进度筛选与进度条收到 `AssetBrowser` 列表标题。已去掉右下角 `AnalysisActivity` 与输入区进度卡。
+
 2026-09-16 素材分析进度：`assets/progress.rs` 拥有合并状态与项目级统计；`AssetAnalysisProgress` 展示进度与筛选，`useAssetWorkspaceController` 管理导入和失败重试，`useAnalysisGateController` 在提交任务前等待首次分析。失败暂停、显式继续、取消和作用域切换均在 controller 中处理。`assets/controls.rs` 实现取消/继续和库编辑；`useAssetAnalysisController` / `AssetAnalysisModal` 管理导入弹窗及预计时间，`useAssetLibraryEditController` / `AssetEditDialog` 管理重命名和批量移除。
 
 2026-09-16 共享子素材库：`shared_library.rs` 拥有全局库、成员和项目关联迁移；`project_asset_access` 是项目可用素材范围。`useProjectCreationController` 管理创建草稿，`ProjectCreationModal` 展示命名及默认全选列表。源文件及既有分析保持原位。
@@ -22,7 +24,7 @@
 | --- | --- | --- |
 | `src/` | React 展示、领域 controller、Tauri TypeScript 桥 | `src/main.tsx`、`src/App.tsx` |
 | `src-tauri/src/` | 本地可信边界：命令、SQLite、Agent、媒体和交付 | `src-tauri/src/lib.rs` |
-| `src-tauri/scripts/` | Rust 调用的 Jianying Python 适配器及测试 | `src-tauri/scripts/create_jianying_draft.py` |
+| `src-tauri/scripts/` | Rust 调用的剪映 / CapCut Python 适配器及测试 | `src-tauri/scripts/create_jianying_draft.py` |
 | `src-tauri/tests/` | Rust 集成契约和版本化 Agent fixture | `src-tauri/tests/agent_contract_assets.rs` |
 | `scripts/` | 开发期分支、架构、文档和真实 WebView 检查 | `package.json` |
 | `.harness/` | 机器可读分支策略、架构预算、Agent 上下文清单与文档同步策略 | `.harness/branch-policy.json`、`.harness/architecture-budgets.json`、`.harness/agent-context.json` |
@@ -40,8 +42,8 @@
 2. `src-tauri/src/lib.rs` 安装 log/dialog/opener 插件并注册稳定 Tauri 命令表。
 3. `src/main.tsx` 将 `<App />` 挂载到 WebView。
 4. `src/App.tsx` 调用 `initializeLocalStore()`，再加载首个项目和剪辑任务。
-5. `projects::initialize_local_store` 执行中断任务恢复、素材分析恢复和 Jianying 注册恢复。
-6. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由剪映链接器以版本化 JSON 调用。FCPXML/OTIO 由 `handoff/` 直接写出。
+5. `projects::initialize_local_store` 执行中断任务恢复、素材分析恢复和剪映 / CapCut 注册恢复。
+6. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由剪映 / CapCut 链接器以版本化 JSON 调用。FCPXML/OTIO 由 `handoff/` 直接写出。
 
 ## 3）前端边界
 
@@ -83,6 +85,7 @@ src/main.tsx
 | `preview_audio.rs` | 旁白与 BGM 混音；禁止 `-shortest` |
 | `handoff/` | 编辑器无关交接计划、输出端口选择与 FCPXML/OTIO 写出 |
 | `jianying.rs` | 剪映链接器：新草稿创建和延迟注册 |
+| `capcut.rs` | CapCut 链接器：按本机注册表识别草稿库并新建 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
 | `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |

@@ -1,4 +1,4 @@
-// 剪辑前等待首次素材分析；只保存当前页面中的请求，取消或切换会话时释放等待。
+// 剪辑前等待首次素材分析；未完成时弹出确认，取消或切换会话时释放等待。
 import { useEffect, useRef, useState } from 'react'
 import { getAssetAnalysisProgress } from '../lib/local-store'
 import { analysisPendingCount } from '../lib/asset-analysis'
@@ -9,6 +9,11 @@ type PendingAnalysis = {
   resolve: (proceed: boolean) => void
   reject: (error: unknown) => void
   timer?: number
+  useReady?: boolean
+}
+
+function analysisComplete(progress: AssetAnalysisProgress) {
+  return analysisPendingCount(progress) === 0 && progress.failed + progress.cancelled === 0
 }
 
 export function useAnalysisGateController(projectId: string | null, sessionId: string | null, importing: boolean) {
@@ -17,6 +22,7 @@ export function useAnalysisGateController(projectId: string | null, sessionId: s
   importingRef.current = importing
   const [progress, setProgress] = useState<AssetAnalysisProgress | null>(null)
   const [waiting, setWaiting] = useState(false)
+  const [prompting, setPrompting] = useState(false)
 
   function finish(proceed: boolean) {
     const request = pending.current
@@ -25,18 +31,24 @@ export function useAnalysisGateController(projectId: string | null, sessionId: s
     window.clearTimeout(request.timer)
     setProgress(null)
     setWaiting(false)
+    setPrompting(false)
     request.resolve(proceed)
   }
 
-  async function check(request: PendingAnalysis, useReady = false) {
+  async function check(request: PendingAnalysis) {
     try {
       const next = await getAssetAnalysisProgress(request.projectId)
       if (pending.current !== request) return
       setProgress(next)
-      if (!importingRef.current && analysisPendingCount(next) === 0 && (next.failed + next.cancelled === 0 || (useReady && next.readyVideo > 0))) {
+      if (!importingRef.current && analysisComplete(next)) {
         finish(true)
         return
       }
+      if (!importingRef.current && request.useReady && next.readyVideo > 0) {
+        finish(true)
+        return
+      }
+      setPrompting(true)
       window.clearTimeout(request.timer)
       request.timer = window.setTimeout(() => void check(request), 1500)
     } catch (error) {
@@ -45,6 +57,7 @@ export function useAnalysisGateController(projectId: string | null, sessionId: s
       window.clearTimeout(request.timer)
       setProgress(null)
       setWaiting(false)
+      setPrompting(false)
       request.reject(error)
     }
   }
@@ -55,6 +68,7 @@ export function useAnalysisGateController(projectId: string | null, sessionId: s
       const request = { projectId, resolve, reject }
       pending.current = request
       setWaiting(true)
+      setPrompting(false)
       void check(request)
     })
   }
@@ -68,13 +82,20 @@ export function useAnalysisGateController(projectId: string | null, sessionId: s
     }
     setProgress(null)
     setWaiting(false)
+    setPrompting(false)
   }, [projectId, sessionId])
 
   return {
     progress,
     waiting,
+    prompting,
     waitForAnalysis,
     cancel: () => finish(false),
-    useReady: () => { if (pending.current) void check(pending.current, true) },
+    useReady: () => {
+      const request = pending.current
+      if (!request) return
+      request.useReady = true
+      void check(request)
+    },
   }
 }

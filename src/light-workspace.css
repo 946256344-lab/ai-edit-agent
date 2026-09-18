@@ -60,6 +60,10 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .item-menu button.danger { color: #984658; }
 .sidebar-library, .new-edit { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; border: 0; border-radius: 8px; color: #4a4a4a; padding: 10px 12px; margin-top: 9px; background: #ffffff25; font-size: 15px; text-align: left; }
 .sidebar-library small { margin-left: auto; color: var(--muted); font-size: 12px; }
+.sidebar-library__status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; font-style: normal; }
+.sidebar-library__status--analyzing { background: #9480b7; animation: analysis-pulse 1.6s ease-in-out infinite; }
+.sidebar-library__status--attention { background: #c28189; }
+@keyframes analysis-pulse { 50% { opacity: .55; } }
 .sidebar-library:hover { background: #e7e7e4; }
 .sidebar-library.selected { color: var(--accent); background: var(--accent-wash); }
 .new-edit { justify-content: center; border: 1px solid #d4d4d0; background: #fafaf8; margin-top: 12px; }
@@ -278,7 +282,6 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .name-edit-field { display: grid; gap: 7px; margin-top: 22px; color: var(--muted); font-size: 12px; }
 .name-edit-field input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; }
 .name-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
-.analysis-activity { background: #fffcfffa; border-color: var(--line); border-radius: 12px; box-shadow: 0 6px 30px #38383820; }.analysis-activity header { color: #616161; }.analysis-activity b, .analysis-activity li:before { color: #878787; }.analysis-activity li, .analysis-activity p { color: #818181; border-color: var(--line); }
 .release-readiness { margin: 12px 24px 0; background: #fff6e9; border-color: #ebd9bc; padding: 8px 12px; flex-shrink: 0; max-height: 100px; overflow: auto; }.release-readiness strong { color: #806743; }.release-readiness li b { color: #997345; }.release-readiness li span { color: #a18a6b; }
 .browser-notice { display: grid; grid-template-columns: minmax(0, 620px); place-content: center; }.browser-notice section { background: var(--paper); border-color: var(--line); border-radius: 16px; }.browser-notice p { color: var(--muted); }.browser-notice code { background: var(--wash); color: var(--ink); border-color: var(--line); }
 

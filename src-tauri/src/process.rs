@@ -16,6 +16,12 @@ pub(crate) enum HiddenCommandError {
     Failed,
 }
 
+/// Limits how much of a large MP4/MOV FFmpeg reads before `-i`.
+/// DJI files on network shares otherwise scan the whole container during probe.
+pub(crate) fn media_open_args() -> [&'static str; 4] {
+    ["-probesize", "32M", "-analyzeduration", "10M"]
+}
+
 /// Builds an external command that never shows a console window from the GUI app.
 pub(crate) fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);

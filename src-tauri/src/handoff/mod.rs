@@ -73,7 +73,7 @@ impl EditorId {
     pub(crate) fn summary(self) -> &'static str {
         match self {
             Self::Jianying => "写入本机剪映草稿箱，可继续微调",
-            Self::CapCut => "即将支持 CapCut 草稿",
+            Self::CapCut => "写入本机 CapCut 草稿箱，可继续微调",
             Self::Fcpxml => "写出 FCPXML，可导入 Premiere、DaVinci Resolve 或 Final Cut",
             Self::Otio => "写出 OTIO，Resolve 可直接导入",
         }
@@ -120,7 +120,7 @@ pub(crate) fn editor_capabilities(id: EditorId) -> EditorCapabilities {
         },
         EditorId::CapCut => EditorCapabilities {
             editor_id: id,
-            implemented: false,
+            implemented: true,
             delivery: DeliveryKind::DropInDraft,
             video_cuts: Support::Full,
             speed_change: Support::Full,
@@ -278,6 +278,7 @@ pub(crate) fn jianying_create_draft_input(
     let mut payload = json!({
         "inputFormatVersion": JIANYING_ADAPTER_FORMAT_VERSION,
         "operation": "createDraft",
+        "editor": "jianying",
         "draftRoot": dest.draft_root,
         "draftName": dest.draft_name,
         "draftRegistryPath": dest.draft_registry_path,
@@ -289,6 +290,15 @@ pub(crate) fn jianying_create_draft_input(
     if caps.voiceover != Support::Unsupported {
         payload["voiceoverTracks"] = json!(plan.voiceover_tracks);
     }
+    payload
+}
+
+pub(crate) fn capcut_create_draft_input(
+    plan: &HandoffPlan,
+    dest: &JianyingDraftDestination,
+) -> Value {
+    let mut payload = jianying_create_draft_input(plan, dest);
+    payload["editor"] = json!("capcut");
     payload
 }
 
@@ -497,7 +507,7 @@ pub(crate) mod tests {
         assert!(EditorId::Jianying.implemented());
         assert!(EditorId::Fcpxml.implemented());
         assert!(EditorId::Otio.implemented());
-        assert!(!EditorId::CapCut.implemented());
+        assert!(EditorId::CapCut.implemented());
         assert_eq!(EditorId::parse("premiere").unwrap(), EditorId::Fcpxml);
         assert_eq!(
             editor_capabilities(EditorId::Jianying).voiceover,
@@ -537,6 +547,7 @@ pub(crate) mod tests {
         );
         assert_eq!(payload["inputFormatVersion"], 2);
         assert_eq!(payload["operation"], "createDraft");
+        assert_eq!(payload["editor"], "jianying");
         assert_eq!(payload["clips"][0]["sourceEndMs"], 2_000);
         assert_eq!(payload["overlayClips"][0]["sourceEndMs"], 1_500);
         assert_eq!(payload["textTracks"][0]["cues"][0]["text"], "字幕");
@@ -546,5 +557,15 @@ pub(crate) mod tests {
         );
         assert!(payload.get("voiceoverTracks").is_none());
         assert!(payload["clips"][0].get("assetId").is_none());
+        let capcut = capcut_create_draft_input(
+            &plan,
+            &JianyingDraftDestination {
+                draft_root: "C:/drafts".to_owned(),
+                draft_name: "demo-1".to_owned(),
+                draft_registry_path: "C:/registry.json".to_owned(),
+            },
+        );
+        assert_eq!(capcut["editor"], "capcut");
+        assert_eq!(capcut["clips"][0]["sourceEndMs"], 2_000);
     }
 }

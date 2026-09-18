@@ -3,6 +3,7 @@
 
 use crate::assets::resume_incomplete_analysis;
 use crate::db::{now_millis, open_connection};
+use crate::capcut::resume_pending_capcut_registrations;
 use crate::jianying::resume_pending_jianying_registrations;
 use crate::models::{Conversation, EditingSession, EditingTask, Message, Project, StoreStatus};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -203,6 +204,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
 
     let step_start = std::time::Instant::now();
     resume_pending_jianying_registrations(&app)?;
+    resume_pending_capcut_registrations(&app)?;
     log::info!(
         "[PERF] initialize_local_store: resume_pending_jianying_registrations took {:?}",
         step_start.elapsed()

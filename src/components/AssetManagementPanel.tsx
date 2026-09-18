@@ -89,8 +89,6 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
         </div>
       </header>
 
-      <AssetAnalysisProgress progress={model.page.progress} selected={model.analysisFilter} onSelect={actions.selectAnalysisFilter} onRetry={actions.retryFailed} retrying={model.retrying} importing={model.importing} notice={model.analysisNotice} onCancel={actions.cancelAnalysis} onResume={actions.resumeAnalysis} busy={model.analysisBusy} />
-
       <div className={`asset-workbench__grid ${showSidePanel ? '' : 'asset-workbench__grid--compact'} ${showEvidence ? 'asset-workbench__grid--inspecting' : ''}`}>
         <aside className="asset-workbench__left">
           <AssetDirectoryTree
@@ -112,6 +110,21 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
             filtered={model.analysisFilter !== null}
             onInspect={actions.inspectAsset}
             editing={{ model: model.editing, actions: actions.editing }}
+            analysis={(model.page.progress.total > 0 || model.importing || model.analysisNotice) ? (
+              <AssetAnalysisProgress
+                placement="toolbar"
+                progress={model.page.progress}
+                selected={model.analysisFilter}
+                onSelect={actions.selectAnalysisFilter}
+                onRetry={actions.retryFailed}
+                retrying={model.retrying}
+                importing={model.importing}
+                notice={model.analysisNotice}
+                onCancel={actions.cancelAnalysis}
+                onResume={actions.resumeAnalysis}
+                busy={model.analysisBusy}
+              />
+            ) : undefined}
           />
         </main>
 

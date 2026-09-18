@@ -25,3 +25,11 @@ export function analysisSummary(progress: AssetAnalysisProgress) {
 export function analysisPendingCount(progress: AssetAnalysisProgress) {
   return progress.analyzing + progress.queued - progress.cancelled
 }
+
+export type AnalysisAmbientStatus = 'idle' | 'analyzing' | 'attention'
+
+export function analysisAmbientStatus(progress: AssetAnalysisProgress): AnalysisAmbientStatus {
+  if (analysisPendingCount(progress) > 0) return 'analyzing'
+  if (progress.failed > 0 || progress.cancelled > 0) return 'attention'
+  return 'idle'
+}

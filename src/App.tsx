@@ -5,7 +5,7 @@ import './light-workspace.css'
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { PairedWorkspace } from './components/PairedWorkspace'
 import { AssetAnalysisModal } from './components/AssetAnalysisModal'
-import { AnalysisActivity } from './components/AnalysisActivity'
+import { AnalysisIncompleteDialog } from './components/AnalysisIncompleteDialog'
 import { AppSidebar } from './components/AppSidebar'
 import { RoughCutPreview } from './components/RoughCutPreview'
 import { AssetManagementPanel } from './components/AssetManagementPanel'
@@ -46,6 +46,7 @@ import {
 } from './lib/local-store'
 import type { AgentEditEvent, ConversationTurnResult, StoredAgentTask, StoredEditingSession, StoredMessage, StoredProject, TaskRouteResult } from './lib/local-store'
 import { toMessage } from './lib/message'
+import { analysisAmbientStatus, analysisSummary } from './lib/asset-analysis'
 
 function toEditingSession(session: StoredEditingSession): EditingSessionView {
   return {
@@ -401,7 +402,7 @@ function App() {
     try {
       if (!await analysisGate.waitForAnalysis() || cancelRequestedRef.current) {
         setIsSending(false)
-        setComposerNotice('已取消等待，剪辑要求已保留。')
+        setComposerNotice('已取消这次发送，剪辑要求已保留。')
         return
       }
       if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
@@ -566,6 +567,8 @@ function App() {
           artworkNotice: sessionArtwork?.notice ?? null,
           view: activeView,
           assetCount: assetWorkspace.page.counts.total,
+          analysisStatus: analysisAmbientStatus(assetWorkspace.page.progress),
+          analysisHint: analysisSummary(assetWorkspace.page.progress),
         }}
         actions={{
           createSession: () => shotReplacement.actions.requestAction(() => void createEditingSessionWorkspace()),
@@ -599,7 +602,7 @@ function App() {
             <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? '从灵感，到画面'}</h1>
             <p>{artifactWorkspace.timeline
               ? `${(artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1)} 秒 · ${artifactWorkspace.timeline.clips.length} 个镜头 · 第 ${artifactWorkspace.timeline.versionNumber} 版`
-              : analysisGate.waiting ? '等待素材分析完成…' : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
+              : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
             {artifactWorkspace.storyboardVersions.length > 0 && (
               <label className="storyboard-version-picker">
                 故事版
@@ -649,9 +652,6 @@ function App() {
                   progress: analysisGate.progress ?? assetWorkspace.page.progress,
                   waiting: analysisGate.waiting,
                   importing: assetWorkspace.model.importing,
-                  retrying: assetWorkspace.model.retrying,
-                  busy: assetWorkspace.model.analysisBusy,
-                  notice: assetWorkspace.model.analysisNotice,
                 },
                 routeStatus: { text: routeStatusText, detail: routeStatusDetail, tone: routeStatusTone },
               }}
@@ -663,10 +663,6 @@ function App() {
                 openArtifacts: () => setActiveView('chat'),
                 toggleMedia: composerMedia.toggle,
                 sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage()) },
-                retryAnalysis: assetWorkspace.actions.retryFailed,
-                cancelAnalysis: assetWorkspace.actions.cancelAnalysis,
-                resumeAnalysis: assetWorkspace.actions.resumeAnalysis,
-                useAnalyzedAssets: analysisGate.useReady,
                 stopAgentRun,
               }}
             />
@@ -681,12 +677,16 @@ function App() {
         </div>
       </section>
 
-      <AnalysisActivity
-        analyzingCount={assetWorkspace.page.progress.analyzing}
-        queuedCount={assetWorkspace.page.progress.queued - assetWorkspace.page.progress.cancelled}
-        onCancel={assetWorkspace.actions.cancelAnalysis}
-        busy={assetWorkspace.model.analysisBusy}
-        visibleAssets={assetWorkspace.assets}
+      <AnalysisIncompleteDialog
+        open={analysisGate.prompting}
+        progress={analysisGate.progress}
+        importing={assetWorkspace.model.importing}
+        onUseReady={analysisGate.useReady}
+        onCancel={analysisGate.cancel}
+        onOpenLibrary={() => {
+          analysisGate.cancel()
+          shotReplacement.actions.requestAction(() => setActiveView('assets'))
+        }}
       />
       <AssetAnalysisModal controller={assetWorkspace.analysis} />
       <ProviderSettingsModal controller={provider} />

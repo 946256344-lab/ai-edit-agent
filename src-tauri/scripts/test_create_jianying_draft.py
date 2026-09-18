@@ -13,7 +13,9 @@ from pyJianYingDraft import TrackType
 from create_jianying_draft import (
     add_music_tracks,
     add_text_tracks,
+    bind_sdk,
     clip_source_duration_us,
+    editor_process_name,
     escape_text_material_unicode,
     fit_adjacent_cue_range,
     fit_source_duration,
@@ -78,6 +80,11 @@ class JianyingProcessDetectionTests(unittest.TestCase):
         )
 
         self.assertFalse(jianying_is_running())
+
+    def test_capcut_uses_local_sdk_and_process_name(self):
+        self.assertEqual(editor_process_name("capcut"), "CapCut.exe")
+        bind_sdk("capcut")
+        bind_sdk("jianying")
 
 
 class TextTrackExportTests(unittest.TestCase):
@@ -187,7 +194,7 @@ class MusicTrackExportTests(unittest.TestCase):
 
 
 class DeferredRegistrationTests(unittest.TestCase):
-    @patch("create_jianying_draft.jianying_is_running", return_value=True)
+    @patch("create_jianying_draft.process_is_running", return_value=True)
     @patch("create_jianying_draft.register_draft")
     def test_defers_registration_while_jianying_is_running(self, register, _running):
         status = register_when_safe("registry", "root", "draft", "name", 1_000)
@@ -195,7 +202,7 @@ class DeferredRegistrationTests(unittest.TestCase):
         self.assertEqual(status, "pending")
         register.assert_not_called()
 
-    @patch("create_jianying_draft.jianying_is_running", return_value=False)
+    @patch("create_jianying_draft.process_is_running", return_value=False)
     @patch("create_jianying_draft.register_draft")
     def test_registers_immediately_when_jianying_is_closed(self, register, _running):
         status = register_when_safe("registry", "root", "draft", "name", 1_000)

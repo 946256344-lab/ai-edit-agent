@@ -2,7 +2,9 @@
 //! 对比不够、样本不足或抽帧失败时保持原硬切范围。
 
 use crate::models::{MotionEnergySample, MotionProfile, SceneSegment};
-use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
+use crate::process::{
+    hidden_command, media_open_args, run_hidden_command_with_timeout, HiddenCommandError,
+};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -183,12 +185,11 @@ fn extract_energy_samples(
     if duration_ms < MIN_DURATION_MS {
         return None;
     }
-    let fps = ((MAX_SAMPLES as f64) / (duration_ms as f64 / 1000.0)).clamp(2.0, 5.0);
+    let fps = ((MAX_SAMPLES as f64) / (duration_ms as f64 / 1000.0)).clamp(1.5, 2.5);
     let mut command = hidden_command("ffmpeg");
+    command.args(["-hide_banner", "-loglevel", "error"]);
+    command.args(media_open_args());
     command.args([
-        "-hide_banner",
-        "-loglevel",
-        "error",
         "-ss",
         &format!("{:.3}", start_ms as f64 / 1000.0),
         "-t",

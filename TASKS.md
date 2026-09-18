@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-18）：剪辑前未分析完改为弹窗确认，询问是否只用已分析素材。见 docs/changes/2026-09-18-analysis-status-ui.md。
+- [x] 已实现（2026-09-18）：素材分析提示收口。导入弹窗保留；侧栏素材库只露状态点；发送未分析完时弹窗确认；进度筛选和进度条收到素材列表标题。去掉右下角浮层和输入区进度卡。见 docs/changes/2026-09-18-analysis-status-ui.md。
+- [x] 已实现（2026-09-18）：技术分析加速。一律先扫关键帧；全帧只补本机短片且几乎没切到的。缩略图/抽帧超时不整条失败。见 docs/changes/2026-09-18-faster-asset-analysis.md。
+- [x] 已实现（2026-09-18）：CapCut 投放链接器。按本机注册表识别草稿库，只新建不覆盖。见 docs/changes/2026-09-18-capcut-linker.md。
 - [x] 已验证（2026-09-18）：本机可新建剪映草稿。当天时间线已注册 `123-0c9499f5`；逐字字幕 1ms 边界由适配器收齐。见 docs/changes/2026-09-18-verify-jianying-draft.md。
 - [x] 已实现（2026-09-18）：去掉输出端口落地后的旧残留。未挂载成果页、前端剪映包装与重复源采集。见 docs/changes/2026-09-18-remove-legacy-editor-remnants.md。
 - [x] 已实现（2026-09-18）：输出端口可选编辑器。项目记住选择；剪映/FCPXML/OTIO 可交付，CapCut 未实现。见 docs/changes/2026-09-18-editor-output-port.md。

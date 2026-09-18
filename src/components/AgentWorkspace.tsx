@@ -3,8 +3,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
 import { WorkspaceIcon } from './WorkspaceIcon'
-import { analysisPendingCount } from '../lib/asset-analysis'
-import { AssetAnalysisProgress } from './AssetAnalysisProgress'
 import type { AssetAnalysisProgress as AnalysisProgress, MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
 
@@ -19,7 +17,7 @@ export type AgentWorkspaceModel = {
   listenerReady: boolean
   composerNotice: string | null
   mediaOptions: MediaOptions
-  analysis: { progress: AnalysisProgress; waiting: boolean; importing: boolean; retrying: boolean; busy: boolean; notice: string | null }
+  analysis: { progress: AnalysisProgress; waiting: boolean; importing: boolean }
   routeStatus: {
     text: string | null
     detail: string | null
@@ -33,10 +31,6 @@ export type AgentWorkspaceActions = {
   sendMessage: (event: FormEvent<HTMLFormElement>) => void
   stopAgentRun: () => void
   toggleMedia: (name: keyof MediaOptions) => void
-  retryAnalysis: () => void
-  cancelAnalysis: () => void
-  resumeAnalysis: () => void
-  useAnalyzedAssets: () => void
 }
 
 type AgentWorkspaceProps = {
@@ -58,7 +52,6 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
   const followLatest = useRef(true)
   const [showLatest, setShowLatest] = useState(false)
   const { analysis } = model
-  const analysisPending = analysisPendingCount(analysis.progress) > 0
 
   useLayoutEffect(() => {
     const textarea = composer.current
@@ -86,7 +79,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
 
   return (
     <section className="conversation-workspace conversation-workspace--chat">
-      <header className="chat-heading"><strong>剪辑对话</strong><span>{analysis.waiting ? '等待素材分析…' : model.isSending ? '正在处理…' : ''}</span></header>
+      <header className="chat-heading"><strong>剪辑对话</strong><span>{model.isSending && !analysis.waiting ? '正在处理…' : ''}</span></header>
       <div className="message-stream" ref={stream} onScroll={(event) => {
         const element = event.currentTarget
         followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
@@ -143,12 +136,6 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
       }}>↓ 回到最新消息</button>}
 
       <form className="composer" onSubmit={actions.sendMessage}>
-        {(analysis.progress.total > 0 || analysis.importing || analysis.notice) && <AssetAnalysisProgress compact progress={analysis.progress} onRetry={actions.retryAnalysis} retrying={analysis.retrying} importing={analysis.importing} notice={analysis.notice} onCancel={actions.cancelAnalysis} onResume={actions.resumeAnalysis} busy={analysis.busy} />}
-        {analysis.waiting && <div className="analysis-waiting" role="status">
-          <span>{analysisPending ? '已保留本次请求，分析完成后自动开始剪辑。' : (analysis.progress.failed + analysis.progress.cancelled) > 0 ? '有素材分析失败或已取消，请继续分析，或仅使用已分析素材。' : '正在确认素材分析状态…'}</span>
-          {!analysisPending && (analysis.progress.failed + analysis.progress.cancelled) > 0 && <button type="button" disabled={analysis.progress.readyVideo === 0 || analysis.retrying} onClick={actions.useAnalyzedAssets}>仅使用已分析素材剪辑</button>}
-          {!analysisPending && (analysis.progress.failed + analysis.progress.cancelled) > 0 && analysis.progress.readyVideo === 0 && <span>暂无已分析完成的可用视频。</span>}
-        </div>}
         <textarea
           ref={composer}
           aria-label="剪辑需求或文案"
@@ -187,11 +174,11 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               type="button"
               onClick={actions.stopAgentRun}
             >
-              {analysis.waiting ? '取消等待' : model.listenerReady ? '停止' : '停止连接'}
+              {analysis.waiting ? '取消' : model.listenerReady ? '停止' : '停止连接'}
             </button>
           ) : (
-            <button className={`send-button${analysisPending || (analysis.progress.failed + analysis.progress.cancelled) > 0 ? ' send-button--analysis' : ''}`} type="submit" aria-label={model.editBusy ? '保存中' : analysisPending ? '分析完成后开始剪辑' : '发送'} disabled={!model.input.trim() || model.editBusy || analysis.importing}>
-              {model.editBusy ? '…' : analysis.importing ? '正在导入…' : analysisPending ? '分析完成后开始剪辑' : (analysis.progress.failed + analysis.progress.cancelled) > 0 ? '开始剪辑' : <WorkspaceIcon name="arrow" />}
+            <button className={`send-button${analysis.importing ? ' send-button--analysis' : ''}`} type="submit" aria-label={model.editBusy ? '保存中' : '发送'} disabled={!model.input.trim() || model.editBusy || analysis.importing}>
+              {model.editBusy ? '…' : analysis.importing ? '正在导入…' : <WorkspaceIcon name="arrow" />}
             </button>
           )}
         </div>

@@ -1,12 +1,16 @@
 # API 与工具契约
 
+## 2026-09-18：CapCut 投放链接器
+
+`deliver_to_editor` 可选 CapCut。草稿库从该设备 `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\root_meta_info.json` 读取 `draft_root_path`，不写死盘符。未打开过 CapCut 则拒绝。见 `docs/changes/2026-09-18-capcut-linker.md`。
+
 ## 2026-09-18：去掉输出端口落地后的旧残留
 
 前端不再封装 `create_jianying_draft` / `generate_storyboard` / `synthesize_storyboard_voiceover`。工作台交付只走 `deliver_to_editor`。公开 Tauri 命令保留。见 `docs/changes/2026-09-18-remove-legacy-editor-remnants.md`。
 
 ## 2026-09-18：输出端口可选编辑器
 
-新增 `list_editor_linkers`、`set_output_editor`、`deliver_to_editor`。项目 `settings_json.outputEditor` 记住选择。剪映写草稿；FCPXML / OTIO 写出导入文件；CapCut 列出但未实现。`create_jianying_draft` 仍可强制交付剪映。自动预览后的交付走当前选择。见 `docs/changes/2026-09-18-editor-output-port.md`。
+新增 `list_editor_linkers`、`set_output_editor`、`deliver_to_editor`。项目 `settings_json.outputEditor` 记住选择。剪映 / CapCut 写草稿；FCPXML / OTIO 写出导入文件。`create_jianying_draft` 仍可强制交付剪映。自动预览后的交付走当前选择。见 `docs/changes/2026-09-18-editor-output-port.md`、`docs/changes/2026-09-18-capcut-linker.md`。
 
 ## 2026-09-18：剪映改为编辑器链接器
 
@@ -69,14 +73,14 @@
 - `rename_library_asset`（projectId, assetId, name）：仅改显示名，不改本地文件名。
 - `remove_library_assets`（projectId, assetIds）：返回批量操作计数，先取消未完成首次分析，再标记 `metadata.libraryRemoved`；库列表、统计、搜索与新剪辑候选不再读取它，保留资产行、源文件和已有时间线引用。共享素材的编辑作用于该素材及引用它的所有项目，前端移除确认说明此范围。
 
-导入弹窗跟踪本次导入的 ID，预计剩余时间按本批次实际完成速度估算，尚无完成项时显示“正在估算”。“后台分析”仅关闭弹窗；弱化的“取消分析”取消该批次，素材库/对话进度条取消当前项目中的未完成分析。
+导入弹窗跟踪本次导入的 ID，预计剩余时间按本批次实际完成速度估算，尚无完成项时显示“正在估算”。“后台分析”仅关闭弹窗；弱化的“取消分析”取消该批次。素材库列表标题提供项目级取消/继续/重试；对话等待提示不再承担分析控制。
 
 
 `list_asset_page` 增加可选 `analysisState: 'ready' | 'analyzing' | 'queued' | 'failed'`，与目录等现有筛选组合。新增返回 `progress: { total, ready, analyzing, queued, failed, readyVideo, cancelled }`，按当前项目的共享素材范围去重统计，不受分页或筛选影响；旧 `counts` 保持原义。
 
 首次分析状态同时考虑技术分析和画面识别，视频/图片只有两者完成才为 ready；音频/其他类型只需技术分析。技术失败、画面失败或已跳过画面识别归入 failed（详情保留已跳过说明），queued/running 不算已完成。`readyVideo` 另排除手动排除、缺失、变化和不可读的视频。`retry_asset_analysis_batch` 复用两阶段失败重试，最多 200 项，仅重试失败步骤，返回原有 requested/updated/skipped 计数。
 
-对话入口在调用任务路由和 `submit_conversation_turn` 前等待当前项目首次分析，文案和媒体选项按点击提交时快照保留；失败暂停，用户明确选择后才继续使用已完成素材。等待仅存在当前应用页面，取消、切换项目/会话会取消等待；重启不会自动续发。素材导入及重试入队期间不自动放行。`storyboard_sources` 只接收技术和首次画面分析均 ready 的视频，失败素材上的部分段卡不参与召回；Phase 4 精修仍在剪辑中执行。
+对话入口在调用任务路由和 `submit_conversation_turn` 前检查当前项目首次分析。素材未全部完成时弹出确认，询问是否只用已分析素材；取消则保留输入框文案。分析全部完成后自动继续。文案和媒体选项按点击提交时快照保留。确认仅存在当前应用页面，取消、切换项目/会话会取消这次发送；重启不会自动续发。素材导入及重试入队期间不自动放行。`storyboard_sources` 只接收技术和首次画面分析均 ready 的视频，失败素材上的部分段卡不参与召回；Phase 4 精修仍在剪辑中执行。
 
 ## 2026-09-16：关配音不再强制 15 秒
 
@@ -286,7 +290,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 | `list_editor_linkers` | `{ projectId }` | `EditorLinkerCatalog` | 列出输出端口（剪映 / CapCut / FCPXML / OTIO）及当前项目选择。 |
 | `set_output_editor` | `{ projectId, editorId }` | `EditorLinkerCatalog` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
-| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。 |
+| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。 |
 
 `agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
 
@@ -326,9 +330,9 @@ NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真
 
 可重试写失败和成功产物的 `qualityWarnings` 会分别触发最多两次恢复/精炼续步；无关观察或前置调用不能清除仍未闭合的失败/警告。默认工具可见性不等于完成清单；请求中明确要求的最低产物集合只用于 RunReceipt 终态验真，不参与工具暴露或路径选择。`render_preview` 的成功收据绑定返回的 `timelineVersionId`；任何后续时间线写工具若返回不同版本或缺少可验证版本，旧 preview 收据即失效，必须重新渲染才能满足 preview 完成门。
 
-内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：完成后素材成为技术 `ready`。场景检测用 FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 找硬切，CLIP 对切点前后帧验真（相似、抽帧失败或 CLIP 不可用则不切）；无已验证硬切则整条一段，禁止按秒均分。硬切确定后对每段抽灰度序列算帧差能量，只收缩静止开头和已收敛结尾；对比不够则不切。`analysisVersion=4`；version&lt;3 由 `reanalyze_asset_segments` 整段重切，version=3 只补运动曲线、不改视觉、不自动排队视觉。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、45、20、20 秒硬超时；任一阶段超时都会将该素材标记失败而不阻塞队列，OCR 正常完成但无文字结果仍不失败。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 按硬切段各发送一张低分辨率中点帧，最多 6 段一批，标签含素材 ID、片段 ID 与源时间；无硬切段时退回整条代表帧。模型应回 `narrativeRole`（自拟短语，非枚举）和一句可见 `caption`，以及现有短标签；未知字段忽略，空字段允许。按 `assetId+segmentId` 对上后收下该卡（源时间以本地帧为准），对不上或单卡无法解析则丢弃该卡，不因一张废整批。回写时写入片段向量。选片与片段检索不等待 `analyze_asset_segments_batch`；第二次视觉分析是选中镜头的 Phase 4 多帧精修。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或整批 JSON 无法解析不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
+内部 `analyze_asset` 只执行本地技术分析，最多有两个 worker 并行运行：完成后素材成为技术 `ready`。场景检测用 FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 找硬切，CLIP 对切点前后帧验真（相似、抽帧失败或 CLIP 不可用则不切）；无已验证硬切则整条一段，禁止按秒均分。硬切确定后对每段抽灰度序列算帧差能量，只收缩静止开头和已收敛结尾；对比不够则不切。`analysisVersion=4`；version&lt;3 由 `reanalyze_asset_segments` 整段重切，version=3 只补运动曲线、不改视觉、不自动排队视觉。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、60、20、20 秒硬超时；FFprobe 超时仍将该素材标记失败，缩略图或单帧抽帧超时则跳过该步并继续，OCR 正常完成但无文字结果仍不失败。场景检测：一律先扫关键帧。全帧补扫仅用于本机、≤60 秒、且关键帧切点 ≤1 的片子；共享盘、长片或关键帧已切开则不再整段解码，超时保留已有切点。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 按硬切段各发送一张低分辨率中点帧，最多 6 段一批，标签含素材 ID、片段 ID 与源时间；无硬切段时退回整条代表帧。模型应回 `narrativeRole`（自拟短语，非枚举）和一句可见 `caption`，以及现有短标签；未知字段忽略，空字段允许。按 `assetId+segmentId` 对上后收下该卡（源时间以本地帧为准），对不上或单卡无法解析则丢弃该卡，不因一张废整批。回写时写入片段向量。选片与片段检索不等待 `analyze_asset_segments_batch`；第二次视觉分析是选中镜头的 Phase 4 多帧精修。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或整批 JSON 无法解析不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。启动时有效的中断批次会恢复为 `queued`，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
 
-首次场景检测的滤镜顺序为 `fps=4 -> scale=320:-2:flags=fast_bilinear -> select(scene) -> showinfo`；它先降低比较成本，再以 `pts_time` 保存源时间。前 30 秒和最多 4 张关键帧仍是本地安全上限。
+首次场景检测滤镜为 `fps=3,scale=160` + `select=gt(scene,0.30)`，一律先解关键帧；仅本机短片且关键帧几乎没切到时才全帧补扫。源时间以 `pts_time` 为准。
 
 新分析的视频会从统一为 320px 宽的关键帧计算拉普拉斯方差，取归一化中位数写入 `visualQualityScore`；已有技术就绪视频在首次 storyboard 前用既有关键帧补齐。视觉 evidence 写入后，本地内置模型生成证据文本向量；旧素材同样在首次 storyboard 前批量补齐，失败只关闭语义路径，不影响词面排序。
 
@@ -434,7 +438,7 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 
 ## Jianying draft 创建规则
 
-内部时间线先投影为编辑器无关的 `HandoffPlan`（源窗、槽位、裁剪、文本、音乐、旁白）。输出端口按项目选择交付：剪映链接器写成草稿；FCPXML/OTIO 写出导入文件。旁白轨当前不写入剪映草稿（预览仍混音）。`create_jianying_draft` 仍可强制交付剪映。
+内部时间线先投影为编辑器无关的 `HandoffPlan`（源窗、槽位、裁剪、文本、音乐、旁白）。输出端口按项目选择交付：剪映 / CapCut 链接器写成草稿；FCPXML/OTIO 写出导入文件。旁白轨当前不写入剪映或 CapCut 草稿（预览仍混音）。`create_jianying_draft` 仍可强制交付剪映。草稿库从该设备注册表识别，不写死盘符。
 
 `JianyingDraftResult` 会返回草稿目录和内容文件路径，仅供本地桌面流程使用，调用方不得将其记录到日志、浏览器存储或文档。
 
@@ -495,3 +499,4 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-09-15）：素材切段只认 FFmpeg 硬切并用 CLIP 验真；无已验证硬切则整条一段。`analysisVersion=3`。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
 维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。`analysisVersion=4`。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
 维护记录（2026-09-16）：素材详情展示片段运动能量曲线与可用窗。见 `docs/changes/2026-09-16-motion-energy-detail.md`。
+维护记录（2026-09-18）：技术分析先扫关键帧，缩略图/抽帧超时不整条失败。见 `docs/changes/2026-09-18-faster-asset-analysis.md`。

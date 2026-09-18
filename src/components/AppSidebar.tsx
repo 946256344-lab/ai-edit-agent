@@ -1,6 +1,7 @@
 // 项目侧栏：项目内素材入口、剪辑会话与设置；操作仍交给应用 controller。
 import { useEffect, useRef, useState } from 'react'
 import type { StoredProject } from '../lib/local-store'
+import type { AnalysisAmbientStatus } from '../lib/asset-analysis'
 import type { EditingSessionView, WorkspaceView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
 import { NameEditDialog } from './NameEditDialog'
@@ -16,6 +17,8 @@ export type AppSidebarModel = {
   storeState: 'browser' | 'ready' | 'unavailable'
   view: WorkspaceView
   assetCount: number
+  analysisStatus: AnalysisAmbientStatus
+  analysisHint: string
   covers: Record<string, string>
   artworkNotice: string | null
 }
@@ -74,8 +77,9 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
             <button onClick={(event) => { actions.createProject(); event.currentTarget.closest('details')?.removeAttribute('open') }}><WorkspaceIcon name="plus" />新建项目</button>
           </div>
         </details>
-        <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label="素材库" aria-pressed={model.view === 'assets'} onClick={actions.openAssets}>
+        <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label={model.analysisStatus === 'analyzing' ? `素材库，正在分析，共 ${model.assetCount} 个` : model.analysisStatus === 'attention' ? `素材库，有未完成分析，共 ${model.assetCount} 个` : `素材库，共 ${model.assetCount} 个`} aria-pressed={model.view === 'assets'} title={model.analysisStatus === 'idle' ? undefined : model.analysisHint} onClick={actions.openAssets}>
           <WorkspaceIcon name="library" /><span>素材库</span><small>{model.assetCount}</small>
+          {model.analysisStatus !== 'idle' && <i className={`sidebar-library__status sidebar-library__status--${model.analysisStatus}`} aria-hidden="true" />}
         </button>
         <button className="new-edit" onClick={actions.createSession} title="新建剪辑会话"><WorkspaceIcon name="plus" /><span>新建剪辑</span></button>
       </div>

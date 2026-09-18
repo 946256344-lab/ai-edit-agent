@@ -6,7 +6,9 @@ use crate::models::{
     Asset, AssetTaskCenter, AssetTaskFailure, AssetTaskStageCounts, BatchAssetActionResult,
     KeyframeMetadata, OcrEvidence, SceneSegment, TechnicalMetadata,
 };
-use crate::process::{hidden_command, run_hidden_command_with_timeout, HiddenCommandError};
+use crate::process::{
+    hidden_command, media_open_args, run_hidden_command_with_timeout, HiddenCommandError,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,7 +17,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
@@ -138,9 +140,9 @@ fn parse_frame_rate(value: Option<&str>) -> Option<f64> {
 fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
     let mut command = hidden_command("ffprobe");
     command
+        .args(["-v", "error"])
+        .args(media_open_args())
         .args([
-            "-v",
-            "error",
             "-show_entries",
             "format=duration:stream=codec_type,width,height,r_frame_rate",
             "-of",
@@ -225,6 +227,7 @@ fn generate_thumbnail(
     let destination = thumbnail_destination(app, asset_id)?;
     let mut command = hidden_command("ffmpeg");
     command.args(["-y", "-hide_banner", "-loglevel", "error"]);
+    command.args(media_open_args());
     if kind == "video" {
         command.args(["-ss", "0.5"]);
     }
@@ -233,12 +236,16 @@ fn generate_thumbnail(
         .arg(source)
         .args(["-frames:v", "1", "-vf", "scale=320:-2"])
         .arg(&destination);
-    let output = run_hidden_command_with_timeout(&mut command, THUMBNAIL_FFMPEG_TIMEOUT).map_err(
-        |error| match error {
-            HiddenCommandError::TimedOut => "Thumbnail generation timed out.".to_owned(),
-            HiddenCommandError::Failed => "Thumbnail generation could not start.".to_owned(),
-        },
-    )?;
+    let output = match run_hidden_command_with_timeout(&mut command, THUMBNAIL_FFMPEG_TIMEOUT) {
+        Ok(output) => output,
+        Err(HiddenCommandError::TimedOut) => {
+            log::warn!("Thumbnail generation timed out for asset {asset_id}.");
+            return Ok(None);
+        }
+        Err(HiddenCommandError::Failed) => {
+            return Err("Thumbnail generation could not start.".to_owned());
+        }
+    };
     Ok((output.status.success() && destination.is_file())
         .then(|| destination.to_string_lossy().into_owned()))
 }
@@ -520,12 +527,18 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
         )? {
             return Ok(None);
         }
+        let started = Instant::now();
         let source = PathBuf::from(&source_reference);
         let mut metadata = probe_media(&source)?;
+        let probe_ms = started.elapsed().as_millis();
         if !super::controls::task_running(&app, &task_id) { return Ok(None); }
+        let thumb_started = Instant::now();
         metadata.thumbnail_path = generate_thumbnail(&app, &asset_id, &source, &kind)?;
+        let thumb_ms = thumb_started.elapsed().as_millis();
         if !super::controls::task_running(&app, &task_id) { return Ok(None); }
+        let mut segments_ms = 0;
         if kind == "video" {
+            let segments_started = Instant::now();
             (metadata.keyframes, metadata.scene_segments) =
                 generate_video_keyframes(&app, &asset_id, &source, metadata.duration_ms)?;
             metadata.visual_quality_score = keyframe_visual_quality_score(&metadata.keyframes);
@@ -565,9 +578,16 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
                     }
                 }
             }
+            segments_ms = segments_started.elapsed().as_millis();
         }
         if !super::controls::task_running(&app, &task_id) { return Ok(None); }
+        let ocr_started = Instant::now();
         metadata.ocr_evidence = extract_ocr_evidence(&kind, &source, &metadata.keyframes)?;
+        log::info!(
+            "[PERF] technical analysis asset={asset_id} probe={probe_ms}ms thumb={thumb_ms}ms segments={segments_ms}ms ocr={}ms total={}ms",
+            ocr_started.elapsed().as_millis(),
+            started.elapsed().as_millis()
+        );
         Ok(Some((source_reference, metadata)))
     });
     match result {
