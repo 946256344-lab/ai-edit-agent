@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "resources/models/bge-small-zh-v1.5/onnx/model.onnx",
+      "resources/models/clip-ViT-B-32-vision/model.onnx",
+      "resources/models/clip-ViT-B-32-text/model.onnx"
+    ]
+  }
+}

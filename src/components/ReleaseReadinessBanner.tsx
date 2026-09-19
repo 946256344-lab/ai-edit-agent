@@ -121,6 +121,11 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
               <li>
                 <span>{modelStatus ? formatDownloadProgress(modelStatus) : '准备中…'}</span>
               </li>
+              {modelFailed ? (
+                <li>
+                  <span>应用会自动换官方源/国内镜像并续传；仍失败时可手动重试。选镜在此期间可降级使用。</span>
+                </li>
+              ) : null}
             </ul>
           </div>
           {modelFailed ? (

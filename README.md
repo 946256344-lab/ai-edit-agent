@@ -36,7 +36,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 桌面环境依赖
 
-开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe、Tesseract（含英文 `eng` 语言数据）、Python 和 `pyJianYingDraft`。安装包捆绑 ONNX Runtime 与模型小配置，**不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载到本机数据目录并校验；开发机也可用 `scripts/fetch-clip-models.ps1` 预拉 CLIP。FFmpeg、Tesseract、Python 或 Jianying 适配器依赖仍未随包提供，生产安装、发现与报错策略仍待实现。
+开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe、Tesseract（含英文 `eng` 语言数据）、Python 和 `pyJianYingDraft`。安装包捆绑 ONNX Runtime 与模型小配置，**默认不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载（官方 + 国内镜像、断点续传）到本机数据目录并校验。需要离线开箱可用时，先 `npm run models:fetch`，再 `npm run tauri:build:full` 打完整包。开发机也可用同一 fetch 脚本预拉。FFmpeg、Tesseract、Python 或 Jianying 适配器依赖仍未随包提供，生产安装、发现与报错策略仍待实现。
 
 `pyJianYingDraft` 适配器要求通过本地 `py` Python launcher 可调用。更新 Jianying 的首页草稿注册表时，Jianying Pro 必须保持关闭。
 

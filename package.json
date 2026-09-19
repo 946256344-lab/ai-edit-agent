@@ -21,7 +21,9 @@
     "tauri": "node scripts/run-tauri.mjs",
     "tauri:verify": "node scripts/verify-tauri-webview.mjs",
     "tauri:dev": "node scripts/run-tauri.mjs dev",
-    "tauri:build": "node scripts/run-tauri.mjs build"
+    "tauri:build": "node scripts/run-tauri.mjs build",
+    "tauri:build:full": "node scripts/run-tauri.mjs build --full-models",
+    "models:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1"
   },
   "dependencies": {
     "@moviemasher/moviemasher.js": "^5.1.1",

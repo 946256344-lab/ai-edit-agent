@@ -155,9 +155,9 @@ Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-
 | 命令 | 参数 | 返回 | 说明 |
 |------|------|------|------|
 | `get_runtime_model_status` | 无 | `RuntimeModelStatus` | 三项权重状态与总体 `idle/pending/downloading/ready/failed`；不写副作用。 |
-| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 幂等启动后台下载到 `app_data/runtime-models/`；已在下或已齐则返回当前状态。 |
+| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 幂等启动后台下载到 `app_data/runtime-models/`；已在下或已齐则返回当前状态。官方失败后换国内镜像，断点续传并自动重试。 |
 
-事件 `runtime-model-progress` 推送同结构进度。`initialize_local_store` 在缺权重时自动开下，不阻塞。路径解析优先 `app_data`，其次安装包/开发目录。见 `docs/changes/2026-09-17-runtime-model-download.md`。
+事件 `runtime-model-progress` 推送同结构进度。`initialize_local_store` 在缺权重时自动开下，不阻塞。路径解析优先 `app_data`，其次安装包/开发目录。完整安装包可用 `npm run tauri:build:full` 捆绑 ONNX。见 `docs/changes/2026-09-19-runtime-model-download-resilience.md`。
 
 ## 2026-09-09：发行就绪检查
 
@@ -263,7 +263,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
 | `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message`（`status`=`ok|warn|fail`）。不探测源媒体内容，不写库。 |
 | `get_runtime_model_status` | 无 | `RuntimeModelStatus { overall, currentId, message, artifacts[] }` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。 |
-| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；幂等；不挡 UI。 |
+| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
 | `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |

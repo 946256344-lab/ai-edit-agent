@@ -22,9 +22,11 @@
 
 选片以该拍 `requiredVisual` 与网格画面为准；卡片文字是未核验标签，与画面冲突时看图。旁白只约束时长和口播，不单独决定选哪条。对不上直证时允许诚实的情景承载。网格按该条候选时间窗现拼，缺文件则从源片现抽。无图不作为硬失败。不按题材或画面类型设禁选清单。
 
-## 瘦安装包与运行时模型下载（2026-09-17）
+## 瘦安装包与运行时模型下载（2026-09-19 修订）
 
-安装包不再捆绑 BGE/CLIP 的 `model.onnx` 大文件。应用启动后若本机缺失，则后台从固定 HuggingFace URL 下载到 `%APPDATA%/<app>/runtime-models/`，校验 SHA-256 后供选镜加载；tokenizer/config 仍随包。下载不阻塞工作台；缺失时 BGE 降级词面、CLIP 加权为 0。不静默换源。FFmpeg/Tesseract/Python 仍不在本期自动下载。
+默认安装包不捆绑 BGE/CLIP 的 `model.onnx` 大文件。启动缺权重时后台下载到 `%APPDATA%/<app>/runtime-models/`，SHA-256 校验后加载；tokenizer/config 仍随包。下载不阻塞工作台；缺失时 BGE 降级词面、CLIP 加权为 0。
+
+下载策略：先 HuggingFace 官方，再国内镜像 `hf-mirror.com`（同路径同哈希，不是换模型）；单次尝试超时约 20 分钟，传输中断保留 `.partial` 并自动续传重试。发行方可选用完整包（`npm run models:fetch` 后 `npm run tauri:build:full`）把 ONNX 打进安装包，用户可跳过首次下载。FFmpeg/Tesseract/Python 仍不在本期自动下载。
 
 ## 默认直推 master（2026-09-16）
 
