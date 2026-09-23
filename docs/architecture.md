@@ -156,7 +156,7 @@ Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话
 
 前端按”入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview 与输出端口交付；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。粗剪工作台并排渲染 `AgentWorkspace` 与 `RoughCutPreview`，素材库以覆盖层打开；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
 
-Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许作用域内的本地派生媒体协议。
+Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许 Tauri IPC、作用域内的本地派生媒体协议、开发服务器和指定字体域。
 
 ## 系统边界
 
