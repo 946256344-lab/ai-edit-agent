@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已验证（2026-09-23）：正式版自定义模型端到端闭环通过。临时 540×960 素材完成技术/视觉分析；Agent 依次完成素材读取、storyboard、preview、状态与成果读取，生成 3 秒单 beat/单镜头时间线；FFprobe 确认预览为 540×960 H.264、2.97 秒且可播放。测试项目与源文件均已清理。见 docs/changes/2026-09-23-release-candidate-e2e.md。
 - [x] 已修复并验证（2026-09-23）：Release CSP 允许受限的 `ipc:` / `http://ipc.localhost`，生产版 Tauri IPC 已恢复；新 NSIS 约 262.3 MB，真实 WebView 项目初始化、素材页、设置弹窗及运行时零错误回归通过。见 docs/changes/2026-09-23-release-ipc-csp.md。
 - [x] 已实现并验证（2026-09-23）：安装包捆绑 Tesseract 5.4.0 与英文 `eng` 数据；运行时优先随包副本，发行检查验证语言数据。新 NSIS 约 262.3 MB；无系统 Tesseract 时文件级、真实 Release IPC 与 `HELLO 123` OCR 烟雾测试通过。见 docs/changes/2026-09-23-bundle-tesseract.md。
 - [x] 已验证（2026-09-23）：恢复发布基线。Phase 4 现行慢放规则断言与透明字幕背景校验已修正；413 个 Rust 单元测试、2 个契约测试、19 个 Python 适配器测试、前端构建、harness，以及无系统 Python/FFmpeg 的随包运行时验证通过。见 docs/changes/2026-09-23-release-baseline-recovery.md。
