@@ -1,4 +1,4 @@
-// Connect to a packaged Tauri WebView on CDP 9222 and read Python/Jianying adapter readiness.
+// 连接正式版 WebView，读取完整发行检查并验证所有随包运行组件。
 import assert from 'node:assert/strict'
 import process from 'node:process'
 
@@ -33,6 +33,7 @@ socket.addEventListener('message', (event) => {
   if (message.id && pending.has(message.id)) {
     const request = pending.get(message.id)
     pending.delete(message.id)
+    clearTimeout(request.timeout)
     if (message.error) request.reject(new Error(message.error.message))
     else request.resolve(message.result)
   }
@@ -41,14 +42,14 @@ socket.addEventListener('message', (event) => {
 function call(method, params = {}) {
   return new Promise((resolve, reject) => {
     const id = ++nextId
-    pending.set(id, { resolve, reject })
-    socket.send(JSON.stringify({ id, method, params }))
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id)
         reject(new Error(`${method} timed out`))
       }
     }, 45000)
+    pending.set(id, { resolve, reject, timeout })
+    socket.send(JSON.stringify({ id, method, params }))
   })
 }
 
@@ -68,5 +69,5 @@ const adapter = report.checks.find((item) => item.id === 'jianying_adapter')
 assert.equal(adapter?.status, 'ok', `jianying_adapter check: ${adapter?.status} ${adapter?.message}`)
 const tesseract = report.checks.find((item) => item.id === 'tesseract')
 assert.equal(tesseract?.status, 'ok', `tesseract check: ${tesseract?.status} ${tesseract?.message}`)
-console.log(JSON.stringify({ overall: report.overall, jianying_adapter: adapter, tesseract }, null, 2))
+console.log(JSON.stringify(report, null, 2))
 socket.close()
