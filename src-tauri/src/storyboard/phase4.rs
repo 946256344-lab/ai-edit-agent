@@ -2216,7 +2216,7 @@ mod tests {
         assert_eq!(updated.shots[3].crop_focus, original[3].crop_focus);
         assert_eq!(updated.shots[2].crop_focus, Some([0.7, 0.2]));
         assert_eq!(updated.shots[2].source_start_ms, 8000);
-        assert_eq!(updated.shots[2].duration_ms, 1500);
+        assert_eq!(updated.shots[2].duration_ms, original[2].duration_ms);
         assert_eq!(updated.shots[0].narration_text, original[0].narration_text);
     }
 

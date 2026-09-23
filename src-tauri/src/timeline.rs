@@ -863,6 +863,13 @@ pub(crate) fn validate_text_tracks(
                         .chars()
                         .all(|character| character.is_ascii_hexdigit())
             };
+            let is_background_color = |value: &str| {
+                matches!(value.len(), 7 | 9)
+                    && value.starts_with('#')
+                    && value[1..]
+                        .chars()
+                        .all(|character| character.is_ascii_hexdigit())
+            };
             if cue.style.font_key.trim().is_empty()
                 || !(0.01..=0.30).contains(&cue.style.font_size)
                 || !(0.0..=10.0).contains(&cue.style.stroke_width)
@@ -876,7 +883,7 @@ pub(crate) fn validate_text_tracks(
                     .style
                     .background_color
                     .as_deref()
-                    .is_some_and(|color| !is_color(color))
+                    .is_some_and(|color| !is_background_color(color))
                 || !matches!(cue.style.alignment.as_str(), "left" | "center" | "right")
                 || !(-100..=100).contains(&cue.style.letter_spacing)
                 || !(-100..=100).contains(&cue.style.line_spacing)

@@ -5,7 +5,7 @@ import { evaluateDocSync } from './check-doc-sync.mjs'
 
 const policy = JSON.parse(readFileSync('.harness/doc-sync-policy.json', 'utf8'))
 const completeFiles = [
-  'src-tauri/src/store.rs',
+  'src-tauri/src/lib.rs',
   'docs/api.md',
   'docs/changes/2026-08-05-documentation-harness.md',
 ]
@@ -15,8 +15,8 @@ const completeRecord = new Map([
 
 assert.deepEqual(evaluateDocSync(['src/App.tsx'], policy, new Map()).errors, [])
 assert.deepEqual(evaluateDocSync(completeFiles, policy, completeRecord).errors, [])
-assert.match(evaluateDocSync(['src-tauri/src/store.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
-assert.match(evaluateDocSync(['src-tauri/src/commands/media.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
-assert.match(evaluateDocSync(['src-tauri/src/agentloop/policy.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
+assert.match(evaluateDocSync(['src-tauri/src/lib.rs'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
+assert.match(evaluateDocSync(['src/lib/local-store.ts'], policy, new Map()).errors.join('\n'), /缺少必需的同步文档/)
+assert.deepEqual(evaluateDocSync(['src-tauri/src/agentloop/policy.rs'], policy, new Map()).errors, [])
 
 console.log('文档同步检查单元测试通过。')
