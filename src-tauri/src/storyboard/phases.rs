@@ -2284,11 +2284,7 @@ pub(crate) fn phase3_select(
                 attempt,
             ) {
                 Ok(selection) => {
-                    if selection
-                        .candidate_indexes
-                        .iter()
-                        .any(|index| *index > 4)
-                    {
+                    if selection.candidate_indexes.iter().any(|index| *index > 4) {
                         last_error = Some(format!(
                             "Phase 3 candidateIndex must be 0-4 for beat '{beat_id}'."
                         ));
@@ -2312,9 +2308,7 @@ pub(crate) fn phase3_select(
             match_level: None,
         });
         if last_error.is_some() {
-            log::warn!(
-                "Phase 3 beat '{beat_id}' exhausted local retries; leaving uncovered"
-            );
+            log::warn!("Phase 3 beat '{beat_id}' exhausted local retries; leaving uncovered");
         }
         chosen_so_far.extend(refs_from_selection(rough, &selection));
         selections.push(selection);
@@ -2359,7 +2353,10 @@ pub(crate) fn phase3_select(
     Ok((selected, issues))
 }
 
-fn beats_named_in_repair(repair: Option<&RepairPacket>, rough: &RoughStoryboard) -> HashSet<String> {
+fn beats_named_in_repair(
+    repair: Option<&RepairPacket>,
+    rough: &RoughStoryboard,
+) -> HashSet<String> {
     let Some(repair) = repair else {
         return covered_beat_ids(rough).into_iter().collect();
     };
@@ -2485,10 +2482,10 @@ fn select_one_beat(
         .filter(|packet| {
             packet.issues.iter().any(|issue| {
                 issue.message.contains(&pool.beat_id)
-                    || packet
-                        .previous_shots
-                        .iter()
-                        .any(|shot| shot.beat_id == pool.beat_id && issue.affected_shots.contains(&shot.shot_index))
+                    || packet.previous_shots.iter().any(|shot| {
+                        shot.beat_id == pool.beat_id
+                            && issue.affected_shots.contains(&shot.shot_index)
+                    })
             })
         })
         .map(repair_packet_prompt_block)
@@ -2800,10 +2797,7 @@ fn assemble_phase3_selection(
             let duration = (per_beat_budget / part_count.max(1)).clamp(1_200, 6_000);
             let (provisional_start, provisional_end) =
                 if let Some(segment) = candidate.segment.as_ref() {
-                    (
-                        segment.start_ms,
-                        segment.end_ms.max(segment.start_ms + 1),
-                    )
+                    (segment.start_ms, segment.end_ms.max(segment.start_ms + 1))
                 } else {
                     let asset_end = candidate.duration_ms.unwrap_or(duration).max(1);
                     (0, asset_end)

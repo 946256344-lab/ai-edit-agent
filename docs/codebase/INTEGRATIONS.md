@@ -10,9 +10,9 @@
 | 自定义 OpenAI-compatible API | HTTP API | 主模型/粗视觉模型 | Bearer API key | 高 | `custom_api.rs`、`provider.rs` |
 | Jamendo | HTTP API + download | 搜索/下载 CC0、CC-BY 音乐 | client ID | 中 | `music_provider.rs` |
 | ElevenLabs | HTTP API | 旁白 TTS、音色列表、alignment 字幕 | xi-api-key | 高 | `voice_provider.rs` |
-| FFmpeg / FFprobe | 本机进程 | 分析、抽帧、preview、质量检查 | 无 | 高 | `assets.rs`、`preview.rs` |
+| FFmpeg / FFprobe | 安装包进程，PATH 回退 | 分析、抽帧、preview、质量检查 | 无 | 高 | `process.rs`、`preview.rs`、`assets/` |
 | Tesseract | 本机进程 | OCR | 无 | 中 | `assets.rs` |
-| Python + pyJianYingDraft / pycapcut | 本机适配器 | 剪映 / CapCut 链接器写出草稿；草稿库从该设备注册表识别 | 无 | 高、实验性 | `handoff/`、`jianying.rs`、`capcut.rs`、`create_jianying_draft.py` |
+| Python + pyJianYingDraft / pycapcut | 安装包 embeddable 解释器，`py` 回退 | 剪映 / CapCut 链接器写出草稿；草稿库从该设备注册表识别 | 无 | 高、实验性 | `handoff/`、`jianying.rs`、`capcut.rs`、`create_jianying_draft.py`、`scripts/fetch-python.ps1` |
 | FCPXML / OTIO 文件 | 本机导入文件 | Premiere / Resolve / Final Cut 交接 | 无 | 中 | `handoff/fcpxml.rs`、`handoff/otio.rs` |
 | Jianying Pro | 本地应用/文件格式 | 草稿注册和后续人工编辑 | 本机用户 | 高、单向 | `jianying.rs` |
 | BGE-small-zh + ONNX Runtime | 安装包内本地模型 | storyboard 中文语义召回 | 无、离线 | 中 | `storyboard/semantic.rs`、`tauri.conf.json` |

@@ -498,7 +498,10 @@ pub(crate) mod tests {
         sources.insert("video-1".to_owned(), source(r"D:\media\a.mp4", "video"));
         sources.insert("overlay-1".to_owned(), source(r"D:\media\b.mp4", "video"));
         sources.insert("audio-1".to_owned(), source(r"D:\media\m.mp3", "audio"));
-        sources.insert("voice-asset".to_owned(), source(r"D:\media\vo.wav", "audio"));
+        sources.insert(
+            "voice-asset".to_owned(),
+            source(r"D:\media\vo.wav", "audio"),
+        );
         sources
     }
 

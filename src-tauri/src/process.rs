@@ -1,14 +1,21 @@
 //! Windows 外部进程统一入口：隐藏控制台窗口，并为可控调用提供超时与回收。
 //! 业务模块不得自行创建 Command，以免重新引入可见窗口或无限等待。
+//! FFmpeg/FFprobe/Python 优先安装包资源，其次环境变量，最后 PATH；不在此捆绑 Tesseract。
 
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::{self, Read},
+    path::PathBuf,
     process::{Child, Command, Output, Stdio},
-    sync::mpsc,
+    sync::{mpsc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
+use tauri::{AppHandle, Manager};
+
+static FFMPEG: OnceLock<PathBuf> = OnceLock::new();
+static FFPROBE: OnceLock<PathBuf> = OnceLock::new();
+static PYTHON: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HiddenCommandError {
@@ -22,9 +29,201 @@ pub(crate) fn media_open_args() -> [&'static str; 4] {
     ["-probesize", "32M", "-analyzeduration", "10M"]
 }
 
+fn media_tool_file_name(name: &str) -> Option<&'static str> {
+    match name {
+        "ffmpeg" => Some("ffmpeg.exe"),
+        "ffprobe" => Some("ffprobe.exe"),
+        _ => None,
+    }
+}
+
+fn env_override(name: &str) -> Option<PathBuf> {
+    let key = match name {
+        "ffmpeg" => "FFMPEG_PATH",
+        "ffprobe" => "FFPROBE_PATH",
+        _ => return None,
+    };
+    let path = PathBuf::from(std::env::var_os(key)?);
+    path.is_file().then_some(path)
+}
+
+fn bundled_media_candidates(app: Option<&AppHandle>, file_name: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(app) = app {
+        if let Ok(dir) = app.path().resource_dir() {
+            paths.push(dir.join("resources").join("ffmpeg").join(file_name));
+            paths.push(dir.join("ffmpeg").join(file_name));
+            paths.push(dir.join(file_name));
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        paths.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("ffmpeg")
+                .join(file_name),
+        );
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            paths.push(parent.join(file_name));
+            paths.push(parent.join("resources").join("ffmpeg").join(file_name));
+        }
+    }
+    paths
+}
+
+fn first_existing(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    paths.into_iter().find(|path| path.is_file())
+}
+
+fn slot_for(name: &str) -> Option<&'static OnceLock<PathBuf>> {
+    match name {
+        "ffmpeg" => Some(&FFMPEG),
+        "ffprobe" => Some(&FFPROBE),
+        _ => None,
+    }
+}
+
+fn python_env_override() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var_os("PYTHON_PATH")?);
+    path.is_file().then_some(path)
+}
+
+fn bundled_python_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
+    let file_name = "python.exe";
+    let mut paths = Vec::new();
+    if let Some(app) = app {
+        if let Ok(dir) = app.path().resource_dir() {
+            paths.push(dir.join("resources").join("python").join(file_name));
+            paths.push(dir.join("python").join(file_name));
+            paths.push(dir.join(file_name));
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        paths.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("python")
+                .join(file_name),
+        );
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            paths.push(parent.join("resources").join("python").join(file_name));
+            paths.push(parent.join("python").join(file_name));
+            paths.push(parent.join(file_name));
+        }
+    }
+    paths
+}
+
+fn resolved_media_path(name: &str) -> Option<PathBuf> {
+    let file_name = media_tool_file_name(name)?;
+    env_override(name)
+        .or_else(|| slot_for(name).and_then(OnceLock::get).cloned())
+        .or_else(|| first_existing(bundled_media_candidates(None, file_name)))
+}
+
+fn resolved_python_path() -> Option<PathBuf> {
+    python_env_override()
+        .or_else(|| PYTHON.get().cloned())
+        .or_else(|| first_existing(bundled_python_candidates(None)))
+}
+
+/// 启动时记住安装包内的 FFmpeg/FFprobe/Python，后续解析不再依赖系统 PATH。
+pub(crate) fn install_bundled_media_tools(app: &AppHandle) {
+    for name in ["ffmpeg", "ffprobe"] {
+        let Some(slot) = slot_for(name) else {
+            continue;
+        };
+        if slot.get().is_some() {
+            continue;
+        }
+        let Some(file_name) = media_tool_file_name(name) else {
+            continue;
+        };
+        if let Some(path) = env_override(name)
+            .or_else(|| first_existing(bundled_media_candidates(Some(app), file_name)))
+        {
+            let _ = slot.set(path);
+        }
+    }
+    if PYTHON.get().is_none() {
+        if let Some(path) =
+            python_env_override().or_else(|| first_existing(bundled_python_candidates(Some(app))))
+        {
+            let _ = PYTHON.set(path);
+        }
+    }
+}
+
+/// 剪映适配器用的解释器：随包 `python.exe` 优先，不把 `py -3` 传给 embeddable 解释器。
+pub(crate) fn python_program() -> OsString {
+    if let Some(path) = resolved_python_path() {
+        return path.into_os_string();
+    }
+    if cfg!(windows) {
+        OsString::from("py")
+    } else {
+        OsString::from("python")
+    }
+}
+
+/// 适配器子进程需要能直接找到 `ffmpeg` 与 `MediaInfo.dll`，因此把随包目录插到 PATH 前面。
+pub(crate) fn apply_bundled_runtime_path(command: &mut Command) {
+    let mut prepend = Vec::new();
+    if let Some(path) = resolved_media_path("ffmpeg") {
+        if let Some(dir) = path.parent() {
+            prepend.push(dir.to_path_buf());
+        }
+    }
+    if let Some(path) = resolved_python_path() {
+        if let Some(dir) = path.parent() {
+            prepend.push(dir.to_path_buf());
+        }
+    }
+    if prepend.is_empty() {
+        return;
+    }
+    let mut entries = prepend;
+    if let Some(current) = std::env::var_os("PATH") {
+        entries.extend(std::env::split_paths(&current));
+    }
+    if let Ok(joined) = std::env::join_paths(entries) {
+        command.env("PATH", joined);
+    }
+}
+
+fn resolve_program(program: impl AsRef<OsStr>) -> OsString {
+    let program = program.as_ref();
+    let Some(name) = program.to_str() else {
+        return program.to_os_string();
+    };
+    let name = name
+        .strip_suffix(".exe")
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let Some(file_name) = media_tool_file_name(&name) else {
+        return program.to_os_string();
+    };
+    if let Some(path) = env_override(&name) {
+        return path.into_os_string();
+    }
+    if let Some(path) = slot_for(&name).and_then(OnceLock::get) {
+        return path.clone().into_os_string();
+    }
+    if let Some(path) = first_existing(bundled_media_candidates(None, file_name)) {
+        return path.into_os_string();
+    }
+    program.to_os_string()
+}
+
 /// Builds an external command that never shows a console window from the GUI app.
 pub(crate) fn hidden_command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
+    let mut command = Command::new(resolve_program(program));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -176,6 +375,24 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout.len(), 1048576);
         assert_eq!(output.stderr.len(), 1048576);
+    }
+
+    #[test]
+    fn resolve_program_does_not_rewrite_python_names() {
+        assert_eq!(resolve_program("python"), OsString::from("python"));
+        assert_eq!(resolve_program("python.exe"), OsString::from("python.exe"));
+        assert_eq!(resolve_program("py"), OsString::from("py"));
+    }
+
+    #[test]
+    fn python_program_never_passes_dash_three() {
+        let program = python_program();
+        assert_ne!(program, OsString::from("-3"));
+        let as_path = PathBuf::from(&program);
+        assert_ne!(
+            as_path.file_name().and_then(|name| name.to_str()),
+            Some("-3")
+        );
     }
 
     #[test]

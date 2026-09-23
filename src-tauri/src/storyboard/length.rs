@@ -64,8 +64,7 @@ pub(crate) fn stretch_shots_to_speech_timing(
             let share = if offset + 1 == indices.len() {
                 remaining.max(1)
             } else {
-                let proportional =
-                    ((needed as i128 * span as i128) / source_total as i128) as i64;
+                let proportional = ((needed as i128 * span as i128) / source_total as i128) as i64;
                 proportional
                     .max(1)
                     .min(remaining.saturating_sub((indices.len() - offset - 1) as i64))
@@ -89,17 +88,17 @@ pub(crate) fn stretch_shots_to_speech_timing(
     }
 }
 
-pub(crate) fn usable_ms_for_shot(
-    shot: &StoryboardShot,
-    pools: &[BeatCandidatePool],
-) -> i64 {
+pub(crate) fn usable_ms_for_shot(shot: &StoryboardShot, pools: &[BeatCandidatePool]) -> i64 {
     pools
         .iter()
         .find(|pool| pool.beat_id == shot.beat_id)
         .and_then(|pool| {
             pool.candidates.iter().find(|candidate| {
                 candidate.asset_id == shot.asset_id
-                    && candidate.segment.as_ref().map(|segment| segment.id.as_str())
+                    && candidate
+                        .segment
+                        .as_ref()
+                        .map(|segment| segment.id.as_str())
                         == shot.segment_id.as_deref()
             })
         })
@@ -217,7 +216,10 @@ pub(crate) fn user_decision_error(
     issues: &[StoryboardIssue],
 ) -> String {
     let mut facts = Vec::new();
-    for issue in issues.iter().filter(|issue| issue.kind == "beat_audio_window_shortfall") {
+    for issue in issues
+        .iter()
+        .filter(|issue| issue.kind == "beat_audio_window_shortfall")
+    {
         let beat_id = issue
             .affected_shots
             .first()
@@ -230,9 +232,7 @@ pub(crate) fn user_decision_error(
                         .map(|shot| shot.beat_id.clone())
                 })
             })
-            .or_else(|| {
-                issue.message.split('\'').nth(1).map(str::to_owned)
-            })
+            .or_else(|| issue.message.split('\'').nth(1).map(str::to_owned))
             .unwrap_or_else(|| "unknown".to_owned());
         let needed = rough.speech_timing.duration(&beat_id).unwrap_or(0);
         let available = content
@@ -378,10 +378,7 @@ mod tests {
             candidate_pools: vec![BeatCandidatePool {
                 beat_id: "engineered-together".into(),
                 beat_purpose: "close".into(),
-                candidates: vec![
-                    source("short", 0, usable_end),
-                    source("long", 0, 8_000),
-                ],
+                candidates: vec![source("short", 0, usable_end), source("long", 0, 8_000)],
                 scores: vec![],
             }],
         }
@@ -422,7 +419,10 @@ mod tests {
         };
         assert!(collect_usable_window_shortfalls(&mut content, &rough).is_empty());
         assert_eq!(content.shots[0].duration_ms, 3_370);
-        assert_eq!(content.shots[0].source_end_ms - content.shots[0].source_start_ms, 3_370);
+        assert_eq!(
+            content.shots[0].source_end_ms - content.shots[0].source_start_ms,
+            3_370
+        );
     }
 
     #[test]
@@ -433,10 +433,7 @@ mod tests {
             summary: String::new(),
             target_duration_ms: 4_000,
             script_mode: "full_script".into(),
-            beats: vec![
-                beat("a", "hello there"),
-                beat("b", "friends"),
-            ],
+            beats: vec![beat("a", "hello there"), beat("b", "friends")],
             uncovered_beat_ids: vec![],
             shots: vec![],
             candidate_pools: vec![],
@@ -466,11 +463,7 @@ mod tests {
             summary: String::new(),
             target_duration_ms: 4_000,
             script_mode: "full_script".into(),
-            beats: vec![
-                beat("a", "one"),
-                beat("b", "two"),
-                beat("c", "three"),
-            ],
+            beats: vec![beat("a", "one"), beat("b", "two"), beat("c", "three")],
             uncovered_beat_ids: vec![],
             shots: vec![],
             candidate_pools: vec![],
@@ -517,11 +510,7 @@ mod tests {
         // Make concat match but a and c changed (not adjacent pair only... actually
         // "one three" + "two" + "" joins to "one three two" still mismatch.
         // Adjacent-only with matching concat:
-        far.beats = vec![
-            beat("a", "one two three"),
-            beat("b", "two"),
-            beat("c", ""),
-        ];
+        far.beats = vec![beat("a", "one two three"), beat("b", "two"), beat("c", "")];
         // concat "one two three two" mismatch. Need: move between a and c would change two non-adjacent.
         far.beats = vec![beat("a", "one three"), beat("b", "two"), beat("c", "")];
         // skip this messy case; test a+c change with matching join:
@@ -529,11 +518,7 @@ mod tests {
         // original join "one two three"; new a="one", b="two", c="three" is a and c changed? a same? a was "one" still. Only c... wait c was "three".
         // Change a and c: a="one two", c="three" but then b still "two" → "one two two three".
         // The real non-adjacent case: a="one two", b="two", c="three" - only a changed, len != 2.
-        far.beats = vec![
-            beat("a", "one three"),
-            beat("b", "two"),
-            beat("c", ""),
-        ];
+        far.beats = vec![beat("a", "one three"), beat("b", "two"), beat("c", "")];
         // We'll construct matching concat with a and c changed:
         // original: one | two | three
         // new: one two three | two |   → join "one two three two"
@@ -542,11 +527,7 @@ mod tests {
         // To get matching "one two three" with a and c: a="one two three", b="", c="" → changed a,b,c len 3.
         // a="one three", b="two", c="" → join "one three two" !=
         // The function requires join equal AND exactly 2 adjacent. So:
-        far.beats = vec![
-            beat("a", "one two three"),
-            beat("b", ""),
-            beat("c", ""),
-        ];
+        far.beats = vec![beat("a", "one two three"), beat("b", ""), beat("c", "")];
         // join "one two three" matches; changed = a,b,c (3) → not one hop
         assert_eq!(
             sync_narration_and_timing(&mut far, &mut rough, None)[0].kind,

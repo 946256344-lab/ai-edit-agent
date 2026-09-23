@@ -412,7 +412,10 @@ fn update_visual_metadata(
             .unwrap_or_else(|| "{}".to_owned());
         let mut metadata: TechnicalMetadata =
             serde_json::from_str(&metadata_json).unwrap_or_default();
-        if metadata.analysis_cancelled || metadata.library_removed || preserves_explicit_visual_skip(&metadata, status) {
+        if metadata.analysis_cancelled
+            || metadata.library_removed
+            || preserves_explicit_visual_skip(&metadata, status)
+        {
             continue;
         }
         metadata.visual_analysis_status = status.to_owned();
@@ -500,7 +503,10 @@ fn commit_coarse_visual_cards(
             .unwrap_or_else(|| "{}".to_owned());
         let mut metadata: TechnicalMetadata =
             serde_json::from_str(&metadata_json).unwrap_or_default();
-        if metadata.analysis_cancelled || metadata.library_removed || preserves_explicit_visual_skip(&metadata, "ready") {
+        if metadata.analysis_cancelled
+            || metadata.library_removed
+            || preserves_explicit_visual_skip(&metadata, "ready")
+        {
             continue;
         }
         if let Some(cards) = cards_by_asset.get(asset_id) {
@@ -801,7 +807,9 @@ pub(crate) fn queue_visual_analysis_batch(
         };
         let mut metadata: TechnicalMetadata =
             serde_json::from_str(&metadata_json).unwrap_or_default();
-        if metadata.analysis_cancelled || metadata.library_removed { continue; }
+        if metadata.analysis_cancelled || metadata.library_removed {
+            continue;
+        }
         project_id.get_or_insert(row_project_id);
         let units = collect_visual_units(asset_id, &kind, &metadata);
         if units.is_empty() {
@@ -847,7 +855,9 @@ pub(crate) fn queue_visual_analysis_batch(
 }
 
 fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String) {
-    if !super::controls::task_running(&app, &task_id) { return; }
+    if !super::controls::task_running(&app, &task_id) {
+        return;
+    }
     let Some(specs) = serde_json::from_str::<Value>(&input_json)
         .ok()
         .and_then(|value| parse_coarse_visual_specs(&value))
@@ -873,7 +883,14 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         }
     }
     let _ = update_visual_batch_task(&app, &task_id, "running", requested_count, 0, 0, 0, None);
-    let _ = update_visual_metadata(&app, Some(&task_id), &asset_ids, "running", &HashMap::new(), None);
+    let _ = update_visual_metadata(
+        &app,
+        Some(&task_id),
+        &asset_ids,
+        "running",
+        &HashMap::new(),
+        None,
+    );
 
     let assets = (|| -> Result<HashMap<String, (String, TechnicalMetadata)>, &'static str> {
         let connection = open_connection(&app).map_err(|_| "visual_storage_failed")?;
@@ -894,12 +911,16 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
                     },
                 )
                 .map_err(|_| "visual_asset_unavailable")?;
-            if !metadata.analysis_cancelled && !metadata.library_removed { map.insert(asset_id.clone(), (kind, metadata)); }
+            if !metadata.analysis_cancelled && !metadata.library_removed {
+                map.insert(asset_id.clone(), (kind, metadata));
+            }
         }
         Ok(map)
     })();
     let Ok(assets) = assets else {
-        let _ = update_visual_metadata(&app, Some(&task_id),
+        let _ = update_visual_metadata(
+            &app,
+            Some(&task_id),
             &asset_ids,
             "failed",
             &HashMap::new(),
@@ -939,7 +960,9 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         };
         expected.insert(unit_key(asset_id, &unit.segment_id), unit.time_ms);
         let Ok(image) = fs::read(&unit.image_path) else {
-            let _ = update_visual_metadata(&app, Some(&task_id),
+            let _ = update_visual_metadata(
+                &app,
+                Some(&task_id),
                 &asset_ids,
                 "failed",
                 &HashMap::new(),
@@ -966,7 +989,9 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         ));
     }
     if frames.is_empty() {
-        let _ = update_visual_metadata(&app, Some(&task_id),
+        let _ = update_visual_metadata(
+            &app,
+            Some(&task_id),
             &asset_ids,
             "failed",
             &HashMap::new(),
@@ -984,13 +1009,17 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         );
         return;
     }
-    if !super::controls::task_running(&app, &task_id) { return; }
+    if !super::controls::task_running(&app, &task_id) {
+        return;
+    }
     let content = visual_model_content(&frames);
     let access = match ModelAccess::resolve() {
         Ok(access) => access,
         Err(error) => {
             log::warn!("Visual analysis batch: provider access failed: {error}.");
-            let _ = update_visual_metadata(&app, Some(&task_id),
+            let _ = update_visual_metadata(
+                &app,
+                Some(&task_id),
                 &asset_ids,
                 "skipped",
                 &HashMap::new(),
@@ -1015,7 +1044,9 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         match post_visual_model_payload(&access, &request, Some(VISUAL_ANALYSIS_TIMEOUT)) {
             Ok(body) => body,
             Err(error) if error == "visual_provider_circuit_open" => {
-                let _ = update_visual_metadata(&app, Some(&task_id),
+                let _ = update_visual_metadata(
+                    &app,
+                    Some(&task_id),
                     &asset_ids,
                     "queued",
                     &HashMap::new(),
@@ -1045,8 +1076,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         .and_then(|text| serde_json::from_str::<VisualBatchResponse>(&text).ok());
     let Some(response) = response else {
         complete_visual_model_request(false);
-        if !super::controls::task_running(&app, &task_id) { return; }
-        let _ = update_visual_metadata(&app, Some(&task_id),
+        if !super::controls::task_running(&app, &task_id) {
+            return;
+        }
+        let _ = update_visual_metadata(
+            &app,
+            Some(&task_id),
             &asset_ids,
             "failed",
             &HashMap::new(),
@@ -1083,8 +1118,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
     }
     if cards_by_asset.is_empty() {
         complete_visual_model_request(false);
-        if !super::controls::task_running(&app, &task_id) { return; }
-        let _ = update_visual_metadata(&app, Some(&task_id),
+        if !super::controls::task_running(&app, &task_id) {
+            return;
+        }
+        let _ = update_visual_metadata(
+            &app,
+            Some(&task_id),
             &asset_ids,
             "failed",
             &HashMap::new(),
@@ -1103,7 +1142,9 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         return;
     }
     complete_visual_model_request(true);
-    if !super::controls::task_running(&app, &task_id) { return; }
+    if !super::controls::task_running(&app, &task_id) {
+        return;
+    }
     let mut failed_ids = Vec::new();
     for (asset_id, segment_id) in &specs {
         if cards_by_asset.contains_key(asset_id) {
@@ -1336,7 +1377,9 @@ pub(crate) fn recover_interrupted_visual_batches(app: &AppHandle) -> Result<(), 
     }
     drop(connection);
     if !invalid_asset_ids.is_empty() {
-        update_visual_metadata(app, None,
+        update_visual_metadata(
+            app,
+            None,
             &invalid_asset_ids,
             "failed",
             &HashMap::new(),
@@ -1421,7 +1464,9 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
     let mut by_project = HashMap::<String, Vec<String>>::new();
     for (asset_id, project_id, kind, metadata_json) in rows {
         let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-        if !metadata.analysis_cancelled && !metadata.library_removed && metadata.visual_analysis_status == "queued"
+        if !metadata.analysis_cancelled
+            && !metadata.library_removed
+            && metadata.visual_analysis_status == "queued"
             && !active_ids.contains(&asset_id)
             && !collect_visual_units(&asset_id, &kind, &metadata).is_empty()
         {

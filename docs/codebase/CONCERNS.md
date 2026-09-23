@@ -7,7 +7,7 @@
 | 高 | `agentloop.rs` 3599 行，仍混合路由、prompt、快照、循环、技能派发和测试；纯 policy 已提取 | `src-tauri/src/agentloop.rs`、`agentloop/policy.rs` | executor 改动仍可能污染路由和状态恢复 | policy 保持无副作用；后续抽 router/state，最后搬 executor |
 | 高 | `assets.rs` 4114 行，混合六类领域职责和两类 worker | `src-tauri/src/assets.rs` | 导入、目录、分析或健康变更互相污染 | 按 import/technical/visual/library/health/metadata 拆子模块 |
 | 高 | 完整 Agent 多步 fixture 不能执行 | `src-tauri/tests/fixtures/README.md` | prompt/schema/状态组合回归只能靠局部测试和实机发现 | 增加 scripted decision seam 与临时 SQLite runner |
-| 高 | 生产安装包不供应媒体/Python 运行时 | `README.md`、`src-tauri/tauri.conf.json` | 开发机可用不代表用户机器可用 | 先做运行时探测矩阵，再决定捆绑或安装引导 |
+| 高 | 生产安装包不供应 Tesseract 运行时 | `README.md`、`src-tauri/tauri.conf.json` | 英文 OCR 在干净机上仍会降级 | 先做探测与安装引导，再决定捆绑 |
 | 中 | 默认直推 master 且无 CI | `.githooks/pre-commit` 只拦 detached HEAD 与文档同步，仓库无 `.github/workflows/` | 本机检查被跳过时，回归只靠后续实机发现 | 保持直推；需要时再补 Windows CI，不要用分支保护抵消该流程 |
 | 中 | `timeline.rs` 1848 行，文本、音乐、镜头编辑共存 | `src-tauri/src/timeline.rs` | 下一轮轨道能力会继续膨胀 | 在 Agent/assets 稳定后按 editing/text/music/repository 拆 |
 | 中 | 前端入口仍接近预算 | `App.tsx` 515 行；artifact controller 363 行 | 新功能可能再次把 task 和产物职责混回 | 下一次功能前拆 conversation/task controller 与 artifact 子域 |
@@ -77,7 +77,7 @@
 | “严格 TypeScript 检查” | build 有多项严格选项，但 `tsconfig.app.json` 未开启 `strict` | 先建立迁移基线，再决定启用顺序 |
 | 版本化 Agent fixture 防止工具/场景回归 | 工具目录契约可执行，完整 scripted Provider 多步 runner 尚未实现 | 增加可注入 decision seam 与临时 SQLite runner |
 | 另一编码 Agent 可从文档接手 | 分层入口和硬门已建立，但未提交工作、隐含用户意图和真实桌面状态仍不能只靠文档恢复 | 交接时保持 Git 状态、当前任务窗口、变更记录和验收证据准确 |
-| Windows 本地产品可独立安装运行 | 当前安装包未捆绑 FFmpeg、Tesseract、Python/Jianying adapter 运行时 | 先完成探测矩阵，再选择捆绑或安装引导 |
+| Windows 本地产品可独立安装运行 | FFmpeg/FFprobe 与 Python/草稿 SDK 已随包；Tesseract 仍未捆绑 | 下一步补 OCR 运行时 |
 
 ## 9）证据
 

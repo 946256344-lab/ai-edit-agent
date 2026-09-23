@@ -1,10 +1,8 @@
 //! CapCut 链接器：按本机草稿注册表识别库位置，只新建不覆盖、不反向同步。
 
 use crate::db::{now_millis, open_connection};
-use crate::handoff::{
-    build_handoff_plan, capcut_create_draft_input, JianyingDraftDestination,
-};
 use crate::handoff::deliver::collect_export_sources;
+use crate::handoff::{build_handoff_plan, capcut_create_draft_input, JianyingDraftDestination};
 use crate::jianying::{
     find_lveditor_draft_location, run_jianying_adapter, text_tracks_are_ready_for_jianying,
     unique_draft_name,
@@ -271,8 +269,10 @@ mod tests {
         assert!(b"\"CapCut.exe\",\"1234\",\"Console\",\"1\",\"100 K\""
             .windows(b"capcut.exe".len())
             .any(|window| window.eq_ignore_ascii_case(b"capcut.exe")));
-        assert!(!b"INFO: No tasks are running which match the specified criteria."
-            .windows(b"capcut.exe".len())
-            .any(|window| window.eq_ignore_ascii_case(b"capcut.exe")));
+        assert!(
+            !b"INFO: No tasks are running which match the specified criteria."
+                .windows(b"capcut.exe".len())
+                .any(|window| window.eq_ignore_ascii_case(b"capcut.exe"))
+        );
     }
 }

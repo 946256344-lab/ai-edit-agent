@@ -281,11 +281,9 @@ fn ensure_sidecars(app: &AppHandle, resource_relative: &str, target: &Path) -> R
             "LICENSE",
             "NOTICE.md",
         ],
-        "resources/models/clip-ViT-B-32-vision" => &[
-            "config.json",
-            "preprocessor_config.json",
-            "NOTICE.md",
-        ],
+        "resources/models/clip-ViT-B-32-vision" => {
+            &["config.json", "preprocessor_config.json", "NOTICE.md"]
+        }
         "resources/models/clip-ViT-B-32-text" => &[
             "config.json",
             "tokenizer.json",
@@ -376,9 +374,12 @@ fn snapshot_status(app: &AppHandle, state: &DownloadState) -> RuntimeModelStatus
 
     let all_ready = artifacts.iter().all(|item| item.state == "ready");
     let any_failed = artifacts.iter().any(|item| item.state == "failed");
-    let any_active = artifacts
-        .iter()
-        .any(|item| matches!(item.state.as_str(), "downloading" | "verifying" | "checking"));
+    let any_active = artifacts.iter().any(|item| {
+        matches!(
+            item.state.as_str(),
+            "downloading" | "verifying" | "checking"
+        )
+    });
 
     let overall = if all_ready {
         "ready".to_owned()
@@ -397,7 +398,8 @@ fn snapshot_status(app: &AppHandle, state: &DownloadState) -> RuntimeModelStatus
     } else if !state.message.is_empty() {
         state.message.clone()
     } else if any_failed {
-        "本地模型下载失败，可重试。已尝试官方与国内镜像续传；选镜仍可用，但语义/画面加权会降级。".to_owned()
+        "本地模型下载失败，可重试。已尝试官方与国内镜像续传；选镜仍可用，但语义/画面加权会降级。"
+            .to_owned()
     } else if matches!(overall.as_str(), "downloading" | "pending") {
         "正在后台下载本地选镜模型…".to_owned()
     } else {
@@ -569,7 +571,9 @@ fn download_artifact(app: &AppHandle, id: ArtifactId) -> Result<(), String> {
         } else {
             "官方源"
         };
-        let existing = fs::metadata(&partial_path).map(|meta| meta.len()).unwrap_or(0);
+        let existing = fs::metadata(&partial_path)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
 
         {
             let mut state = state_lock()
@@ -607,15 +611,14 @@ fn download_artifact(app: &AppHandle, id: ArtifactId) -> Result<(), String> {
                 {
                     if let Ok(mut state) = state_lock().lock() {
                         let index = artifact_index(id);
-                        state.message = format!(
-                            "{}下载中断，即将自动换源/续传重试…",
-                            id.title()
-                        );
+                        state.message = format!("{}下载中断，即将自动换源/续传重试…", id.title());
                         state.artifacts[index].error = Some(error);
                         emit_status(app, &state);
                     }
                 }
-                let delay = RETRY_BASE_DELAY.saturating_mul(attempt + 1).min(Duration::from_secs(20));
+                let delay = RETRY_BASE_DELAY
+                    .saturating_mul(attempt + 1)
+                    .min(Duration::from_secs(20));
                 thread::sleep(delay);
             }
         }
@@ -633,7 +636,9 @@ fn download_artifact_attempt(
     partial_path: &Path,
     final_path: &Path,
 ) -> Result<(), String> {
-    let existing = fs::metadata(partial_path).map(|meta| meta.len()).unwrap_or(0);
+    let existing = fs::metadata(partial_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
 
     let agent = outbound_http::voice_agent();
     let mut request = agent.get(url);

@@ -4,9 +4,9 @@ use super::{
     all_editor_ids, build_handoff_plan, editor_capabilities, fcpxml, otio, posix_media_path,
     DeliveryKind, EditorId, HandoffSource,
 };
+use crate::capcut;
 use crate::db::{now_millis, open_connection};
 use crate::jianying::{create_jianying_draft, draft_location_available};
-use crate::capcut;
 use crate::models::{JianyingDraftResult, TimelineVersion};
 use crate::timeline::load_timeline_version;
 use rusqlite::params;
@@ -216,10 +216,7 @@ fn write_import_file(
         editor_id: editor.as_str().to_owned(),
         delivery_kind: "importFile".to_owned(),
         status: "written".to_owned(),
-        message: format!(
-            "已导出「{display_name}」。{}",
-            editor.summary()
-        ),
+        message: format!("已导出「{display_name}」。{}", editor.summary()),
         display_name,
         output_path: Some(output_path.to_string_lossy().replace('\\', "/")),
         jianying: None,

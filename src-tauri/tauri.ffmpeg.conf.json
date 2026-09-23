@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "resources/ffmpeg/ffmpeg.exe",
+      "resources/ffmpeg/ffprobe.exe",
+      "resources/ffmpeg/NOTICE.md",
+      "resources/ffmpeg/LICENSE"
+    ]
+  }
+}

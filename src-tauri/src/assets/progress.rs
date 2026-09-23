@@ -35,17 +35,24 @@ pub(super) fn project_analysis_progress(
             AND (?2 IS NULL OR id IN (SELECT value FROM json_each(?2))))"
     );
     connection
-        .query_row(&sql, params![project_id, asset_ids.map(|ids| serde_json::json!(ids).to_string())], |row| {
-            Ok(AssetAnalysisProgress {
-                total: row.get(0)?,
-                ready: row.get(1)?,
-                analyzing: row.get(2)?,
-                queued: row.get(3)?,
-                failed: row.get(4)?,
-                ready_video: row.get(5)?,
-                cancelled: row.get(6)?,
-            })
-        })
+        .query_row(
+            &sql,
+            params![
+                project_id,
+                asset_ids.map(|ids| serde_json::json!(ids).to_string())
+            ],
+            |row| {
+                Ok(AssetAnalysisProgress {
+                    total: row.get(0)?,
+                    ready: row.get(1)?,
+                    analyzing: row.get(2)?,
+                    queued: row.get(3)?,
+                    failed: row.get(4)?,
+                    ready_video: row.get(5)?,
+                    cancelled: row.get(6)?,
+                })
+            },
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -143,8 +150,25 @@ mod tests {
         connection.execute_batch("UPDATE assets SET metadata_json = json_set(metadata_json, '$.analysisCancelled', json('true')) WHERE id = 'visual-running';
             UPDATE assets SET metadata_json = json_set(metadata_json, '$.libraryRemoved', json('true')) WHERE id = 'ready';").unwrap();
         let progress = project_analysis_progress(&connection, "project", None).unwrap();
-        assert_eq!((progress.total, progress.cancelled, progress.analyzing, progress.queued), (8, 1, 1, 3));
-        let batch = project_analysis_progress(&connection, "project", Some(&["visual-running".to_owned(), "ready".to_owned(), "other-only".to_owned()])).unwrap();
+        assert_eq!(
+            (
+                progress.total,
+                progress.cancelled,
+                progress.analyzing,
+                progress.queued
+            ),
+            (8, 1, 1, 3)
+        );
+        let batch = project_analysis_progress(
+            &connection,
+            "project",
+            Some(&[
+                "visual-running".to_owned(),
+                "ready".to_owned(),
+                "other-only".to_owned(),
+            ]),
+        )
+        .unwrap();
         assert_eq!((batch.total, batch.cancelled), (1, 1));
     }
 }

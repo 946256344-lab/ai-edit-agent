@@ -2014,9 +2014,7 @@ mod tests {
             },
         ];
         let mut session = Phase4Session::new();
-        session
-            .ensure_initialized(&selected, &[source])
-            .unwrap();
+        session.ensure_initialized(&selected, &[source]).unwrap();
         let (window, _) = session.pick_map.get(&1).expect("locked P3 window");
         assert_eq!(window.window_id, "asset-a:p3");
         assert_eq!(window.start_ms, 0);

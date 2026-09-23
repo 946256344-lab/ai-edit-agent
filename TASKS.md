@@ -3,6 +3,10 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已验证（2026-09-20）：NSIS `Assembly Video Agent_0.1.1_x64-setup.exe`（约 155.7 MB）含 FFmpeg 与 Python；PATH 无系统 Python 时随包解释器可导入草稿 SDK，release 应用 `jianying_adapter` 为 ok。见 docs/changes/2026-09-20-verify-bundled-python.md。
+- [x] 已实现（2026-09-20）：安装包捆绑 embeddable Python 3.12 与 pyJianYingDraft/pycapcut；适配器走随包 python.exe，PATH 带上随包 FFmpeg。PATH 无系统 Python 时 `npm run python:verify` 可导入 SDK 并看到随包 FFmpeg。见 docs/changes/2026-09-20-bundle-python.md。
+- [x] 已验证（2026-09-20）：NSIS 安装包 `Assembly Video Agent_0.1.1_x64-setup.exe`；PATH 无系统 FFmpeg 时随包二进制可出 540×960 H.264，release 应用 `get_release_readiness` 的 ffmpeg/ffprobe 为 ok。见 docs/changes/2026-09-20-verify-bundled-ffmpeg.md。
+- [x] 已实现（2026-09-20）：安装包捆绑 FFmpeg/FFprobe（Gyan 8.1.2 full_build）。`hidden_command` 优先随包，其次环境变量，最后 PATH。Tesseract/Python 仍不随包。见 docs/changes/2026-09-20-bundle-ffmpeg.md。
 - [x] 已实现（2026-09-18）：剪辑前未分析完改为弹窗确认，询问是否只用已分析素材。见 docs/changes/2026-09-18-analysis-status-ui.md。
 - [x] 已实现（2026-09-18）：素材分析提示收口。导入弹窗保留；侧栏素材库只露状态点；发送未分析完时弹窗确认；进度筛选和进度条收到素材列表标题。去掉右下角浮层和输入区进度卡。见 docs/changes/2026-09-18-analysis-status-ui.md。
 - [x] 已实现（2026-09-18）：技术分析加速。一律先扫关键帧；全帧只补本机短片且几乎没切到的。缩略图/抽帧超时不整条失败。见 docs/changes/2026-09-18-faster-asset-analysis.md。

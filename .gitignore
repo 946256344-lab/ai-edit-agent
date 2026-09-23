@@ -18,6 +18,17 @@ src-tauri/target-*
 src-tauri/resources/models/clip-ViT-B-32-vision/model.onnx
 src-tauri/resources/models/clip-ViT-B-32-text/model.onnx
 
+# Gyan FFmpeg full_build binaries exceed GitHub's 100MB file limit; fetch via scripts/fetch-ffmpeg.ps1
+src-tauri/resources/ffmpeg/ffmpeg.exe
+src-tauri/resources/ffmpeg/ffprobe.exe
+src-tauri/resources/ffmpeg/LICENSE
+src-tauri/resources/ffmpeg/.cache/
+
+# Embeddable CPython + draft SDKs; fetch via scripts/fetch-python.ps1
+src-tauri/resources/python/**
+!src-tauri/resources/python/NOTICE.md
+src-tauri/resources/.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -19,7 +19,7 @@
 - 工具结果进入下一次模型总结请求后，瞬时 Provider 传输失败会在原单步/总预算内重试；重试只重发模型请求，不会重复执行已经完成的本地工具。
 - 开发构建可用显式 `NATIVE_PROVIDER_FULL_TRACE=1` 把 NativeToolLoop 每次 HTTP 的完整请求 JSON 和原始响应写入 `src-tauri/target/native-provider-full-trace.jsonl`；不进前端，release 构建不可用。
 
-这不是生产就绪的 Agent 编排系统。自定义模型适配器、生产安装包中的媒体运行时、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
+这不是生产就绪的 Agent 编排系统。自定义模型适配器、Tesseract 运行时随包、多轨音频/字幕、最终视频导出和从 Jianying 反向同步尚未实现。
 
 ## 运行
 
@@ -36,9 +36,9 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 桌面环境依赖
 
-开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe、Tesseract（含英文 `eng` 语言数据）、Python 和 `pyJianYingDraft`。安装包捆绑 ONNX Runtime 与模型小配置，**默认不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载（官方 + 国内镜像、断点续传）到本机数据目录并校验。需要离线开箱可用时，先 `npm run models:fetch`，再 `npm run tauri:build:full` 打完整包。开发机也可用同一 fetch 脚本预拉。FFmpeg、Tesseract、Python 或 Jianying 适配器依赖仍未随包提供，生产安装、发现与报错策略仍待实现。
+开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools、FFmpeg/FFprobe（安装包会捆绑；开发机也可使用系统 PATH）、Tesseract（含英文 `eng` 语言数据）。剪映/CapCut 草稿适配器使用随包 embeddable Python 3.12 与 `pyJianYingDraft`/`pycapcut`（`npm run python:fetch` 或 `npm run tauri:build` 自动拉取）；开发机未拉取时仍可回退系统 `py`。安装包捆绑 ONNX Runtime 与模型小配置，**默认不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载（官方 + 国内镜像、断点续传）到本机数据目录并校验。需要离线开箱可用时，先 `npm run models:fetch`，再 `npm run tauri:build:full` 打完整包。开发机也可用同一 fetch 脚本预拉。正式安装包构建会拉取并捆绑 Gyan full_build 的 FFmpeg/FFprobe（`npm run ffmpeg:fetch` 或 `npm run tauri:build` 自动拉取）以及 Python 草稿运行时。验证随包媒体：先 `npm run tauri:build -- -b nsis`，再 `npm run ffmpeg:verify`（会去掉系统 PATH 里的 ffmpeg 后用安装产物做 540×960 探测/编码）。验证随包 Python：`npm run python:verify`（去掉系统 python/py 后导入草稿 SDK）；安装包验证再跑 `node scripts/verify-release-python-app.mjs`。Tesseract 仍未随包提供。
 
-`pyJianYingDraft` 适配器要求通过本地 `py` Python launcher 可调用。更新 Jianying 的首页草稿注册表时，Jianying Pro 必须保持关闭。
+剪映适配器优先调用随包 `python.exe`，不要把 `py -3` 传给 embeddable 解释器。更新 Jianying 的首页草稿注册表时，Jianying Pro 必须保持关闭。
 
 ## 数据与安全边界
 

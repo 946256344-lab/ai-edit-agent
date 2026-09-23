@@ -106,7 +106,11 @@ enum SceneDetectResult {
     Failed,
 }
 
-fn run_scene_detect(source: &Path, budget: Duration, skip_non_keyframes: bool) -> SceneDetectResult {
+fn run_scene_detect(
+    source: &Path,
+    budget: Duration,
+    skip_non_keyframes: bool,
+) -> SceneDetectResult {
     let filter = format!("fps=3,scale=160:-2,select='gt(scene\\,{SCENE_THRESHOLD})',showinfo");
     let mut command = hidden_command("ffmpeg");
     command.args(["-hide_banner", "-loglevel", "info"]);

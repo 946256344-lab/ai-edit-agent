@@ -23,7 +23,11 @@
     "tauri:dev": "node scripts/run-tauri.mjs dev",
     "tauri:build": "node scripts/run-tauri.mjs build",
     "tauri:build:full": "node scripts/run-tauri.mjs build --full-models",
-    "models:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1"
+    "models:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1",
+    "ffmpeg:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1",
+    "ffmpeg:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-ffmpeg.ps1",
+    "python:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-python.ps1",
+    "python:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-python.ps1"
   },
   "dependencies": {
     "@moviemasher/moviemasher.js": "^5.1.1",

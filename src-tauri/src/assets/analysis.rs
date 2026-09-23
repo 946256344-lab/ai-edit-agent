@@ -1158,7 +1158,9 @@ fn classify_asset_for_retry(
         return Ok(None);
     }
     let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
-    if metadata.analysis_cancelled || metadata.library_removed { return Ok(None); }
+    if metadata.analysis_cancelled || metadata.library_removed {
+        return Ok(None);
+    }
     if stage.includes_technical() && analysis_status == "failed" {
         return Ok(Some(FailedAssetRetryCandidate {
             asset_id: asset_id.to_owned(),

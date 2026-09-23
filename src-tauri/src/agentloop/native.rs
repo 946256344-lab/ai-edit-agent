@@ -3033,7 +3033,9 @@ mod tests {
             .as_array()
             .into_iter()
             .flatten()
-            .any(|value| value.as_str().is_some_and(|text| text.contains("shorter than"))));
+            .any(|value| value
+                .as_str()
+                .is_some_and(|text| text.contains("shorter than"))));
     }
 
     #[test]

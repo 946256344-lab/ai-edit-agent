@@ -1,12 +1,10 @@
 //! 剪映链接器：把 HandoffPlan 写成唯一新草稿，绝不覆盖或反向同步已有工程。
 
 use crate::db::{now_millis, open_connection};
-use crate::handoff::{
-    build_handoff_plan, jianying_create_draft_input, JianyingDraftDestination,
-};
 use crate::handoff::deliver::collect_export_sources;
+use crate::handoff::{build_handoff_plan, jianying_create_draft_input, JianyingDraftDestination};
 use crate::models::{JianyingDraftResult, JianyingRegistrationStatus, TimelineVersion};
-use crate::process::hidden_command;
+use crate::process::{apply_bundled_runtime_path, hidden_command, python_program};
 use crate::timeline::load_timeline_version;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -112,18 +110,36 @@ fn jianying_process_is_running() -> bool {
 }
 
 fn jianying_adapter_script(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut paths = Vec::new();
     if cfg!(debug_assertions) {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("scripts")
-            .join("create_jianying_draft.py"))
-    } else {
-        Ok(app
-            .path()
-            .resource_dir()
-            .map_err(|error| error.to_string())?
-            .join("scripts")
-            .join("create_jianying_draft.py"))
+        paths.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("scripts")
+                .join("create_jianying_draft.py"),
+        );
     }
+    if let Ok(dir) = app.path().resource_dir() {
+        paths.push(dir.join("scripts").join("create_jianying_draft.py"));
+        paths.push(dir.join("create_jianying_draft.py"));
+        if let Some(parent) = dir.parent() {
+            paths.push(parent.join("scripts").join("create_jianying_draft.py"));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            paths.push(parent.join("scripts").join("create_jianying_draft.py"));
+            paths.push(
+                parent
+                    .join("resources")
+                    .join("scripts")
+                    .join("create_jianying_draft.py"),
+            );
+        }
+    }
+    paths
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "Jianying adapter script is missing.".to_owned())
 }
 
 pub(crate) fn run_jianying_adapter(
@@ -141,16 +157,20 @@ pub(crate) fn run_jianying_adapter(
     fs::write(&input_path, input.to_string())
         .map_err(|_| "Could not prepare Jianying draft input.".to_owned())?;
     let output = (|| {
-        let child = hidden_command("py")
+        let mut command = hidden_command(python_program());
+        apply_bundled_runtime_path(&mut command);
+        let child = command
             .env("PYTHONUTF8", "1")
             .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .arg(jianying_adapter_script(app)?)
             .arg(&input_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|_| {
-                "Python with a draft SDK (pyJianYingDraft or pycapcut) is unavailable on this computer.".to_owned()
+                "Bundled Python with a draft SDK (pyJianYingDraft or pycapcut) is unavailable."
+                    .to_owned()
             })?;
         child
             .wait_with_output()

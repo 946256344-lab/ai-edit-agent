@@ -1,4 +1,4 @@
-﻿# 当前技术决策
+# 当前技术决策
 
 本文只记录今天仍然影响开发的决定；历史 ADR 仍可在仓库历史中查阅，不再作为必读规则。
 
@@ -26,7 +26,17 @@
 
 默认安装包不捆绑 BGE/CLIP 的 `model.onnx` 大文件。启动缺权重时后台下载到 `%APPDATA%/<app>/runtime-models/`，SHA-256 校验后加载；tokenizer/config 仍随包。下载不阻塞工作台；缺失时 BGE 降级词面、CLIP 加权为 0。
 
-下载策略：先 HuggingFace 官方，再国内镜像 `hf-mirror.com`（同路径同哈希，不是换模型）；单次尝试超时约 20 分钟，传输中断保留 `.partial` 并自动续传重试。发行方可选用完整包（`npm run models:fetch` 后 `npm run tauri:build:full`）把 ONNX 打进安装包，用户可跳过首次下载。FFmpeg/Tesseract/Python 仍不在本期自动下载。
+下载策略：先 HuggingFace 官方，再国内镜像 `hf-mirror.com`（同路径同哈希，不是换模型）；单次尝试超时约 20 分钟，传输中断保留 `.partial` 并自动续传重试。发行方可选用完整包（`npm run models:fetch` 后 `npm run tauri:build:full`）把 ONNX 打进安装包，用户可跳过首次下载。Tesseract 仍不随包；FFmpeg/FFprobe 与 Python 见以下两节。
+
+## FFmpeg/FFprobe 随安装包（2026-09-20）
+
+生产安装包捆绑 Gyan `ffmpeg-8.1.2-full_build` 的 `ffmpeg.exe` / `ffprobe.exe`（含 libass，供 preview 字幕）。调用一律走 `process::hidden_command`：优先 `FFMPEG_PATH`/`FFPROBE_PATH`，其次安装包或开发目录资源，最后系统 PATH。二进制 gitignored，构建前 `npm run ffmpeg:fetch` 或 `npm run tauri:build` 自动拉取。不捆绑 Tesseract。
+
+## Python/剪映草稿 SDK 随安装包（2026-09-20）
+
+生产安装包捆绑官方 Windows embeddable CPython 3.12.10，并预装 `pyJianYingDraft==0.3.0`、`pycapcut==0.0.3` 与 `MediaInfo.dll`。`python_program()` 优先 `PYTHON_PATH` 与随包 `python.exe`，未拉取时 Windows 回退 `py`，且不得把 `py -3` 传给 embeddable 解释器。启动适配器时把随包 FFmpeg/Python 目录插到子进程 PATH 前面。运行时 gitignored，构建前 `npm run python:fetch` 或 `npm run tauri:build` 自动拉取。
+
+Tauri CLI 多次 `--config` 会覆盖 `bundle.resources`，不会拼接数组。`scripts/run-tauri.mjs` 在构建时把 `tauri.conf.json` 基础资源与 FFmpeg/Python（及可选完整 ONNX）清单写成一份 `src-tauri/target/tauri.merged-resources.conf.json` 再交给 CLI。Python 树用目录路径拷贝，不用 glob。
 
 ## 默认直推 master（2026-09-16）
 
@@ -98,7 +108,7 @@ Preview 使用本地 FFmpeg 生成，用于检查节奏、字幕和画面。Prev
 
 ## 14. 当前未完成事项
 
-- 安装包还没有完整捆绑 FFmpeg、Tesseract、Python 和编辑器链接器运行时。
+- 安装包还没有完整捆绑 Tesseract。FFmpeg/FFprobe 与 Python/剪映草稿 SDK 已随包。
 - 最终视频导出尚未实现。
 - 多轨媒体能力仍在迭代。
 - 官方模型 OAuth 契约和部分外部 Provider 能力仍需真实环境验证。

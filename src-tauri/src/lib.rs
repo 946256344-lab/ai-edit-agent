@@ -12,10 +12,10 @@ mod agentloop;
 mod assets;
 /// 不含 payload 的 Agent 步骤、诊断、任务状态与操作记录。
 mod audit;
-/// Storyboard 确认后的自动化流程：timeline + preview 依次执行。
-mod confirmation;
 /// CapCut 链接器：按本机注册表识别草稿库并单向新建。
 mod capcut;
+/// Storyboard 确认后的自动化流程：timeline + preview 依次执行。
+mod confirmation;
 /// 自定义 OpenAI 兼容凭据命令与配置。
 mod custom_api;
 /// SQLite 位置、连接策略与只追加 schema 迁移。
@@ -42,7 +42,7 @@ mod preview;
 mod preview_audio;
 /// 跨时间线版本复用预览镜头与无字幕底片。
 mod preview_cache;
-/// 隐藏 Windows 子进程的创建与有界执行。
+/// 隐藏 Windows 子进程的创建与有界执行；FFmpeg/FFprobe 优先随包。
 mod process;
 /// Project/task/conversation/message 命令与启动恢复协调。
 mod projects;
@@ -79,6 +79,7 @@ pub fn run() {
                     .level(log::LevelFilter::Info)
                     .build(),
             )?;
+            process::install_bundled_media_tools(&app.handle());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

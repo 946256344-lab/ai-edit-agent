@@ -2,7 +2,7 @@
 use crate::custom_api::get_custom_api_status;
 use crate::db::database_path;
 use crate::oauth::get_experimental_openai_oauth_status;
-use crate::process::program_responds;
+use crate::process::{program_responds, python_program};
 use crate::storyboard::semantic;
 use serde::Serialize;
 use std::{fs, path::Path, time::Duration};
@@ -100,7 +100,7 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "ffmpeg",
                 "媒体处理",
                 "fail",
-                "未找到 FFmpeg。导入分析与预览都需要它，请安装并确保可在本机命令行运行 ffmpeg。",
+                "未找到 FFmpeg。正式安装包应已包含；请重新安装应用后再试。",
             )
         },
         if ffprobe_ok {
@@ -110,7 +110,7 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "ffprobe",
                 "媒体探测",
                 "fail",
-                "未找到 FFprobe。素材时长与格式探测需要它。",
+                "未找到 FFprobe。正式安装包应已包含；请重新安装应用后再试。",
             )
         },
     ]
@@ -155,14 +155,20 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
     });
 
     let script_ok = crate::jianying::adapter_script_available(app);
-    let python_ok =
-        tool_available("py", &["-3", "--version"]) || tool_available("python", &["--version"]);
-    checks.push(if script_ok && python_ok {
+    let python = python_program();
+    let python_ok = program_responds(&python, &["--version"], Duration::from_secs(8));
+    let sdk_ok = python_ok
+        && program_responds(
+            &python,
+            &["-c", "import pyJianYingDraft, pycapcut"],
+            Duration::from_secs(20),
+        );
+    checks.push(if script_ok && sdk_ok {
         check(
             "jianying_adapter",
             "剪映适配器",
             "ok",
-            "Python 与剪映草稿脚本可用。",
+            "随包 Python 与剪映草稿 SDK 可用。",
         )
     } else if !script_ok {
         check(
@@ -171,12 +177,19 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "warn",
             "缺少剪映草稿脚本资源。预览不受影响，无法创建剪映草稿。",
         )
+    } else if python_ok {
+        check(
+            "jianying_adapter",
+            "剪映适配器",
+            "warn",
+            "Python 可用，但未找到 pyJianYingDraft/pycapcut。预览不受影响，无法创建剪映草稿。",
+        )
     } else {
         check(
             "jianying_adapter",
             "剪映适配器",
             "warn",
-            "未找到 Python（py/python）。预览不受影响，创建剪映草稿需要本机 Python。",
+            "未找到随包 Python。预览不受影响，无法创建剪映草稿。",
         )
     });
     checks
@@ -294,7 +307,12 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
     checks.push(provider_check());
     checks.extend(jianying_checks(&app));
     checks.push(if crate::capcut::draft_location_available() {
-        check("capcut", "CapCut 草稿位置", "ok", "已找到本机 CapCut 草稿目录。")
+        check(
+            "capcut",
+            "CapCut 草稿位置",
+            "ok",
+            "已找到本机 CapCut 草稿目录。",
+        )
     } else {
         check(
             "capcut",

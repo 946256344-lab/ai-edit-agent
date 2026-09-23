@@ -1009,12 +1009,7 @@ fn normalize_storyboard_candidate_scoped(
                 let (start, end) = if range_already_valid {
                     (original_start, original_end)
                 } else {
-                    choose_storyboard_video_range(
-                        source,
-                        source_need,
-                        original_start,
-                        original_end,
-                    )
+                    choose_storyboard_video_range(source, source_need, original_start, original_end)
                 };
                 if start != original_start || end != original_end {
                     corrections += 1;
@@ -1407,10 +1402,10 @@ mod tests {
     use super::{
         brief_has_voiceover_script, coarse_beat_issue, decide_script_mode,
         enforce_decided_script_mode, estimated_storyboard_duration_ms, expected_beat_count,
-        key_message_marker_issue, minimum_storyboard_duration,
-        normalize_storyboard_candidate, phase5_should_retry_phase4, resolve_voiceover_script,
-        short_brief_duration_issue, spoken_duration_conflicts, storyboard_completion_gaps,
-        storyboard_sources, storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
+        key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
+        phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
+        spoken_duration_conflicts, storyboard_completion_gaps, storyboard_sources,
+        storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
         MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
@@ -1957,7 +1952,10 @@ mod tests {
         };
         let issue = key_message_marker_issue("帮我做个短片", &mut narrative)
             .expect("overlong titles should be rejected");
-        assert!(issue.contains("24") || issue.contains("characters"), "issue={issue}");
+        assert!(
+            issue.contains("24") || issue.contains("characters"),
+            "issue={issue}"
+        );
     }
 
     #[test]
@@ -2750,59 +2748,66 @@ fn generate_storyboard_internal(
         library_inventory.chars().count()
     );
     let mut phase1_feedback = None;
-    let voiceover_duration_ms = audio_first.as_ref().map(|(_, prepared)| prepared.duration_ms);
-    let narrative = (0..MAX_PHASE1_REVISIONS).find_map(|revision| {
-        log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
-        match phases::phase1_generate_narrative(
-            &access,
-            brief,
-            required_script_mode,
-            &library_inventory,
-            phase1_feedback.as_deref(),
-            voiceover_duration_ms,
-            requested_duration_ms.filter(|value| *value > 0),
-        ) {
-            Ok(candidate) => {
-                let mut candidate = candidate;
-                enforce_decided_script_mode(brief, required_script_mode, &mut candidate);
-                let duration_issue = if media_options.is_some_and(|options| options.voiceover) {
-                    None
-                } else {
-                    short_brief_duration_issue(brief, &candidate, required_script_mode)
-                };
-                let key_message_issue = key_message_marker_issue(brief, &candidate);
-                let issue = duration_issue.or(key_message_issue);
-                if let Some(issue) = issue {
-                    log::warn!("Phase 1 narrative rejected: {issue}");
-                    phase1_feedback = Some(issue);
-                    None
-                } else if let Some(coarse) =
-                    coarse_beat_issue(&candidate, voiceover_duration_ms)
-                {
-                    if revision + 1 < MAX_PHASE1_REVISIONS {
-                        log::warn!("Phase 1 beats too coarse, asking for a finer split: {coarse}");
-                        phase1_feedback = Some(coarse);
+    let voiceover_duration_ms = audio_first
+        .as_ref()
+        .map(|(_, prepared)| prepared.duration_ms);
+    let narrative = (0..MAX_PHASE1_REVISIONS)
+        .find_map(|revision| {
+            log::info!("Phase 1 attempt {}/{}", revision + 1, MAX_PHASE1_REVISIONS);
+            match phases::phase1_generate_narrative(
+                &access,
+                brief,
+                required_script_mode,
+                &library_inventory,
+                phase1_feedback.as_deref(),
+                voiceover_duration_ms,
+                requested_duration_ms.filter(|value| *value > 0),
+            ) {
+                Ok(candidate) => {
+                    let mut candidate = candidate;
+                    enforce_decided_script_mode(brief, required_script_mode, &mut candidate);
+                    let duration_issue = if media_options.is_some_and(|options| options.voiceover) {
                         None
                     } else {
-                        log::warn!(
-                            "Phase 1 keeping coarse beats after last revision: {coarse}"
-                        );
+                        short_brief_duration_issue(brief, &candidate, required_script_mode)
+                    };
+                    let key_message_issue = key_message_marker_issue(brief, &candidate);
+                    let issue = duration_issue.or(key_message_issue);
+                    if let Some(issue) = issue {
+                        log::warn!("Phase 1 narrative rejected: {issue}");
+                        phase1_feedback = Some(issue);
+                        None
+                    } else if let Some(coarse) =
+                        coarse_beat_issue(&candidate, voiceover_duration_ms)
+                    {
+                        if revision + 1 < MAX_PHASE1_REVISIONS {
+                            log::warn!(
+                                "Phase 1 beats too coarse, asking for a finer split: {coarse}"
+                            );
+                            phase1_feedback = Some(coarse);
+                            None
+                        } else {
+                            log::warn!(
+                                "Phase 1 keeping coarse beats after last revision: {coarse}"
+                            );
+                            Some(candidate)
+                        }
+                    } else {
                         Some(candidate)
                     }
-                } else {
-                    Some(candidate)
+                }
+                Err(error) => {
+                    log::warn!("Phase 1 request failed: {error}");
+                    phase1_feedback = Some(error);
+                    None
                 }
             }
-            Err(error) => {
-                log::warn!("Phase 1 request failed: {error}");
-                phase1_feedback = Some(error);
-                None
-            }
-        }
-    }).ok_or_else(|| {
-        phase1_feedback
-            .unwrap_or_else(|| "Storyboard narrative structure could not be generated.".to_owned())
-    })?;
+        })
+        .ok_or_else(|| {
+            phase1_feedback.unwrap_or_else(|| {
+                "Storyboard narrative structure could not be generated.".to_owned()
+            })
+        })?;
     let mut narrative = narrative;
     crate::execution_deadline::check()?;
     enforce_decided_script_mode(brief, required_script_mode, &mut narrative);
@@ -2964,7 +2969,8 @@ fn generate_storyboard_internal(
                         alignment,
                     ));
                     issues.extend(crate::storyboard::length::collect_usable_window_shortfalls(
-                        &mut candidate, &rough,
+                        &mut candidate,
+                        &rough,
                     ));
                     last_candidate = Some(candidate.clone());
                     log::info!(
@@ -3441,10 +3447,11 @@ fn map_scoped_storyboard_row(
     editing_task_id: &str,
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<StoryboardVersion> {
-    let content: StoryboardContent = serde_json::from_str(&row.get::<_, String>(2)?).map_err(|error| {
-        log::warn!("Storyboard content could not be deserialized: {error}");
-        rusqlite::Error::InvalidQuery
-    })?;
+    let content: StoryboardContent =
+        serde_json::from_str(&row.get::<_, String>(2)?).map_err(|error| {
+            log::warn!("Storyboard content could not be deserialized: {error}");
+            rusqlite::Error::InvalidQuery
+        })?;
     Ok(StoryboardVersion {
         id: row.get(0)?,
         project_id: project_id.to_owned(),

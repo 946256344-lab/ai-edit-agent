@@ -581,7 +581,10 @@ pub(crate) fn ensure_phase3_candidate_grid(
 
 fn candidate_source_window(candidate: &StoryboardSource) -> (i64, i64) {
     if let Some(segment) = &candidate.segment {
-        return (segment.start_ms.max(0), segment.end_ms.max(segment.start_ms + 1));
+        return (
+            segment.start_ms.max(0),
+            segment.end_ms.max(segment.start_ms + 1),
+        );
     }
     let end = candidate.duration_ms.unwrap_or(0).max(0);
     (0, end.max(1))
@@ -811,7 +814,10 @@ mod tests {
 
     #[test]
     fn sample_times_cover_the_span_inclusively() {
-        assert_eq!(sample_times_in_span(1000, 5000, 4), vec![1000, 2333, 3666, 4999]);
+        assert_eq!(
+            sample_times_in_span(1000, 5000, 4),
+            vec![1000, 2333, 3666, 4999]
+        );
         assert_eq!(sample_times_in_span(800, 800, 4), vec![800]);
     }
 
@@ -842,7 +848,12 @@ mod tests {
             visual_evidence: Vec::new(),
             visual_quality_score: None,
             evidence_embedding: None,
-            keyframe_grid_path: Some(directory.join("stale_grid.jpg").to_string_lossy().into_owned()),
+            keyframe_grid_path: Some(
+                directory
+                    .join("stale_grid.jpg")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             keyframes: Vec::new(),
             source_path: None,
             segment: Some(crate::models::CandidateSegment {
@@ -856,7 +867,8 @@ mod tests {
             segment_embedding: None,
             segment_clip_embedding: None,
         };
-        let grid = ensure_phase3_candidate_grid(None, &candidate).expect("composed from existing frames");
+        let grid =
+            ensure_phase3_candidate_grid(None, &candidate).expect("composed from existing frames");
         assert!(grid.is_file());
         let _ = std::fs::remove_dir_all(&directory);
     }

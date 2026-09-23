@@ -104,7 +104,7 @@ Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保
 | 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
 | 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
 | 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 本机中文向量（安装后下载或开发预置）；`visualKeywords` 跨语言词面；不可用时词面降级 |
-| 生产安装包运行时供应 | ❌ TODO | FFmpeg/Tesseract/Python 未随包分发 |
+| 生产安装包运行时供应 | ⚠️ 部分 | FFmpeg/FFprobe 与 Python/草稿 SDK 随包；Tesseract 未随包 |
 | Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
 | Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
 | Windows CI / 远端分支保护 | ❌ TODO | |
@@ -178,7 +178,7 @@ Windows 桌面应用（Tauri + React）
 |- 本地工具服务（部分实现）
 |  |- 导入、FFprobe/FFmpeg/Tesseract 分析、时间线、preview
 |  |- 编辑器链接器（剪映草稿 / FCPXML / OTIO）
-|  `- 音频、字幕、ElevenLabs 配音、生产运行时供应 TODO
+|  `- 音频、字幕、ElevenLabs 配音、Tesseract 运行时供应 TODO
 |
 |- 模型 Provider（部分实现）
 |  |- 实验性 OpenCode 兼容 OAuth/PKCE
@@ -376,7 +376,7 @@ storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 �
 
 已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
 
-- `bge-small-zh-v1.5` 与 CLIP ViT-B/32 的 **ONNX 大文件**默认不进安装包：启动后若缺失则后台下载到 `app_data/runtime-models/`，SHA-256 校验后加载；小配置/tokenizer 仍随包。下载先走 HuggingFace 官方，失败则换国内镜像并断点续传、自动重试；不阻塞工作台。缺失时 Phase 2 分别降级为词面或跳过 CLIP 加权。发行可选完整包捆绑 ONNX（`tauri:build:full`）。开发机可用 `npm run models:fetch` 预拉。FFmpeg/FFprobe、Tesseract（英文 `eng` 数据）、Python 与 `pyJianYingDraft` 仍是开发机依赖，尚未随生产安装包分发。
+- `bge-small-zh-v1.5` 与 CLIP ViT-B/32 的 **ONNX 大文件**默认不进安装包：启动后若缺失则后台下载到 `app_data/runtime-models/`，SHA-256 校验后加载；小配置/tokenizer 仍随包。下载先走 HuggingFace 官方，失败则换国内镜像并断点续传、自动重试；不阻塞工作台。缺失时 Phase 2 分别降级为词面或跳过 CLIP 加权。发行可选完整包捆绑 ONNX（`tauri:build:full`）。开发机可用 `npm run models:fetch` 预拉。**FFmpeg/FFprobe 随生产安装包分发**（Gyan 8.1.2 full_build，含 `ass` 滤镜）。**Python 3.12 embeddable 与 pyJianYingDraft/pycapcut 随生产安装包分发**；适配器走 `python_program()`，启动子进程时把随包 FFmpeg 目录加入 PATH。Tesseract（英文 `eng` 数据）仍是本机依赖。
 - Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
 - `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
 

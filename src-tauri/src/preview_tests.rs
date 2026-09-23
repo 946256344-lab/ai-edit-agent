@@ -169,10 +169,8 @@ fn ffmpeg_renders_a_source_bound_vertical_clip() {
 // 源时长短于时间线槽位时，按源窗对成片时长放慢，而不是黑帧或静帧。
 #[test]
 fn render_timeline_clip_slows_short_source_to_timeline_slot() {
-    let directory = std::env::temp_dir().join(format!(
-        "assembly-video-agent-slow-test-{}",
-        Uuid::new_v4()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("assembly-video-agent-slow-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).expect("create temporary slow test directory");
     let source = directory.join("source.mp4");
     // 生成 2 秒合成源
