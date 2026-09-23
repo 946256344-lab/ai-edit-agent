@@ -81,8 +81,31 @@ function ensurePythonForBuild() {
   console.log('安装包：准备捆绑 Python 与草稿 SDK')
 }
 
+function ensureTesseractForBuild() {
+  if (tauriArgs[0] !== 'build') return
+  const tesseractDir = path.join(repoRoot, 'src-tauri', 'resources', 'tesseract')
+  const program = path.join(tesseractDir, 'tesseract.exe')
+  const english = path.join(tesseractDir, 'tessdata', 'eng.traineddata')
+  if (!existsSync(program) || !existsSync(english)) {
+    const script = path.join(repoRoot, 'scripts', 'fetch-tesseract.ps1')
+    console.log('缺少随包 Tesseract / eng 数据，正在运行 scripts/fetch-tesseract.ps1 …')
+    const result = spawnSync('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', script], {
+      stdio: 'inherit',
+      cwd: repoRoot,
+      env,
+    })
+    if (result.status !== 0 || !existsSync(program) || !existsSync(english)) {
+      console.error('无法准备 Tesseract。请运行：npm run tesseract:fetch')
+      process.exit(1)
+    }
+  }
+  extraResourceConfigs.push(path.join(repoRoot, 'src-tauri', 'tauri.tesseract.conf.json'))
+  console.log('安装包：准备捆绑 Tesseract 与英文 OCR 数据')
+}
+
 ensureFfmpegForBuild()
 ensurePythonForBuild()
+ensureTesseractForBuild()
 if (fullModelsFlag) {
   const requiredOnnx = [
     'src-tauri/resources/models/bge-small-zh-v1.5/onnx/model.onnx',

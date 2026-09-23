@@ -161,7 +161,7 @@ Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-
 
 ## 2026-09-09：发行就绪检查
 
-新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe（优先安装包资源）、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、随包 Python/草稿 SDK/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`、`docs/changes/2026-09-20-bundle-ffmpeg.md`、`docs/changes/2026-09-20-bundle-python.md`。
+新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe、Tesseract 与英文数据（均优先安装包资源）、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、随包 Python/草稿 SDK/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`、`docs/changes/2026-09-20-bundle-ffmpeg.md`、`docs/changes/2026-09-20-bundle-python.md`、`docs/changes/2026-09-23-bundle-tesseract.md`。
 
 ## 2026-09-09：预览缓存上限与清理
 
@@ -261,7 +261,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。成功写入后对 `previews/cache/<projectId>` 执行单项目上限淘汰（默认 2 GiB，按修改时间删最旧中间文件）。 |
 | `get_preview_cache_status` | `{ projectId }` | `PreviewCacheStatus { projectId, bytesUsed, limitBytes, fileCount }` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
 | `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
-| `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message`（`status`=`ok|warn|fail`）。FFmpeg/FFprobe 优先探测安装包资源。不探测源媒体内容，不写库。 |
+| `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message`（`status`=`ok|warn|fail`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
 | `get_runtime_model_status` | 无 | `RuntimeModelStatus { overall, currentId, message, artifacts[] }` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。 |
 | `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
 | `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |

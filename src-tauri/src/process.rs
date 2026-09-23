@@ -1,6 +1,6 @@
 //! Windows 外部进程统一入口：隐藏控制台窗口，并为可控调用提供超时与回收。
 //! 业务模块不得自行创建 Command，以免重新引入可见窗口或无限等待。
-//! FFmpeg/FFprobe/Python 优先安装包资源，其次环境变量，最后 PATH；不在此捆绑 Tesseract。
+//! FFmpeg/FFprobe/Python/Tesseract 优先安装包资源，其次环境变量，最后 PATH。
 
 use std::{
     ffi::{OsStr, OsString},
@@ -16,6 +16,7 @@ use tauri::{AppHandle, Manager};
 static FFMPEG: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE: OnceLock<PathBuf> = OnceLock::new();
 static PYTHON: OnceLock<PathBuf> = OnceLock::new();
+static TESSERACT: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HiddenCommandError {
@@ -33,6 +34,15 @@ fn media_tool_file_name(name: &str) -> Option<&'static str> {
     match name {
         "ffmpeg" => Some("ffmpeg.exe"),
         "ffprobe" => Some("ffprobe.exe"),
+        "tesseract" => Some("tesseract.exe"),
+        _ => None,
+    }
+}
+
+fn bundled_tool_directory(name: &str) -> Option<&'static str> {
+    match name {
+        "ffmpeg" | "ffprobe" => Some("ffmpeg"),
+        "tesseract" => Some("tesseract"),
         _ => None,
     }
 }
@@ -41,18 +51,22 @@ fn env_override(name: &str) -> Option<PathBuf> {
     let key = match name {
         "ffmpeg" => "FFMPEG_PATH",
         "ffprobe" => "FFPROBE_PATH",
+        "tesseract" => "TESSERACT_PATH",
         _ => return None,
     };
     let path = PathBuf::from(std::env::var_os(key)?);
     path.is_file().then_some(path)
 }
 
-fn bundled_media_candidates(app: Option<&AppHandle>, file_name: &str) -> Vec<PathBuf> {
+fn bundled_media_candidates(app: Option<&AppHandle>, name: &str, file_name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
+    let Some(directory) = bundled_tool_directory(name) else {
+        return paths;
+    };
     if let Some(app) = app {
         if let Ok(dir) = app.path().resource_dir() {
-            paths.push(dir.join("resources").join("ffmpeg").join(file_name));
-            paths.push(dir.join("ffmpeg").join(file_name));
+            paths.push(dir.join("resources").join(directory).join(file_name));
+            paths.push(dir.join(directory).join(file_name));
             paths.push(dir.join(file_name));
         }
     }
@@ -61,14 +75,14 @@ fn bundled_media_candidates(app: Option<&AppHandle>, file_name: &str) -> Vec<Pat
         paths.push(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("resources")
-                .join("ffmpeg")
+                .join(directory)
                 .join(file_name),
         );
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             paths.push(parent.join(file_name));
-            paths.push(parent.join("resources").join("ffmpeg").join(file_name));
+            paths.push(parent.join("resources").join(directory).join(file_name));
         }
     }
     paths
@@ -82,6 +96,7 @@ fn slot_for(name: &str) -> Option<&'static OnceLock<PathBuf>> {
     match name {
         "ffmpeg" => Some(&FFMPEG),
         "ffprobe" => Some(&FFPROBE),
+        "tesseract" => Some(&TESSERACT),
         _ => None,
     }
 }
@@ -124,7 +139,7 @@ fn resolved_media_path(name: &str) -> Option<PathBuf> {
     let file_name = media_tool_file_name(name)?;
     env_override(name)
         .or_else(|| slot_for(name).and_then(OnceLock::get).cloned())
-        .or_else(|| first_existing(bundled_media_candidates(None, file_name)))
+        .or_else(|| first_existing(bundled_media_candidates(None, name, file_name)))
 }
 
 fn resolved_python_path() -> Option<PathBuf> {
@@ -133,9 +148,9 @@ fn resolved_python_path() -> Option<PathBuf> {
         .or_else(|| first_existing(bundled_python_candidates(None)))
 }
 
-/// 启动时记住安装包内的 FFmpeg/FFprobe/Python，后续解析不再依赖系统 PATH。
+/// 启动时记住安装包内的 FFmpeg/FFprobe/Python/Tesseract，后续解析不再依赖系统 PATH。
 pub(crate) fn install_bundled_media_tools(app: &AppHandle) {
-    for name in ["ffmpeg", "ffprobe"] {
+    for name in ["ffmpeg", "ffprobe", "tesseract"] {
         let Some(slot) = slot_for(name) else {
             continue;
         };
@@ -146,7 +161,7 @@ pub(crate) fn install_bundled_media_tools(app: &AppHandle) {
             continue;
         };
         if let Some(path) = env_override(name)
-            .or_else(|| first_existing(bundled_media_candidates(Some(app), file_name)))
+            .or_else(|| first_existing(bundled_media_candidates(Some(app), name, file_name)))
         {
             let _ = slot.set(path);
         }
@@ -158,6 +173,21 @@ pub(crate) fn install_bundled_media_tools(app: &AppHandle) {
             let _ = PYTHON.set(path);
         }
     }
+}
+
+pub(crate) fn tesseract_program() -> OsString {
+    if let Some(path) = resolved_media_path("tesseract") {
+        return path.into_os_string();
+    }
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        let installed = PathBuf::from(program_files)
+            .join("Tesseract-OCR")
+            .join("tesseract.exe");
+        if installed.is_file() {
+            return installed.into_os_string();
+        }
+    }
+    OsString::from("tesseract")
 }
 
 /// 剪映适配器用的解释器：随包 `python.exe` 优先，不把 `py -3` 传给 embeddable 解释器。
@@ -215,7 +245,7 @@ fn resolve_program(program: impl AsRef<OsStr>) -> OsString {
     if let Some(path) = slot_for(&name).and_then(OnceLock::get) {
         return path.clone().into_os_string();
     }
-    if let Some(path) = first_existing(bundled_media_candidates(None, file_name)) {
+    if let Some(path) = first_existing(bundled_media_candidates(None, &name, file_name)) {
         return path.into_os_string();
     }
     program.to_os_string()

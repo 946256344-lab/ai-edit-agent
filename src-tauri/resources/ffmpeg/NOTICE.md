@@ -8,4 +8,4 @@
 
 These executables are redistributed only as the local media runtime for Assembly Video Agent (analysis, preview, quality checks). They are not linked into the application binary.
 
-The `.exe` files exceed GitHub’s 100MB limit and are gitignored. Fetch with `npm run ffmpeg:fetch` before `npm run tauri:build`. Tesseract and Python are not bundled here.
+The `.exe` files exceed GitHub’s 100MB limit and are gitignored. Fetch with `npm run ffmpeg:fetch` before `npm run tauri:build`. Tesseract and Python are bundled from their own resource directories.

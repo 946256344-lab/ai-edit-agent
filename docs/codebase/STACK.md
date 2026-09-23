@@ -26,7 +26,7 @@ Node 的团队支持版本未在仓库中固定；不要把当前开发机版本
 | serde / serde_json | `1.0` | Tauri、SQLite JSON 和 Provider schema | `src-tauri/Cargo.toml` |
 | uuid | `1.18` | 项目、任务、版本、产物与审计 ID | `src-tauri/Cargo.toml` |
 
-系统运行时依赖：FFmpeg/FFprobe 与 embeddable Python 3.12（含 `pyJianYingDraft`/`pycapcut`）由安装包捆绑（见 `scripts/fetch-ffmpeg.ps1`、`scripts/fetch-python.ps1`）；Tesseract 和 Jianying Pro 仍需本机安装。
+系统运行时依赖：FFmpeg/FFprobe、embeddable Python 3.12（含 `pyJianYingDraft`/`pycapcut`）与 Tesseract 5.4.0/英文数据由安装包捆绑（见 `scripts/fetch-ffmpeg.ps1`、`scripts/fetch-python.ps1`、`scripts/fetch-tesseract.ps1`）；只有使用剪映交付时需要本机安装 Jianying Pro。
 
 ## 3）开发工具链
 
@@ -63,7 +63,7 @@ python -m unittest discover -s src-tauri/scripts -p "test_*.py"
 - 运行时读取：`TESSERACT_PATH`、`FFMPEG_PATH`、`FFPROBE_PATH`、`PYTHON_PATH`、`ProgramFiles`、`LOCALAPPDATA`、进程 `PATH`。
 - 回归脚本读取：`TAURI_CDP_URL`、`TAURI_VERIFY_SCREENSHOT`。
 - 仓库没有 `.env.example`，模型、OAuth 和 Jamendo 凭据不使用 `.env`。
-- [TODO] Tesseract 运行时发现、版本兼容和安装失败说明尚未实现。
+- Tesseract 解析顺序为显式 `TESSERACT_PATH`、随包资源、`Program Files`、系统 PATH；发行检查同时验证 `eng` 数据。
 
 ## 6）证据
 

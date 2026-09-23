@@ -2,7 +2,10 @@
 use crate::custom_api::get_custom_api_status;
 use crate::db::database_path;
 use crate::oauth::get_experimental_openai_oauth_status;
-use crate::process::{program_responds, python_program};
+use crate::process::{
+    hidden_command, program_responds, python_program, run_hidden_command_with_timeout,
+    tesseract_program,
+};
 use crate::storyboard::semantic;
 use serde::Serialize;
 use std::{fs, path::Path, time::Duration};
@@ -92,6 +95,17 @@ fn format_gib(bytes: u64) -> String {
 fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
     let ffmpeg_ok = tool_available("ffmpeg", &["-version"]);
     let ffprobe_ok = tool_available("ffprobe", &["-version"]);
+    let mut tesseract = hidden_command(tesseract_program());
+    tesseract.arg("--list-langs");
+    let tesseract_ok = run_hidden_command_with_timeout(&mut tesseract, Duration::from_secs(8))
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.trim() == "eng")
+        })
+        .unwrap_or(false);
     vec![
         if ffmpeg_ok {
             check("ffmpeg", "媒体处理", "ok", "FFmpeg 可用。")
@@ -111,6 +125,16 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "媒体探测",
                 "fail",
                 "未找到 FFprobe。正式安装包应已包含；请重新安装应用后再试。",
+            )
+        },
+        if tesseract_ok {
+            check("tesseract", "文字识别", "ok", "Tesseract 英文 OCR 可用。")
+        } else {
+            check(
+                "tesseract",
+                "文字识别",
+                "fail",
+                "未找到 Tesseract 或英文 OCR 数据。正式安装包应已包含；请重新安装应用后再试。",
             )
         },
     ]

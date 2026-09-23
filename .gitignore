@@ -27,6 +27,10 @@ src-tauri/resources/ffmpeg/.cache/
 # Embeddable CPython + draft SDKs; fetch via scripts/fetch-python.ps1
 src-tauri/resources/python/**
 !src-tauri/resources/python/NOTICE.md
+
+# Tesseract OCR Windows runtime; fetch via scripts/fetch-tesseract.ps1
+src-tauri/resources/tesseract/**
+!src-tauri/resources/tesseract/NOTICE.md
 src-tauri/resources/.cache/
 
 # Editor directories and files

@@ -7,14 +7,15 @@ use crate::models::{
     KeyframeMetadata, OcrEvidence, SceneSegment, TechnicalMetadata,
 };
 use crate::process::{
-    hidden_command, media_open_args, run_hidden_command_with_timeout, HiddenCommandError,
+    hidden_command, media_open_args, run_hidden_command_with_timeout, tesseract_program,
+    HiddenCommandError,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
@@ -363,21 +364,6 @@ pub(crate) fn backfill_project_visual_quality(
         .commit()
         .map_err(|_| "visual_quality_backfill_write_failed".to_owned())?;
     Ok(updated)
-}
-
-fn tesseract_program() -> PathBuf {
-    if let Some(configured) = env::var_os("TESSERACT_PATH") {
-        return PathBuf::from(configured);
-    }
-    if let Some(program_files) = env::var_os("ProgramFiles") {
-        let installed = PathBuf::from(program_files)
-            .join("Tesseract-OCR")
-            .join("tesseract.exe");
-        if installed.is_file() {
-            return installed;
-        }
-    }
-    PathBuf::from("tesseract")
 }
 
 fn extract_ocr(image_path: &Path, time_ms: Option<i64>) -> Result<Option<OcrEvidence>, String> {

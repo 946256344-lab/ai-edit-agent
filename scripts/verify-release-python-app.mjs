@@ -66,5 +66,7 @@ const report = response.result.value
 assert.ok(report, 'get_release_readiness returned empty')
 const adapter = report.checks.find((item) => item.id === 'jianying_adapter')
 assert.equal(adapter?.status, 'ok', `jianying_adapter check: ${adapter?.status} ${adapter?.message}`)
-console.log(JSON.stringify({ overall: report.overall, jianying_adapter: adapter }, null, 2))
+const tesseract = report.checks.find((item) => item.id === 'tesseract')
+assert.equal(tesseract?.status, 'ok', `tesseract check: ${tesseract?.status} ${tesseract?.message}`)
+console.log(JSON.stringify({ overall: report.overall, jianying_adapter: adapter, tesseract }, null, 2))
 socket.close()

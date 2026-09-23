@@ -27,7 +27,9 @@
     "ffmpeg:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1",
     "ffmpeg:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-ffmpeg.ps1",
     "python:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-python.ps1",
-    "python:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-python.ps1"
+    "python:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-python.ps1",
+    "tesseract:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-tesseract.ps1",
+    "tesseract:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-tesseract.ps1"
   },
   "dependencies": {
     "@moviemasher/moviemasher.js": "^5.1.1",

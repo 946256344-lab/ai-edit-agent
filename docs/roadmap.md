@@ -42,7 +42,7 @@ MVP 尚未验收。验收证据必须是在 Tauri 桌面应用中，由已认证
 ### 2. 生产化媒体与模型接入
 
 - 本地选镜 ONNX（BGE/CLIP）：瘦安装包 + 应用内后台下载（官方/国内镜像、续传重试）；可选完整包捆绑，见 `docs/changes/2026-09-19-runtime-model-download-resilience.md`。
-- FFmpeg/FFprobe 与 Python/剪映草稿 SDK 已随安装包；仍需捆绑或可靠供应 Tesseract。
+- FFmpeg/FFprobe、Python/剪映草稿 SDK 与 Tesseract/英文数据已随安装包，并已在无系统依赖的 Release 环境验证。
 - 实现自定义模型 API 适配器，继续保持 Provider 可替换。
 - 实现收集项目媒体、缺失文件恢复策略、质量评分和语义重复检测。
 
