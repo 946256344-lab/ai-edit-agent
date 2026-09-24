@@ -3480,7 +3480,9 @@ fn finalize_audio_first_timeline(
         TextAnimation, TextCue, TextLayout, TextStyle, TextTrack, TimelineClip, TimelineContent,
         VoiceoverCue, VoiceoverTrack,
     };
-    use crate::voice_provider::{cues_from_alignment, subtitle_track_from_cues};
+    use crate::voice_provider::{
+        cues_from_alignment_text, storyboard_narration_text, subtitle_track_from_cues,
+    };
     let include_subtitles = crate::media_options::storyboard_options(connection, &storyboard.id)?
         .map_or(true, |options| options.subtitles);
     let duration_ms = prepared.duration_ms;
@@ -3573,9 +3575,11 @@ fn finalize_audio_first_timeline(
     };
     let mut vt: Vec<VoiceoverTrack> = Vec::new();
     if voiceover_fits {
-        if let Some(align_cues) = cues_from_alignment(&prepared.alignment, duration_ms)
-            .ok()
-            .filter(|_| include_subtitles)
+        let narration = storyboard_narration_text(Some(storyboard));
+        if let Some(align_cues) =
+            cues_from_alignment_text(&prepared.alignment, duration_ms, narration.as_deref())
+                .ok()
+                .filter(|_| include_subtitles)
         {
             let generated = subtitle_track_from_cues(&generation_id, &align_cues);
             let kept: Vec<TextTrack> = text_tracks

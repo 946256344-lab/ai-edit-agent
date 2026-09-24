@@ -355,22 +355,30 @@ pub(crate) fn cues_from_alignment(
     alignment: &Value,
     voice_duration_ms: i64,
 ) -> Result<Vec<AlignmentCue>, String> {
+    cues_from_alignment_text(alignment, voice_duration_ms, None)
+}
+
+pub(crate) fn cues_from_alignment_text(
+    alignment: &Value,
+    voice_duration_ms: i64,
+    narration_text: Option<&str>,
+) -> Result<Vec<AlignmentCue>, String> {
     if let Some(segments) = alignment.get("segments").and_then(Value::as_array) {
-        let cues = segments
+        let units = segments
             .iter()
             .filter_map(|segment| {
-                let text = segment.get("text")?.as_str()?.trim().to_owned();
+                let text = segment.get("text")?.as_str()?.to_owned();
                 let start_ms = (segment.get("start")?.as_f64()? * 1000.0).floor() as i64;
                 let end_ms = (segment.get("end")?.as_f64()? * 1000.0).ceil() as i64;
-                (!text.is_empty() && end_ms > start_ms).then_some(AlignmentCue {
+                (!text.is_empty() && start_ms < voice_duration_ms).then_some(AlignmentCue {
                     start_ms: start_ms.max(0),
                     end_ms: end_ms.min(voice_duration_ms),
                     text,
                 })
             })
             .collect::<Vec<_>>();
-        return (!cues.is_empty())
-            .then_some(cues)
+        return (units.iter().any(|unit| !unit.text.trim().is_empty()))
+            .then(|| group_alignment_units(units, narration_text))
             .ok_or_else(|| "incomplete_alignment".to_owned());
     }
     let characters = alignment
@@ -388,9 +396,7 @@ pub(crate) fn cues_from_alignment(
     if characters.is_empty() || characters.len() != starts.len() || characters.len() != ends.len() {
         return Err("incomplete_alignment".to_owned());
     }
-    let mut letters = String::new();
-    let mut start_secs = Vec::with_capacity(characters.len());
-    let mut end_secs = Vec::with_capacity(characters.len());
+    let mut units = Vec::with_capacity(characters.len());
     for index in 0..characters.len() {
         let Some(ch) = characters[index].as_str() else {
             continue;
@@ -401,69 +407,16 @@ pub(crate) fn cues_from_alignment(
         let Some(end) = ends[index].as_f64() else {
             return Err("incomplete_alignment".to_owned());
         };
-        letters.push_str(ch);
-        start_secs.push(start);
-        end_secs.push(end);
-    }
-    if letters.trim().is_empty() {
-        return Err("incomplete_alignment".to_owned());
-    }
-    let words: Vec<(usize, usize)> = letters
-        .char_indices()
-        .filter(|(_, ch)| !ch.is_whitespace())
-        .fold(Vec::new(), |mut words, (byte_index, ch)| {
-            if words.last().is_some_and(|(_, end)| *end == byte_index) {
-                if let Some(last) = words.last_mut() {
-                    last.1 = byte_index + ch.len_utf8();
-                }
-            } else {
-                words.push((byte_index, byte_index + ch.len_utf8()));
-            }
-            words
+        units.push(AlignmentCue {
+            start_ms: (start * 1000.0).floor() as i64,
+            end_ms: ((end * 1000.0).ceil() as i64).min(voice_duration_ms),
+            text: ch.to_owned(),
         });
-    if words.is_empty() {
+    }
+    if units.iter().all(|unit| unit.text.trim().is_empty()) {
         return Err("incomplete_alignment".to_owned());
     }
-    let char_index_at_byte = |byte_index: usize| letters[..byte_index].chars().count();
-    let mut cues = Vec::new();
-    let mut cursor = 0usize;
-    while cursor < words.len() {
-        let mut end_word = (cursor + 10).min(words.len());
-        for candidate in cursor..end_word {
-            let word = &letters[words[candidate].0..words[candidate].1];
-            if candidate - cursor >= 3
-                && word.chars().last().is_some_and(|ch| {
-                    matches!(ch, '.' | '!' | '?' | '。' | '！' | '？' | ',' | '，')
-                })
-            {
-                end_word = candidate + 1;
-                break;
-            }
-        }
-        if end_word < words.len() && words.len() - end_word == 1 {
-            end_word = words.len();
-        }
-        let first = words[cursor];
-        let last = words[end_word - 1];
-        let text = letters[first.0..last.1].trim().to_owned();
-        if text.is_empty() {
-            cursor = end_word;
-            continue;
-        }
-        let start_index = char_index_at_byte(first.0);
-        let last_char_index = char_index_at_byte(last.1).saturating_sub(1);
-        let start_ms = (start_secs[start_index] * 1000.0).floor() as i64;
-        let end_ms = (end_secs[last_char_index] * 1000.0).ceil() as i64;
-        let end_ms = end_ms.max(start_ms + 1).min(voice_duration_ms);
-        if end_ms > start_ms {
-            cues.push(AlignmentCue {
-                start_ms: start_ms.max(0),
-                end_ms,
-                text,
-            });
-        }
-        cursor = end_word;
-    }
+    let cues = group_alignment_units(units, None);
     if cues.is_empty() {
         return Err("incomplete_alignment".to_owned());
     }
@@ -474,6 +427,119 @@ pub(crate) fn cues_from_alignment(
         return Err("incomplete_alignment".to_owned());
     }
     Ok(cues)
+}
+
+/// 语音服务可能逐字返回时间戳；字幕按短句显示，仍使用首尾字的真实时间。
+fn group_alignment_units(
+    units: Vec<AlignmentCue>,
+    narration_text: Option<&str>,
+) -> Vec<AlignmentCue> {
+    let spoken = |text: &str| {
+        text.chars()
+            .filter(|ch| ch.is_alphanumeric())
+            .collect::<String>()
+            .to_lowercase()
+    };
+    let boundaries = narration_text
+        .filter(|_| {
+            !units.iter().any(|unit| {
+                unit.text
+                    .chars()
+                    .any(|ch| matches!(ch, ',' | '，' | '.' | '。' | '!' | '！' | '?' | '？'))
+            })
+        })
+        .filter(|text| {
+            spoken(text)
+                == spoken(
+                    &units
+                        .iter()
+                        .map(|unit| unit.text.as_str())
+                        .collect::<String>(),
+                )
+        })
+        .map(|text| {
+            let mut positions = HashMap::new();
+            let mut count = 0;
+            for ch in text.chars() {
+                if ch.is_alphanumeric() {
+                    count += 1;
+                } else if count > 0
+                    && matches!(ch, ',' | '，' | '.' | '。' | '!' | '！' | '?' | '？' | '\n')
+                {
+                    positions.entry(count).or_insert(ch);
+                }
+            }
+            positions
+        })
+        .unwrap_or_default();
+    let mut cues = Vec::new();
+    let mut current: Option<AlignmentCue> = None;
+    let mut spoken_count = 0;
+    for unit in units {
+        if let Some(cue) = current.as_ref() {
+            let cjk = cue
+                .text
+                .chars()
+                .chain(unit.text.chars())
+                .any(|ch| matches!(ch, '\u{3400}'..='\u{9fff}'));
+            let max_chars = if cjk { 16 } else { 32 };
+            if (cue.text.chars().count() >= 4 && unit.start_ms - cue.end_ms >= 300)
+                || (cue.text.chars().count() >= 12 && unit.start_ms - cue.end_ms >= 120)
+                || cue.text.chars().count() + unit.text.chars().count() > max_chars
+            {
+                cues.push(current.take().unwrap());
+            }
+        }
+        let cue = current.get_or_insert_with(|| AlignmentCue {
+            start_ms: unit.start_ms.max(0),
+            end_ms: unit.end_ms,
+            text: String::new(),
+        });
+        cue.text.push_str(&unit.text);
+        cue.end_ms = cue.end_ms.max(unit.end_ms);
+        let added_spoken = unit.text.chars().filter(|ch| ch.is_alphanumeric()).count();
+        spoken_count += added_spoken;
+        if let Some(ch) = boundaries
+            .get(&spoken_count)
+            .filter(|ch| added_spoken > 0 && **ch != '\n')
+        {
+            cue.text.push(*ch);
+        }
+        if cue.text.chars().count() >= 4
+            && ((added_spoken > 0 && boundaries.contains_key(&spoken_count))
+                || cue.text.chars().last().is_some_and(|ch| {
+                    matches!(ch, '.' | '!' | '?' | '。' | '！' | '？' | ',' | '，')
+                }))
+        {
+            cues.push(current.take().unwrap());
+        }
+    }
+    if let Some(cue) = current {
+        cues.push(cue);
+    }
+    if cues.len() > 1
+        && cues
+            .last()
+            .is_some_and(|cue| cue.end_ms - cue.start_ms < 600)
+    {
+        let tail = cues.pop().unwrap();
+        let previous = cues.last_mut().unwrap();
+        previous.text.push_str(&tail.text);
+        previous.end_ms = tail.end_ms;
+    }
+    for index in 0..cues.len().saturating_sub(1) {
+        if cues[index].end_ms - cues[index].start_ms < 600
+            && cues[index + 1].start_ms - cues[index].start_ms >= 600
+        {
+            cues[index].end_ms = cues[index + 1].start_ms;
+        }
+    }
+    cues.into_iter()
+        .filter_map(|mut cue| {
+            cue.text = cue.text.trim().to_owned();
+            (cue.end_ms > cue.start_ms && !cue.text.is_empty()).then_some(cue)
+        })
+        .collect()
 }
 
 pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue]) -> TextTrack {
@@ -507,7 +573,7 @@ pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue
                     template_id: Some("subtitle_safe".to_owned()),
                     start_ms: cue.start_ms,
                     end_ms: cue.end_ms,
-                    text: cue.text.chars().take(280).collect(),
+                    text: wrap_subtitle_text(&cue.text.chars().take(280).collect::<String>()),
                     style: TextStyle::default(),
                     layout: TextLayout::default(),
                     entrance,
@@ -518,6 +584,22 @@ pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue
             })
             .collect(),
     }
+}
+
+fn wrap_subtitle_text(text: &str) -> String {
+    let line_chars = if text.chars().any(|ch| matches!(ch, '\u{3400}'..='\u{9fff}')) {
+        8
+    } else {
+        24
+    };
+    let mut wrapped = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index > 0 && index % line_chars == 0 {
+            wrapped.push('\n');
+        }
+        wrapped.push(ch);
+    }
+    wrapped
 }
 
 fn project_lock(project_id: &str) -> Arc<Mutex<()>> {
@@ -848,7 +930,7 @@ pub(crate) fn synthesize_voiceover_for_timeline(
     let subtitle_track = if !include_subtitles {
         None
     } else {
-        match cues_from_alignment(&alignment, duration_ms) {
+        match cues_from_alignment_text(&alignment, duration_ms, Some(text)) {
             Ok(cues) if !cues.is_empty() => {
                 Some(subtitle_track_from_cues(&cached.generation_id, &cues))
             }
@@ -1180,6 +1262,33 @@ mod tests {
         assert!(!cues.is_empty());
         assert!(cues.iter().all(|cue| cue.end_ms <= 10_000));
         assert!(cues[0].text.contains("Hello"));
+    }
+
+    #[test]
+    fn fish_character_alignment_displays_short_phrases() {
+        let spoken = "对于工厂来说停电不只是没有电更意味着停机延误和生产损失";
+        let segments = spoken
+            .chars()
+            .enumerate()
+            .map(|(index, ch)| {
+                json!({"text": ch.to_string(), "start": index as f64 * 0.2, "end": (index + 1) as f64 * 0.2})
+            })
+            .collect::<Vec<_>>();
+        let cues = cues_from_alignment_text(
+            &json!({"segments": segments}),
+            6_000,
+            Some("对于工厂来说，停电不只是没有电，更意味着停机、延误和生产损失。"),
+        )
+        .expect("cues");
+        assert!(cues.len() >= 2 && cues.len() <= 4);
+        assert_eq!(cues[0].text, "对于工厂来说，");
+        assert_eq!(cues[1].text, "停电不只是没有电，");
+        assert!(cues.iter().all(|cue| cue.end_ms - cue.start_ms >= 600));
+        let track = subtitle_track_from_cues("fish", &cues);
+        assert!(track
+            .cues
+            .iter()
+            .all(|cue| { cue.text.lines().all(|line| line.chars().count() <= 8) }));
     }
 
     #[test]
