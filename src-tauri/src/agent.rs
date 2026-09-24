@@ -265,7 +265,28 @@ pub fn execute_agent_edit(
 
 #[tauri::command]
 /// 统一对话入口：先消费绑定完整请求与作用域的一次性 receipt，随后才允许写消息或运行技能。
-pub fn submit_conversation_turn(
+pub async fn submit_conversation_turn(
+    app: AppHandle,
+    project_id: String,
+    editing_task_id: String,
+    conversation_id: String,
+    storyboard_version_id: Option<String>,
+    timeline_version_id: Option<String>,
+    request: String,
+    route_receipt: String,
+    media_options: Option<crate::media_options::MediaOptions>,
+) -> Result<ConversationTurnResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        submit_conversation_turn_blocking(
+            app, project_id, editing_task_id, conversation_id, storyboard_version_id,
+            timeline_version_id, request, route_receipt, media_options,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn submit_conversation_turn_blocking(
     app: AppHandle,
     project_id: String,
     editing_task_id: String,

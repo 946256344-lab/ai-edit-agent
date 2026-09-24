@@ -52,7 +52,19 @@ struct ModelTaskRoute {
 
 #[tauri::command]
 #[rustfmt::skip]
-pub fn resolve_conversation_task(
+pub async fn resolve_conversation_task(
+    app: AppHandle, project_id: String,
+    active_editing_task_id: Option<String>, request: String,
+) -> Result<TaskRouteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_conversation_task_blocking(app, project_id, active_editing_task_id, request)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[rustfmt::skip]
+fn resolve_conversation_task_blocking(
     app: AppHandle, project_id: String,
     active_editing_task_id: Option<String>, request: String,
 ) -> Result<TaskRouteResult, String> {

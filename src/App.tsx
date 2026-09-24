@@ -410,6 +410,9 @@ function App() {
         setIsSending(false)
         return
       }
+      setRouteStatusText('正在确认剪辑任务…')
+      setRouteStatusDetail(null)
+      setRouteStatusTone('info')
       const resolved = await resolveMessageContext(trimmed)
       if (cancelRequestedRef.current) {
         setIsSending(false)
