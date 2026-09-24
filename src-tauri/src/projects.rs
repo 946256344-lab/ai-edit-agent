@@ -12,6 +12,62 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 const MISSING_AGENT_REPLY_MESSAGE: &str = "上一条 Agent 任务已结束，但应用未能恢复其最终回复。请审阅当前 storyboard、时间线和 preview，并重新提问或继续操作。";
+pub(crate) const DEFAULT_CANDIDATE_SCORE_FIRST_SLOTS: usize = 5;
+
+pub(crate) fn candidate_score_first_slots(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<usize, String> {
+    let settings: String = connection
+        .query_row(
+            "SELECT settings_json FROM projects WHERE id = ?1",
+            [project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let settings: serde_json::Value =
+        serde_json::from_str(&settings).map_err(|error| error.to_string())?;
+    Ok(settings
+        .get("candidateScoreFirstSlots")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as usize)
+        .unwrap_or(DEFAULT_CANDIDATE_SCORE_FIRST_SLOTS))
+}
+
+#[tauri::command]
+pub fn get_candidate_score_first_slots(
+    app: AppHandle,
+    project_id: String,
+) -> Result<usize, String> {
+    let connection = open_connection(&app)?;
+    candidate_score_first_slots(&connection, &project_id)
+}
+
+#[tauri::command]
+pub fn set_candidate_score_first_slots(
+    app: AppHandle,
+    project_id: String,
+    score_first_slots: usize,
+) -> Result<usize, String> {
+    let connection = open_connection(&app)?;
+    let settings: String = connection
+        .query_row(
+            "SELECT settings_json FROM projects WHERE id = ?1",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&settings).map_err(|error| error.to_string())?;
+    settings["candidateScoreFirstSlots"] = serde_json::json!(score_first_slots);
+    connection
+        .execute(
+            "UPDATE projects SET settings_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![settings.to_string(), now_millis(), project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(score_first_slots)
+}
 
 fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<usize, String> {
     let mut statement = connection

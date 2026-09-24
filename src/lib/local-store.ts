@@ -528,6 +528,16 @@ export async function clearPreviewCache(projectId: string, confirmed: boolean) {
   return invoke<PreviewCacheStatus>('clear_preview_cache', { projectId, confirmed })
 }
 
+export async function getCandidateScoreFirstSlots(projectId: string) {
+  requireDesktopRuntime()
+  return invoke<number>('get_candidate_score_first_slots', { projectId })
+}
+
+export async function setCandidateScoreFirstSlots(projectId: string, scoreFirstSlots: number) {
+  requireDesktopRuntime()
+  return invoke<number>('set_candidate_score_first_slots', { projectId, scoreFirstSlots })
+}
+
 export type ReleaseReadinessCheck = {
   id: string
   title: string

@@ -1,8 +1,8 @@
 // storyboard/phases.rs - Storyboard 分步生成
 //
 // Phase 1: 叙事结构（注入本地库库存摘要，约束 requiredVisual/visualKeywords）
-// Phase 2: 全库段排序，每 beat 取 9 段（同片最多 2，相似最多 2）
-// Phase 3: 每拍单独看最多 9 张图，默认一镜；替补只从前 5 条里选；网格按该条时间窗现拼
+// Phase 2: 全库段排序，每 beat 取 9 段；综合分与分项高分比例按项目设置调整
+// Phase 3: 每拍单独看最多 9 张图，默认一镜；9 条均可选；网格按该条时间窗现拼
 // Phase 4: 锁在 P3 窗内精修切点（禁止换片；整片也不再 Pass A 另切窗）
 // Phase 5: 由调用方执行 normalize + validate_storyboard
 
@@ -337,6 +337,7 @@ pub(crate) fn phase2_rough_shot_selection(
     embeddings: &[Vec<f32>],
     clip_embeddings: &[Vec<f32>],
     speech_timing: super::timing::SpeechTiming,
+    score_first_slots: usize,
 ) -> Result<RoughStoryboard, String> {
     log::info!(
         "Phase 2: Shortlisting {} segments for {} beats (max {} per asset, max {} similar)",
@@ -366,7 +367,8 @@ pub(crate) fn phase2_rough_shot_selection(
             beat_embedding.map(Vec::as_slice),
             beat_clip.map(Vec::as_slice),
         );
-        let (pool, scores, library_exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE);
+        let (pool, scores, library_exhausted) =
+            pick_segment_pool(&ranked, PHASE2_POOL_SIZE, score_first_slots);
         let sample = pool
             .iter()
             .zip(scores.iter())
@@ -490,39 +492,87 @@ pub(crate) fn phase2_rough_shot_selection(
 fn pick_segment_pool(
     ranked: &[scoring::ScoredCandidate],
     target_len: usize,
+    score_first_slots: usize,
 ) -> (Vec<StoryboardSource>, Vec<scoring::CandidateScore>, bool) {
     let mut pool: Vec<StoryboardSource> = Vec::new();
     let mut scores: Vec<scoring::CandidateScore> = Vec::new();
     let mut per_asset: HashMap<String, usize> = HashMap::new();
-
+    for candidate in ranked {
+        if pool.len() >= score_first_slots.min(target_len) {
+            break;
+        }
+        add_pool_candidate(candidate, &mut pool, &mut scores, &mut per_asset);
+    }
+    let mut component_orders = [
+        ranked.iter().collect::<Vec<_>>(),
+        ranked.iter().collect::<Vec<_>>(),
+        ranked.iter().collect::<Vec<_>>(),
+    ];
+    component_orders[0].sort_by(|a, b| b.score.clip.total_cmp(&a.score.clip));
+    component_orders[1].sort_by(|a, b| b.score.semantic.total_cmp(&a.score.semantic));
+    component_orders[2].sort_by(|a, b| b.score.lexical.total_cmp(&a.score.lexical));
+    while pool.len() < target_len {
+        let mut added = false;
+        for (channel, order) in component_orders.iter().enumerate() {
+            if pool.len() >= target_len {
+                break;
+            }
+            for candidate in order {
+                let component = match channel {
+                    0 => candidate.score.clip,
+                    1 => candidate.score.semantic,
+                    _ => candidate.score.lexical,
+                };
+                if component > 0.0
+                    && add_pool_candidate(candidate, &mut pool, &mut scores, &mut per_asset)
+                {
+                    added = true;
+                    break;
+                }
+            }
+        }
+        if !added {
+            break;
+        }
+    }
     for candidate in ranked {
         if pool.len() >= target_len {
             break;
         }
-        let source = &candidate.source;
-        if pool.iter().any(|existing| {
-            existing.asset_id == source.asset_id
-                && ranges_overlap(candidate_range_ms(existing), candidate_range_ms(source))
-        }) {
-            continue;
-        }
-        let count = *per_asset.get(&source.asset_id).unwrap_or(&0);
-        if count >= PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL {
-            continue;
-        }
-        let similar = pool
-            .iter()
-            .filter(|existing| sources_are_similar(existing, source))
-            .count();
-        if similar >= PHASE2_MAX_SIMILAR_IN_POOL {
-            continue;
-        }
-        per_asset.insert(source.asset_id.clone(), count + 1);
-        pool.push(source.clone());
-        scores.push(candidate.score.clone());
+        add_pool_candidate(candidate, &mut pool, &mut scores, &mut per_asset);
     }
     let library_exhausted = pool.len() < target_len;
     (pool, scores, library_exhausted)
+}
+
+fn add_pool_candidate(
+    candidate: &scoring::ScoredCandidate,
+    pool: &mut Vec<StoryboardSource>,
+    scores: &mut Vec<scoring::CandidateScore>,
+    per_asset: &mut HashMap<String, usize>,
+) -> bool {
+    let source = &candidate.source;
+    if pool.iter().any(|existing| {
+        existing.asset_id == source.asset_id
+            && ranges_overlap(candidate_range_ms(existing), candidate_range_ms(source))
+    }) {
+        return false;
+    }
+    let count = *per_asset.get(&source.asset_id).unwrap_or(&0);
+    if count >= PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL {
+        return false;
+    }
+    let similar = pool
+        .iter()
+        .filter(|existing| sources_are_similar(existing, source))
+        .count();
+    if similar >= PHASE2_MAX_SIMILAR_IN_POOL {
+        return false;
+    }
+    per_asset.insert(source.asset_id.clone(), count + 1);
+    pool.push(source.clone());
+    scores.push(candidate.score.clone());
+    true
 }
 
 fn candidate_range_ms(source: &StoryboardSource) -> (i64, i64) {
@@ -939,7 +989,7 @@ mod tests {
                 scored(source(&id), (20 - index) as f64)
             })
             .collect::<Vec<_>>();
-        let (pool, scores, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE);
+        let (pool, scores, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE, 9);
         assert!(!exhausted);
         assert_eq!(pool.len(), 9);
         assert_eq!(scores.len(), 9);
@@ -960,7 +1010,7 @@ mod tests {
         ranked.extend(
             (0..10).map(|index| scored(source(&format!("asset-{index}")), (20 - index) as f64)),
         );
-        let (pool, _, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE);
+        let (pool, _, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE, 9);
         assert!(!exhausted);
         assert_eq!(pool.len(), 9);
         let multi = pool.iter().filter(|item| item.asset_id == "multi").count();
@@ -992,7 +1042,7 @@ mod tests {
                 scored(item, (20 - index) as f64)
             })
             .collect::<Vec<_>>();
-        let (pool, _, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE);
+        let (pool, _, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE, 9);
         assert!(!exhausted);
         let ids: Vec<_> = pool.iter().map(|item| item.asset_id.as_str()).collect();
         assert_eq!(ids.len(), 9);
@@ -1012,6 +1062,30 @@ mod tests {
     }
 
     #[test]
+    fn pick_segment_pool_includes_component_leaders_after_score_first_slots() {
+        let mut ranked = (0..12)
+            .map(|index| scored(source(&format!("asset-{index}")), (30 - index) as f64))
+            .collect::<Vec<_>>();
+        ranked[9].score.clip = 25.0;
+        ranked[10].score.semantic = 25.0;
+        ranked[11].score.lexical = 25.0;
+        let (pool, _, exhausted) = pick_segment_pool(&ranked, PHASE2_POOL_SIZE, 5);
+        let ids = pool
+            .iter()
+            .map(|item| item.asset_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(!exhausted);
+        assert_eq!(ids.len(), 9);
+        assert_eq!(
+            &ids[..5],
+            &["asset-0", "asset-1", "asset-2", "asset-3", "asset-4"]
+        );
+        assert!(ids.contains(&"asset-9"));
+        assert!(ids.contains(&"asset-10"));
+        assert!(ids.contains(&"asset-11"));
+    }
+
+    #[test]
     fn phase2_covers_a_beat_with_one_segment() {
         let narrative = NarrativeStructure {
             title: "title".to_owned(),
@@ -1028,6 +1102,7 @@ mod tests {
             &[],
             &[],
             crate::storyboard::timing::SpeechTiming::default(),
+            9,
         )
         .expect("one segment should cover the beat");
         assert!(rough.uncovered_beat_ids.is_empty());
@@ -1223,7 +1298,35 @@ mod tests {
         )
         .err()
         .expect("out-of-pool index must fail");
-        assert!(invalid.contains("must be 0-4"));
+        assert!(invalid.contains("outside beat"));
+    }
+
+    #[test]
+    fn phase3_can_select_the_ninth_candidate() {
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "test".to_owned(),
+            summary: String::new(),
+            target_duration_ms: 3_000,
+            script_mode: "key_message".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: vec![],
+            shots: vec![shot("asset-0")],
+            candidate_pools: vec![candidate_pool(
+                "beat-1",
+                &[
+                    "asset-0", "asset-1", "asset-2", "asset-3", "asset-4", "asset-5", "asset-6",
+                    "asset-7", "asset-8",
+                ],
+            )],
+        };
+        let selected = super::assemble_phase3_selection(
+            "test",
+            &rough,
+            r#"{"selections":[{"beatId":"beat-1","candidateIndexes":[8],"uncovered":false}]}"#,
+        )
+        .unwrap();
+        assert_eq!(selected.shots[0].asset_id, "asset-8");
     }
 
     #[test]
@@ -2218,7 +2321,7 @@ mod tests {
     }
 }
 
-/// Phase 3: 每个 beat 单独看最多 9 张候选图，默认选 1 镜（替补只从前 5 条里选）。
+/// Phase 3: 每个 beat 单独看最多 9 张候选图，默认选 1 镜；池内候选均可选。
 ///
 /// 返回 `(候选, 校验问题)`：`Err` 仅表示传输/解析失败；语义问题进 `issues`。
 pub(crate) fn phase3_select(
@@ -2284,9 +2387,13 @@ pub(crate) fn phase3_select(
                 attempt,
             ) {
                 Ok(selection) => {
-                    if selection.candidate_indexes.iter().any(|index| *index > 4) {
+                    if selection
+                        .candidate_indexes
+                        .iter()
+                        .any(|index| *index >= pool.candidates.len())
+                    {
                         last_error = Some(format!(
-                            "Phase 3 candidateIndex must be 0-4 for beat '{beat_id}'."
+                            "Phase 3 candidateIndex is outside beat '{beat_id}' candidate pool."
                         ));
                         continue;
                     }
@@ -2512,7 +2619,7 @@ fn select_one_beat(
         Selection order: (1) look at the attached frames first; visibleCaption/scene/subjects/actions are unverified labels — if they conflict with the frames, trust the frames; (2) prefer the candidate whose frames best cover this beat's requiredVisual; (3) if none cover it literally, pick the closest honest scene-setting clip from this pool.\n\
         Narration is what will be spoken and how long the picture must last. Do not pick a clip only because it echoes abstract wording in the narration or brief.\n\
         Do not invent camera motion or events absent from the frames. Do not treat a caption as true when the grid shows something else.\n\
-        Hard rule: candidateIndexes must be DISTINCT assetIds from THIS beat's pool. Indexes must be 0-4; candidates 5-8 are context only.\n\
+        Hard rule: candidateIndexes must be DISTINCT assetIds from THIS beat's pool. Every listed candidateIndex is selectable.\n\
         Hard rule: do not pick a candidate visually similar to an already selected shot.\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list.\n\
         Choose ONE candidate. A second distinct, non-similar asset is allowed only when two clips honestly fit; never pad.\n\
@@ -2786,11 +2893,6 @@ fn assemble_phase3_selection(
             .unwrap_or(per_beat_budget);
         let part_count = selection.candidate_indexes.len() as i64;
         for (part_offset, index) in selection.candidate_indexes.iter().enumerate() {
-            if *index > 4 {
-                return Err(format!(
-                    "Phase 3 candidateIndex {index} must be 0-4 for beat '{beat_id}'."
-                ));
-            }
             let candidate = pool.and_then(|pool| pool.candidates.get(*index)).ok_or_else(|| {
                 format!("Phase 3 candidateIndex {index} is outside beat '{beat_id}' candidate pool.")
             })?;

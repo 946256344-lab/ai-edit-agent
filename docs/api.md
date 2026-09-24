@@ -248,6 +248,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
 | `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 从段里取最多 9 个候选，模型从池中选出 1–3 个互异素材（有第二条不相似且对得上才加镜）后再精修源时间范围，本地校验后创建任务内版本。 |
+| `get_candidate_score_first_slots` | `{ projectId }` | `number` | 读取项目每拍 9 条候选中按综合分优先选入的名额，默认 5。 |
+| `set_candidate_score_first_slots` | `{ projectId, scoreFirstSlots }` | `number` | 保存项目候选名额；设置界面提供 3～9 条。其余名额轮流从 CLIP 画面、语义、关键词分项高分候选中选入，仍遵守同素材和相似画面限制；下次生成生效。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按版本号倒序。 |
 | `get_storyboard_version` | `{ projectId, editingTaskId, storyboardVersionId }` | `StoryboardVersion` | 读取指定故事版；必须属于当前项目和剪辑任务。 |

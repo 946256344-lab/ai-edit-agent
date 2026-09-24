@@ -2881,6 +2881,7 @@ fn generate_storyboard_internal(
     let connection = open_connection(&app)?;
     let (sources, visual_ready_count) =
         storyboard_sources(&connection, &project_id, Some(&expand_set))?;
+    let score_first_slots = crate::projects::candidate_score_first_slots(&connection, &project_id)?;
     log::info!(
         "Phase 2 sources after segment expand: total={}, visual_ready={}, assets={}",
         sources.len(),
@@ -2911,6 +2912,7 @@ fn generate_storyboard_internal(
         &embeddings,
         &clip_embeddings,
         initial_timing,
+        score_first_slots,
     )?;
     let pool_asset_ids = {
         let mut seen = HashSet::new();

@@ -276,6 +276,7 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .provider-modal { width: min(580px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 28px; background: var(--paper); border-color: var(--line); border-radius: 18px; color: #494949; box-shadow: 0 20px 80px #2b2b2b26; }
 .provider-modal h2 { color: #393939; font-size: 24px; font-weight: 400; }.provider-modal p, .provider-modal label, .provider-modal .provider-hint, .provider-option small { color: #7b7b7b; font-size: 12px; line-height: 1.8; }
 .provider-option { background: var(--wash); border-color: var(--line); }.provider-option strong { font-size: 13px; color: #545454; }.provider-option b { color: #808080; }
+.provider-option select { flex: 0 0 auto; align-self: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); }
 .provider-divider { background: var(--line); }.provider-modal input, .provider-modal select, .provider-modal textarea { min-height: 38px; font-size: 12px; color: #525252; background: white; border-color: #cbcbcb; }
 .provider-modal .modal-button { background: #2a2a2a; border-color: #2a2a2a; color: white; }.provider-modal .close-button { color: #919191; }
 .name-edit-dialog { width: min(440px, calc(100vw - 48px)); }

@@ -107,6 +107,8 @@ pub fn run() {
             projects::delete_project,
             shared_library::list_shared_libraries,
             projects::list_projects,
+            projects::get_candidate_score_first_slots,
+            projects::set_candidate_score_first_slots,
             projects::create_editing_session,
             projects::list_editing_sessions,
             projects::rename_editing_session,

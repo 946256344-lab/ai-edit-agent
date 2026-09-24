@@ -1,6 +1,6 @@
-// 当前项目维护弹窗：预览缓存占用与显式清理，不改 Provider 或素材路径。
+// 当前项目设置：候选召回比例与预览缓存维护。
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { clearPreviewCache, getPreviewCacheStatus } from '../lib/local-store'
+import { clearPreviewCache, getCandidateScoreFirstSlots, getPreviewCacheStatus, setCandidateScoreFirstSlots } from '../lib/local-store'
 import type { PreviewCacheStatus } from '../lib/local-store'
 
 type ProjectSettingsModalProps = {
@@ -25,24 +25,29 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
     return () => element?.close()
   }, [open])
   const [status, setStatus] = useState<PreviewCacheStatus | null>(null)
+  const [scoreFirstSlots, setScoreFirstSlots] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open || !projectId) {
       setStatus(null)
+      setScoreFirstSlots(null)
       setError(null)
       return
     }
     let active = true
     setBusy(true)
     setError(null)
-    void getPreviewCacheStatus(projectId)
-      .then((next) => {
-        if (active) setStatus(next)
+    void Promise.all([getPreviewCacheStatus(projectId), getCandidateScoreFirstSlots(projectId)])
+      .then(([nextStatus, nextSlots]) => {
+        if (active) {
+          setStatus(nextStatus)
+          setScoreFirstSlots(nextSlots)
+        }
       })
       .catch(() => {
-        if (active) setError('无法读取预览缓存占用。')
+        if (active) setError('无法读取项目设置。')
       })
       .finally(() => {
         if (active) setBusy(false)
@@ -72,6 +77,19 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
     }
   }
 
+  async function handleScoreFirstSlots(next: number) {
+    if (!projectId) return
+    setBusy(true)
+    setError(null)
+    try {
+      setScoreFirstSlots(await setCandidateScoreFirstSlots(projectId, next))
+    } catch {
+      setError('保存候选比例失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <dialog ref={dialog} className="settings-dialog" aria-label="项目设置" onCancel={(event) => { event.preventDefault(); dialog.current?.close(); onClose() }}>
       <section className="provider-modal">
@@ -79,6 +97,21 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
         <span className="eyebrow">PROJECT</span>
         <h2>项目设置</h2>
         <p>{projectName ? `项目：${projectName}` : '请先选择一个项目。'}</p>
+
+        <label className="provider-option chosen">
+          <span>
+            <strong>候选镜头：综合分优先数量</strong>
+            <small>每拍最多 9 条。其余名额从画面、语义和关键词高分候选中补入；下次生成生效。</small>
+          </span>
+          <select
+            aria-label="综合分优先数量"
+            value={scoreFirstSlots ?? 5}
+            onChange={(event) => void handleScoreFirstSlots(Number(event.target.value))}
+            disabled={!projectId || busy || scoreFirstSlots === null}
+          >
+            {[3, 4, 5, 6, 7, 8, 9].map((count) => <option key={count} value={count}>{count} 条</option>)}
+          </select>
+        </label>
 
         <div className="provider-option chosen">
           <span>

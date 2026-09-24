@@ -301,6 +301,7 @@ pub async fn generate_shot_recommendations(
             &[],
             &[],
             SpeechTiming::default(),
+            crate::projects::candidate_score_first_slots(&connection, &project_id)?,
         )?;
         store_pools(&connection, &ctx.storyboard.id, &rough.candidate_pools)?;
         recommendations(&connection, &ctx)
