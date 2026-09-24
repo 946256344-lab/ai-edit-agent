@@ -1998,6 +1998,64 @@ mod tests {
     }
 
     #[test]
+    fn narration_estimate_follows_language_and_target() {
+        use crate::storyboard::multimodal::Phase4ContentWindow;
+        use std::collections::HashMap;
+
+        let chinese = "这是一句比较完整的口播文案需要足够画面";
+        let chinese_ms = super::estimated_narration_ms(chinese);
+        let old_two_char_units = ((chinese.chars().count() as f64) / 2.0).ceil() * 300.0;
+        assert!(
+            (chinese_ms as f64) < old_two_char_units,
+            "chinese estimate {chinese_ms} should be faster than the old two-character clock"
+        );
+        assert_eq!(super::estimated_narration_ms("hello world"), 600);
+
+        let mut long = shot("selected");
+        long.order_index = 1;
+        long.narration_text = chinese.to_owned();
+        long.duration_ms = 8_000;
+        long.source_start_ms = 0;
+        long.source_end_ms = 8_000;
+        let mut short = shot("other");
+        short.order_index = 2;
+        short.beat_id = "beat-2".to_owned();
+        short.narration_text = "Hi".to_owned();
+        short.duration_ms = 8_000;
+        short.source_start_ms = 0;
+        short.source_end_ms = 8_000;
+        let mut content = StoryboardContent {
+            brief: String::new(),
+            title: "t".to_owned(),
+            summary: "s".to_owned(),
+            target_duration_ms: 10_000,
+            script_mode: "full_script".to_owned(),
+            beats: vec![beat()],
+            uncovered_beat_ids: Vec::new(),
+            shots: vec![long, short],
+        };
+        let mut pick_map = HashMap::new();
+        for (order, asset) in [(1_i64, "selected"), (2, "other")] {
+            pick_map.insert(
+                order,
+                (
+                    Phase4ContentWindow {
+                        window_id: format!("{asset}:w0"),
+                        asset_id: asset.to_owned(),
+                        start_ms: 0,
+                        end_ms: 20_000,
+                    },
+                    false,
+                ),
+            );
+        }
+        apply_narration_phrase_duration_floor(&mut content, &pick_map);
+        let total = content.shots.iter().map(|shot| shot.duration_ms).sum::<i64>();
+        assert_eq!(total, 10_000);
+        assert!(content.shots[0].duration_ms > content.shots[1].duration_ms);
+    }
+
+    #[test]
     fn clamp_shots_survives_when_start_already_at_window_end() {
         // 回归：start+1 > window.end 时旧 clamp 会 panic。
         use crate::storyboard::multimodal::Phase4ContentWindow;
@@ -3289,7 +3347,7 @@ fn pack_overlapping_shots_within_windows(
     }
 }
 
-/// 旁白句界托底：切点落在窗内时，保证画面时长够念完本镜旁白，减轻「话说一半被切」。
+/// 旁白句界托底：没有 TTS 逐拍时间戳时，按语言估算每镜口播，再收进成片目标。
 #[cfg(test)]
 fn apply_narration_phrase_duration_floor(
     content: &mut StoryboardContent,
@@ -3303,64 +3361,93 @@ pub(crate) fn apply_narration_phrase_duration_floor_scoped(
     pick_map: &HashMap<i64, (crate::storyboard::multimodal::Phase4ContentWindow, bool)>,
     mutable: Option<&HashSet<i64>>,
 ) {
-    for shot in &mut content.shots {
+    let mut planned: Vec<(usize, i64)> = Vec::new();
+    for (index, shot) in content.shots.iter().enumerate() {
         if let Some(allowed) = mutable {
             if !allowed.contains(&shot.order_index) {
                 continue;
             }
         }
         let narration = shot.narration_text.trim();
-        if narration.is_empty() {
+        if narration.is_empty() || !pick_map.contains_key(&shot.order_index) {
             continue;
         }
+        planned.push((index, estimated_narration_ms(narration)));
+    }
+    if planned.is_empty() {
+        return;
+    }
+    let weight_sum = planned.iter().map(|(_, weight)| *weight).sum::<i64>().max(1);
+    let frozen_ms = content
+        .shots
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| planned.iter().all(|(planned_index, _)| planned_index != index))
+        .map(|(_, shot)| shot.duration_ms.max(0))
+        .sum::<i64>();
+    let budget = content
+        .target_duration_ms
+        .saturating_sub(frozen_ms)
+        .max(planned.len() as i64);
+    let mut remaining = budget;
+    for (offset, (index, weight)) in planned.iter().enumerate() {
+        let share = if offset + 1 == planned.len() {
+            remaining
+        } else {
+            let share = ((*weight as i128 * budget as i128) / weight_sum as i128) as i64;
+            share.min(remaining.saturating_sub((planned.len() - offset - 1) as i64))
+        }
+        .max(1);
+        remaining = remaining.saturating_sub(share);
+        let shot = &mut content.shots[*index];
         let Some((window, _)) = pick_map.get(&shot.order_index) else {
             continue;
         };
-        let need_ms = estimated_narration_ms(narration);
-        if shot.duration_ms >= need_ms {
-            continue;
-        }
-        let new_end = (shot.source_start_ms + need_ms).min(window.end_ms);
+        let new_end = (shot.source_start_ms + share).min(window.end_ms);
         if new_end > shot.source_end_ms {
             crate::storyboard::length::set_source_range(shot, shot.source_start_ms, new_end);
         }
-        shot.duration_ms = need_ms;
+        shot.duration_ms = share;
     }
 }
 
+/// 按文字本身区分中文、英文和其他音节，不用统一的「两字 300 毫秒」。
+/// 中文按字，英文按词，假名和谚文按音节；标点不计。
 fn estimated_narration_ms(text: &str) -> i64 {
-    let mut units = 0.0_f64;
-    let mut ascii_run = false;
+    const CJK_MS: f64 = 110.0;
+    const LATIN_WORD_MS: f64 = 300.0;
+    const KANA_MS: f64 = 80.0;
+    const HANGUL_MS: f64 = 150.0;
     let mut cjk = 0.0_f64;
+    let mut latin_words = 0.0_f64;
+    let mut kana = 0.0_f64;
+    let mut hangul = 0.0_f64;
+    let mut latin_run = false;
     for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if cjk > 0.0 {
-                units += (cjk / 2.0).ceil();
-                cjk = 0.0;
-            }
-            if !ascii_run {
-                units += 1.0;
-                ascii_run = true;
-            }
-        } else if ('\u{4e00}'..='\u{9fff}').contains(&ch) {
-            ascii_run = false;
+        if ('\u{4e00}'..='\u{9fff}').contains(&ch) {
+            latin_run = false;
             cjk += 1.0;
-            if cjk >= 2.0 {
-                units += 1.0;
-                cjk = 0.0;
+        } else if ('\u{3040}'..='\u{30ff}').contains(&ch) {
+            latin_run = false;
+            kana += 1.0;
+        } else if ('\u{ac00}'..='\u{d7af}').contains(&ch) {
+            latin_run = false;
+            hangul += 1.0;
+        } else if ch.is_ascii_alphanumeric() {
+            if !latin_run {
+                latin_words += 1.0;
+                latin_run = true;
             }
         } else {
-            ascii_run = false;
-            if cjk > 0.0 {
-                units += (cjk / 2.0).ceil();
-                cjk = 0.0;
-            }
+            latin_run = false;
         }
     }
-    if cjk > 0.0 {
-        units += (cjk / 2.0).ceil();
+    let ms = cjk * CJK_MS + latin_words * LATIN_WORD_MS + kana * KANA_MS + hangul * HANGUL_MS;
+    if ms <= 0.0 {
+        300
+    } else {
+        ms.round() as i64
     }
-    ((units.max(1.0)) * 300.0).round() as i64
 }
 
 /// 镜头时间范围与池候选对照。
