@@ -8,6 +8,7 @@ pub mod health;
 pub mod library;
 pub mod motion;
 mod progress;
+mod retry;
 pub mod segment_visual;
 pub mod segments;
 pub mod visual;

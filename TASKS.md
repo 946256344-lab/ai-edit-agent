@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [x] 已实现（2026-09-24）：分析失败自动补跑；画面识别最后不足 6 段（如 4 段）也立即送审。瞬时网络/超时最多补 3 次，技术超时最多 2 次；用户跳过与不适用不补。见 docs/changes/2026-09-24-analysis-auto-retry.md。
 - [x] 已实现（2026-09-24）：Phase 3 可从全部 9 条候选中选镜；项目设置可调综合分优先名额（默认 5/9），其余从画面、语义、关键词分项高分候选补入。见 docs/changes/2026-09-24-candidate-recall-mix.md。
 - [x] 已修复（2026-09-24）：语音对齐返回逐字时间戳时，字幕按原文标点与短句合并展示，保留首尾字的时间范围；镜头不匹配原因已按最新镜头版候选池核查。
 - [x] 已实现（2026-09-24）：旁白托底按语言估算时长，并收进成片目标。见 docs/changes/2026-09-24-narration-language-estimate.md。
@@ -59,7 +60,7 @@
 - [x] 完成（2026-09-09，feature/segment-visual-on-demand）：按需片段视觉证据与片段向量缓存。见 docs/changes/2026-09-09-segment-visual-on-demand.md。
 - [x] 完成（2026-09-09，feature/segment-phase234）：Phase 2/3/4 以片段为候选单位选镜。见 docs/changes/2026-09-09-segment-phase234.md。
 - [x] 完成（2026-09-09，fix/storyboard-asset-selection-scoring）：Phase 2 跨语言召回与权重重设、Phase 3 补 requiredVisual/visualKeywords；不重跑视觉分析。见 docs/changes/2026-09-09-phase2-cross-lingual-scoring.md。
-- [ ] 后续：视觉分析队列有 queued/failed 未消化素材，需单独补跑或重试策略。
+- [x] 已并入 2026-09-24：queued/failed 瞬时失败由自动补跑消化，见 `docs/changes/2026-09-24-analysis-auto-retry.md`。
 - [x] 已并入 2026-09-16：覆盖 beat 允许 1 镜，见 `docs/changes/2026-09-16-beat-one-shot-ok.md`。
 - [x] 完成（2026-09-09，fix/jianying-deliver-feedback）：成果页剪映交付可见反馈与可读草稿名。见 docs/changes/2026-09-09-jianying-deliver-feedback.md。
 - [x] 完成（2026-09-09，feature/release-readiness-check）：发行 UI 简化、预览缓存上限、启动就绪检查。见 docs/changes/2026-09-09-*.md。

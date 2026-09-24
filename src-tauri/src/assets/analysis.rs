@@ -198,6 +198,8 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         embedding_source_hash: None,
         embedding_version: None,
         keyframe_grid_path: None,
+        visual_analysis_retry_count: 0,
+        analysis_retry_count: 0,
     })
 }
 
@@ -596,15 +598,25 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
         Err(error) => {
             log::warn!("Local media analysis failed for asset {asset_id}: {error}");
             if let Some(source_reference) = terminal_source_reference {
-                let _ = update_analysis_status(
+                let retried = super::retry::maybe_requeue_technical_failure(
                     &app,
                     &asset_id,
-                    &task_id,
                     &source_reference,
-                    "failed",
-                    None,
-                    Some(&error),
-                );
+                    &task_id,
+                    &error,
+                )
+                .unwrap_or(false);
+                if !retried {
+                    let _ = update_analysis_status(
+                        &app,
+                        &asset_id,
+                        &task_id,
+                        &source_reference,
+                        "failed",
+                        None,
+                        Some(&error),
+                    );
+                }
             }
         }
     }
@@ -873,6 +885,7 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
         spawn_technical_analysis_tasks(app.clone(), tasks);
         // 技术队列排空后，顺带补跑旧格式分段。
         let _ = enqueue_and_spawn_segment_reanalysis(app, None);
+        let _ = super::retry::requeue_retryable_visual_failures(app);
         Ok(())
     })();
     log::info!(
@@ -1240,11 +1253,13 @@ pub(crate) fn retry_failed_asset_analysis(
     }
 
     let technical_queued = if stage.includes_technical() && !technical_ids.is_empty() {
+        super::retry::reset_retry_counts(app, &technical_ids, false, true)?;
         request_asset_analysis(app, project_id, &technical_ids)?
     } else {
         0
     };
     let visual_queued = if stage.includes_visual() && !visual_ids.is_empty() {
+        super::retry::reset_retry_counts(app, &visual_ids, true, false)?;
         super::visual::queue_visual_analysis_batch(app, &visual_ids)?;
         visual_ids.len()
     } else {

@@ -1,6 +1,6 @@
 //! 视觉分析批次队列：远端视觉模型请求、优先级排序、批次worker与恢复。
-//! 技术分析完成后自动排队；粗识别按硬切段各送 1 帧、6 段一批，收下模型自拟叙事短语并写片段向量。
-//! storyboard brief 可对 pending 批次重新排序。
+//! 技术分析完成后自动排队；粗识别按硬切段各送 1 帧、最多 6 段一批，最后不足 6 段也送审。
+//! 瞬时失败自动补跑；storyboard brief 可对 pending 批次重新排序。
 
 use crate::db::{now_millis, open_connection};
 use crate::models::{BatchAssetActionResult, TechnicalMetadata, VisualEvidence};
@@ -338,6 +338,58 @@ struct VisualBatchRanking {
 
 // representative_frame 从 analysis 模块导入
 use super::analysis::representative_frame;
+
+pub(super) fn close_visual_batch_task(
+    app: &AppHandle,
+    task_id: &str,
+    status: &str,
+    requested_count: usize,
+    failed_count: usize,
+    error_code: Option<&str>,
+) -> Result<(), String> {
+    update_visual_batch_task(
+        app,
+        task_id,
+        status,
+        requested_count,
+        0,
+        0,
+        failed_count,
+        error_code,
+    )
+}
+
+fn fail_or_retry_visual_batch(
+    app: &AppHandle,
+    task_id: &str,
+    asset_ids: &[String],
+    requested_count: usize,
+    note: &str,
+) {
+    if let Err(error) =
+        super::retry::conclude_visual_batch(app, task_id, asset_ids, requested_count, note)
+    {
+        log::warn!("Visual batch conclude failed: {error}");
+        let _ = update_visual_metadata(
+            app,
+            Some(task_id),
+            asset_ids,
+            "failed",
+            &HashMap::new(),
+            Some(note),
+        );
+        let _ = update_visual_batch_task(
+            app,
+            task_id,
+            "failed",
+            requested_count,
+            0,
+            0,
+            requested_count,
+            Some(note),
+        );
+    }
+}
 
 fn update_visual_batch_task(
     app: &AppHandle,
@@ -918,23 +970,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         Ok(map)
     })();
     let Ok(assets) = assets else {
-        let _ = update_visual_metadata(
-            &app,
-            Some(&task_id),
-            &asset_ids,
-            "failed",
-            &HashMap::new(),
-            Some("visual_asset_unavailable"),
-        );
-        let _ = update_visual_batch_task(
+        fail_or_retry_visual_batch(
             &app,
             &task_id,
-            "failed",
+            &asset_ids,
             requested_count,
-            0,
-            0,
-            requested_count,
-            Some("visual_asset_unavailable"),
+            "visual_asset_unavailable",
         );
         return;
     };
@@ -960,23 +1001,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         };
         expected.insert(unit_key(asset_id, &unit.segment_id), unit.time_ms);
         let Ok(image) = fs::read(&unit.image_path) else {
-            let _ = update_visual_metadata(
-                &app,
-                Some(&task_id),
-                &asset_ids,
-                "failed",
-                &HashMap::new(),
-                Some("visual_frame_unavailable"),
-            );
-            let _ = update_visual_batch_task(
+            fail_or_retry_visual_batch(
                 &app,
                 &task_id,
-                "failed",
+                &asset_ids,
                 requested_count,
-                0,
-                0,
-                requested_count,
-                Some("visual_frame_unavailable"),
+                "visual_frame_unavailable",
             );
             return;
         };
@@ -989,23 +1019,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         ));
     }
     if frames.is_empty() {
-        let _ = update_visual_metadata(
-            &app,
-            Some(&task_id),
-            &asset_ids,
-            "failed",
-            &HashMap::new(),
-            Some("visual_frame_unavailable"),
-        );
-        let _ = update_visual_batch_task(
+        fail_or_retry_visual_batch(
             &app,
             &task_id,
-            "failed",
+            &asset_ids,
             requested_count,
-            0,
-            0,
-            requested_count,
-            Some("visual_frame_unavailable"),
+            "visual_frame_unavailable",
         );
         return;
     }
@@ -1017,23 +1036,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         Ok(access) => access,
         Err(error) => {
             log::warn!("Visual analysis batch: provider access failed: {error}.");
-            let _ = update_visual_metadata(
-                &app,
-                Some(&task_id),
-                &asset_ids,
-                "skipped",
-                &HashMap::new(),
-                Some("visual_provider_unavailable"),
-            );
-            let _ = update_visual_batch_task(
+            fail_or_retry_visual_batch(
                 &app,
                 &task_id,
-                "completed",
+                &asset_ids,
                 requested_count,
-                0,
-                requested_count,
-                0,
-                Some("visual_provider_unavailable"),
+                "visual_provider_unavailable",
             );
             return;
         }
@@ -1079,24 +1087,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         if !super::controls::task_running(&app, &task_id) {
             return;
         }
-        let _ = update_visual_metadata(
-            &app,
-            Some(&task_id),
-            &asset_ids,
-            "failed",
-            &HashMap::new(),
-            Some(&failure_note),
-        );
-        let _ = update_visual_batch_task(
-            &app,
-            &task_id,
-            "failed",
-            requested_count,
-            0,
-            0,
-            requested_count,
-            Some(&failure_note),
-        );
+        fail_or_retry_visual_batch(&app, &task_id, &asset_ids, requested_count, &failure_note);
         return;
     };
     let mut cards_by_asset: HashMap<String, Vec<VisualEvidence>> = HashMap::new();
@@ -1121,23 +1112,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         if !super::controls::task_running(&app, &task_id) {
             return;
         }
-        let _ = update_visual_metadata(
-            &app,
-            Some(&task_id),
-            &asset_ids,
-            "failed",
-            &HashMap::new(),
-            Some("visual_response_invalid"),
-        );
-        let _ = update_visual_batch_task(
+        fail_or_retry_visual_batch(
             &app,
             &task_id,
-            "failed",
+            &asset_ids,
             requested_count,
-            0,
-            0,
-            requested_count,
-            Some("visual_response_invalid"),
+            "visual_response_invalid",
         );
         return;
     }
@@ -1168,15 +1148,12 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
     if commit_coarse_visual_cards(&app, &task_id, &kind_by_asset, &cards_by_asset, &failed_ids)
         .is_err()
     {
-        let _ = update_visual_batch_task(
+        fail_or_retry_visual_batch(
             &app,
             &task_id,
-            "failed",
+            &asset_ids,
             requested_count,
-            0,
-            0,
-            requested_count,
-            Some("visual_metadata_conflict"),
+            "visual_metadata_conflict",
         );
         return;
     }
@@ -1281,7 +1258,13 @@ pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
                         run_visual_analysis_batch(app.clone(), task_id, input_json);
                     }
                 }
-                Ok(None) | Err(_) => break,
+                Ok(None) => {
+                    match super::retry::requeue_retryable_visual_failures(&app) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => continue,
+                    }
+                }
+                Err(_) => break,
             }
         }
         VISUAL_ANALYSIS_WORKER_ACTIVE.store(false, Ordering::Release);
@@ -1704,6 +1687,22 @@ mod tests {
             Some(6)
         );
         assert_eq!(first["segments"][0]["segmentId"], "s001");
+    }
+
+    #[test]
+    fn parse_coarse_visual_specs_accepts_remainder_of_four() {
+        let specs = parse_coarse_visual_specs(&serde_json::json!({
+            "assetIds": ["a"],
+            "segments": [
+                {"assetId": "a", "segmentId": "s001"},
+                {"assetId": "a", "segmentId": "s002"},
+                {"assetId": "a", "segmentId": "s003"},
+                {"assetId": "a", "segmentId": "s004"}
+            ]
+        }))
+        .expect("remainder batch of four");
+        assert_eq!(specs.len(), 4);
+        assert_eq!(specs[3].1, "s004");
     }
 
     #[test]

@@ -957,6 +957,12 @@ pub struct TechnicalMetadata {
     pub(crate) visual_analysis_note: Option<String>,
     #[serde(default = "default_visual_analysis_status")]
     pub(crate) visual_analysis_status: String,
+    /// 画面识别自动补跑次数；成功或用户手动重试后清零。
+    #[serde(default)]
+    pub(crate) visual_analysis_retry_count: u32,
+    /// 技术分析自动补跑次数；成功或用户手动重试后清零。
+    #[serde(default)]
+    pub(crate) analysis_retry_count: u32,
     /// 技术分析格式版本。0=旧固定 4 帧；2=真实场景分段。
     #[serde(default)]
     pub(crate) analysis_version: u32,

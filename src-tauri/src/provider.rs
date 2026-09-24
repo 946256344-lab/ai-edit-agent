@@ -80,7 +80,12 @@ pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailure
         };
     }
     let normalized = error.to_ascii_lowercase();
-    if normalized.contains("timed out") || normalized.contains("timeout") || error.contains("超时")
+    if normalized.contains("timed out")
+        || normalized.contains("timeout")
+        || error.contains("超时")
+        || error.contains("10060")
+        || error.contains("没有正确答复")
+        || error.contains("连接尝试失败")
     {
         return ModelRequestFailureClass {
             code: "provider_timeout".to_owned(),
@@ -1358,6 +1363,10 @@ mod tests {
             "自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 timed out",
         );
         assert_eq!(timed_out.code, "provider_timeout");
+        let windows_timeout = classify_model_request_failure(
+            "自定义 API 读取响应失败（https://sensitive.example/v1，模型 private-model）:由于连接方在一段时间后没有正确答复或连接的主机没有反应，连接尝试失败。 (os error 10060)",
+        );
+        assert_eq!(windows_timeout.code, "provider_timeout");
         assert!(!timed_out.code.contains("sensitive"));
         assert!(!timed_out.code.contains("private-model"));
 

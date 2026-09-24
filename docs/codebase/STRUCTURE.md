@@ -2,6 +2,8 @@
 
 2026-09-18 素材分析提示：导入弹窗保留 `AssetAnalysisModal` / `AssetAnalysisProgress`；侧栏 `AppSidebar` 素材库入口用环境状态点；发送时 `AnalysisIncompleteDialog` 确认是否只用已分析素材；素材库进度筛选与进度条收到 `AssetBrowser` 列表标题。已去掉右下角 `AnalysisActivity` 与输入区进度卡。
 
+2026-09-24 分析自动补跑：`assets/retry.rs` 拥有瞬时失败补跑次数与可否补跑判定；画面识别最后不足 6 段也送审。`assets/visual.rs` 失败收尾与空闲回收走该模块，`assets/analysis.rs` 技术超时最多补 2 次。用户/Agent 手动重试清零次数。
+
 2026-09-16 素材分析进度：`assets/progress.rs` 拥有合并状态与项目级统计；`AssetAnalysisProgress` 展示进度与筛选，`useAssetWorkspaceController` 管理导入和失败重试，`useAnalysisGateController` 在提交任务前等待首次分析。失败暂停、显式继续、取消和作用域切换均在 controller 中处理。`assets/controls.rs` 实现取消/继续和库编辑；`useAssetAnalysisController` / `AssetAnalysisModal` 管理导入弹窗及预计时间，`useAssetLibraryEditController` / `AssetEditDialog` 管理重命名和批量移除。
 
 2026-09-16 共享子素材库：`shared_library.rs` 拥有全局库、成员和项目关联迁移；`project_asset_access` 是项目可用素材范围。`useProjectCreationController` 管理创建草稿，`ProjectCreationModal` 展示命名及默认全选列表。源文件及既有分析保持原位。
@@ -77,7 +79,7 @@ src/main.tsx
 | `agentloop/policy.rs` | 工具白名单、请求权限、负向约束与真实性辅助 |
 | `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema 与动态目录；Provider 常驻 `load_tools` 并最多加载 5 个业务工具 |
 | `agentloop/logs.rs` | 固定读取当前应用日志文件，提供有界行范围、分页及凭据/路径遮蔽 |
-| `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集 |
+| `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集；瞬时失败补跑在 `assets/retry.rs` |
 | `storyboard.rs` | 证据候选、模型提案、校验和版本；Phase 4 当次精修进度在 `storyboard/phase4.rs` |
 | `timeline.rs` | 时间线版本、镜头/文本/音乐编辑和查询 |
 | `timeline_voice.rs` | 旁白写入、画面补尾、系统字幕替换 |
