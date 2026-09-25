@@ -1110,6 +1110,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "get_edit_status"
         | "get_asset_health_summary"
         | "list_assets"
+        | "get_library_visual_overview"
         | "list_voices"
         | "get_storyboard"
         | "get_text_capabilities"
@@ -1120,8 +1121,18 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
         "get_edit_status"
         | "get_asset_health_summary"
         | "list_assets"
+        | "get_library_visual_overview"
         | "get_storyboard"
         | "get_text_capabilities" => Err(invalid_arguments()),
+        "get_asset_visual_detail" => {
+            if object.len() != 1 || !object.contains_key("assetId") {
+                return Err(invalid_arguments());
+            }
+            if !required_non_empty_string(&object["assetId"]) {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
         "get_timeline" => {
             if object.len() != 1 || !object.contains_key("timelineVersionId") {
                 return Err(invalid_arguments());

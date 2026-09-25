@@ -848,6 +848,25 @@ pub(super) fn apply_skill(
             )?;
             Ok(json!({ "tool": "get_asset_health_summary", "status": "ok", "summary": summary }))
         }
+        "get_library_visual_overview" => {
+            let overview = crate::assets::get_library_visual_overview_for_agent(
+                &state.connection,
+                state.project_id,
+            )?;
+            Ok(overview)
+        }
+        "get_asset_visual_detail" => {
+            let asset_id = args
+                .get("assetId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "get_asset_visual_detail requires assetId.".to_owned())?;
+            let detail = crate::assets::get_asset_visual_detail_for_agent(
+                &state.connection,
+                state.project_id,
+                asset_id,
+            )?;
+            Ok(detail)
+        }
         "search_assets" => {
             let results = crate::assets::search_assets_for_agent(
                 &state.connection,

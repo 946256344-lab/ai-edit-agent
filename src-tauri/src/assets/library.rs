@@ -256,6 +256,231 @@ pub(crate) fn list_assets_for_agent(
     list_assets_snapshot(app, project_id, false)
 }
 
+/// Agent 工具：整个库的视觉证据聚合概览，不返回路径或 ID。
+/// 供 Agent 在写文案或规划分镜前了解素材库的实际画面内容。
+pub(crate) fn get_library_visual_overview_for_agent(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<serde_json::Value, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT metadata_json FROM assets \
+             WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) \
+             AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 \
+             AND kind = 'video' \
+             AND analysis_status = 'ready'",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![project_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut total = 0usize;
+    let mut with_visual = 0usize;
+    let mut tag_counts: HashMap<String, usize> = HashMap::new();
+    let mut scene_counts: HashMap<String, usize> = HashMap::new();
+    let mut ocr_sample: Vec<String> = Vec::new();
+    let mut sample_captions: Vec<String> = Vec::new();
+    let mut sample_narrative_roles: Vec<String> = Vec::new();
+    for row in rows {
+        let json_str = row.map_err(|error| error.to_string())?;
+        let meta: crate::models::TechnicalMetadata =
+            serde_json::from_str(&json_str).unwrap_or_default();
+        total += 1;
+        let mut saw_visual = false;
+        // 整片级视觉证据
+        for ev in &meta.visual_evidence {
+            saw_visual = true;
+            overview_tally_evidence(ev, &mut tag_counts, &mut scene_counts);
+            if sample_captions.len() < 40 {
+                if let Some(cap) = &ev.caption {
+                    sample_captions.push(cap.clone());
+                }
+            }
+            if sample_narrative_roles.len() < 40 {
+                if let Some(role) = &ev.narrative_role {
+                    sample_narrative_roles.push(role.clone());
+                }
+            }
+        }
+        // 片段级视觉证据
+        for seg in &meta.scene_segments {
+            if let Some(ev) = &seg.visual_evidence {
+                saw_visual = true;
+                overview_tally_evidence(ev, &mut tag_counts, &mut scene_counts);
+                if sample_captions.len() < 40 {
+                    if let Some(cap) = &ev.caption {
+                        sample_captions.push(cap.clone());
+                    }
+                }
+                if sample_narrative_roles.len() < 40 {
+                    if let Some(role) = &ev.narrative_role {
+                        sample_narrative_roles.push(role.clone());
+                    }
+                }
+            }
+        }
+        if saw_visual {
+            with_visual += 1;
+        }
+        for ocr in &meta.ocr_evidence {
+            let text = ocr.text.trim().to_owned();
+            if !text.is_empty() && ocr_sample.len() < 20 && !ocr_sample.contains(&text) {
+                ocr_sample.push(text);
+            }
+        }
+    }
+    // 按频次降序取 top 条目
+    let top_tags = top_n_by_count(&tag_counts, 30);
+    let top_scenes = top_n_by_count(&scene_counts, 20);
+    Ok(serde_json::json!({
+        "tool": "get_library_visual_overview",
+        "status": "ok",
+        "totalReadyVideos": total,
+        "withVisualEvidence": with_visual,
+        "frequentTags": top_tags,
+        "frequentScenes": top_scenes,
+        "sampleCaptions": sample_captions,
+        "sampleNarrativeRoles": sample_narrative_roles,
+        "sampleOcr": ocr_sample,
+    }))
+}
+
+/// Agent 工具：返回单条素材所有片段的完整视觉证据明细，供深挖某条素材时使用。
+pub(crate) fn get_asset_visual_detail_for_agent(
+    connection: &Connection,
+    project_id: &str,
+    asset_id: &str,
+) -> Result<serde_json::Value, String> {
+    let metadata_json: Option<String> = connection
+        .query_row(
+            "SELECT metadata_json FROM assets \
+             WHERE id = ?1 \
+             AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2) \
+             AND coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0",
+            params![asset_id, project_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some(json_str) = metadata_json else {
+        return Ok(serde_json::json!({
+            "tool": "get_asset_visual_detail",
+            "status": "failed",
+            "code": "asset_not_found",
+        }));
+    };
+    let meta: crate::models::TechnicalMetadata =
+        serde_json::from_str(&json_str).unwrap_or_default();
+
+    // 整片级证据
+    let asset_level: Vec<serde_json::Value> = meta
+        .visual_evidence
+        .iter()
+        .map(|ev| {
+            serde_json::json!({
+                "scope": "asset",
+                "timeMs": ev.time_ms,
+                "scene": ev.scene,
+                "subjects": ev.subjects,
+                "actions": ev.actions,
+                "products": ev.products,
+                "caption": ev.caption,
+                "narrativeRole": ev.narrative_role,
+                "shotType": ev.shot_type,
+                "cameraMotion": ev.camera_motion,
+            })
+        })
+        .collect();
+
+    // 片段级证据
+    let segment_level: Vec<serde_json::Value> = meta
+        .scene_segments
+        .iter()
+        .map(|seg| {
+            let ev_json = seg.visual_evidence.as_ref().map(|ev| {
+                serde_json::json!({
+                    "timeMs": ev.time_ms,
+                    "scene": ev.scene,
+                    "subjects": ev.subjects,
+                    "actions": ev.actions,
+                    "products": ev.products,
+                    "caption": ev.caption,
+                    "narrativeRole": ev.narrative_role,
+                    "shotType": ev.shot_type,
+                    "cameraMotion": ev.camera_motion,
+                })
+            });
+            serde_json::json!({
+                "segmentId": seg.id,
+                "startMs": seg.start_ms,
+                "endMs": seg.end_ms,
+                "durationMs": seg.end_ms - seg.start_ms,
+                "visualQualityScore": seg.visual_quality_score,
+                "visualEvidence": ev_json,
+            })
+        })
+        .collect();
+
+    let ocr: Vec<&str> = meta
+        .ocr_evidence
+        .iter()
+        .map(|o| o.text.as_str())
+        .collect();
+
+    Ok(serde_json::json!({
+        "tool": "get_asset_visual_detail",
+        "status": "ok",
+        "assetId": asset_id,
+        "durationMs": meta.duration_ms,
+        "width": meta.width,
+        "height": meta.height,
+        "hasAudio": meta.has_audio,
+        "visualAnalysisStatus": meta.visual_analysis_status,
+        "assetLevelEvidence": asset_level,
+        "segments": segment_level,
+        "ocr": ocr,
+    }))
+}
+
+/// 将一条 VisualEvidence 的 subjects/actions/products/scene 计入频次统计。
+fn overview_tally_evidence(
+    ev: &crate::models::VisualEvidence,
+    tag_counts: &mut HashMap<String, usize>,
+    scene_counts: &mut HashMap<String, usize>,
+) {
+    for tag in ev
+        .subjects
+        .iter()
+        .chain(ev.actions.iter())
+        .chain(ev.products.iter())
+    {
+        let t = tag.trim().to_lowercase();
+        if t.chars().count() >= 2 {
+            *tag_counts.entry(t).or_insert(0) += 1;
+        }
+    }
+    if let Some(scene) = &ev.scene {
+        let s = scene.trim().to_lowercase();
+        if s.chars().count() >= 2 {
+            *scene_counts.entry(s).or_insert(0) += 1;
+        }
+    }
+}
+
+/// 按频次降序取前 n 条，格式为 `{ "tag": "...", "count": N }`。
+fn top_n_by_count(
+    counts: &HashMap<String, usize>,
+    n: usize,
+) -> Vec<serde_json::Value> {
+    let mut items: Vec<(&String, &usize)> = counts.iter().collect();
+    items.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    items
+        .into_iter()
+        .take(n)
+        .map(|(tag, count)| serde_json::json!({ "tag": tag, "count": count }))
+        .collect()
+}
+
 #[tauri::command]
 /// 返回一个有界素材页和目录投影；目录筛选按"直属素材"语义执行，而不是递归混入后代。
 pub fn list_asset_page(

@@ -71,6 +71,25 @@ pub(crate) fn native_function_tools_for_request(
             Vec::new(),
         ),
         function_tool(
+            "get_library_visual_overview",
+            "Aggregate visual evidence across the whole library: frequent subjects, actions, scenes, sample captions and narrative roles. Use this before writing copy or planning a storyboard to understand what the footage actually shows.",
+            json!({}),
+            Vec::new(),
+        ),
+        function_tool(
+            "get_asset_visual_detail",
+            "Return full per-segment visual evidence for one asset: scene, subjects, actions, captions, narrative role, shot type, camera motion, and usable time ranges.",
+            json!({
+                "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Asset identifier from list_assets or search_assets."
+                }
+            }),
+            vec!["assetId"],
+        ),
+        function_tool(
             SEARCH_ASSETS,
             "Filter the full current-project library by text, kind, duration, rating, tag, or collection. Returns one page plus total and nextOffset.",
             json!({

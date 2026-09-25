@@ -17,6 +17,7 @@ pub mod visual;
 // library：目录投影与 Agent 列表查询
 pub(crate) use library::{
     asset_public_folder_metadata, asset_safe_directory, list_assets_for_agent,
+    get_library_visual_overview_for_agent, get_asset_visual_detail_for_agent,
 };
 // analysis：分析队列与恢复
 pub(crate) use analysis::{
