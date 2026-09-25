@@ -1881,6 +1881,7 @@ mod tests {
             target_duration_ms: 84_000,
             spoken_script: String::new(),
             script_mode: "full_script".to_owned(),
+            shot_length_hint: String::new(),
             beats: (0..12)
                 .map(|index| StoryboardBeat {
                     id: format!("beat-{index}"),
@@ -1915,6 +1916,7 @@ mod tests {
             target_duration_ms: 12_000,
             spoken_script: "工厂里正在生产。".to_owned(),
             script_mode: "full_script".to_owned(),
+            shot_length_hint: String::new(),
             beats: beats.clone(),
         };
         assert!(
@@ -1941,6 +1943,7 @@ mod tests {
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![StoryboardBeat {
                 id: "a".to_owned(),
                 purpose: "p".to_owned(),
@@ -1966,6 +1969,7 @@ mod tests {
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![StoryboardBeat {
                 id: "a".to_owned(),
                 purpose: "p".to_owned(),
@@ -1986,6 +1990,7 @@ mod tests {
             target_duration_ms: 30_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: (0..4)
                 .map(|index| StoryboardBeat {
                     id: format!("b{index}"),
@@ -2008,6 +2013,7 @@ mod tests {
             target_duration_ms: 60_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![StoryboardBeat {
                 id: "a".to_owned(),
                 purpose: "p".to_owned(),
@@ -2032,6 +2038,7 @@ mod tests {
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![
                 StoryboardBeat {
                     id: "a".to_owned(),
@@ -2084,6 +2091,7 @@ mod tests {
             target_duration_ms: 12_000,
             spoken_script: String::new(),
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![StoryboardBeat {
                 id: "a".to_owned(),
                 purpose: "p".to_owned(),
@@ -2248,6 +2256,7 @@ mod tests {
             target_duration_ms,
             spoken_script: "script".to_owned(),
             script_mode: "full_script".to_owned(),
+            shot_length_hint: String::new(),
             beats: (0..count)
                 .map(|index| StoryboardBeat {
                     id: format!("beat-{index}"),

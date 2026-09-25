@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] implemented_unverified（2026-09-25）：用户对单镜长短的原话偏好经 `shotLengthHint` 从 Phase 1 透传到 Phase 3，区分快切与长镜；`default` 逐字保持改造前行为。编译、142 项 storyboard 测试与 harness 通过，待真实模型回合验收。见 docs/changes/2026-09-25-shot-length-hint.md。
 - [ ] implemented_unverified（2026-09-25）：Agent 最后一个模型步骤改为只总结已确认产物与未完成事项，避免预览已生成后继续多轮读工具而落入步骤上限。单元回归和 Release 编译通过；重建版桌面读取既有演示项目成功，最后一步路径待真实模型回合触发。
 - [ ] 实施中（2026-09-24）：将桌面应用对外品牌更名为 FellowCut，保留应用标识、数据库和凭据服务以兼容本机旧数据；构建并验收更名安装包。网站在独立仓库实施。
 - [ ] implemented_unverified（2026-09-24）：修复发送时界面短暂卡住。任务归属模型请求与对话提交在后台工作线程执行，发送时显示任务归属状态；待真实桌面交互验收。见 docs/changes/2026-09-24-send-ui-responsiveness.md。

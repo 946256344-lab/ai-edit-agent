@@ -48,7 +48,53 @@ pub struct NarrativeStructure {
     /// 完整口播原文（仅 full_script）。模型从 brief 抽出应照念的文案，不得改写。
     #[serde(default)]
     pub spoken_script: String,
+    /// 用户对单镜长短的偏好（short / default / long）；旧记录与模型瞎写都落回 default。
+    #[serde(default)]
+    pub shot_length_hint: String,
     pub beats: Vec<StoryboardBeat>,
+}
+
+/// 单镜长短偏好：只影响 Phase 3 的每拍时长上下界与提示词，不改任何硬约束。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShotLengthHint {
+    Short,
+    Default,
+    Long,
+}
+
+impl ShotLengthHint {
+    /// 每拍成片时长的下限/上限（毫秒）。Default 逐字等于改造前的 clamp(1_200, 6_000)。
+    pub(crate) fn duration_bounds(self) -> (i64, i64) {
+        match self {
+            ShotLengthHint::Short => (900, 2_500),
+            ShotLengthHint::Default => (1_200, 6_000),
+            ShotLengthHint::Long => (2_000, 8_000),
+        }
+    }
+
+    /// 给模型看的节奏说明；Default 保持原文案，避免旧行为漂移。
+    pub(crate) fn prompt_line(self) -> &'static str {
+        match self {
+            ShotLengthHint::Short => {
+                "The user asked for a fast cut. Prefer the shortest clip that still covers requiredVisual, \
+                and prefer splitting this beat across 2-3 distinct clips over holding one shot."
+            }
+            ShotLengthHint::Default => "Picture shots should last about 2-3 seconds.",
+            ShotLengthHint::Long => {
+                "The user asked for longer, calmer shots. Prefer ONE clip held longer; do not split this beat \
+                unless two clips honestly cover different parts of requiredVisual."
+            }
+        }
+    }
+}
+
+/// 宽松解析模型的 shotLengthHint：不认识的值不报错、不打回重试，落回 default。
+pub(crate) fn normalize_shot_length_hint(value: &str) -> ShotLengthHint {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "short" | "fast" | "quick" | "snappy" => ShotLengthHint::Short,
+        "long" | "slow" | "calm" | "relaxed" => ShotLengthHint::Long,
+        _ => ShotLengthHint::Default,
+    }
 }
 
 /// Phase 2 输出：粗略 storyboard（每个 beat 一个 shot）
@@ -72,6 +118,9 @@ pub struct RoughStoryboard {
     pub summary: String,
     pub target_duration_ms: i64,
     pub script_mode: String,
+    /// 用户对单镜长短的偏好，从 Phase 1 透传到 Phase 3 算时长；旧记录缺省为 default。
+    #[serde(default)]
+    pub(crate) shot_length_hint: String,
     pub beats: Vec<StoryboardBeat>,
     pub uncovered_beat_ids: Vec<String>,
     pub shots: Vec<StoryboardShot>,
@@ -116,6 +165,12 @@ pub(crate) fn phase1_generate_narrative(
         Prefer a focused promo over a 60-90s essay; do not pad empty time. This is guidance, not a hard cap."
             .to_owned()
     };
+    // shotLengthHint：用户对单镜长短的原话偏好。只在这一维表达，别替用户决定节奏。
+    mode_instructions.push_str(
+        "\nshotLengthHint: \"short\" when the user asks for fast cuts / 快节奏 / 别拖 / 多切几个镜头, \
+        \"long\" when they ask for longer or calmer shots / 慢一点 / 长镜头 / 别切太碎, \
+        otherwise \"default\". Judge this from the user's own words about pacing; do not guess from the topic.",
+    );
     if let Some(duration_ms) = voiceover_duration_ms {
         let beats = super::expected_beat_count(duration_ms);
         let secs = (duration_ms + 500) / 1000;
@@ -144,7 +199,7 @@ pub(crate) fn phase1_generate_narrative(
 
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
-        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), and beats.\n\
+        Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), shotLengthHint (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn, about 2-3 seconds. Do not collapse a whole product act (intro / problem / proof / CTA) into one beat — one picture shot is cut per beat, so a 6-second beat becomes a 6-second hold.\n\
@@ -481,6 +536,7 @@ pub(crate) fn phase2_rough_shot_selection(
         summary: narrative.summary.clone(),
         target_duration_ms: narrative.target_duration_ms,
         script_mode: narrative.script_mode.clone(),
+        shot_length_hint: narrative.shot_length_hint.clone(),
         beats: narrative.beats.clone(),
         uncovered_beat_ids,
         shots,
@@ -1092,6 +1148,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 4_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             spoken_script: String::new(),
             beats: vec![beat()],
         };
@@ -1272,6 +1329,7 @@ mod tests {
             summary: String::new(),
             target_duration_ms: 6000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: vec![],
             shots: vec![shot("whole")],
@@ -1309,6 +1367,7 @@ mod tests {
             summary: String::new(),
             target_duration_ms: 3_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: vec![],
             shots: vec![shot("asset-0")],
@@ -1406,6 +1465,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot("selected")],
@@ -1443,6 +1503,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one, beat_two],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_a.clone(), rough_b],
@@ -1490,6 +1551,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_shot.clone()],
@@ -1526,6 +1588,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_shot.clone()],
@@ -1561,6 +1624,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_shot.clone()],
@@ -1605,6 +1669,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 8_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one.clone(), beat_two.clone()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot_b.clone(), shot_c.clone()],
@@ -1669,6 +1734,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 12_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one.clone(), beat_two.clone(), beat_three.clone()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot_b.clone(), shot_c.clone(), shot_e.clone()],
@@ -1735,6 +1801,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 8_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one.clone(), beat_two.clone()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot_b.clone(), shot_c.clone()],
@@ -1788,6 +1855,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 8_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one.clone(), beat_two.clone()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![shot_a.clone(), shot_c.clone()],
@@ -1834,6 +1902,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one, beat_two],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_a.clone(), rough_b],
@@ -1873,6 +1942,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat_one, beat_two],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_a, rough_b],
@@ -1906,6 +1976,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat()],
             uncovered_beat_ids: Vec::new(),
             shots: vec![rough_shot],
@@ -2210,6 +2281,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat(), uncovered_beat],
             uncovered_beat_ids: vec!["beat-2".to_owned()],
             shots: vec![rough_shot.clone()],
@@ -2247,6 +2319,7 @@ mod tests {
             summary: "summary".to_owned(),
             target_duration_ms: 1_000,
             script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
             beats: vec![beat(), uncovered_beat],
             uncovered_beat_ids: vec!["beat-2".to_owned()],
             shots: vec![rough_shot.clone()],
@@ -2660,6 +2733,8 @@ fn select_one_beat(
         .map(|(beat_id, asset_id, segment_id)| format!("{beat_id}:{asset_id}:{segment_id}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let pacing_line =
+        normalize_shot_length_hint(&rough.shot_length_hint).prompt_line();
     let prompt = format!(
         "Brief: {brief}\n\
         Narrative title/summary/target: {} / {} / {}ms\n\
@@ -2681,7 +2756,7 @@ fn select_one_beat(
         Hard rule: do not pick a candidate visually similar to an already selected shot.\n\
         Hard rule: no single assetId may appear in more than 40% of the final shot list.\n\
         Choose ONE candidate. A second distinct, non-similar asset is allowed only when two clips honestly fit; never pad.\n\
-        Picture shots should last about 2-3 seconds.\n\
+        {pacing_line}\n\
         matchLevel must be 'direct' when the chosen frames visibly cover requiredVisual, otherwise 'contextual'.\n\
         Return JSON only: {{\"selections\":[{{\"beatId\":\"{}\",\"candidateIndexes\":[0],\"uncovered\":false,\"matchLevel\":\"contextual\",\"narration\":null}}]}}\n\
         Include exactly one selection object for this beat. Omit narration unless moving words to a neighbor beat.",
@@ -2922,6 +2997,8 @@ fn assemble_phase3_selection(
     let mut uncovered = rough.uncovered_beat_ids.clone();
     let mut shots = Vec::new();
     let mut order_index = 1_i64;
+    let (min_shot_ms, max_shot_ms) =
+        normalize_shot_length_hint(&rough.shot_length_hint).duration_bounds();
     let per_beat_budget = if rough.beats.is_empty() {
         rough.target_duration_ms
     } else {
@@ -2954,7 +3031,8 @@ fn assemble_phase3_selection(
             let candidate = pool.and_then(|pool| pool.candidates.get(*index)).ok_or_else(|| {
                 format!("Phase 3 candidateIndex {index} is outside beat '{beat_id}' candidate pool.")
             })?;
-            let duration = (per_beat_budget / part_count.max(1)).clamp(1_200, 6_000);
+            let duration =
+                (per_beat_budget / part_count.max(1)).clamp(min_shot_ms, max_shot_ms);
             let (provisional_start, provisional_end) =
                 if let Some(segment) = candidate.segment.as_ref() {
                     (segment.start_ms, segment.end_ms.max(segment.start_ms + 1))

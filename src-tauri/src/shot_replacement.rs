@@ -292,6 +292,7 @@ pub async fn generate_shot_recommendations(
             target_duration_ms: ctx.storyboard.target_duration_ms,
             script_mode: ctx.storyboard.script_mode.clone(),
             spoken_script: String::new(),
+            shot_length_hint: String::new(),
             beats: ctx.storyboard.beats.clone(),
         };
         let rough = phases::phase2_rough_shot_selection(
@@ -392,6 +393,7 @@ pub async fn prepare_shot_replacement(
             summary: selected.summary.clone(),
             target_duration_ms: duration,
             script_mode: selected.script_mode.clone(),
+            shot_length_hint: String::new(),
             beats: selected.beats.clone(),
             uncovered_beat_ids: Vec::new(),
             shots: selected.shots.clone(),
