@@ -50,6 +50,7 @@ import {
 } from './lib/local-store'
 import type { AgentEditEvent, ConversationTurnResult, StoredAgentTask, StoredEditingSession, StoredMessage, StoredProject, TaskRouteResult } from './lib/local-store'
 import { toMessage } from './lib/message'
+import { describeSendError } from './lib/send-error'
 import { analysisAmbientStatus, analysisSummary } from './lib/asset-analysis'
 import { formatClockTime, getLocale, messages as uiMessages, useI18n } from './lib/i18n'
 
@@ -505,24 +506,7 @@ function App() {
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.error('[App] sendMessage failed:', errorMessage, error)
       const errorCopy = uiMessages().app.errors
-      let userMessage = context
-        ? errorCopy.requestFailed
-        : errorCopy.prepareFailed
-
-      // 提供更具体的错误诊断
-      if (errorMessage.includes('Task resolver model is unavailable')) {
-        userMessage = errorCopy.modelUnavailable
-      } else if (errorMessage.includes('Custom API credential read failed')) {
-        userMessage = errorCopy.credentialFailed
-      } else if (errorMessage.includes('OAuth not logged in')) {
-        userMessage = errorCopy.oauthExpired
-      } else if (errorMessage.includes('Current local project could not be verified')) {
-        userMessage = errorCopy.projectMissing
-      } else if (errorMessage.includes('Task Resolver did not')) {
-        userMessage = errorCopy.routeFailed(errorMessage)
-      }
-
-      setComposerNotice(userMessage)
+      setComposerNotice(describeSendError(errorMessage, context !== null))
       if (context) {
         try {
           await appendStoredMessage(context.conversationId, context.sessionId, 'agent', errorCopy.agentMessage)

@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-26，claude/send-error-real-cause）：发送失败显示真实原因。任务归属的模型请求失败带稳定码前缀（`provider_timeout` 等），前端 `describeSendError` 按码给出超时、连不上、凭据被拒、限流、服务端错误等具体提示，兜底附脱敏原因摘录，不再只说「无法准备当前剪辑任务」。cargo check、lint、tsc、i18n 通过；待桌面实测。见 docs/changes/2026-09-26-send-error-real-cause.md。
 - [ ] implemented_unverified（2026-09-25，claude/keen-driscoll-de8c99）：故事版切换显示派生版来源。`StoryboardVersion` 加可选 `derivedFromVersionId` / `changedBeatIds`，下拉项显示「v5（改自 v4，第 3 拍）」；缺字段按普通版本显示。选择器移入 `StoryboardVersionPicker` 组件。lint、tsc（本次文件）、i18n、文档同步检查通过；后端 `reselect_shots` / `refine_shot_ranges` 落地后待真实派生版验收。见 docs/changes/2026-09-25-derived-storyboard-version-label.md。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
 - [ ] 待修（2026-09-25）：`npm run harness:check` 在 master 上已失败：`src/App.tsx` 有 15 个 `useState`，超过预算 14（14ad3d7 新增 `pendingUserMessage`）。需把发送相关状态移入 controller，不应提高预算。

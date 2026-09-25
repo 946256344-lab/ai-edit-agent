@@ -113,6 +113,12 @@ pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailure
     }
 }
 
+/// 同步返回给前端的 Provider 失败加上 `{code}: ` 前缀，前端按稳定码给出具体原因，
+/// 不必匹配随系统语言变化的传输文案。原文保留在码之后，由前端脱敏后摘录。
+pub(crate) fn with_model_failure_code(error: String) -> String {
+    format!("{}: {error}", classify_model_request_failure(&error).code)
+}
+
 fn provider_http_status(error: &str) -> Option<u16> {
     // 只认错误后缀 `:HTTP {status}`，避免 Base URL 里的 HTTP/HTTPS 被当成状态码。
     let marker = ":HTTP ";
