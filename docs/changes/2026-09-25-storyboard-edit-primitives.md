@@ -71,7 +71,7 @@
 - `cargo test --lib -- agentloop::`：`ordinary_question_returns_message_without_tool_call` 失败，为改动前已存在的问题：`get_library_visual_overview` / `get_asset_visual_detail` 在工具目录里但不在 `NATIVE_TOOL_NAMES` 白名单，已另开任务修复。
 - 契约：`src/lib/agent-tools.ts` 与 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json` 补两个工具；`cargo test --test agent_contract_assets` 通过（fixture 工具数断言改为 31，原先已因视觉工具停在 27 而失败）；`check-agent-contracts`、`check-doc-sync`、`check-i18n-literals`、`npm run lint` 通过。
 - `npm run harness:check` 仍停在改动前已存在的 `src/App.tsx` useState 预算问题，本任务未触碰前端组件。
-- 真实桌面与真实模型回合待验收（见上方验收场景）。
+- 真实桌面（2026-09-25 23:53 / 23:55，agnes-2.5-flash）：`reselect_shots` 只把第 3 镜换成另一素材（v5，changedBeatIds=["precision-testing-equipment"]）；`refine_shot_ranges` 只把第 2 镜入出点后移约 6.8 秒、素材不变（v6 改自 v5）。两次前后时间线对比：7 镜、总长 18081ms、被改镜头的时间线槽位不变，其余镜头、配音、字幕、音乐轨逐字不变。场景 1、3 通过；场景 2、4、5 因模型服务超时待验。
 
 ## 顺带发现
 
