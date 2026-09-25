@@ -499,6 +499,8 @@ export const zhCN = {
     shot: (index: number) => `镜头 ${index}`,
     currentShotLine: (shot: string, seconds: string) => `当前镜头 ${shot} · ${seconds} 秒`,
     waitingShot: '等待镜头',
+    showShots: '展开镜头条',
+    hideShots: '收起镜头条',
     replaceCurrent: '替换当前镜头',
     undo: '撤销',
     redo: '重做',

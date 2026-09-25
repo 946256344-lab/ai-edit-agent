@@ -505,6 +505,8 @@ export const en: typeof zhCN = {
     shot: (index: number) => `Shot ${index}`,
     currentShotLine: (shot: string, seconds: string) => `Shot ${shot} · ${seconds}s`,
     waitingShot: 'Waiting for shots',
+    showShots: 'Show shots',
+    hideShots: 'Hide shots',
     replaceCurrent: 'Replace this shot',
     undo: 'Undo',
     redo: 'Redo',

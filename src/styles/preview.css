@@ -1,4 +1,4 @@
-/* 粗剪预览：白色卡片里的浅灰舞台、按镜头分段的播放条、6 格镜头条与镜头替换面板。 */
+/* 粗剪预览：白色卡片里的浅灰舞台占满高度，下方一行镜头计数与操作；6 格镜头条默认收起，点计数展开；镜头替换面板。 */
 
 .rough-preview {
   display: flex; flex-direction: column; gap: 14px; min-width: 0; min-height: 0; overflow: hidden;
@@ -48,12 +48,19 @@
 .cut-player:fullscreen { justify-content: center; background: #000; }
 .cut-player:fullscreen video { box-shadow: none; }
 
-/* 当前镜头与镜头条：一屏 6 格，可横向滑动。 */
-.preview-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
-.preview-tools > div { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
-.current-shot { font-size: var(--text-sm); font-weight: 500; color: var(--text); }
-.preview-tools .outline-button { min-height: 32px; padding: 0 12px; font-size: var(--text-xs); }
-.shot-strip { display: flex; gap: 8px; flex-shrink: 0; margin: -4px; padding: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
+/* 操作行与镜头条：一行放镜头计数和操作，窄时计数先省略；镜头条一屏 6 格，可横向滑动。 */
+.preview-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; min-width: 0; }
+.preview-tools > div { display: flex; align-items: center; flex-shrink: 0; gap: 2px; }
+.current-shot { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: 500; color: var(--text); }
+.preview-tools .outline-button { min-height: 32px; padding: 0 10px; font-size: var(--text-xs); }
+.preview-tools .icon-button.is-stale { color: var(--accent); background: var(--accent-wash); }
+.shot-toggle { display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 32px; margin-left: -8px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 500; white-space: nowrap; }
+.shot-toggle span { overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.shot-toggle .workspace-icon { width: 16px; height: 16px; flex-basis: 16px; color: var(--text-2); }
+.shot-toggle:hover { background: var(--fill); }
+.shot-toggle[aria-expanded="true"] { background: var(--accent-wash); color: var(--accent-hover); }
+.shot-toggle[aria-expanded="true"] .workspace-icon { color: var(--accent); }
+.shot-strip { display: flex; gap: 8px; flex-shrink: 0; margin: -4px; padding: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; animation: message-in var(--dur-enter) var(--ease); }
 .shot-strip::-webkit-scrollbar { display: none; }
 .shot-strip button { display: flex; flex-direction: column; gap: 6px; flex: 0 0 calc((100% - 40px) / 6); min-width: 36px; padding: 0; border: 0; background: transparent; color: var(--text-2); scroll-snap-align: start; }
 .shot-thumbnail { display: grid; place-items: center; width: 100%; aspect-ratio: 9 / 16; overflow: hidden; border-radius: var(--radius-sm); background: var(--fill-strong); transition: box-shadow var(--dur-fast) ease; }

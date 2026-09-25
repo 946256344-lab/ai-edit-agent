@@ -19,6 +19,8 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   const pendingDialog = useRef<HTMLDialogElement>(null)
   const strip = useRef<HTMLDivElement>(null)
   const [playhead, setPlayhead] = useState(0)
+  // 镜头条默认收起，让出空间给画面；点镜头计数展开。
+  const [showStrip, setShowStrip] = useState(false)
   const { shot, prepared, phase, recommendations, selectedId } = replacement
   const busy = phase === 'saving' || phase === 'rendering' || artifact.busy.renderingPreview || artifact.busy.delivering || agentBusy
   const clips = artifact.timeline?.clips ?? []
@@ -32,10 +34,10 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
       ? t.backend.candidateTooShort((shotMs / 1000).toFixed(1))
       : t.backend.candidateUnavailable
     : null
-  // 镜头条一屏只放 6 个：播放到哪一镜，就把它滚到可见位置。
+  // 镜头条一屏只放 6 个：展开时播放到哪一镜，就把它滚到可见位置。
   useEffect(() => {
     strip.current?.querySelector<HTMLElement>('button.selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [currentClip?.shotIndex])
+  }, [currentClip?.shotIndex, showStrip])
   useEffect(() => {
     if (replacement.pending) pendingDialog.current?.showModal()
     else pendingDialog.current?.close()
@@ -72,10 +74,12 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
             {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} segments={stalePreview ? [] : clips.map((clip) => ({ startMs: clip.timelineStartMs, endMs: clip.timelineEndMs }))} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? copy.makingFirstCut : copy.firstCutFromChat}</h3><p>{copy.emptyLine1}<br />{copy.emptyLine2}</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? copy.renderPreview : copy.createTimeline}</button>}</div>}
           </div>
           <div className="preview-tools">
-            <span className="current-shot">{currentClip ? copy.currentShotLine(String(currentClip.shotIndex).padStart(2, '0'), ((currentClip.timelineEndMs - currentClip.timelineStartMs) / 1000).toFixed(1)) : copy.waitingShot}</span>
-            <div><button className="outline-button" disabled={!currentClip || busy || (currentClip.clipKind ?? 'source') !== 'source'} onClick={() => { if (currentClip) actions.replacement.open(currentClip) }}>{copy.replaceCurrent}</button><button className="text-button icon-button" title={copy.undo} aria-label={copy.undo} disabled={!replacement.canUndo || busy} onClick={actions.replacement.undo}><WorkspaceIcon name="undo" /></button><button className="text-button icon-button" title={copy.redo} aria-label={copy.redo} disabled={!replacement.canRedo || busy} onClick={actions.replacement.redo}><WorkspaceIcon name="redo" /></button>{artifact.timeline && <button className="text-button" disabled={busy} onClick={actions.artifact.renderPreview}>{copy.updatePreview}</button>}</div>
+            {currentClip
+              ? <button className="shot-toggle" aria-expanded={showStrip} aria-controls="preview-shot-strip" title={`${copy.currentShotLine(String(currentClip.shotIndex).padStart(2, '0'), ((currentClip.timelineEndMs - currentClip.timelineStartMs) / 1000).toFixed(1))} · ${showStrip ? copy.hideShots : copy.showShots}`} onClick={() => setShowStrip((open) => !open)}><WorkspaceIcon name="film" /><span>{String(currentClip.shotIndex).padStart(2, '0')}/{String(clips.length).padStart(2, '0')}</span></button>
+              : <span className="current-shot">{copy.waitingShot}</span>}
+            <div><button className="outline-button" disabled={!currentClip || busy || (currentClip.clipKind ?? 'source') !== 'source'} onClick={() => { if (currentClip) actions.replacement.open(currentClip) }}>{copy.replaceCurrent}</button><button className="text-button icon-button" title={copy.undo} aria-label={copy.undo} disabled={!replacement.canUndo || busy} onClick={actions.replacement.undo}><WorkspaceIcon name="undo" /></button><button className="text-button icon-button" title={copy.redo} aria-label={copy.redo} disabled={!replacement.canRedo || busy} onClick={actions.replacement.redo}><WorkspaceIcon name="redo" /></button>{artifact.timeline && <button className={`text-button icon-button ${stalePreview ? 'is-stale' : ''}`} title={copy.updatePreview} aria-label={copy.updatePreview} disabled={busy} onClick={actions.artifact.renderPreview}><WorkspaceIcon name="refresh" /></button>}</div>
           </div>
-          <div className="shot-strip" ref={strip} aria-label={copy.stripAria}>
+          {showStrip && clips.length > 0 && <div className="shot-strip" id="preview-shot-strip" ref={strip} aria-label={copy.stripAria}>
             {clips.map((clip) => {
               const image = artifact.shotImages[clip.shotIndex]
               return <button key={clip.shotIndex} className={clip.shotIndex === currentClip?.shotIndex ? 'selected' : ''} onClick={() => { setPlayhead(clip.timelineStartMs); if (video.current) video.current.currentTime = clip.timelineStartMs / 1000 }} aria-label={copy.locateShot(clip.shotIndex)} aria-pressed={clip.shotIndex === currentClip?.shotIndex} title={image?.displayName ?? copy.shot(clip.shotIndex)}>
@@ -83,7 +87,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
                 <span className="shot-caption">{String(clip.shotIndex).padStart(2, '0')}</span>
               </button>
             })}
-          </div>
+          </div>}
         </>
       )}
       {(replacement.notice || stalePreview || artifact.deliveryNotice || artifact.thumbnailNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>{copy.stalePreview}</p>}{artifact.deliveryNotice && <p>{artifact.deliveryNotice}</p>}{artifact.thumbnailNotice && <p>{artifact.thumbnailNotice}</p>}</div>}
