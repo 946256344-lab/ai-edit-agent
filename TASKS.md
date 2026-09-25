@@ -4,7 +4,7 @@
 
 - [ ] implemented_unverified（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5，默认排除当前素材）与 `refine_shot_ranges`（只走 P4→P5），其余镜头、配音、字幕冻结，拍时长取当前时间线，同事务写派生 storyboard + 新 timeline 并出预览；`generate_storyboard` 保留为默认流程。cargo check、storyboard/tools 测试通过；待真实桌面回合验收。前端派生版本标注、手动换镜召回升级另开任务。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。
 - [ ] 待修（2026-09-25）：Phase 3 增量重跑从未生效。`phase3_select` 无修复包时 `beats_named_in_repair` 返回全部拍，`prior_shots` 复用分支走不到；有修复包时又不加载 `prior_shots`。需决定是修复还是删除该路径（局部编辑已由 `reselect_shots` 承担）。
-- [ ] 待修（2026-09-25）：`get_library_visual_overview` / `get_asset_visual_detail` 不在 `NATIVE_TOOL_NAMES` 白名单，模型调用被拒，`ordinary_question_returns_message_without_tool_call` 在 master 上失败。已另开任务。
+- [ ] implemented_unverified（2026-09-25，claude/keen-driscoll-de8c99）：故事版切换显示派生版来源。`StoryboardVersion` 加可选 `derivedFromVersionId` / `changedBeatIds`，下拉项显示「v5（改自 v4，第 3 拍）」；缺字段按普通版本显示。选择器移入 `StoryboardVersionPicker` 组件。lint、tsc（本次文件）、i18n、文档同步检查通过；后端 `reselect_shots` / `refine_shot_ranges` 落地后待真实派生版验收。见 docs/changes/2026-09-25-derived-storyboard-version-label.md。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
 - [ ] 待修（2026-09-25）：`npm run harness:check` 在 master 上已失败：`src/App.tsx` 有 15 个 `useState`，超过预算 14（14ad3d7 新增 `pendingUserMessage`）。需把发送相关状态移入 controller，不应提高预算。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：助手消息按 Markdown 渲染（`react-markdown` + `remark-gfm`），保留单个换行；不执行原始 HTML、不加载远程图片，外部链接交给系统浏览器。仿真回复渲染与链接不跳转已核对；真实桌面点链接待验收。见 docs/changes/2026-09-25-message-markdown.md。
@@ -18,7 +18,7 @@
 - [ ] implemented_unverified（2026-09-25）：五处 storyboard pipeline 智能化改进：①`StoryboardBeat` 新增 per-beat `paceHint`（short/default/long），Phase 1 模型生成叙事时按 beat 写节奏，Phase 3 优先使用 per-beat 值覆盖全局 `shotLengthHint`；②Phase 2 低分自适应扩池，最高分低于阈值时静默扩展到 12 条候选；③Phase 3 已选镜头上下文携带 beat purpose，帮助模型判断叙事连贯性；④Phase 3 低分池预警，明确告知模型库存匹配度有限；⑤Phase 4 Pass C 早停，全部 Pass B 镜头收敛时跳过 Pass C 省去冗余精修。编译通过，既有单元测试全绿；待真实模型回合验收。
 - [ ] implemented_unverified（2026-09-25）：用户对单镜长短的原话偏好经 `shotLengthHint` 从 Phase 1 透传到 Phase 3，区分快切与长镜；`default` 逐字保持改造前行为。编译、142 项 storyboard 测试与 harness 通过，待真实模型回合验收。见 docs/changes/2026-09-25-shot-length-hint.md。
 - [ ] implemented_unverified（2026-09-25）：Agent 最后一个模型步骤改为只总结已确认产物与未完成事项，避免预览已生成后继续多轮读工具而落入步骤上限。单元回归和 Release 编译通过；重建版桌面读取既有演示项目成功，最后一步路径待真实模型回合触发。
-- [ ] 实施中（2026-09-24）：将桌面应用对外品牌更名为 FellowCut，保留应用标识、数据库和凭据服务以兼容本机旧数据；构建并验收更名安装包。网站在独立仓库实施。
+- [ ] 实施中（2026-09-25，claude/product-naming-voycut-3663a1）：对外品牌由 FellowCut 改为 Voycut（按设计稿字标写法），保留应用标识、数据库、凭据服务与语言偏好存储键以兼容本机旧数据；图标待设计源文件到位后更换；构建并验收更名安装包。网站在独立仓库实施。见 docs/changes/2026-09-25-rename-to-voycut.md。
 - [ ] implemented_unverified（2026-09-24）：修复发送时界面短暂卡住。任务归属模型请求与对话提交在后台工作线程执行，发送时显示任务归属状态；待真实桌面交互验收。见 docs/changes/2026-09-24-send-ui-responsiveness.md。
 - [x] 已实现（2026-09-24）：分析失败自动补跑；画面识别最后不足 6 段（如 4 段）也立即送审。瞬时网络/超时最多补 3 次，技术超时最多 2 次；用户跳过与不适用不补。见 docs/changes/2026-09-24-analysis-auto-retry.md。
 - [x] 已实现（2026-09-24）：Phase 3 可从全部 9 条候选中选镜；项目设置可调综合分优先名额（默认 5/9），其余从画面、语义、关键词分项高分候选补入。见 docs/changes/2026-09-24-candidate-recall-mix.md。

@@ -9,14 +9,14 @@ async function waitForTarget(timeoutMs = 30000) {
   while (Date.now() < deadline) {
     try {
       const targets = await fetch(endpoint).then((response) => response.json())
-      const target = targets.find((candidate) => candidate.title === 'FellowCut')
+      const target = targets.find((candidate) => candidate.title === 'Voycut')
       if (target) return target
     } catch {
       // WebView CDP is not listening yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  throw new Error('FellowCut WebView target was not found.')
+  throw new Error('Voycut WebView target was not found.')
 }
 
 const target = await waitForTarget()

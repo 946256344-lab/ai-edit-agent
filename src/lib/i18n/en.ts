@@ -656,7 +656,7 @@ export const en: typeof zhCN = {
       routeFailed: (detail: string) => `Task matching failed: ${detail}`,
       agentMessage: 'This run did not complete and existing results were not changed. Please retry, or tell me which media and clips to keep.',
     },
-    browserTitle: 'Please run FellowCut in the Windows desktop app',
+    browserTitle: 'Please run Voycut in the Windows desktop app',
     browserBody: 'Browser mode cannot access local projects, media files, FFmpeg or AI credentials, so it cannot be used for editing tests.',
     newProject: 'New project',
     startEditing: 'Start editing',
@@ -665,5 +665,14 @@ export const en: typeof zhCN = {
     making: 'Making your rough cut…',
     idle: 'Import media and start your next story',
     storyboard: 'Storyboard',
+    storyboardVersion: (version: number) => `v${version}`,
+    // 派生版说明：来源版本找不到时省略，改动的拍找不到位置时只报数量。
+    derivedStoryboardVersion: (version: number, parentVersion: number | null, beatPositions: number[] | null, changedCount: number) => {
+      const parts = [
+        parentVersion === null ? null : `from v${parentVersion}`,
+        beatPositions ? `${beatPositions.length === 1 ? 'beat' : 'beats'} ${beatPositions.join(', ')}` : changedCount > 0 ? `${plural(changedCount, 'beat')} changed` : null,
+      ].filter(Boolean)
+      return `v${version} (${parts.length > 0 ? parts.join(', ') : 'edited'})`
+    },
   },
 }

@@ -2,7 +2,7 @@
 name = "assembly-video-agent"
 version = "0.1.2"
 description = "A Windows-first local video editing Agent"
-authors = ["FellowCut"]
+authors = ["Voycut"]
 license = "UNLICENSED"
 edition = "2021"
 rust-version = "1.77.2"

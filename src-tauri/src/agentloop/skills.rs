@@ -1669,7 +1669,7 @@ pub(super) fn apply_skill(
             let draft_name = Path::new(&draft.draft_directory)
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("FellowCut");
+                .unwrap_or("Voycut");
             let message = if draft.registration_status == "pending" {
                 format!("已生成剪映草稿\u{201c}{draft_name}\u{201d}，剪映正在运行，退出剪映后会自动完成注册。")
             } else {

@@ -44,6 +44,8 @@
 
 新增只读命令 `list_storyboard_versions` 与 `get_storyboard_version`。工作台记住当前打开的故事版；Agent 快照和 `get_storyboard` 使用该版本，不是永远最新一版。`generate_storyboard` 仍始终新建版本并切到新版。见 `docs/changes/2026-09-17-storyboard-versions.md`。
 
+`StoryboardVersion` 加性可选字段 `derivedFromVersionId?: string | null`（局部改镜所依据的故事版 id）与 `changedBeatIds?: string[]`（改动的拍）。旧版本与普通生成版本缺省或为 null；前端版本切换据此显示「v5（改自 v4，第 3 拍）」，来源不在已加载列表时省略来源，拍位置解析不到时只报数量。见 `docs/changes/2026-09-25-derived-storyboard-version-label.md`。
+
 ## 2026-09-17：生成后自动预览并新建剪映草稿
 
 公开 Tauri 命令不变。Agent `generate_storyboard` 在时间线有可播镜头时自动 `render_preview` 并 `create_jianying_draft`（只新建、不覆盖）。`qualityWarnings` 不再推迟预览。已有配音后禁止改旁白。见 `docs/changes/2026-09-17-auto-preview-jianying.md`。

@@ -194,6 +194,9 @@ export type StoryboardVersion = {
   uncoveredBeatIds: string[]
   shots: Array<{ orderIndex: number; cropFocus?: [number, number] | null; durationMs: number; purpose: string; onScreenText: string; assetId: string; sourceStartMs: number; sourceEndMs: number; reason: string; beatId: string; matchLevel: 'direct' | 'contextual'; segmentId?: string | null }>
   createdAt: number
+  // 局部改镜生成的派生版：来源版本与改动的拍。旧版本与未派生版本缺省或为 null，按普通版本展示。
+  derivedFromVersionId?: string | null
+  changedBeatIds?: string[]
 }
 
 export type TextAnimation = { templateId: string; durationMs: number; intensity: number }

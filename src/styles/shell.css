@@ -130,7 +130,7 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .cut-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .cut-meta p { margin: 0; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-strong); font-size: var(--text-xs); }
 .storyboard-version-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--text-xs); }
-.storyboard-version-picker select { min-width: 64px; height: 26px; padding: 0 8px; border: 0; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-strong); font-size: var(--text-xs); cursor: pointer; }
+.storyboard-version-picker select { min-width: 64px; max-width: 240px; height: 26px; padding: 0 8px; text-overflow: ellipsis; border: 0; border-radius: var(--radius-pill); background: var(--fill); color: var(--text-strong); font-size: var(--text-xs); cursor: pointer; }
 .deliver-port { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; flex-shrink: 0; }
 .deliver-port .storyboard-version-picker { gap: 8px; font-size: var(--text-sm); }
 .deliver-port .storyboard-version-picker select { min-width: 132px; height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--text-sm); }
