@@ -312,6 +312,7 @@ mod tests {
             visual_keywords: vec![],
             narration: narration.to_owned(),
             on_screen_text: String::new(),
+            ..Default::default()
         }
     }
 

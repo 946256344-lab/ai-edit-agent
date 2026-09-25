@@ -473,6 +473,7 @@ mod tests {
             visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         }
     }
 
@@ -583,6 +584,7 @@ mod tests {
             visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
         let ranked = rank_segment_candidates(
             vec![office, factory],
@@ -642,6 +644,7 @@ mod tests {
             ],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
         let ranked = rank_segment_candidates(
             vec![office, forklift],
@@ -682,6 +685,7 @@ mod tests {
             visual_keywords: vec!["battery".to_owned(), "modules".to_owned()],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
         let ranked = rank_segment_candidates(
             vec![bare, evidenced],
@@ -712,6 +716,7 @@ mod tests {
             visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
 
         let ranked = rank_segment_candidates(
@@ -827,6 +832,7 @@ mod tests {
             visual_keywords: vec!["cables".to_owned(), "tray".to_owned(), "orange".to_owned()],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
         let beat_clip = [1.0_f32, 0.0, 0.0];
         let ranked = rank_segment_candidates(

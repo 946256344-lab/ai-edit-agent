@@ -833,7 +833,7 @@ fn default_storyboard_split_role() -> String {
     "lead".to_owned()
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardBeat {
     pub id: String,
@@ -848,6 +848,9 @@ pub struct StoryboardBeat {
     /// 屏幕标记文案（key_message 主产物；full_script 可空）。
     #[serde(default)]
     pub on_screen_text: String,
+    /// 该 beat 的单镜节奏偏好（short / default / long）；空串时回退到全局 shotLengthHint。
+    #[serde(default)]
+    pub pace_hint: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

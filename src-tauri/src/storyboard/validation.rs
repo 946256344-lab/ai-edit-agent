@@ -85,6 +85,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: String::new(),
+                ..Default::default()
             }],
             uncovered_beat_ids: vec![],
             shots: vec![StoryboardShot {

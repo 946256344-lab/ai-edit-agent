@@ -604,6 +604,34 @@ impl Phase4Session {
         if self.pass_c_planned {
             return;
         }
+        // 早停：若所有 Pass B 完成的镜头均无 uncertain 且帧间距已足够密，跳过 Pass C。
+        let needs_any_c = self.pass_b_done.iter().any(|order| {
+            if self.pass_c_done.contains(order) {
+                return false;
+            }
+            if !self.repair_shots.is_empty() && !self.repair_shots.contains(order) {
+                return false;
+            }
+            if let Some((window, uncertain)) = self.pick_map.get(order) {
+                if *uncertain {
+                    return true;
+                }
+                let spacing = window.span_ms() / refine_frames.max(1) as i64;
+                return spacing > max_spacing_ms;
+            }
+            false
+        });
+        if !needs_any_c {
+            log::info!(
+                "Phase 4 Pass C skipped: all {} Pass-B shots are converged (no uncertain, spacing ≤ {}ms)",
+                self.pass_b_done.len(),
+                max_spacing_ms
+            );
+            self.pass_c_pending = HashSet::new();
+            self.pass_c_modes = HashMap::new();
+            self.pass_c_planned = true;
+            return;
+        }
         let mut pending = HashSet::new();
         let mut modes = HashMap::new();
         for (order, (window, uncertain)) in &self.pick_map {
@@ -1922,6 +1950,7 @@ mod tests {
                 visual_keywords: Vec::new(),
                 narration: "n".to_owned(),
                 on_screen_text: String::new(),
+                ..Default::default()
             }],
             uncovered_beat_ids: Vec::new(),
             shots,

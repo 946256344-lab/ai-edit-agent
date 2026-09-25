@@ -448,6 +448,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: "你好。".into(),
                 on_screen_text: String::new(),
+                ..Default::default()
             },
             StoryboardBeat {
                 id: "b".into(),
@@ -456,6 +457,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: "展示产品细节。".into(),
                 on_screen_text: String::new(),
+                ..Default::default()
             },
         ]
     }
@@ -506,6 +508,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: "工厂".into(),
+                ..Default::default()
             },
             StoryboardBeat {
                 id: "b".into(),
@@ -514,6 +517,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: "交付能力".into(),
+                ..Default::default()
             },
         ];
         let timing = from_pacing_plan(&beats, &["a".into(), "b".into()], 12_000);

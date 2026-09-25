@@ -21,6 +21,10 @@ use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 
 const PHASE2_POOL_SIZE: usize = 9;
+/// 最高分低于此阈值时，若库内仍有候选则扩展到 PHASE2_EXTENDED_POOL_SIZE，让 Phase 3 有更多备选。
+const PHASE2_LOW_MATCH_THRESHOLD: f64 = 30.0;
+/// 弱匹配时最多扩展到多少条（不影响现有 PHASE2_POOL_SIZE == 9 的基线测试）。
+const PHASE2_EXTENDED_POOL_SIZE: usize = 12;
 /// 每个 beat 池内同一素材最多几段。
 const PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL: usize = 2;
 /// 每个 beat 池内互为相似的段最多几条。
@@ -200,7 +204,7 @@ pub(crate) fn phase1_generate_narrative(
     let prompt = format!(
         "Analyze this brief and create a narrative structure: {brief}\n\
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), shotLengthHint (string), and beats.\n\
-        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
+        Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string), paceHint (\"short\" for fast-action beats like CTA/transitions, \"long\" for emotional holds or reveals, \"default\" for everything else).\n\
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should cover one concrete idea, action, or emotional turn — split here rather than collapsing a whole product act (intro / problem / proof / CTA) into one beat. One picture shot is selected per beat, so a 6-second beat produces a 6-second hold.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
@@ -422,8 +426,24 @@ pub(crate) fn phase2_rough_shot_selection(
             beat_embedding.map(Vec::as_slice),
             beat_clip.map(Vec::as_slice),
         );
+        // 若最高分低于阈值且库内候选充足，静默扩展到 PHASE2_EXTENDED_POOL_SIZE。
+        let best_score = ranked.first().map(|c| c.score.total).unwrap_or(0.0);
+        let effective_pool_size = if best_score < PHASE2_LOW_MATCH_THRESHOLD
+            && ranked.len() > PHASE2_POOL_SIZE
+        {
+            log::info!(
+                "Beat '{}': best score {:.1} < {:.1}, expanding pool to {}",
+                beat.id,
+                best_score,
+                PHASE2_LOW_MATCH_THRESHOLD,
+                PHASE2_EXTENDED_POOL_SIZE
+            );
+            PHASE2_EXTENDED_POOL_SIZE
+        } else {
+            PHASE2_POOL_SIZE
+        };
         let (pool, scores, library_exhausted) =
-            pick_segment_pool(&ranked, PHASE2_POOL_SIZE, score_first_slots);
+            pick_segment_pool(&ranked, effective_pool_size, score_first_slots);
         let sample = pool
             .iter()
             .zip(scores.iter())
@@ -1211,6 +1231,7 @@ mod tests {
             visual_keywords: vec![],
             narration: "narration".to_owned(),
             on_screen_text: String::new(),
+            ..Default::default()
         }
     }
 
@@ -2730,26 +2751,58 @@ fn select_one_beat(
         .unwrap_or_default();
     let already = already_selected
         .iter()
-        .map(|(beat_id, asset_id, segment_id)| format!("{beat_id}:{asset_id}:{segment_id}"))
+        .map(|(beat_id, asset_id, segment_id)| {
+            let purpose = rough
+                .beats
+                .iter()
+                .find(|b| &b.id == beat_id)
+                .map(|b| b.purpose.as_str())
+                .unwrap_or("");
+            if purpose.is_empty() {
+                format!("{beat_id}:{asset_id}:{segment_id}")
+            } else {
+                format!("{beat_id}:{asset_id}:{segment_id}(purpose={purpose})")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    let pacing_line =
-        normalize_shot_length_hint(&rough.shot_length_hint).prompt_line();
+    // per-beat paceHint 优先于全局 shotLengthHint，空串时回退到全局。
+    let beat_pace = rough
+        .beats
+        .iter()
+        .find(|b| b.id == pool.beat_id)
+        .map(|b| b.pace_hint.as_str())
+        .unwrap_or("");
+    let pacing_line = if beat_pace.is_empty() {
+        normalize_shot_length_hint(&rough.shot_length_hint).prompt_line()
+    } else {
+        normalize_shot_length_hint(beat_pace).prompt_line()
+    };
+    // 低分预警：最高候选分数低时明确告知模型库存匹配度有限。
+    let low_match_note = {
+        let best = pool.scores.iter().map(|s| s.total).fold(0.0_f64, f64::max);
+        if best < PHASE2_LOW_MATCH_THRESHOLD && !pool.candidates.is_empty() {
+            "\nNote: the best candidate in this pool has a low match score — the library may not have footage that directly covers requiredVisual. Accept the closest honest scene-setting clip and set matchLevel='contextual'."
+        } else {
+            ""
+        }
+    };
     let prompt = format!(
         "Brief: {brief}\n\
         Narrative title/summary/target: {} / {} / {}ms\n\
         Script mode: {}\n\
         This request is for ONE beat only: {}\n\
-        Already selected shots (assetId:segmentId): {}\n\
+        Already selected shots (beatId:assetId:segmentId:purpose): {}\n\
         Uncovered beat ids (do not create shots for these): {}\n\
         Beat timing plan: {}\n\
         Candidate pool for this beat: {candidate_cards_json}\n\
-        {feedback_context}\n\n\
+        {feedback_context}{low_match_note}\n\n\
         Keyframe grids for this beat's candidates are attached below (up to 9). Each image is this candidate's own time window, not a stand-in for the whole file.\n\
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
         If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
         Selection order: (1) look at the attached frames first; visibleCaption/scene/subjects/actions are unverified labels — if they conflict with the frames, trust the frames; (2) prefer the candidate whose frames best cover this beat's requiredVisual; (3) if none cover it literally, pick the closest honest scene-setting clip from this pool.\n\
+        Narrative continuity: consider what already-selected shots show (see already-selected list above) and choose a visually distinct angle or scene to advance the story — avoid repeating the same location or subject if variety is available.\n\
         Narration is what will be spoken and how long the picture must last. Do not pick a clip only because it echoes abstract wording in the narration or brief.\n\
         Do not invent camera motion or events absent from the frames. Do not treat a caption as true when the grid shows something else.\n\
         Hard rule: candidateIndexes must be DISTINCT assetIds from THIS beat's pool. Every listed candidateIndex is selectable.\n\

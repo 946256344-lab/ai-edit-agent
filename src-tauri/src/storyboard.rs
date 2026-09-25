@@ -1452,6 +1452,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: "This is the opening scene.".to_owned(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 },
                 StoryboardBeat {
                     id: "missing".to_owned(),
@@ -1460,6 +1461,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: String::new(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 },
             ],
             uncovered_beat_ids: vec!["missing".to_owned()],
@@ -1890,6 +1892,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: "短旁白".to_owned(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 })
                 .collect(),
         };
@@ -1908,6 +1911,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: "短旁白".to_owned(),
                 on_screen_text: String::new(),
+                ..Default::default()
             })
             .collect::<Vec<_>>();
         let short = NarrativeStructure {
@@ -1951,6 +1955,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: "ABCDEFGHIJKLMNOPQRSTUVWXY".to_owned(),
+                ..Default::default()
             }],
         };
         let issue = key_message_marker_issue("帮我做个短片", &mut narrative)
@@ -1977,6 +1982,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: "工厂实力".to_owned(),
+                ..Default::default()
             }],
         };
         assert!(key_message_marker_issue("帮我做个短片", &mut narrative).is_none());
@@ -1999,6 +2005,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: String::new(),
                     on_screen_text: "工厂现场".to_owned(),
+                    ..Default::default()
                 })
                 .collect(),
         };
@@ -2021,6 +2028,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: String::new(),
+                ..Default::default()
             }],
         };
         assert!(key_message_marker_issue("帮我做个长一点的短片", &mut narrative).is_none());
@@ -2047,6 +2055,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: String::new(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 },
                 StoryboardBeat {
                     id: "b".to_owned(),
@@ -2055,6 +2064,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: String::new(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 },
             ],
         };
@@ -2099,6 +2109,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: String::new(),
                 on_screen_text: "标记".to_owned(),
+                ..Default::default()
             }],
         };
         enforce_decided_script_mode(&speakable, "full_script", &mut narrative);
@@ -2134,6 +2145,7 @@ mod tests {
             visual_keywords: vec![],
             narration: "Completely paraphrased narration that should not be spoken.".to_owned(),
             on_screen_text: String::new(),
+            ..Default::default()
         }];
         let from_spoken = resolve_voiceover_script(
             &brief,
@@ -2265,6 +2277,7 @@ mod tests {
                     visual_keywords: vec![],
                     narration: "一句旁白。".to_owned(),
                     on_screen_text: String::new(),
+                    ..Default::default()
                 })
                 .collect(),
         }
@@ -2330,6 +2343,7 @@ mod tests {
             visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         });
         storyboard.uncovered_beat_ids.clear();
         storyboard.shots[0].source_start_ms = 0;
@@ -2374,6 +2388,7 @@ mod tests {
             visual_keywords: vec![],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         });
         storyboard.uncovered_beat_ids.clear();
         storyboard.shots[0].crop_focus = Some([0.3, 0.4]);

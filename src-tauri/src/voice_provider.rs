@@ -1371,6 +1371,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: "Once only.".to_owned(),
                 on_screen_text: String::new(),
+                ..Default::default()
             }],
             uncovered_beat_ids: Vec::new(),
             shots: vec![
@@ -1441,6 +1442,7 @@ mod tests {
                 visual_keywords: vec![],
                 narration: "Model paraphrase should not be spoken.".to_owned(),
                 on_screen_text: String::new(),
+                ..Default::default()
             }],
             uncovered_beat_ids: Vec::new(),
             shots: Vec::new(),

@@ -418,6 +418,7 @@ mod tests {
             visual_keywords: vec!["warranty plaque".to_owned(), "certificate wall".to_owned()],
             narration: String::new(),
             on_screen_text: String::new(),
+            ..Default::default()
         };
         let query = beat_clip_query(&beat);
         assert!(query.contains("certificate wall"));
