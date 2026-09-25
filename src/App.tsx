@@ -607,7 +607,7 @@ function App() {
             <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? t.app.headingFallback}</h1>
             <div className="cut-meta">
             <p>{artifactWorkspace.timeline
-              ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length, artifactWorkspace.timeline.versionNumber)
+              ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length)
               : isSending ? t.app.making : t.app.idle}</p>
             <StoryboardVersionPicker
               versions={artifactWorkspace.storyboardVersions}

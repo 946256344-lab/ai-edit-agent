@@ -672,7 +672,7 @@ export const en: typeof zhCN = {
     newProject: 'New project',
     startEditing: 'Start editing',
     headingFallback: 'From idea to picture',
-    timelineSummary: (seconds: string, clips: number, version: number) => `${seconds}s · ${plural(clips, 'shot')} · version ${version}`,
+    timelineSummary: (seconds: string, clips: number) => `${seconds}s · ${plural(clips, 'shot')}`,
     making: 'Making your rough cut…',
     idle: 'Import media and start your next story',
     storyboard: 'Storyboard',

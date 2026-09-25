@@ -666,7 +666,7 @@ export const zhCN = {
     newProject: '新项目',
     startEditing: '开始剪辑',
     headingFallback: '从灵感，到画面',
-    timelineSummary: (seconds: string, clips: number, version: number) => `${seconds} 秒 · ${clips} 个镜头 · 第 ${version} 版`,
+    timelineSummary: (seconds: string, clips: number) => `${seconds} 秒 · ${clips} 个镜头`,
     making: '正在制作你的粗剪…',
     idle: '导入素材，开始你的下一段故事',
     storyboard: '故事版',
