@@ -2,7 +2,7 @@
 
 ## 当前任务窗口
 
-- [ ] implemented_unverified（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5，默认排除当前素材）与 `refine_shot_ranges`（只走 P4→P5），其余镜头、配音、字幕冻结，拍时长取当前时间线，同事务写派生 storyboard + 新 timeline 并出预览；`generate_storyboard` 保留为默认流程。cargo check、storyboard/tools 测试通过；待真实桌面回合验收。前端派生版本标注、手动换镜召回升级另开任务。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。
+- [ ] implemented_unverified（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5，默认排除当前素材）与 `refine_shot_ranges`（只走 P4→P5），其余镜头、配音、字幕冻结，拍时长取当前时间线，同事务写派生 storyboard + 新 timeline 并出预览；`generate_storyboard` 保留为默认流程。cargo check、storyboard/tools 测试通过；真实桌面已验「换第 3 个镜头」与「精修第 2 个镜头切点」：只目标镜头变化，其余 6 镜、配音、字幕、音乐与总时长 18081ms 逐字不变。两拍同时重选、按素材名替换与派生版本标注待模型服务恢复后验收。前端派生版本标注、手动换镜召回升级另开任务。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。
 - [ ] 待修（2026-09-25）：Phase 3 增量重跑从未生效。`phase3_select` 无修复包时 `beats_named_in_repair` 返回全部拍，`prior_shots` 复用分支走不到；有修复包时又不加载 `prior_shots`。需决定是修复还是删除该路径（局部编辑已由 `reselect_shots` 承担）。
 - [x] 已修复（2026-09-25，claude/determined-dirac-80a490）：`get_library_visual_overview` / `get_asset_visual_detail` 补进 `NATIVE_TOOL_NAMES`，模型调用不再被白名单拒绝。cargo check 与 `agentloop::` 112 项测试通过（含原失败的 `ordinary_question_returns_message_without_tool_call`）。见 docs/changes/2026-09-25-visual-tools-native-whitelist.md。
 - [ ] implemented_unverified（2026-09-25，claude/keen-driscoll-de8c99）：故事版切换显示派生版来源。`StoryboardVersion` 加可选 `derivedFromVersionId` / `changedBeatIds`，下拉项显示「v5（改自 v4，第 3 拍）」；缺字段按普通版本显示。选择器移入 `StoryboardVersionPicker` 组件。lint、tsc（本次文件）、i18n、文档同步检查通过；后端 `reselect_shots` / `refine_shot_ranges` 落地后待真实派生版验收。见 docs/changes/2026-09-25-derived-storyboard-version-label.md。
