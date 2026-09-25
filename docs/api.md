@@ -383,6 +383,8 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `retry_failed_asset_analysis` | Native `{ stage: "technical"\|"visual"\|"both"\|null, assetIds: string[]\|null, limit: number\|null }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 或空数组时自动收集最多 `limit`（默认 1000）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。视觉批次入队时自动按 worker 批次上限拆分。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
 | `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
 | `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
+| `get_library_visual_overview` | 无 | 已实现的只读 Agent 观察工具：聚合当前项目全部就绪素材的持久化视觉证据，返回频繁出现的主体、动作、场景、示例字幕及叙事角色；适合在写文案或规划分镜前了解实际画面内容。不访问源文件，不返回路径。 |
+| `get_asset_visual_detail` | `{ assetId }` | 已实现的只读 Agent 观察工具：返回当前项目单条已就绪素材的完整片段级视觉证据，包括场景、主体、动作、字幕、叙事角色、镜头类型、摄像机运动及可用时间范围；`assetId` 须为当前项目素材。不返回路径或原始错误。 |
 | `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
 | `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `segmentId`、`sourceStartMs/sourceEndMs`、`shotType`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。用第一次段卡检索，不触发模型加深；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
 | `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前打开的作用域化产物详情，不是永远最新一版。 |

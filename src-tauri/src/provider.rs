@@ -374,7 +374,7 @@ fn chat_turn_from_value(value: &Value) -> Option<ModelTurn> {
             output.push(ModelOutputItem::Message {
                 id: message.get("id").and_then(Value::as_str).map(str::to_owned),
                 role,
-                content,
+                content: content.clone(),
                 raw: message.clone(),
             });
         }
@@ -402,9 +402,141 @@ fn chat_turn_from_value(value: &Value) -> Option<ModelTurn> {
                     raw: tool_call.clone(),
                 }));
             }
+        } else {
+            // 兜底：部分自定义模型（Qwen/Hermes 系列）不走 tool_calls 字段，
+            // 而是在文本内容里输出 <tool_call><function=...> XML 块。
+            // 这里从文本中提取调用，并把纯文本部分替换回消息体。
+            let raw_text = content
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("");
+            if raw_text.contains("<tool_call>") {
+                let (visible_text, xml_calls) = extract_xml_tool_calls(&raw_text);
+                // 若提取到工具调用，用剥离后的文本替换输出中已推入的 Message。
+                if !xml_calls.is_empty() {
+                    if let Some(ModelOutputItem::Message { content: ref mut c, .. }) =
+                        output.last_mut()
+                    {
+                        let trimmed = visible_text.trim().to_owned();
+                        *c = if trimmed.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![json!({"type": "output_text", "text": trimmed})]
+                        };
+                    }
+                    // 若剥离后没有可见文本，撤销刚才推入的空消息。
+                    if visible_text.trim().is_empty() {
+                        if let Some(ModelOutputItem::Message { content: ref c, .. }) =
+                            output.last()
+                        {
+                            if c.is_empty() {
+                                output.pop();
+                            }
+                        }
+                    }
+                    for (index, (name, args)) in xml_calls.into_iter().enumerate() {
+                        let call_id = format!("xml_call_{index}");
+                        let raw = json!({
+                            "id": call_id,
+                            "type": "function",
+                            "function": { "name": name, "arguments": args }
+                        });
+                        output.push(ModelOutputItem::FunctionCall(FunctionCall {
+                            call_id: format!("xml_call_{index}"),
+                            name,
+                            arguments: args,
+                            raw,
+                        }));
+                    }
+                }
+            }
         }
     }
     Some(ModelTurn { output })
+}
+
+/// 从模型输出文本中提取 `<tool_call>` XML 块，返回 (剩余可见文本, 调用列表)。
+///
+/// 支持的格式（Qwen/Hermes 系列）：
+/// ```text
+/// <tool_call>
+/// <function=NAME>
+/// <parameter=KEY>VALUE</parameter>
+/// ...
+/// </function>
+/// </tool_call>
+/// ```
+/// 参数值收集为 JSON 对象后序列化为字符串，与标准 `tool_calls.function.arguments` 保持一致。
+fn extract_xml_tool_calls(text: &str) -> (String, Vec<(String, String)>) {
+    let mut calls: Vec<(String, String)> = Vec::new();
+    let mut visible = String::new();
+    let mut remaining = text;
+    while let Some(start) = remaining.find("<tool_call>") {
+        visible.push_str(&remaining[..start]);
+        let after_open = &remaining[start + "<tool_call>".len()..];
+        let end = after_open.find("</tool_call>").unwrap_or(after_open.len());
+        let block = &after_open[..end];
+        remaining = if end < after_open.len() {
+            &after_open[end + "</tool_call>".len()..]
+        } else {
+            ""
+        };
+        if let Some((name, args)) = parse_xml_function_block(block) {
+            calls.push((name, args));
+        }
+    }
+    visible.push_str(remaining);
+    (visible, calls)
+}
+
+/// 解析单个 `<function=NAME>...<parameter=K>V</parameter>...</function>` 块。
+fn parse_xml_function_block(block: &str) -> Option<(String, String)> {
+    // 提取函数名：<function=NAME> 或 <function=NAME/>
+    let fn_start = block.find("<function=")?;
+    let after_fn = &block[fn_start + "<function=".len()..];
+    let fn_name_end = after_fn.find(|c: char| c == '>' || c == '/' || c == ' ')?;
+    let name = after_fn[..fn_name_end].trim().to_owned();
+    if name.is_empty() {
+        return None;
+    }
+    // 提取所有 <parameter=KEY>VALUE</parameter>
+    let mut params = serde_json::Map::new();
+    let mut search = block;
+    while let Some(p_start) = search.find("<parameter=") {
+        let after_p = &search[p_start + "<parameter=".len()..];
+        let key_end = after_p.find('>')?;
+        let key = after_p[..key_end].trim().to_owned();
+        let value_start = &after_p[key_end + 1..];
+        let value_end = value_start.find("</parameter>").unwrap_or(value_start.len());
+        let value = value_start[..value_end].trim().to_owned();
+        search = if value_end < value_start.len() {
+            &value_start[value_end + "</parameter>".len()..]
+        } else {
+            ""
+        };
+        if !key.is_empty() {
+            // 尝试把 "null" / 数字 / 布尔 / JSON 对象解析成对应类型，否则保留字符串。
+            let json_value = if value == "null" {
+                Value::Null
+            } else if let Ok(n) = value.parse::<i64>() {
+                json!(n)
+            } else if let Ok(f) = value.parse::<f64>() {
+                json!(f)
+            } else if value == "true" {
+                json!(true)
+            } else if value == "false" {
+                json!(false)
+            } else if let Ok(v) = serde_json::from_str::<Value>(&value) {
+                v
+            } else {
+                json!(value)
+            };
+            params.insert(key, json_value);
+        }
+    }
+    let args = serde_json::to_string(&Value::Object(params)).unwrap_or_else(|_| "{}".to_owned());
+    Some((name, args))
 }
 
 #[derive(Default)]

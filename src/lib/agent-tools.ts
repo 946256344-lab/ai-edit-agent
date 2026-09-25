@@ -7,6 +7,8 @@ export type AgentObservationToolName =
   | 'get_edit_status'
   | 'get_asset_health_summary'
   | 'list_assets'
+  | 'get_library_visual_overview'
+  | 'get_asset_visual_detail'
   | 'search_assets'
   | 'search_asset_segments'
   | 'search_music'

@@ -104,6 +104,48 @@
       ]
     },
     {
+      "name": "get_library_visual_overview",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "scope": {
+        "boundary": "current_project",
+        "resolution": "aggregates persisted per-segment visual evidence across all ready assets"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["current project is validated"],
+      "produces": [],
+      "returns": ["frequent_subjects", "actions", "scenes", "sample_captions", "narrative_roles"]
+    },
+    {
+      "name": "get_asset_visual_detail",
+      "version": 1,
+      "kind": "observation",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "assetId": { "type": "string" }
+        },
+        "required": ["assetId"]
+      },
+      "scope": {
+        "boundary": "current_project_and_ready_asset",
+        "resolution": "returns full per-segment visual evidence for one asset in the current project"
+      },
+      "sideEffect": false,
+      "idempotency": "read_only",
+      "retryPolicy": "safe to invoke again",
+      "preconditions": ["asset belongs to the current project", "asset analysis is ready"],
+      "produces": [],
+      "returns": ["segments", "scene", "subjects", "actions", "captions", "narrative_role", "shot_type", "camera_motion", "usable_ranges"]
+    },
+    {
       "name": "search_assets",
       "version": 1,
       "kind": "observation",
