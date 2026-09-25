@@ -16,4 +16,4 @@
 
 ## 验证
 
-`npm run lint`、`npx tsc -b --pretty false`、`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run harness:check`、`git diff --check` 通过。真实桌面账号登录、试用显示、退出和旧项目读取尚未验收，当前状态为 `implemented_unverified`。
+`npm run lint`、`npx tsc -b --pretty false`、`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run harness:check`、`git diff --check` 通过。独立工作树的开发版已启动；界面加载旧本机项目和原有剪辑会话。用户提供的真实桌面截图显示账号已登录、邮箱已验证、资格为“试用中”，有效期为 2026-10-02 17:31:35。退出登录、重启后刷新令牌恢复以及更名安装包尚未验证。当前状态为部分已验证。
