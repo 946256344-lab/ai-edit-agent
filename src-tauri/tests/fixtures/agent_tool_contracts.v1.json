@@ -704,6 +704,88 @@
       ]
     },
     {
+      "name": "reselect_shots",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": { "type": "string", "optional": true },
+          "shotIndexes": { "type": "array", "optional": true, "minItems": 1, "maxItems": 5, "items": { "type": "integer" } },
+          "beatIds": { "type": "array", "optional": true, "minItems": 1, "maxItems": 5, "items": { "type": "string" } },
+          "instruction": { "type": "string", "optional": true },
+          "keepCurrent": { "type": "boolean", "optional": true }
+        },
+        "required": []
+      },
+      "scope": {
+        "boundary": "timeline_and_storyboard_loaded_for_current_editing_task_and_ready_assets_in_current_project",
+        "resolution": "timeline is selected only from LoopState; storyboard must belong to the same project and editing task; candidates come only from ready, accessible project assets"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; a beat can be re-picked at most once per turn and every success creates a derived storyboard version, a timeline version and an operation log",
+      "preconditions": [
+        "exactly one of shotIndexes or beatIds is given, at most 5 beats",
+        "timeline clips still map one-to-one and in order onto the storyboard shots",
+        "each target beat keeps a candidate after excluding current, neighbouring, similar, overlapping and over-reused footage",
+        "new shots fill each target beat's current timeline slot exactly",
+        "frozen shots keep asset, source range, duration and crop unchanged",
+        "the whole storyboard passes validation"
+      ],
+      "produces": [
+        "storyboard_version",
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "storyboardVersionId",
+        "timelineVersionId",
+        "versionNumber",
+        "changes"
+      ]
+    },
+    {
+      "name": "refine_shot_ranges",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": { "type": "string", "optional": true },
+          "shotIndexes": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "type": "integer" } },
+          "instruction": { "type": "string", "optional": true }
+        },
+        "required": [
+          "shotIndexes"
+        ]
+      },
+      "scope": {
+        "boundary": "timeline_and_storyboard_loaded_for_current_editing_task",
+        "resolution": "timeline is selected only from LoopState; storyboard must belong to the same project and editing task"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every success creates a derived storyboard version, a timeline version and an operation log",
+      "preconditions": [
+        "shot indexes are storyboard shots on the current timeline (not manually inserted clips), at most 10",
+        "asset and segment of each refined shot stay unchanged",
+        "timeline duration of each refined shot stays unchanged",
+        "the whole storyboard passes validation"
+      ],
+      "produces": [
+        "storyboard_version",
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "storyboardVersionId",
+        "timelineVersionId",
+        "versionNumber",
+        "changes"
+      ]
+    },
+    {
       "name": "reorder_clips",
       "version": 1,
       "kind": "edit",

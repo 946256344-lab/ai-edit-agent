@@ -414,94 +414,19 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut uncovered_beat_ids = Vec::new();
     let mut candidate_pools = Vec::new();
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
-        let beat_embedding = embeddings.get(beat_index);
-        let beat_clip = clip_embeddings.get(beat_index);
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
-        let ranked = scoring::rank_segment_candidates(
-            sources.to_vec(),
+        match build_beat_pool(
             beat,
-            target_each,
-            &[],
+            sources,
             usage_counts,
-            beat_embedding.map(Vec::as_slice),
-            beat_clip.map(Vec::as_slice),
-        );
-        // 若最高分低于阈值且库内候选充足，静默扩展到 PHASE2_EXTENDED_POOL_SIZE。
-        let best_score = ranked.first().map(|c| c.score.total).unwrap_or(0.0);
-        let effective_pool_size = if best_score < PHASE2_LOW_MATCH_THRESHOLD
-            && ranked.len() > PHASE2_POOL_SIZE
-        {
-            log::info!(
-                "Beat '{}': best score {:.1} < {:.1}, expanding pool to {}",
-                beat.id,
-                best_score,
-                PHASE2_LOW_MATCH_THRESHOLD,
-                PHASE2_EXTENDED_POOL_SIZE
-            );
-            PHASE2_EXTENDED_POOL_SIZE
-        } else {
-            PHASE2_POOL_SIZE
-        };
-        let (pool, scores, library_exhausted) =
-            pick_segment_pool(&ranked, effective_pool_size, score_first_slots);
-        let sample = pool
-            .iter()
-            .zip(scores.iter())
-            .enumerate()
-            .map(|(index, (candidate, score))| {
-                let segment = candidate
-                    .segment
-                    .as_ref()
-                    .map(|segment| segment.id.as_str())
-                    .unwrap_or("-");
-                format!(
-                    "#{index}:{}/{segment}(sem={:.1}/lex={:.1}/clip={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
-                    candidate.asset_id,
-                    score.semantic,
-                    score.lexical,
-                    score.clip,
-                    score.quality,
-                    score.duration,
-                    score.freshness,
-                    score.total,
-                    if score.has_evidence { "" } else { ",noEv" }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        log::info!(
-            "Beat '{}': poolSize={}, libraryExhausted={}, sample={}",
-            beat.id,
-            pool.len(),
-            library_exhausted,
-            sample
-        );
-        crate::storyboard::provider_trace::append_pool_trace(
-            "Phase 2",
-            &beat.id,
-            &json!({
-                "purpose": beat.purpose,
-                "narration": beat.narration,
-                "requiredVisual": beat.required_visual,
-                "visualKeywords": beat.visual_keywords,
-                "libraryExhausted": library_exhausted,
-                "candidates": pool_trace_candidates(&pool, &scores),
-            }),
-        );
-        if pool.is_empty() {
-            log::warn!(
-                "Beat '{}': no usable segment candidates; leaving uncovered",
-                beat.id
-            );
-            uncovered_beat_ids.push(beat.id.clone());
-            continue;
+            embeddings.get(beat_index).map(Vec::as_slice),
+            clip_embeddings.get(beat_index).map(Vec::as_slice),
+            target_each,
+            score_first_slots,
+        ) {
+            Some(pool) => candidate_pools.push(pool),
+            None => uncovered_beat_ids.push(beat.id.clone()),
         }
-        candidate_pools.push(BeatCandidatePool {
-            beat_id: beat.id.clone(),
-            beat_purpose: beat.purpose.clone(),
-            candidates: pool,
-            scores,
-        });
     }
 
     if candidate_pools.is_empty() {
@@ -561,6 +486,103 @@ pub(crate) fn phase2_rough_shot_selection(
         uncovered_beat_ids,
         shots,
         candidate_pools,
+    })
+}
+
+/// 单拍召回：全库段按综合分排序，弱匹配时扩池，按名额与多样性规则取池。
+/// 返回 None 表示该拍没有可用候选。整条生成与局部重选共用，保证召回一致。
+pub(crate) fn build_beat_pool(
+    beat: &StoryboardBeat,
+    sources: &[StoryboardSource],
+    usage_counts: &HashMap<String, i32>,
+    beat_embedding: Option<&[f32]>,
+    beat_clip: Option<&[f32]>,
+    target_each: i64,
+    score_first_slots: usize,
+) -> Option<BeatCandidatePool> {
+    let ranked = scoring::rank_segment_candidates(
+        sources.to_vec(),
+        beat,
+        target_each,
+        &[],
+        usage_counts,
+        beat_embedding,
+        beat_clip,
+    );
+    // 若最高分低于阈值且库内候选充足，静默扩展到 PHASE2_EXTENDED_POOL_SIZE。
+    let best_score = ranked.first().map(|c| c.score.total).unwrap_or(0.0);
+    let effective_pool_size = if best_score < PHASE2_LOW_MATCH_THRESHOLD
+        && ranked.len() > PHASE2_POOL_SIZE
+    {
+        log::info!(
+            "Beat '{}': best score {:.1} < {:.1}, expanding pool to {}",
+            beat.id,
+            best_score,
+            PHASE2_LOW_MATCH_THRESHOLD,
+            PHASE2_EXTENDED_POOL_SIZE
+        );
+        PHASE2_EXTENDED_POOL_SIZE
+    } else {
+        PHASE2_POOL_SIZE
+    };
+    let (pool, scores, library_exhausted) =
+        pick_segment_pool(&ranked, effective_pool_size, score_first_slots);
+    let sample = pool
+        .iter()
+        .zip(scores.iter())
+        .enumerate()
+        .map(|(index, (candidate, score))| {
+            let segment = candidate
+                .segment
+                .as_ref()
+                .map(|segment| segment.id.as_str())
+                .unwrap_or("-");
+            format!(
+                "#{index}:{}/{segment}(sem={:.1}/lex={:.1}/clip={:.1}/q={:.1}/d={:.1}/f={:.1}=total={:.1}{})",
+                candidate.asset_id,
+                score.semantic,
+                score.lexical,
+                score.clip,
+                score.quality,
+                score.duration,
+                score.freshness,
+                score.total,
+                if score.has_evidence { "" } else { ",noEv" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    log::info!(
+        "Beat '{}': poolSize={}, libraryExhausted={}, sample={}",
+        beat.id,
+        pool.len(),
+        library_exhausted,
+        sample
+    );
+    crate::storyboard::provider_trace::append_pool_trace(
+        "Phase 2",
+        &beat.id,
+        &json!({
+            "purpose": beat.purpose,
+            "narration": beat.narration,
+            "requiredVisual": beat.required_visual,
+            "visualKeywords": beat.visual_keywords,
+            "libraryExhausted": library_exhausted,
+            "candidates": pool_trace_candidates(&pool, &scores),
+        }),
+    );
+    if pool.is_empty() {
+        log::warn!(
+            "Beat '{}': no usable segment candidates; leaving uncovered",
+            beat.id
+        );
+        return None;
+    }
+    Some(BeatCandidatePool {
+        beat_id: beat.id.clone(),
+        beat_purpose: beat.purpose.clone(),
+        candidates: pool,
+        scores,
     })
 }
 
@@ -2552,6 +2574,7 @@ pub(crate) fn phase3_select(
                 &chosen_so_far,
                 repair,
                 attempt,
+                None,
             ) {
                 Ok(selection) => {
                     if selection
@@ -2625,6 +2648,83 @@ pub(crate) fn phase3_select(
         }
     }
     Ok((selected, issues))
+}
+
+/// 局部重选：只为 `rough.candidate_pools` 覆盖的目标拍逐拍看图选镜。
+/// `context` 是其余拍的冻结镜头（beatId, assetId, segmentId），只作「已选」上下文，不经模型也不改动。
+/// 配音已锁定，模型给出的旁白改写一律丢弃；某拍选不出时如实失败，不把它改成 uncovered。
+pub(crate) fn phase3_select_beats(
+    app: &AppHandle,
+    access: &ModelAccess,
+    brief: &str,
+    rough: &RoughStoryboard,
+    context: &[(String, String, String)],
+    user_note: Option<&str>,
+) -> Result<StoryboardContent, String> {
+    let mut chosen_so_far = context.to_vec();
+    let mut selections = Vec::new();
+    for pool in &rough.candidate_pools {
+        let mut last_error = String::new();
+        let mut picked = None;
+        for attempt in 1..=3 {
+            crate::execution_deadline::check()?;
+            match select_one_beat(
+                app,
+                access,
+                brief,
+                rough,
+                pool,
+                &chosen_so_far,
+                None,
+                attempt,
+                user_note,
+            ) {
+                Ok(mut selection) => {
+                    if selection.uncovered || selection.candidate_indexes.is_empty() {
+                        last_error = "the model found no acceptable candidate".to_owned();
+                        continue;
+                    }
+                    if selection
+                        .candidate_indexes
+                        .iter()
+                        .any(|index| *index >= pool.candidates.len())
+                    {
+                        last_error = "candidateIndex was outside the pool".to_owned();
+                        continue;
+                    }
+                    let mut assets = HashSet::new();
+                    if !selection
+                        .candidate_indexes
+                        .iter()
+                        .all(|index| assets.insert(pool.candidates[*index].asset_id.as_str()))
+                    {
+                        last_error = "the same asset was picked twice for one beat".to_owned();
+                        continue;
+                    }
+                    selection.narration = None;
+                    picked = Some(selection);
+                    break;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Local reselect beat '{}' attempt {attempt} failed: {error}",
+                        pool.beat_id
+                    );
+                    last_error = error;
+                }
+            }
+        }
+        let selection = picked.ok_or_else(|| {
+            format!(
+                "storyboard_local_reselect_failed: beat '{}' has no acceptable replacement ({last_error}).",
+                pool.beat_id
+            )
+        })?;
+        chosen_so_far.extend(refs_from_selection(rough, &selection));
+        selections.push(selection);
+    }
+    let payload = json!({ "selections": selections }).to_string();
+    assemble_phase3_selection(brief, rough, &payload)
 }
 
 fn beats_named_in_repair(
@@ -2796,6 +2896,7 @@ fn select_one_beat(
     already_selected: &[(String, String, String)],
     repair: Option<&RepairPacket>,
     attempt: usize,
+    user_note: Option<&str>,
 ) -> Result<Phase3BeatSelection, String> {
     let (keyframe_blocks, attached_indexes) = phase3_keyframe_image_blocks_for_pool(app, pool);
     let candidate_cards_json = serde_json::to_string(&phase3_pool_cards(
@@ -2855,6 +2956,16 @@ fn select_one_beat(
             ""
         }
     };
+    // 局部重选：用户对这一拍的原话（例如「要更有人气的」），优先于默认偏好。
+    let user_note_line = user_note
+        .map(str::trim)
+        .filter(|note| !note.is_empty())
+        .map(|note| {
+            format!(
+                "\nThe user rejected the previous shot for this beat and said: \"{note}\". Pick the candidate whose frames best satisfy this while still covering requiredVisual."
+            )
+        })
+        .unwrap_or_default();
     let prompt = format!(
         "Brief: {brief}\n\
         Narrative title/summary/target: {} / {} / {}ms\n\
@@ -2864,7 +2975,7 @@ fn select_one_beat(
         Uncovered beat ids (do not create shots for these): {}\n\
         Beat timing plan: {}\n\
         Candidate pool for this beat: {candidate_cards_json}\n\
-        {feedback_context}{low_match_note}\n\n\
+        {feedback_context}{low_match_note}{user_note_line}\n\n\
         Keyframe grids for this beat's candidates are attached below (up to 9). Each image is this candidate's own time window, not a stand-in for the whole file.\n\
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\

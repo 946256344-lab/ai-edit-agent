@@ -29,6 +29,8 @@ const CREATE_TIMELINE_DRAFT: &str = "create_timeline_draft";
 const REPLACE_CLIPS: &str = "replace_clips";
 const INSERT_CLIPS: &str = "insert_clips";
 const CHANGE_CLIP_DURATION: &str = "change_clip_duration";
+const RESELECT_SHOTS: &str = "reselect_shots";
+const REFINE_SHOT_RANGES: &str = "refine_shot_ranges";
 const REORDER_CLIPS: &str = "reorder_clips";
 const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
 const DOWNLOAD_MUSIC: &str = "download_music";
@@ -420,6 +422,63 @@ fn main_chain_function_tools() -> Vec<Value> {
                 }
             }),
             vec!["timelineVersionId", "adjustments"],
+        ),
+        function_tool(
+            RESELECT_SHOTS,
+            "Re-pick footage for up to 5 beats the user is unhappy with (e.g. 'shot 3 is bad', 'shots 2 and 5 are too dark'). Rust re-ranks the whole ready library for those beats only, excludes the current footage (unless keepCurrent), neighbouring and similar clips, lets you look at the new candidates, refines cut points, validates the whole storyboard, then writes a derived storyboard version plus a new timeline and renders preview. Every other shot, the voiceover, subtitles and music stay exactly as they are, and each beat keeps its current duration. Use this instead of generate_storyboard for local complaints about specific shots; use replace_clips only when the user names the exact asset to use; use refine_shot_ranges when only the cut points should move. Pass exactly one of shotIndexes or beatIds; shotIndex is the clip shotIndex from get_timeline / get_storyboard.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "shotIndexes": {
+                    "type": ["array", "null"],
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {"type": "integer", "minimum": 1},
+                    "description": "Timeline shotIndex values whose beats should get new footage. Null when beatIds is given."
+                },
+                "beatIds": {
+                    "type": ["array", "null"],
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "description": "Storyboard beat ids to re-pick. Null when shotIndexes is given."
+                },
+                "instruction": {
+                    "type": ["string", "null"],
+                    "maxLength": 500,
+                    "description": "The user's own words about what the new shot should be, copied verbatim. Null if they gave none."
+                },
+                "keepCurrent": {
+                    "type": ["boolean", "null"],
+                    "description": "True only if the user wants the current footage to stay eligible. Null or false excludes it."
+                }
+            }),
+            vec!["timelineVersionId", "shotIndexes", "beatIds", "instruction", "keepCurrent"],
+        ),
+        function_tool(
+            REFINE_SHOT_RANGES,
+            "Move the cut points / crop of up to 10 existing shots without changing their footage or on-screen duration (e.g. 'start shot 4 half a second later', 'don't cut in the middle of the action'). Rust re-samples frames inside each shot's locked segment, lets you pick new in/out points, validates, then writes a derived storyboard version plus a new timeline and renders preview. Other shots, voiceover, subtitles and music are unchanged.",
+            json!({
+                "timelineVersionId": {
+                    "type": ["string", "null"],
+                    "description": "Optional scoped timeline version; null selects the current version."
+                },
+                "shotIndexes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": {"type": "integer", "minimum": 1},
+                    "description": "Timeline shotIndex values to refine."
+                },
+                "instruction": {
+                    "type": ["string", "null"],
+                    "maxLength": 500,
+                    "description": "The user's own words about how the cut should change, copied verbatim. Null if they gave none."
+                }
+            }),
+            vec!["timelineVersionId", "shotIndexes", "instruction"],
         ),
         function_tool(
             REORDER_CLIPS,
@@ -884,6 +943,8 @@ mod tests {
             "replace_clips",
             "insert_clips",
             "change_clip_duration",
+            "reselect_shots",
+            "refine_shot_ranges",
             "reorder_clips",
         ] {
             let tool = tools

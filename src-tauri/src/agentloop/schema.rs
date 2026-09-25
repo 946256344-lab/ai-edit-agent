@@ -32,6 +32,8 @@ pub(super) struct LoopState<'a> {
     pub(super) last_outcome: Option<AgentEditResult>,
     pub(super) last_failed_tool_error_code: Option<&'static str>,
     pub(super) successful_observation: bool,
+    /// 本轮已局部重选过的 beat；同一拍一轮只重选一次，避免模型反复换片空转。
+    pub(super) reselected_beats: std::collections::HashSet<String>,
 }
 
 impl LoopState<'_> {

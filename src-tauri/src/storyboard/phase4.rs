@@ -135,11 +135,24 @@ pub(crate) struct Phase4Session {
     pub(crate) model_calls: Vec<Phase4ModelCall>,
     ranges_seeded: bool,
     pass_c_planned: bool,
+    /// 局部编辑：只允许精修这些镜头，其余从一开始就冻结；整条生成为 None。
+    initial_scope: Option<HashSet<i64>>,
+    /// 局部编辑时用户的原话，附在 Pass B 提示词里。
+    instruction: Option<String>,
 }
 
 impl Phase4Session {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// 局部编辑会话：只精修 `scope` 内的镜头，修复也不得越出该集合。
+    pub(crate) fn scoped(scope: HashSet<i64>, instruction: Option<String>) -> Self {
+        Self {
+            initial_scope: Some(scope),
+            instruction: instruction.filter(|text| !text.trim().is_empty()),
+            ..Self::default()
+        }
     }
 
     pub(crate) fn ensure_initialized(
@@ -267,8 +280,17 @@ impl Phase4Session {
         self.pass_a_pending = pass_a_pending;
         self.pass_a_done = pass_a_done;
         self.pass_a_asset_batches = pass_a_asset_batches;
-        self.pass_b_pending = all_orders;
-        self.pass_b_done = HashSet::new();
+        if let Some(scope) = &self.initial_scope {
+            self.pass_b_pending = all_orders.intersection(scope).copied().collect();
+            self.pass_b_done = all_orders.difference(scope).copied().collect();
+            self.repair_shots = self.pass_b_pending.clone();
+            if self.pass_b_pending.is_empty() {
+                return Err("Phase 4 local edit scope matched no shots.".to_owned());
+            }
+        } else {
+            self.pass_b_pending = all_orders;
+            self.pass_b_done = HashSet::new();
+        }
         self.initialized = true;
         if self.pass_a_pending.is_empty() {
             log::info!(
@@ -313,7 +335,15 @@ impl Phase4Session {
             ));
         }
         let content = self.content.as_ref().unwrap_or(selected);
-        let set = repair_set_from_issues(&repair.issues, content)?;
+        let mut set = repair_set_from_issues(&repair.issues, content)?;
+        if let Some(scope) = &self.initial_scope {
+            set.retain(|order| scope.contains(order));
+            if set.is_empty() {
+                return Err(
+                    "Phase 4 repair would change shots outside the local edit scope.".to_owned(),
+                );
+            }
+        }
         if set.is_empty() {
             return Ok(());
         }
@@ -1208,7 +1238,14 @@ pub(crate) fn phase4_refine_ranges(
     );
     session.ensure_initialized(selected, sources)?;
     session.apply_repair_if_needed(repair, selected)?;
-    let feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
+    let mut feedback_context = repair.map_or(String::new(), repair_packet_prompt_block);
+    if let Some(instruction) = &session.instruction {
+        feedback_context.push_str(&format!(
+            "
+User instruction for these shots (follow it inside the locked window; never swap assets): {instruction}
+"
+        ));
+    }
     let attempt = repair.map(|packet| packet.attempt).unwrap_or(1);
 
     run_pending_pass_a(
