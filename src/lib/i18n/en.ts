@@ -665,5 +665,14 @@ export const en: typeof zhCN = {
     making: 'Making your rough cut…',
     idle: 'Import media and start your next story',
     storyboard: 'Storyboard',
+    storyboardVersion: (version: number) => `v${version}`,
+    // 派生版说明：来源版本找不到时省略，改动的拍找不到位置时只报数量。
+    derivedStoryboardVersion: (version: number, parentVersion: number | null, beatPositions: number[] | null, changedCount: number) => {
+      const parts = [
+        parentVersion === null ? null : `from v${parentVersion}`,
+        beatPositions ? `${beatPositions.length === 1 ? 'beat' : 'beats'} ${beatPositions.join(', ')}` : changedCount > 0 ? `${plural(changedCount, 'beat')} changed` : null,
+      ].filter(Boolean)
+      return `v${version} (${parts.length > 0 ? parts.join(', ') : 'edited'})`
+    },
   },
 }

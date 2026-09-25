@@ -658,5 +658,14 @@ export const zhCN = {
     making: '正在制作你的粗剪…',
     idle: '导入素材，开始你的下一段故事',
     storyboard: '故事版',
+    storyboardVersion: (version: number) => `v${version}`,
+    // 派生版说明：来源版本找不到时省略，改动的拍找不到位置时只报数量。
+    derivedStoryboardVersion: (version: number, parentVersion: number | null, beatPositions: number[] | null, changedCount: number) => {
+      const parts = [
+        parentVersion === null ? null : `改自 v${parentVersion}`,
+        beatPositions ? `第 ${beatPositions.join('、')} 拍` : changedCount > 0 ? `改了 ${changedCount} 拍` : null,
+      ].filter(Boolean)
+      return `v${version}（${parts.length > 0 ? parts.join('，') : '局部修改'}）`
+    },
   },
 }

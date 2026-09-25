@@ -16,6 +16,7 @@ import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
+import { StoryboardVersionPicker } from './components/StoryboardVersionPicker'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
 import { useProjectCreationController } from './hooks/useProjectCreationController'
@@ -624,24 +625,11 @@ function App() {
             <p>{artifactWorkspace.timeline
               ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length, artifactWorkspace.timeline.versionNumber)
               : isSending ? t.app.making : t.app.idle}</p>
-            {artifactWorkspace.storyboardVersions.length > 0 && (
-              <label className="storyboard-version-picker">
-                {t.app.storyboard}
-                <select
-                  value={artifactWorkspace.storyboard?.id ?? ''}
-                  onChange={(event) => {
-                    const nextId = event.target.value
-                    if (nextId) shotReplacement.actions.requestAction(() => void artifactWorkspace.actions.openStoryboard(nextId))
-                  }}
-                >
-                  {artifactWorkspace.storyboardVersions.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      v{version.versionNumber}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
+            <StoryboardVersionPicker
+              versions={artifactWorkspace.storyboardVersions}
+              selectedId={artifactWorkspace.storyboard?.id ?? null}
+              onSelect={(nextId) => shotReplacement.actions.requestAction(() => void artifactWorkspace.actions.openStoryboard(nextId))}
+            />
             </div>
           </div>
           <EditorOutputPort
