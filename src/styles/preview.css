@@ -10,7 +10,7 @@
 .format-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-2); font-size: var(--text-xs); }
 .preview-heading > .format-label { text-align: right; }
 .preview-heading .storyboard-version-picker { flex: 0 1 auto; justify-content: flex-end; max-width: 62%; }
-.preview-heading .storyboard-version-picker select { min-width: 0; border-color: var(--accent-line); background: var(--accent-wash); color: var(--accent-hover); font-weight: 500; }
+.preview-heading .storyboard-version-picker select { min-width: 0; }
 
 /* 舞台：浅灰底，画面带柔和投影；空状态给出下一步。 */
 .rough-player { display: flex; flex: 1; justify-content: center; align-items: center; min-height: 160px; overflow: hidden; border-radius: var(--radius-md); background: var(--stage); }
