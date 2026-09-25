@@ -1,8 +1,8 @@
 // storyboard/phases.rs - Storyboard 分步生成
 //
 // Phase 1: 叙事结构（注入本地库库存摘要，约束 requiredVisual/visualKeywords）
-// Phase 2: 全库段排序，每 beat 取 9 段；综合分与分项高分比例按项目设置调整
-// Phase 3: 每拍单独看最多 9 张图，默认一镜；9 条均可选；网格按该条时间窗现拼
+// Phase 2: 全库段排序，每 beat 取 9 段（弱匹配扩到 12）；综合分与分项高分比例按项目设置调整
+// Phase 3: 每拍单独看图，池内每条都附网格，默认一镜；池内均可选；网格按该条时间窗现拼
 // Phase 4: 锁在 P3 窗内精修切点（禁止换片；整片也不再 Pass A 另切窗）
 // Phase 5: 由调用方执行 normalize + validate_storyboard
 
@@ -24,6 +24,7 @@ const PHASE2_POOL_SIZE: usize = 9;
 /// 最高分低于此阈值时，若库内仍有候选则扩展到 PHASE2_EXTENDED_POOL_SIZE，让 Phase 3 有更多备选。
 const PHASE2_LOW_MATCH_THRESHOLD: f64 = 30.0;
 /// 弱匹配时最多扩展到多少条（不影响现有 PHASE2_POOL_SIZE == 9 的基线测试）。
+/// Phase 3 网格上限与此一致：池里每条都附图。
 const PHASE2_EXTENDED_POOL_SIZE: usize = 12;
 /// 每个 beat 池内同一素材最多几段。
 const PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL: usize = 2;
@@ -2495,7 +2496,7 @@ mod tests {
     }
 }
 
-/// Phase 3: 每个 beat 单独看最多 9 张候选图，默认选 1 镜；池内候选均可选。
+/// Phase 3: 每个 beat 单独看图（池内每条一张网格），默认选 1 镜；池内候选均可选。
 ///
 /// `prior_shots` 为上一版 storyboard 的镜头列表。beat id 不变且上次选中的
 /// assetId/segmentId 仍在新候选池里时，直接复用上次结果跳过模型调用（增量重跑）。
@@ -2976,7 +2977,7 @@ fn select_one_beat(
         Beat timing plan: {}\n\
         Candidate pool for this beat: {candidate_cards_json}\n\
         {feedback_context}{low_match_note}{user_note_line}\n\n\
-        Keyframe grids for this beat's candidates are attached below (up to 9). Each image is this candidate's own time window, not a stand-in for the whole file.\n\
+        Keyframe grids are attached below for {} of this beat's {} candidates. Each image is this candidate's own time window, not a stand-in for the whole file.\n\
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
         If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
@@ -2999,6 +3000,8 @@ fn select_one_beat(
         already,
         rough.uncovered_beat_ids.join(", "),
         serde_json::to_string(&rough.speech_timing).unwrap(),
+        attached_indexes.len(),
+        pool.candidates.len(),
         pool.beat_id
     );
     let mut content_blocks = vec![json!({ "type": "input_text", "text": prompt })];
@@ -3133,7 +3136,8 @@ fn candidate_evidence_summary(candidate: &StoryboardSource) -> Value {
     }
 }
 
-/// 为这一拍附上最多 9 张候选网格：按该条时间窗现拼，缺文件则现抽。
+/// 为这一拍池内每条候选附一张网格：按该条时间窗现拼，缺文件则现抽。
+/// 上限跟 Phase 2 最大池（弱匹配扩池）一致，扩池的候选也能被看图，不只剩文字卡。
 fn phase3_keyframe_image_blocks_for_pool(
     app: &AppHandle,
     pool: &BeatCandidatePool,
@@ -3142,10 +3146,7 @@ fn phase3_keyframe_image_blocks_for_pool(
 
     let mut blocks = Vec::new();
     let mut attached = HashSet::new();
-    let considered = pool
-        .candidates
-        .len()
-        .min(crate::storyboard::multimodal::PHASE3_MAX_GRID_IMAGES);
+    let considered = pool.candidates.len().min(PHASE2_EXTENDED_POOL_SIZE);
     for (index, candidate) in pool.candidates.iter().take(considered).enumerate() {
         let Some(grid_path) = ensure_phase3_candidate_grid(Some(app), candidate) else {
             continue;

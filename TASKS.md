@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-25，claude/p2-p3-quota-allocation-939155）：Phase 3 网格上限跟候选池走。弱匹配扩池到 12 条时，后 3 条过去只有文字卡；现在池内每条都附网格，上限等于 Phase 2 最大池，提示词写实际附图数。cargo check 通过；待真实弱匹配回合验收。见 docs/changes/2026-09-25-phase3-grid-follows-pool.md。
 - [ ] implemented_unverified（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5，默认排除当前素材）与 `refine_shot_ranges`（只走 P4→P5），其余镜头、配音、字幕冻结，拍时长取当前时间线，同事务写派生 storyboard + 新 timeline 并出预览；`generate_storyboard` 保留为默认流程。cargo check、storyboard/tools 测试通过；待真实桌面回合验收。前端派生版本标注、手动换镜召回升级另开任务。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。
 - [ ] 待修（2026-09-25）：Phase 3 增量重跑从未生效。`phase3_select` 无修复包时 `beats_named_in_repair` 返回全部拍，`prior_shots` 复用分支走不到；有修复包时又不加载 `prior_shots`。需决定是修复还是删除该路径（局部编辑已由 `reselect_shots` 承担）。
 - [x] 已修复（2026-09-25，claude/determined-dirac-80a490）：`get_library_visual_overview` / `get_asset_visual_detail` 补进 `NATIVE_TOOL_NAMES`，模型调用不再被白名单拒绝。cargo check 与 `agentloop::` 112 项测试通过（含原失败的 `ordinary_question_returns_message_without_tool_call`）。见 docs/changes/2026-09-25-visual-tools-native-whitelist.md。
