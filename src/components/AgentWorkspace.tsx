@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
 import { MessageMarkdown } from './MessageMarkdown'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { BrandMark } from './BrandMark'
 import type { AssetAnalysisProgress as AnalysisProgress, MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
 import { useI18n } from '../lib/i18n'
@@ -120,7 +121,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-content">
               <div className="message-meta">
-                {message.role === 'agent' ? 'Voycut' : copy.you} <time>{message.time}</time>
+                {message.role === 'agent' ? <><BrandMark className="brand-mark message-avatar" />Voycut</> : copy.you} <time>{message.time}</time>
               </div>
               {message.role === 'agent' ? <MessageMarkdown content={message.content} /> : <p>{message.content}</p>}
               {mediaOptions && <small className="message-media-options">{copy.autoAdded} · {mediaSummary(mediaOptions, t)}</small>}

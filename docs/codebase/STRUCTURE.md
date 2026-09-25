@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-25 Voycut 品牌风格：`src/index.css` 新增画布、品牌渐变与主色填充变量；`BrandMark` 绘制侧栏字标与助手头像的占位标志；对话区与预览区为画布上的白色面板。
+
 2026-09-25 消息 Markdown：`MessageMarkdown` 渲染助手回复（`react-markdown` + `remark-gfm`），不执行原始 HTML、不加载图片，外部链接经 `@tauri-apps/plugin-opener` 交给系统浏览器；用户消息保持原文。
 
 2026-09-25 精修浅色改版：`src/index.css` 定义全部设计变量（颜色、字号、圆角、阴影、动效）；`src/styles/` 按区域拆为 `shell`、`conversation`、`preview`、`assets`、`dialogs`、`responsive`，取代已删除的 `App.css` 与 `light-workspace.css`。`AgentRunCard` 默认只露一行状态；`RoughCutPlayer` 接收镜头区间画分段进度条；侧栏会话用统一竖屏图标，`useSessionArtworkController` 已删除。

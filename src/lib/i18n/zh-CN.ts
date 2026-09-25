@@ -155,6 +155,7 @@ export const zhCN = {
     libraryAnalyzing: (count: number) => `素材库，正在分析，共 ${count} 个`,
     libraryAttention: (count: number) => `素材库，有未完成分析，共 ${count} 个`,
     libraryIdle: (count: number) => `素材库，共 ${count} 个`,
+    libraryCount: (count: number) => `${count} 个素材`,
     library: '素材库',
     newSessionTitle: '新建剪辑会话',
     newEdit: '新建剪辑',

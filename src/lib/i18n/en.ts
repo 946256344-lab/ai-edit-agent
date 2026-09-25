@@ -161,6 +161,7 @@ export const en: typeof zhCN = {
     libraryAnalyzing: (count: number) => `Media library, analyzing, ${plural(count, 'item')}`,
     libraryAttention: (count: number) => `Media library, analysis incomplete, ${plural(count, 'item')}`,
     libraryIdle: (count: number) => `Media library, ${plural(count, 'item')}`,
+    libraryCount: (count: number) => plural(count, 'item'),
     library: 'Media library',
     newSessionTitle: 'New edit session',
     newEdit: 'New edit',

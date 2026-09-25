@@ -6,6 +6,7 @@ import type { EditingSessionView, WorkspaceView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
 import { NameEditDialog } from './NameEditDialog'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { BrandMark } from './BrandMark'
 import { useI18n } from '../lib/i18n'
 
 export type AppSidebarModel = {
@@ -52,7 +53,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
   }, [])
   return (
     <aside ref={sidebar} className="sidebar project-sidebar">
-      <span className="assembly-wordmark" data-tauri-drag-region>Voycut</span>
+      <span className="assembly-wordmark" data-tauri-drag-region><BrandMark /><span>Voycut</span></span>
       <div className="sidebar-project">
         <span className="sidebar-label">{copy.currentProject}</span>
         <details className="project-switcher" onKeyDown={(event) => {
@@ -79,7 +80,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
           </div>
         </details>
         <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label={model.analysisStatus === 'analyzing' ? copy.libraryAnalyzing(model.assetCount) : model.analysisStatus === 'attention' ? copy.libraryAttention(model.assetCount) : copy.libraryIdle(model.assetCount)} aria-pressed={model.view === 'assets'} title={model.analysisStatus === 'idle' ? undefined : model.analysisHint} onClick={actions.openAssets}>
-          <WorkspaceIcon name="library" /><span>{copy.library}</span><small>{model.assetCount}</small>
+          <WorkspaceIcon name="library" /><span><strong>{copy.library}</strong><small>{copy.libraryCount(model.assetCount)}</small></span>
           {model.analysisStatus !== 'idle' && <i className={`sidebar-library__status sidebar-library__status--${model.analysisStatus}`} aria-hidden="true" />}
         </button>
         <button className="new-edit" onClick={actions.createSession} title={copy.newSessionTitle}><WorkspaceIcon name="plus" /><span>{copy.newEdit}</span></button>

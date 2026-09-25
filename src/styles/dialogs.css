@@ -48,7 +48,7 @@
 .library-choices > p { margin: 0; padding: 14px; color: var(--text-2); font-size: var(--text-xs); }
 .library-choice { display: flex; align-items: center; gap: 10px; padding: 12px 14px; font-size: var(--text-sm); cursor: pointer; }
 .library-choice + .library-choice { border-top: 1px solid var(--line); }
-.library-choice:has(input:checked) { background: var(--bg-sunken); }
+.library-choice:has(input:checked) { background: var(--accent-wash); }
 .library-choice input { width: 15px; height: 15px; accent-color: var(--accent); }
 .library-choice .workspace-icon { color: var(--text-2); }
 .library-choice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -63,9 +63,9 @@
 .asset-analysis-dialog label { color: var(--text-2); font-size: var(--text-xs); }
 .asset-analysis-eta { color: var(--text-2); font-size: var(--text-xs); }
 .asset-dialog-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 24px; }
-.asset-dialog-actions button { min-height: 36px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--text-sm); font-weight: 500; }
-.asset-dialog-actions button:hover:not(:disabled) { background: var(--fill); }
-.asset-dialog-actions .import-button { border-color: var(--text); background: var(--text); color: var(--bg); }
-.asset-dialog-actions .import-button:hover:not(:disabled) { background: #000; }
+.asset-dialog-actions button { min-height: 36px; padding: 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font-size: var(--text-sm); font-weight: 500; }
+.asset-dialog-actions button:hover:not(:disabled) { background: var(--bg-sunken); }
+.asset-dialog-actions .import-button { border-color: transparent; background: var(--accent-fill); color: #fff; box-shadow: var(--shadow-button); }
+.asset-dialog-actions .import-button:hover:not(:disabled) { background: var(--accent-hover); }
 .asset-dialog-actions .asset-dialog-secondary { margin-right: auto; border-color: transparent; background: transparent; color: var(--text-2); }
 .asset-name-input { display: block; width: 100%; height: 40px; margin-top: 10px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
