@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { AgentRunCard } from './AgentRunCard'
+import { MessageMarkdown } from './MessageMarkdown'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import type { AssetAnalysisProgress as AnalysisProgress, MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
@@ -121,7 +122,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               <div className="message-meta">
                 {message.role === 'agent' ? 'FellowCut' : copy.you} <time>{message.time}</time>
               </div>
-              <p>{message.content}</p>
+              {message.role === 'agent' ? <MessageMarkdown content={message.content} /> : <p>{message.content}</p>}
               {mediaOptions && <small className="message-media-options">{copy.autoAdded} · {mediaSummary(mediaOptions, t)}</small>}
             </div>
           </article>

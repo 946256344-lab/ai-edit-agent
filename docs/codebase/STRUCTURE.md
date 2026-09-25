@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-25 消息 Markdown：`MessageMarkdown` 渲染助手回复（`react-markdown` + `remark-gfm`），不执行原始 HTML、不加载图片，外部链接经 `@tauri-apps/plugin-opener` 交给系统浏览器；用户消息保持原文。
+
 2026-09-25 精修浅色改版：`src/index.css` 定义全部设计变量（颜色、字号、圆角、阴影、动效）；`src/styles/` 按区域拆为 `shell`、`conversation`、`preview`、`assets`、`dialogs`、`responsive`，取代已删除的 `App.css` 与 `light-workspace.css`。`AgentRunCard` 默认只露一行状态；`RoughCutPlayer` 接收镜头区间画分段进度条；侧栏会话用统一竖屏图标，`useSessionArtworkController` 已删除。
 
 2026-09-18 素材分析提示：导入弹窗保留 `AssetAnalysisModal` / `AssetAnalysisProgress`；侧栏 `AppSidebar` 素材库入口用环境状态点；发送时 `AnalysisIncompleteDialog` 确认是否只用已分析素材；素材库进度筛选与进度条收到 `AssetBrowser` 列表标题。已去掉右下角 `AnalysisActivity` 与输入区进度卡。
