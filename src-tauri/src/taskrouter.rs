@@ -1,7 +1,7 @@
 //! 消息写入前的任务归属与一次性 receipt 边界；只选当前激活任务，不选择 Agent 工具。
 use crate::db::{now_millis, open_connection};
 use crate::models::TaskRouteResult;
-use crate::provider::{model_response_json_text, post_model_payload, ModelAccess};
+use crate::provider::{model_response_json_text, post_model_payload, with_model_failure_code, ModelAccess};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -112,7 +112,8 @@ fn resolve_conversation_task_blocking(
     let body = json!({"model":"gpt-5.4","store":false,"stream":true,
         "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
         "text":{"format":{"type":"json_object"}}});
-    let response_body = post_model_payload(&access, &body, Some(TASK_ROUTE_TIMEOUT))?;
+    let response_body = post_model_payload(&access, &body, Some(TASK_ROUTE_TIMEOUT))
+        .map_err(with_model_failure_code)?;
     let response_text = model_response_json_text(&access, &response_body)
         .ok_or_else(|| "Task route response did not contain JSON.".to_owned())?;
     let response: ModelTaskRoute = serde_json::from_str(&response_text)
@@ -124,7 +125,7 @@ fn resolve_conversation_task_blocking(
         Err(hint) => {
             let cp = format!("{prompt}\n\nIssue: {hint} Return corrected JSON only.");
             let cb = json!({"model":"gpt-5.4","store":false,"stream":true,"input":[{"role":"user","content":[{"type":"input_text","text":cp}]}],"text":{"format":{"type":"json_object"}}});
-            let ct = model_response_json_text(&access, &post_model_payload(&access, &cb, Some(TASK_ROUTE_TIMEOUT))?)
+            let ct = model_response_json_text(&access, &post_model_payload(&access, &cb, Some(TASK_ROUTE_TIMEOUT)).map_err(with_model_failure_code)?)
                 .ok_or_else(|| "Task route correction did not contain JSON.".to_owned())?;
             let corrected: ModelTaskRoute = serde_json::from_str(&ct)
                 .map_err(|_| "Task route correction was malformed.".to_owned())?;
