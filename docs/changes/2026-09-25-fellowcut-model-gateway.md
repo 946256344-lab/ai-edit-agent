@@ -12,7 +12,9 @@
 
 ## 验证与限制
 
-`cargo check`、前端 lint、TypeScript 编译、harness 与网站网关模拟测试通过。2026-09-25 合入 `origin/master` 后，在独立端口启动真实 Tauri 开发版：原有项目和会话可读取，桌面账号显示邮箱已验证、试用中；中英切换后账号弹窗文案跟随语言。真实测试账号从桌面发起只读项目状态请求，经本机临时代理访问受 Vercel 登录保护的预览网关；Native Provider trace 中前两次 Chat Completions 请求均为 HTTP 200，界面收到模型回复。首次 Agent 最终状态为「部分完成」：SQLite 步骤记录显示 `list_assets` 与 `get_asset_health_summary` 成功，`get_library_visual_overview` 因未在执行白名单而记为 `tool_not_allowed`。该工具与 `get_asset_visual_detail` 已在工具目录中，此分支同步补入白名单并增加目录与白名单一致的回归断言；针对性 Rust 测试通过。修复后重跑真实桌面只读请求，经预览网关返回 HTTP 200，界面状态为「完成」并显示模型回复。预览保护无法由公开桌面客户端直接访问；图像批量请求、完整剪辑链路及正式安装包仍待验证。此阶段为部分已验证。
+`cargo check`、前端 lint、TypeScript 编译、harness 与网站网关模拟测试通过。2026-09-25 合入 `origin/master` 后，在独立端口启动真实 Tauri 开发版：原有项目和会话可读取，桌面账号显示邮箱已验证、试用中；中英切换后账号弹窗文案跟随语言。真实测试账号从桌面发起只读项目状态请求，经本机临时代理访问受 Vercel 登录保护的预览网关；Native Provider trace 中前两次 Chat Completions 请求均为 HTTP 200，界面收到模型回复。首次 Agent 最终状态为「部分完成」：SQLite 步骤记录显示 `list_assets` 与 `get_asset_health_summary` 成功，`get_library_visual_overview` 因未在执行白名单而记为 `tool_not_allowed`。该工具与 `get_asset_visual_detail` 已在工具目录中，此分支同步补入白名单并增加目录与白名单一致的回归断言；针对性 Rust 测试通过。修复后重跑真实桌面只读请求，经预览网关返回 HTTP 200，界面状态为「完成」并显示模型回复。
+
+同一开发版中，用已有且已分析的本机素材请求约 8 秒无旁白粗剪。步骤记录确认 `get_library_visual_overview`、`list_assets`、`generate_storyboard`、`get_storyboard`、`render_preview` 均完成；产生 3 镜头、8.0 秒 storyboard 与预览。原预览 MP4 为 H.264、540×960、7.93 秒，已在窗口播放。随后在界面将第 3 镜头从 `38.mp4` 换成 `39.mp4`，时间线由第 1 版变为第 2 版；新预览文件约 570 KB，FFprobe 确认同为 H.264、540×960、7.93 秒，窗口播放到结尾。粗剪工具完成后，最后一次模型结果说明请求失败，整轮显示「部分完成」，实际预览仍保留。公开桌面客户端无法直接访问受 Vercel 登录保护的预览；图像批量请求、素材导入、剪映草稿交付及正式安装包仍待验证。此阶段为部分已验证。
 
 开发版启动检查提示缺少 Tesseract、剪映草稿目录与 pyJianYingDraft/pycapcut；本轮未验证剪映草稿交付。原有项目的素材库侧栏加载完成后显示 95 条，模型回复称 102 条。只读 SQLite 核对表明当前项目可访问资产有 102 条，其中 7 条已标记从素材库移除；素材列表过滤移除标记，而 Agent 健康摘要尚未过滤。模型回复中的总数不等同于当前可见素材数，需另行对齐统计口径。
 
