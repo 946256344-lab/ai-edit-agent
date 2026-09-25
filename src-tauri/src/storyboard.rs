@@ -2552,7 +2552,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn generate_storyboard(
     app: AppHandle,
     project_id: String,
@@ -3411,7 +3411,7 @@ fn generate_storyboard_internal(
     Ok(version)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_latest_storyboard(
     app: AppHandle,
     project_id: String,
@@ -3424,7 +3424,7 @@ pub fn get_latest_storyboard(
         .map_or(Ok(None), |version| Ok(Some(version)))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_storyboard_versions(
     app: AppHandle,
     project_id: String,
@@ -3444,7 +3444,7 @@ pub fn list_storyboard_versions(
     storyboard_versions_for_task(&connection, &project_id, &editing_task_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_storyboard_version(
     app: AppHandle,
     project_id: String,

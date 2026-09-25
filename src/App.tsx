@@ -69,6 +69,8 @@ function App() {
   const [editingSessions, setEditingSessions] = useState<EditingSessionView[]>([])
   const [activeEditingSessionId, setActiveEditingSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
+  // 发送后、任务归属模型返回并落库前先显示的用户消息；落库后由真实消息替换。
+  const [pendingUserMessage, setPendingUserMessage] = useState<ConversationMessage | null>(null)
   const [activeView, setActiveView] = useState<WorkspaceView>('chat')
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -238,6 +240,7 @@ function App() {
   async function appendStoredMessage(conversationId: string, sessionId: string, role: StoredMessage['role'], content: string, routeReceipt?: string) {
     const storedMessage = await createStoredMessage(conversationId, role, content, routeReceipt)
     if (sessionId === activeEditingSessionRef.current) setMessages((current) => [...current, toMessage(storedMessage)])
+    if (role === 'user') setPendingUserMessage(null)
   }
 
   async function createEditingSessionWorkspace() {
@@ -398,14 +401,24 @@ function App() {
     cancelRequestedRef.current = false
     setIsSending(true)
     setComposerNotice(null)
+    // 任务归属要等一次模型请求；先把用户消息显示出来并清空输入框，落库前失败或取消再放回。
+    setPendingUserMessage({ id: `pending-user-${Date.now()}`, role: 'user', content: trimmed, time: '发送中…' })
+    setInput('')
+    const restoreDraft = () => {
+      setPendingUserMessage(null)
+      setInput((current) => current.trim() ? current : trimmed)
+    }
     let context: { conversationId: string; projectId: string; sessionId: string } | null = null
+    let persisted = false
     try {
       if (!await analysisGate.waitForAnalysis() || cancelRequestedRef.current) {
+        restoreDraft()
         setIsSending(false)
         setComposerNotice('已取消这次发送，剪辑要求已保留。')
         return
       }
       if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
+        restoreDraft()
         setComposerNotice('Agent 事件连接暂时不可用，请再次点击发送重试。')
         setIsSending(false)
         return
@@ -415,13 +428,14 @@ function App() {
       setRouteStatusTone('info')
       const resolved = await resolveMessageContext(trimmed)
       if (cancelRequestedRef.current) {
+        restoreDraft()
         setIsSending(false)
         setComposerNotice('已停止本轮处理。')
         return
       }
       if (!resolved.context) {
+        setPendingUserMessage(null)
         showTaskRouteClarification(trimmed, resolved.route.question || '请确认这条请求属于哪个剪辑任务。')
-        setInput('')
         setIsSending(false)
         return
       }
@@ -435,6 +449,7 @@ function App() {
         ? `${resolved.route.deferredRequest}\n\n任务归属补充：${trimmed}`
         : trimmed
       await appendStoredMessage(conversationId, sessionId, 'user', routedRequest, resolved.context.routeReceipt)
+      persisted = true
       if (cancelRequestedRef.current) {
         setIsSending(false)
         setComposerNotice('已停止本轮处理。')
@@ -442,7 +457,6 @@ function App() {
       }
       await setConversationStatus(conversationId, 'working')
       await refreshEditingSessions(projectId)
-      setInput('')
       if (cancelRequestedRef.current) {
         await setConversationStatus(conversationId, 'ready')
         await refreshEditingSessions(projectId)
@@ -480,6 +494,7 @@ function App() {
       )
     } catch (error) {
       setIsSending(false)
+      if (!persisted) restoreDraft()
       setRouteStatusText('这轮请求未完成')
       setRouteStatusDetail(null)
       setRouteStatusTone('warning')
@@ -643,7 +658,7 @@ function App() {
               model={{
                 session: activeEditingSession,
                 storyboard: artifactWorkspace.storyboard,
-                messages,
+                messages: pendingUserMessage ? [...messages, pendingUserMessage] : messages,
                 tasks: agentTasks,
                 input,
                 isSending,

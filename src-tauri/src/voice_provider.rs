@@ -1012,7 +1012,7 @@ pub(crate) fn synthesize_voiceover_for_timeline(
 /// storyboard 生成后自动合成配音+对齐字幕：从 timeline 反查其 storyboard，取全部
 /// shot 的 narrationText 合成整段语音，写回为 timeline 新版本。前端在
 /// create_timeline_draft 之后调用，把返回的新版本用于渲染预览。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn synthesize_storyboard_voiceover(
     app: AppHandle,
     project_id: String,

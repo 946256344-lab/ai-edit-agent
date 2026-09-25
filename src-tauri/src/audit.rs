@@ -73,7 +73,7 @@ fn is_safe_diagnostic_content(content: &str) -> bool {
         })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_agent_diagnostics(
     app: AppHandle,
     project_id: String,
@@ -225,7 +225,7 @@ fn parse_audit_json(value: Option<String>) -> Result<Option<serde_json::Value>, 
         .transpose()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_agent_tasks(
     app: AppHandle,
     project_id: String,
@@ -297,7 +297,7 @@ pub(crate) fn list_agent_run_steps_in_connection(
     Ok(steps)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_agent_run_steps(
     app: AppHandle,
     project_id: String,
@@ -308,7 +308,7 @@ pub fn list_agent_run_steps(
     list_agent_run_steps_in_connection(&connection, &project_id, &editing_task_id, &agent_task_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_operation_logs(
     app: AppHandle,
     project_id: String,

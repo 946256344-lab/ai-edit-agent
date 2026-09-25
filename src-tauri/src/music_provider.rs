@@ -191,7 +191,7 @@ pub(crate) fn download_track(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_jamendo_status() -> JamendoStatus {
     JamendoStatus {
         state: if client_id().is_ok() {
@@ -203,7 +203,7 @@ pub fn get_jamendo_status() -> JamendoStatus {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_jamendo_client_id(client_id: String) -> JamendoStatus {
     let value = client_id.trim();
     if value.is_empty()
@@ -354,7 +354,7 @@ fn elevenlabs_error_code(error: &str) -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_elevenlabs_status() -> ElevenLabsStatus {
     let key_stored = elevenlabs_stored_key().is_ok();
     let importable = !key_stored && elevenlabs_environment_key().is_some();
@@ -392,7 +392,7 @@ pub fn get_elevenlabs_status() -> ElevenLabsStatus {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_elevenlabs_api_key(api_key: String) -> ElevenLabsStatus {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
@@ -423,7 +423,7 @@ pub fn save_elevenlabs_api_key(api_key: String) -> ElevenLabsStatus {
     get_elevenlabs_status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_elevenlabs_api_key() -> ElevenLabsStatus {
     if let Ok(entry) = elevenlabs_entry() {
         let _ = entry.delete_credential();
@@ -431,7 +431,7 @@ pub fn clear_elevenlabs_api_key() -> ElevenLabsStatus {
     get_elevenlabs_status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_elevenlabs_api_key_from_environment() -> ElevenLabsStatus {
     if elevenlabs_stored_key().is_ok() {
         return get_elevenlabs_status();
@@ -683,12 +683,12 @@ pub(crate) mod fish_audio {
         }
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn get_fish_audio_status() -> FishAudioStatus {
         status()
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn save_fish_audio_api_key(api_key: String) -> FishAudioStatus {
         if entry()
             .and_then(|entry| {
@@ -708,7 +708,7 @@ pub(crate) mod fish_audio {
         status()
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn clear_fish_audio_api_key() -> FishAudioStatus {
         if let Ok(entry) = entry() {
             let _ = entry.delete_credential();
@@ -716,7 +716,7 @@ pub(crate) mod fish_audio {
         status()
     }
 
-    #[tauri::command]
+    #[tauri::command(async)]
     pub fn import_fish_audio_api_key_from_environment() -> FishAudioStatus {
         match environment_key() {
             Some(key) => save_fish_audio_api_key(key),

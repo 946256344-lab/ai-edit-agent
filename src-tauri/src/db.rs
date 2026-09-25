@@ -5,8 +5,10 @@
 
 use rusqlite::{params, Connection};
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
+    sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
@@ -30,7 +32,8 @@ pub(crate) fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn open_connection(app: &AppHandle) -> Result<Connection, String> {
-    let connection = Connection::open(database_path(app)?).map_err(|error| error.to_string())?;
+    let path = database_path(app)?;
+    let connection = Connection::open(&path).map_err(|error| error.to_string())?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| error.to_string())?;
@@ -43,8 +46,25 @@ pub(crate) fn open_connection(app: &AppHandle) -> Result<Connection, String> {
     connection
         .pragma_update(None, "foreign_keys", "ON")
         .map_err(|error| error.to_string())?;
-    migrate(&connection)?;
+    // 迁移含写语句（需写锁、全表回填扫描），每个命令都重跑会与后台分析争锁并拖慢交互；
+    // 同一进程内每个数据库文件成功迁移一次即可，失败则下次打开时重试。
+    let migrated = migrated_databases();
+    if !migrated
+        .lock()
+        .map(|done| done.contains(&path))
+        .unwrap_or(false)
+    {
+        migrate(&connection)?;
+        if let Ok(mut done) = migrated.lock() {
+            done.insert(path);
+        }
+    }
     Ok(connection)
+}
+
+fn migrated_databases() -> &'static Mutex<HashSet<PathBuf>> {
+    static MIGRATED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    MIGRATED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {

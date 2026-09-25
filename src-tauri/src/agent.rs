@@ -226,7 +226,7 @@ fn finalize_agent_task(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn execute_agent_edit(
     app: AppHandle,
     project_id: String,
@@ -333,7 +333,7 @@ fn submit_conversation_turn_blocking(
 }
 
 /// 取消当前作用域内仍在排队或运行的 Agent 编辑任务；循环在下一步检查点停止。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_agent_edit(
     app: AppHandle,
     project_id: String,

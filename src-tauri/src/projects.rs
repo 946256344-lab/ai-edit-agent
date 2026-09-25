@@ -34,7 +34,7 @@ pub(crate) fn candidate_score_first_slots(
         .unwrap_or(DEFAULT_CANDIDATE_SCORE_FIRST_SLOTS))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_candidate_score_first_slots(
     app: AppHandle,
     project_id: String,
@@ -43,7 +43,7 @@ pub fn get_candidate_score_first_slots(
     candidate_score_first_slots(&connection, &project_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_candidate_score_first_slots(
     app: AppHandle,
     project_id: String,
@@ -166,7 +166,7 @@ fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<
     Ok(missing.len())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     let start = std::time::Instant::now();
     log::info!("[PERF] initialize_local_store: starting");
@@ -283,7 +283,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_project(
     app: AppHandle,
     name: String,
@@ -331,7 +331,7 @@ pub fn create_project(
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_projects(app: AppHandle) -> Result<Vec<Project>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection
@@ -351,7 +351,7 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<Project>, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_project(app: AppHandle, project_id: String, name: String) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -392,7 +392,7 @@ fn rename_project_record(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_conversation(
     app: AppHandle,
     project_id: String,
@@ -454,7 +454,7 @@ pub fn create_conversation(
     Ok(conversation)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_editing_session(
     app: AppHandle,
     project_id: String,
@@ -497,7 +497,7 @@ pub fn create_editing_session(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_editing_sessions(
     app: AppHandle,
     project_id: String,
@@ -506,7 +506,7 @@ pub fn list_editing_sessions(
     editing_sessions_for_project(&connection, &project_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_editing_session(
     app: AppHandle,
     project_id: String,
@@ -549,7 +549,7 @@ fn rename_editing_session_record(
     transaction.commit().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_project(app: AppHandle, project_id: String, confirmed: bool) -> Result<(), String> {
     if !confirmed {
         return Err("Deleting a project requires explicit confirmation.".to_owned());
@@ -631,7 +631,7 @@ fn delete_project_records(
 
 /// 删除剪辑会话（editing task）及其会话消息、Agent 记录、storyboard/timeline 与本地 preview。
 /// 项目级素材保留。必须 `confirmed=true`。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_editing_session(
     app: AppHandle,
     project_id: String,
@@ -823,7 +823,7 @@ fn editing_sessions_for_project(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_conversations(
     app: AppHandle,
     project_id: String,
@@ -860,7 +860,7 @@ pub fn list_conversations(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_editing_task(
     app: AppHandle,
     project_id: String,
@@ -887,7 +887,7 @@ pub fn create_editing_task(
     Ok(task)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_editing_tasks(app: AppHandle, project_id: String) -> Result<Vec<EditingTask>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection.prepare(
@@ -926,7 +926,7 @@ pub fn list_editing_tasks(app: AppHandle, project_id: String) -> Result<Vec<Edit
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_editing_task_brief(
     app: AppHandle,
     editing_task_id: String,
@@ -947,7 +947,7 @@ pub fn update_editing_task_brief(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_message(
     app: AppHandle,
     conversation_id: String,
@@ -1012,7 +1012,7 @@ pub fn create_message(
     Ok(message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_conversation_status(
     app: AppHandle,
     conversation_id: String,
@@ -1034,7 +1034,7 @@ pub fn set_conversation_status(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_messages(app: AppHandle, conversation_id: String) -> Result<Vec<Message>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection.prepare(

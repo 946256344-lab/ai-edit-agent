@@ -12,7 +12,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 
 const PROGRESS_EVENT: &str = "runtime-model-progress";
@@ -320,15 +321,34 @@ fn artifact_ready_on_disk(app: &AppHandle, id: ArtifactId) -> bool {
         return false;
     };
     let path = directory.join(required);
-    let Ok(bytes) = fs::read(&path) else {
+    let Ok(metadata) = fs::metadata(&path) else {
         return false;
     };
-    hash_bytes(&bytes) == id.sha256()
+    // 权重合计约 700 MB：同一进程内按路径+大小+修改时间记住已校验通过的文件，
+    // 避免启动与每次状态快照重复整文件哈希；文件被替换后元数据变化即重新校验。
+    let fingerprint = (metadata.len(), metadata.modified().ok());
+    let verified = verified_artifacts();
+    if verified
+        .lock()
+        .map(|cache| cache.get(&path) == Some(&fingerprint))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let ready = hash_file(&path).is_ok_and(|actual| actual == id.sha256());
+    if ready {
+        if let Ok(mut cache) = verified.lock() {
+            cache.insert(path, fingerprint);
+        }
+    }
+    ready
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+type ArtifactFingerprint = (u64, Option<SystemTime>);
+
+fn verified_artifacts() -> &'static Mutex<HashMap<PathBuf, ArtifactFingerprint>> {
+    static VERIFIED: OnceLock<Mutex<HashMap<PathBuf, ArtifactFingerprint>>> = OnceLock::new();
+    VERIFIED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
@@ -431,7 +451,7 @@ fn refresh_artifact_baselines(app: &AppHandle, state: &mut DownloadState) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_runtime_model_status(app: AppHandle) -> Result<RuntimeModelStatus, String> {
     let mut state = state_lock()
         .lock()
@@ -440,7 +460,7 @@ pub fn get_runtime_model_status(app: AppHandle) -> Result<RuntimeModelStatus, St
     Ok(snapshot_status(&app, &state))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_runtime_model_download(app: AppHandle) -> Result<RuntimeModelStatus, String> {
     let status = {
         let mut state = state_lock()

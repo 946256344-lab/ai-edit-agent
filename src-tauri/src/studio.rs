@@ -158,7 +158,7 @@ fn recompute_positions(clips: &mut [TimelineClip]) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn commit_studio_edits(
     app: AppHandle,
     payload: StudioCommitPayload,

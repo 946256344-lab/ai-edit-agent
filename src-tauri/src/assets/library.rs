@@ -243,7 +243,7 @@ fn list_assets_snapshot(
     Ok(assets)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_assets(app: AppHandle, project_id: String) -> Result<Vec<Asset>, String> {
     list_assets_snapshot(app, project_id, true)
 }
@@ -481,7 +481,7 @@ fn top_n_by_count(
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 /// 返回一个有界素材页和目录投影；目录筛选按"直属素材"语义执行，而不是递归混入后代。
 pub fn list_asset_page(
     app: AppHandle,
@@ -682,7 +682,7 @@ pub fn list_asset_page(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvidence, String> {
     let connection = open_connection(&app)?;
     let evidence = connection
@@ -784,7 +784,7 @@ fn validate_batch_asset_ids(
     Ok(validated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_asset_user_metadata_batch(
     app: AppHandle,
     project_id: String,
@@ -825,7 +825,7 @@ pub fn update_asset_user_metadata_batch(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_asset_tag_batch(
     app: AppHandle,
     project_id: String,
@@ -862,7 +862,7 @@ pub fn add_asset_tag_batch(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_asset_tag_batch(
     app: AppHandle,
     project_id: String,
@@ -888,7 +888,7 @@ pub fn remove_asset_tag_batch(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_asset_collection(
     app: AppHandle,
     project_id: String,
@@ -910,7 +910,7 @@ pub fn create_asset_collection(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_asset_collections(
     app: AppHandle,
     project_id: String,
@@ -934,7 +934,7 @@ pub fn list_asset_collections(
     Ok(collections)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_assets_to_collection(
     app: AppHandle,
     project_id: String,

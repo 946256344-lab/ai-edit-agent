@@ -287,7 +287,7 @@ fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, String> {
     let mut checks = Vec::new();
     checks.extend(media_runtime_checks());

@@ -381,7 +381,7 @@ fn wait_for_callback(
     emit_status(&app);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_experimental_openai_oauth_status() -> OAuthStatus {
     if matches!(
         login_state().lock().ok().as_deref(),
@@ -397,7 +397,7 @@ pub fn get_experimental_openai_oauth_status() -> OAuthStatus {
     current_status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_experimental_openai_oauth(app: tauri::AppHandle) -> Result<OAuthStart, String> {
     if matches!(
         login_state().lock().ok().as_deref(),
@@ -417,7 +417,7 @@ pub fn start_experimental_openai_oauth(app: tauri::AppHandle) -> Result<OAuthSta
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_experimental_openai_oauth() -> OAuthStatus {
     match credential_entry() {
         Ok(entry) => match entry.delete_credential() {

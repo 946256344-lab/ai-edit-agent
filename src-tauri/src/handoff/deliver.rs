@@ -49,7 +49,7 @@ pub struct EditorDeliveryResult {
     pub jianying: Option<JianyingDraftResult>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_editor_linkers(
     app: AppHandle,
     project_id: String,
@@ -85,7 +85,7 @@ pub fn list_editor_linkers(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_output_editor(
     app: AppHandle,
     project_id: String,
@@ -109,7 +109,7 @@ pub fn set_output_editor(
     list_editor_linkers(app, project_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn deliver_to_editor(
     app: AppHandle,
     timeline_version_id: String,

@@ -17,7 +17,7 @@ use uuid::Uuid;
 const CONFIRMATION_MAX_AGE_MILLIS: i64 = 24 * 60 * 60 * 1_000;
 
 /// 用户确认 storyboard 后，自动依次执行 create_timeline_draft + render_preview。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn confirm_storyboard_and_preview(
     app: AppHandle,
     project_id: String,

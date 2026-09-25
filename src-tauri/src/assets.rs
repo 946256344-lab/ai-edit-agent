@@ -188,7 +188,7 @@ pub(crate) fn wait_for_asset_ready(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_assets(
     app: AppHandle,
     project_id: String,
@@ -198,7 +198,7 @@ pub fn import_assets(
     store_assets(&app, &project_id, sources, None)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_asset_folder(
     app: AppHandle,
     project_id: String,
@@ -288,7 +288,7 @@ fn relink_candidates(
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_asset_relink(
     app: AppHandle,
     project_id: String,
@@ -316,7 +316,7 @@ pub fn preview_asset_relink(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn confirm_asset_relink(
     app: AppHandle,
     project_id: String,
@@ -399,7 +399,7 @@ fn collectable_project_sources(
     Ok(rows)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_collect_project_media(
     app: AppHandle,
     project_id: String,
@@ -450,7 +450,7 @@ fn safe_collected_name(display_name: &str, asset_id: &str) -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn collect_project_media(
     app: AppHandle,
     project_id: String,
