@@ -76,8 +76,8 @@ impl ShotLengthHint {
     pub(crate) fn prompt_line(self) -> &'static str {
         match self {
             ShotLengthHint::Short => {
-                "The user asked for a fast cut. Prefer the shortest clip that still covers requiredVisual, \
-                and prefer splitting this beat across 2-3 distinct clips over holding one shot."
+                "The user asked for fast cuts. Prefer the shortest clip that still covers requiredVisual. \
+                A second distinct shot is still allowed only when two clips honestly cover different parts of requiredVisual — do not pad."
             }
             ShotLengthHint::Default => "Picture shots should last about 2-3 seconds.",
             ShotLengthHint::Long => {
@@ -155,13 +155,13 @@ pub(crate) fn phase1_generate_narrative(
     let mut mode_instructions = if required_script_mode == "full_script" {
         "REQUIRED scriptMode=full_script (the brief is the spoken narration to read). Do not choose key_message.\n\
         Put the exact speakable script into spokenScript (strip only non-spoken instructions like 'please edit a video'; keep wording, order, and language unchanged — do not paraphrase, summarize, or invent). Split the SAME wording across beat.narration fields so concatenating beat narrations (with spaces) reproduces spokenScript without extras or omissions. Set each beat.onScreenText to \"\" (subtitles come from voice alignment later).\n\
-        targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Split by meaning, not punctuation. Aim for about 2-3 seconds of spoken narration per beat; duration can wobble. Later selection uses one picture shot per beat."
+        targetDurationMs must match the real spokenScript length; never invent a longer essay than spokenScript. Split by meaning, not punctuation. Each beat should cover one distinct spoken idea — about 2-3 seconds of speech; duration can wobble. One picture shot is selected per beat."
             .to_owned()
     } else {
         "REQUIRED scriptMode=key_message (locked by the system because the brief is a goal/outline/theme, not a spoken script). Do not choose full_script.\n\
         spokenScript=\"\", set every beat.narration to \"\", and set every beat.onScreenText to \"\" unless the user explicitly asked for on-screen titles.\n\
         Follow the user's duration if they named one (3-120 seconds). \
-        If they did not: suggest 15-45 seconds. Each beat should last about 2-3 seconds of picture — split ideas rather than holding one shot for 5 seconds. \
+        If they did not: suggest 15-45 seconds. Split information into beats of one distinct idea each — about 2-3 seconds worth — rather than collapsing a whole product act into one beat. \
         Prefer a focused promo over a 60-90s essay; do not pad empty time. This is guidance, not a hard cap."
             .to_owned()
     };
@@ -202,7 +202,7 @@ pub(crate) fn phase1_generate_narrative(
         Return a JSON with: title, summary, targetDurationMs (3-120 seconds), scriptMode (must be \"{required_script_mode}\"), spokenScript (string), shotLengthHint (string), and beats.\n\
         Each beat must contain: id (unique short slug), purpose (one sentence), requiredVisual (specific visual requirement grounded in the library inventory when provided), visualKeywords (array of 4-8 concrete English nouns/verbs naming what should be visible on screen — no abstract words; asset tags are English), narration (string), onScreenText (string).\n\
         {mode_instructions}\n\
-        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should usually cover one concrete idea, action, or emotional turn, about 2-3 seconds. Do not collapse a whole product act (intro / problem / proof / CTA) into one beat — one picture shot is cut per beat, so a 6-second beat becomes a 6-second hold.\n\
+        Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should cover one concrete idea, action, or emotional turn — split here rather than collapsing a whole product act (intro / problem / proof / CTA) into one beat. One picture shot is selected per beat, so a 6-second beat produces a 6-second hold.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
         targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or the user's duration / 15-45s guidance (key_message).\n\
         {feedback_context}{inventory_block}"
@@ -2754,8 +2754,7 @@ fn select_one_beat(
         Do not invent camera motion or events absent from the frames. Do not treat a caption as true when the grid shows something else.\n\
         Hard rule: candidateIndexes must be DISTINCT assetIds from THIS beat's pool. Every listed candidateIndex is selectable.\n\
         Hard rule: do not pick a candidate visually similar to an already selected shot.\n\
-        Hard rule: no single assetId may appear in more than 40% of the final shot list.\n\
-        Choose ONE candidate. A second distinct, non-similar asset is allowed only when two clips honestly fit; never pad.\n\
+        Choose ONE candidate. A second distinct, non-similar asset is allowed only when two clips honestly cover different parts of requiredVisual; never pad.\n\
         {pacing_line}\n\
         matchLevel must be 'direct' when the chosen frames visibly cover requiredVisual, otherwise 'contextual'.\n\
         Return JSON only: {{\"selections\":[{{\"beatId\":\"{}\",\"candidateIndexes\":[0],\"uncovered\":false,\"matchLevel\":\"contextual\",\"narration\":null}}]}}\n\
