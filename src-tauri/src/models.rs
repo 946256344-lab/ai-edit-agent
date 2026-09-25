@@ -320,6 +320,19 @@ pub struct StoryboardVersion {
     pub uncovered_beat_ids: Vec<String>,
     pub shots: Vec<StoryboardShot>,
     pub created_at: i64,
+    /// 局部编辑派生关系；整条生成的版本为空。与 content_json 同键存储。
+    #[serde(flatten)]
+    pub derivation: StoryboardDerivation,
+}
+
+/// 局部编辑（重选镜头 / 精修切点）派生出的版本：由哪一版改来、改了哪些 beat。
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryboardDerivation {
+    #[serde(default)]
+    pub derived_from_version_id: Option<String>,
+    #[serde(default)]
+    pub changed_beat_ids: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]

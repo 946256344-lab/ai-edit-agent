@@ -54,3 +54,25 @@
 4. 「用 xx 素材替换第 1 个」：走 `replace_clips`，不调模型。
 5. 池耗尽：诚实报告，不整条重跑。
 6. Agent 轨迹：局部抱怨不触发 `generate_storyboard`。
+
+## 实现（2026-09-25）
+
+- `storyboard.rs`：从 `generate_storyboard_internal` 抽出 `run_phase3_selection`、`run_phase4_and_validate`（新增可选局部作用域）、`persist_storyboard_version` / `insert_storyboard_version`（后者可在调用方事务内写派生关系）；整条生成行为不变。
+- `models.rs`：`StoryboardVersion.derivation`（flatten 为 `derivedFromVersionId`、`changedBeatIds`），读自 `content_json`，旧数据缺省为空。
+- `storyboard/phases.rs`：`build_beat_pool`（单拍召回，整条与局部共用）、`phase3_select_beats`（只选目标拍，冻结镜头作上下文，丢弃旁白改写）、`select_one_beat` 接收用户原话。
+- `storyboard/phase4.rs`：`Phase4Session::scoped` 只精修作用域内镜头，修复不得越界；用户原话进 Pass B 提示词。
+- `storyboard/local_edit.rs`：以时间线为准的编辑基准（同步手动换片、识别手动插入 clip、拒绝被重排的时间线）、目标拍候选预过滤、合并与冻结校验、时间线重建与同事务落库。
+- `agentloop`：两个工具的 schema、白名单、严格参数校验、产物映射、每轮同拍只重选一次。
+
+## 验证
+
+- `cargo check`：通过，警告与改动前一致。
+- `cargo test --lib -- storyboard:: agentloop::tools`：153 通过；新增 1 条回归（目标拍被整体替换、冻结 clip 逐字不变、改动冻结镜头即报错）。
+- `cargo test --lib -- agentloop::`：`ordinary_question_returns_message_without_tool_call` 失败，为改动前已存在的问题：`get_library_visual_overview` / `get_asset_visual_detail` 在工具目录里但不在 `NATIVE_TOOL_NAMES` 白名单，已另开任务修复。
+- 契约：`src/lib/agent-tools.ts` 与 `src-tauri/tests/fixtures/agent_tool_contracts.v1.json` 补两个工具；`cargo test --test agent_contract_assets` 通过（fixture 工具数断言改为 31，原先已因视觉工具停在 27 而失败）；`check-agent-contracts`、`check-doc-sync`、`check-i18n-literals`、`npm run lint` 通过。
+- `npm run harness:check` 仍停在改动前已存在的 `src/App.tsx` useState 预算问题，本任务未触碰前端组件。
+- 真实桌面与真实模型回合待验收（见上方验收场景）。
+
+## 顺带发现
+
+- Phase 3 增量重跑（`prior_shots`）实际从未生效：无修复包时 `beats_named_in_repair` 返回全部拍，复用分支永远走不到；有修复包时又不加载 `prior_shots`。已登记 `TASKS.md`，未在本任务修改。

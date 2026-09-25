@@ -39,6 +39,8 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         | "replace_clips"
         | "insert_clips"
         | "change_clip_duration"
+        | "reselect_shots"
+        | "refine_shot_ranges"
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
@@ -64,6 +66,8 @@ pub(super) fn persisted_artifact_for_tool(
         | "replace_clips"
         | "insert_clips"
         | "change_clip_duration"
+        | "reselect_shots"
+        | "refine_shot_ranges"
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
@@ -1403,6 +1407,121 @@ pub(super) fn apply_skill(
                 "timelineVersionId": timeline_version_id,
                 "versionNumber": version_number
             }))
+        }
+        "reselect_shots" | "refine_shot_ranges" => {
+            use crate::storyboard::local_edit::{self, LocalEditScope, ReselectTarget};
+            let existing = select_timeline_for_tool(state, args)?;
+            let instruction = args
+                .get("instruction")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty());
+            let shot_indexes = args
+                .get("shotIndexes")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_i64).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let scope = LocalEditScope {
+                project_id: state.project_id,
+                editing_task_id: state.editing_task_id,
+                conversation_id: state.conversation_id,
+                agent_task_id: state.agent_task_id,
+            };
+            let outcome = if tool == "reselect_shots" {
+                let beat_ids = args
+                    .get("beatIds")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let target = if beat_ids.is_empty() {
+                    ReselectTarget::Shots(shot_indexes)
+                } else {
+                    ReselectTarget::Beats(beat_ids)
+                };
+                local_edit::reselect_shots(
+                    state.app,
+                    &scope,
+                    &existing.id,
+                    target,
+                    instruction,
+                    args.get("keepCurrent").and_then(Value::as_bool).unwrap_or(false),
+                    &state.reselected_beats,
+                )?
+            } else {
+                local_edit::refine_shot_ranges(
+                    state.app,
+                    &scope,
+                    &existing.id,
+                    &shot_indexes,
+                    instruction,
+                )?
+            };
+            if tool == "reselect_shots" {
+                state
+                    .reselected_beats
+                    .extend(outcome.changes.iter().map(|change| change.beat_id.clone()));
+            }
+            let storyboard_version_id = outcome.storyboard.id.clone();
+            let timeline_version_id = outcome.timeline.id.clone();
+            let timeline_version_number = outcome.timeline.version_number;
+            let changed = outcome
+                .changes
+                .iter()
+                .map(|change| change.beat_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut message = if tool == "reselect_shots" {
+                format!(
+                    "已为 {changed} 重新选镜并创建时间线 v{timeline_version_number}，其余镜头、配音与字幕保持不变。"
+                )
+            } else {
+                format!(
+                    "已精修 {changed} 的切点并创建时间线 v{timeline_version_number}，素材与时长保持不变。"
+                )
+            };
+            let (preview, preview_error) =
+                match render_preview(state.app.clone(), timeline_version_id.clone()) {
+                    Ok(preview) => {
+                        message.push_str("\n预览也已生成。");
+                        (Some(preview), None)
+                    }
+                    Err(error) => {
+                        message.push_str(" 但预览生成失败，请稍后重试。");
+                        (None, Some(error))
+                    }
+                };
+            state.storyboard = Some(outcome.storyboard.clone());
+            upsert(&mut state.timelines, outcome.timeline.clone());
+            let mut result = json!({
+                "tool": tool,
+                "status": "ok",
+                "storyboardVersionId": storyboard_version_id,
+                "timelineVersionId": timeline_version_id,
+                "versionNumber": timeline_version_number,
+                "storyboardVersionNumber": outcome.storyboard.version_number,
+                "changes": outcome.changes,
+            });
+            if preview.is_some() {
+                result["previewTimelineVersionId"] = json!(timeline_version_id);
+            }
+            if let Some(error) = preview_error {
+                result["previewError"] = json!(error);
+            }
+            state.last_outcome = Some(AgentEditResult {
+                agent_task_id,
+                message,
+                storyboard: Some(outcome.storyboard),
+                timeline: Some(outcome.timeline),
+                preview,
+                jianying_draft: None,
+            });
+            Ok(result)
         }
         "reorder_clips" => {
             let existing = select_timeline_for_tool(state, args)?;

@@ -1413,6 +1413,7 @@ mod tests {
                 },
             ],
             created_at: 1,
+            derivation: Default::default(),
         };
         let text = storyboard_narration_text(Some(&version)).expect("narration");
         assert_eq!(text, "Once only.");
@@ -1447,6 +1448,7 @@ mod tests {
             uncovered_beat_ids: Vec::new(),
             shots: Vec::new(),
             created_at: 1,
+            derivation: Default::default(),
         };
         let text = storyboard_narration_text(Some(&version)).expect("narration");
         assert_eq!(text, normalize_narration_text(&brief));

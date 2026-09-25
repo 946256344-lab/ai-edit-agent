@@ -109,7 +109,7 @@ pub(crate) fn store_pools(
     Ok(())
 }
 
-fn load_pools(
+pub(crate) fn load_pools(
     connection: &Connection,
     storyboard_id: &str,
 ) -> Result<Option<Vec<BeatCandidatePool>>, String> {

@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-25：选镜局部编辑工具
+
+新增 Native 工具 `reselect_shots` 与 `refine_shot_ranges`，只改指定 beat / 镜头，其余镜头、配音、字幕、音乐原样保留，拍时长取当前时间线。两者都写派生 storyboard 版本（`derivedFromVersionId`、`changedBeatIds`）加新时间线并渲染预览，不新建剪映草稿。`StoryboardVersion` 的这两个字段对整条生成的版本为 `null` / `[]`。见 `docs/changes/2026-09-25-storyboard-edit-primitives.md`。
+
 ## 2026-09-18：CapCut 投放链接器
 
 `deliver_to_editor` 可选 CapCut。草稿库从该设备 `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\root_meta_info.json` 读取 `draft_root_path`，不写死盘符。未打开过 CapCut 则拒绝。见 `docs/changes/2026-09-18-capcut-linker.md`。
@@ -397,6 +401,8 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `replace_clips` | Native `{ timelineVersionId: string|null, shots: [{ shotIndex, assetId, sourceStartMs, sourceEndMs }] }` | 已实现，批量替换既有镜头并保持对应时间线时长；素材证据与源范围仍由 Rust 复核。 |
 | `insert_clips` | Native `{ timelineVersionId: string|null, clips: [{ assetId, sourceStartMs, sourceEndMs, durationMs: number|null, insertAfterShotIndex: number|null }] }` | 已实现，在既有时间线插入已验证素材以补足画面时长；`insertAfterShotIndex` 为 null 插到开头。禁止用冻结帧垫时长；配音长于画面时应先搜段再插入，然后重试 `synthesize_voiceover`。 |
 | `change_clip_duration` | Native `{ timelineVersionId: string|null, adjustments: [{ shotIndex, newDurationMs: number|null, newSourceStartMs: number|null }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
+| `reselect_shots` | Native `{ timelineVersionId: string|null, shotIndexes: number[]|null, beatIds: string[]|null, instruction: string|null, keepCurrent: boolean|null }` | 已实现：`shotIndexes` 与 `beatIds` 二选一，最多 5 拍。只为这些拍重跑 P2 召回（默认排除当前素材、相邻镜头素材、与冻结镜头相似或重叠的片段、已达复用上限的素材）→ P3 看图选镜 → P4 锁窗精修 → P5 全片校验；新镜头必须正好填满原拍槽位，冻结镜头的素材/源范围/时长/构图须逐字不变，否则不写入。同一拍一轮只能重选一次。池耗尽返回 `storyboard_local_reselect_failed`，不退回整条重跑。结果含每拍 `changes[{ beatId, before, after, matchLevel, remainingAlternates }]`。 |
+| `refine_shot_ranges` | Native `{ timelineVersionId: string|null, shotIndexes: number[], instruction: string|null }` | 已实现：最多 10 个镜头，只跑 P4→P5，素材与片段锁死，时间线时长锁回原槽位，只改入出点与构图。手动插入的 clip 不能精修。 |
 | `reorder_clips` | Native `{ timelineVersionId: string|null, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
 | `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
 | `synthesize_voiceover` | `{ text, voiceId, timelineVersionId }` 均可空；空 `text` 用 storyboard `narrationText` | 已实现：优先 Fish Audio，传输类失败可回退 ElevenLabs。用户没给文案时由 storyboard 撰写 `narrationText`（`key_message` 通常无旁白，需显式提供 `text` 或 beat `narration`）。禁止朗读 `onScreenText`。真实音频时长写入 `voiceoverTracks`（旁白必成）；alignment 字幕尽力，失败不回滚旁白。结果含 `voiceoverApplied`/`subtitleApplied`/`providerUsed`。相同指纹复用缓存。 |

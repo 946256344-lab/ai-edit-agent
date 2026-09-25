@@ -28,6 +28,8 @@ export type AgentSideEffectToolName =
   | 'replace_clips'
   | 'insert_clips'
   | 'change_clip_duration'
+  | 'reselect_shots'
+  | 'refine_shot_ranges'
   | 'reorder_clips'
   | 'replace_text_tracks'
   | 'replace_music_tracks'

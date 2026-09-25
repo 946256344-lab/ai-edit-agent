@@ -57,6 +57,8 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "replace_clips",
     "insert_clips",
     "change_clip_duration",
+    "reselect_shots",
+    "refine_shot_ranges",
     "reorder_clips",
     "replace_text_tracks",
     "download_music",
@@ -145,6 +147,7 @@ pub(crate) fn run_native_tool_loop(
         last_outcome: None,
         last_failed_tool_error_code: None,
         successful_observation: false,
+        reselected_beats: std::collections::HashSet::new(),
     };
     let is_custom = access.custom_config().is_some();
     let mut model_step_number = 0usize;
@@ -472,6 +475,8 @@ fn merge_native_outcomes(
                 | "replace_clips"
                 | "insert_clips"
                 | "change_clip_duration"
+                | "reselect_shots"
+                | "refine_shot_ranges"
                 | "reorder_clips"
                 | "replace_text_tracks"
                 | "replace_music_tracks"
@@ -512,6 +517,8 @@ const TIMELINE_VERSION_WRITE_TOOLS: &[&str] = &[
     "replace_clips",
     "insert_clips",
     "change_clip_duration",
+    "reselect_shots",
+    "refine_shot_ranges",
     "reorder_clips",
     "replace_text_tracks",
     "download_music",
@@ -1099,6 +1106,12 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             coerce_blank_strings_to_null(&mut value, &["brief", "voiceId"]);
             coerce_json_object_string(&mut value, "mediaOptions");
         }
+        "reselect_shots" => {
+            coerce_blank_strings_to_null(&mut value, &["timelineVersionId", "instruction"]);
+        }
+        "refine_shot_ranges" => {
+            coerce_blank_strings_to_null(&mut value, &["timelineVersionId", "instruction"]);
+        }
         _ => {}
     }
     let Some(object) = value.as_object() else {
@@ -1277,6 +1290,55 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             };
             if clips.is_empty() {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "reselect_shots" => {
+            let keys = [
+                "timelineVersionId",
+                "shotIndexes",
+                "beatIds",
+                "instruction",
+                "keepCurrent",
+            ];
+            if object.len() != keys.len() || !keys.iter().all(|key| object.contains_key(*key)) {
+                return Err(invalid_arguments());
+            }
+            let nullable_string =
+                |key: &str| object[key].is_null() || object[key].is_string();
+            if !nullable_string("timelineVersionId")
+                || !nullable_string("instruction")
+                || !(object["keepCurrent"].is_null() || object["keepCurrent"].is_boolean())
+            {
+                return Err(invalid_arguments());
+            }
+            let shots = object["shotIndexes"].as_array().filter(|items| !items.is_empty());
+            let beats = object["beatIds"].as_array().filter(|items| !items.is_empty());
+            let valid = match (shots, beats) {
+                (Some(shots), None) => shots.iter().all(|item| item.as_i64().is_some_and(|n| n > 0)),
+                (None, Some(beats)) => beats.iter().all(required_non_empty_string),
+                _ => false,
+            };
+            if !valid {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "refine_shot_ranges" => {
+            let keys = ["timelineVersionId", "shotIndexes", "instruction"];
+            if object.len() != keys.len() || !keys.iter().all(|key| object.contains_key(*key)) {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string())
+                || !(object["instruction"].is_null() || object["instruction"].is_string())
+            {
+                return Err(invalid_arguments());
+            }
+            let Some(shots) = object["shotIndexes"].as_array() else {
+                return Err(invalid_arguments());
+            };
+            if shots.is_empty() || !shots.iter().all(|item| item.as_i64().is_some_and(|n| n > 0)) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -2701,6 +2763,7 @@ mod tests {
             uncovered_beat_ids: Vec::new(),
             shots: Vec::new(),
             created_at: 1,
+            derivation: Default::default(),
         };
         let earlier = AgentEditResult {
             agent_task_id: "task-1".to_owned(),
@@ -2739,6 +2802,7 @@ mod tests {
             uncovered_beat_ids: Vec::new(),
             shots: Vec::new(),
             created_at: 1,
+            derivation: Default::default(),
         };
         let outcome = AgentEditResult {
             agent_task_id: "agent-task-1".to_owned(),
