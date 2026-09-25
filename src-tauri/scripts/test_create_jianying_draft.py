@@ -12,6 +12,7 @@ from pyJianYingDraft import TrackType
 
 from create_jianying_draft import (
     add_music_tracks,
+    add_voiceover_tracks,
     add_text_tracks,
     bind_sdk,
     clip_source_duration_us,
@@ -190,6 +191,59 @@ class MusicTrackExportTests(unittest.TestCase):
             [call.kwargs["track"] for call in script.add_segment.call_args_list],
             ["assembly-music-0", "assembly-music-0"],
         )
+
+
+class VoiceoverTrackExportTests(unittest.TestCase):
+    @patch("create_jianying_draft.AudioSegment")
+    @patch("create_jianying_draft.AudioMaterial")
+    def test_places_voiceover_on_its_own_audio_track_without_looping(
+        self, audio_material, audio_segment
+    ):
+        audio_material.return_value.duration = 2_999_000  # 文件比记录的 3000ms 短 1ms
+        with TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "vo.wav"
+            source.touch()
+            script = Mock()
+            tracks = [{
+                "id": "vo-1", "enabled": True,
+                "cues": [{
+                    "id": "cue-1", "sourceReference": str(source),
+                    "sourceStartMs": 0, "sourceEndMs": 3_000,
+                    "timelineStartMs": 500, "timelineEndMs": 2_500,
+                    "volume": 1.0, "fadeInMs": 0, "fadeOutMs": 0,
+                }],
+            }]
+
+            add_voiceover_tracks(script, tracks)
+
+        spec = script.append_track.call_args.args[0]
+        self.assertEqual((spec.track_type, spec.name), (TrackType.audio, "assembly-voiceover-0"))
+        self.assertEqual(audio_segment.call_count, 1)
+        self.assertEqual(script.add_segment.call_args.kwargs["track"], "assembly-voiceover-0")
+
+    @patch("create_jianying_draft.AudioSegment")
+    @patch("create_jianying_draft.AudioMaterial")
+    def test_clamps_voiceover_that_overruns_the_real_audio_duration(
+        self, audio_material, audio_segment
+    ):
+        audio_material.return_value.duration = 17_580_000
+        with TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "vo.wav"
+            source.touch()
+            tracks = [{
+                "id": "vo-1", "enabled": True,
+                "cues": [{
+                    "id": "cue-1", "sourceReference": str(source),
+                    "sourceStartMs": 0, "sourceEndMs": 17_581,
+                    "timelineStartMs": 0, "timelineEndMs": 17_581,
+                    "volume": 1.0, "fadeInMs": 0, "fadeOutMs": 0,
+                }],
+            }]
+
+            add_voiceover_tracks(Mock(), tracks)
+
+        source_range = audio_segment.call_args.kwargs["source_timerange"]
+        self.assertEqual(source_range.duration, 17_580_000)
 
 
 class DeferredRegistrationTests(unittest.TestCase):

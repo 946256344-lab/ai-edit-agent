@@ -224,7 +224,7 @@ pub(crate) fn create_capcut_draft(
         "CapCut draft library is unavailable on this computer. Open CapCut and create a local draft once, then try again."
             .to_owned()
     })?;
-    let sources = collect_export_sources(&connection, &timeline, false)?;
+    let sources = collect_export_sources(&connection, &timeline, true)?;
     let plan = build_handoff_plan(&timeline, &sources)?;
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");

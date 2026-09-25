@@ -417,7 +417,7 @@ pub fn create_jianying_draft(
         "Jianying Pro 8.0 draft library is unavailable. Open Jianying Pro and create a local draft before creating a draft here."
             .to_owned()
     })?;
-    let sources = collect_export_sources(&connection, &timeline, false)?;
+    let sources = collect_export_sources(&connection, &timeline, true)?;
     let plan = build_handoff_plan(&timeline, &sources)?;
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");

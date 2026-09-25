@@ -380,6 +380,43 @@ def add_music_tracks(script, tracks):
                 remaining_us -= segment_duration_us
 
 
+def add_voiceover_tracks(script, tracks):
+    """配音是已生成好的整段音频，按源窗放到独立音频轨，不循环；轨名与音乐区分。"""
+    enabled_tracks = [track for track in tracks if track.get("enabled", True)]
+    for track_index, track in enumerate(enabled_tracks):
+        cues = track.get("cues", [])
+        if not cues:
+            continue
+        track_name = f"assembly-voiceover-{track_index}"
+        add_track(script, TrackType.audio, track_name)
+        for cue in cues:
+            reference = cue.get("sourceReference")
+            source = Path(reference) if reference else None
+            if source is None or not source.is_file():
+                raise RuntimeError("Voiceover media is unavailable.")
+            source_start_us = to_microseconds(int(cue["sourceStartMs"]))
+            timeline_start_us = to_microseconds(int(cue["timelineStartMs"]))
+            timeline_duration_us = to_microseconds(int(cue["timelineEndMs"])) - timeline_start_us
+            source_duration_us = to_microseconds(int(cue["sourceEndMs"])) - source_start_us
+            material = AudioMaterial(str(source))
+            # 记录的配音时长常比文件实际多出几毫秒，SDK 不允许源窗越界，按实际时长截断。
+            available_us = material.duration - source_start_us
+            duration_us = min(timeline_duration_us, source_duration_us, available_us)
+            if duration_us <= 0:
+                raise RuntimeError("Voiceover cue has no playable range.")
+            segment = AudioSegment(
+                material,
+                Timerange(timeline_start_us, duration_us),
+                source_timerange=Timerange(source_start_us, duration_us),
+                volume=float(cue.get("volume", 1.0)),
+            )
+            fade_in_us = to_microseconds(int(cue.get("fadeInMs", 0)))
+            fade_out_us = to_microseconds(int(cue.get("fadeOutMs", 0)))
+            if fade_in_us or fade_out_us:
+                segment.add_fade(fade_in_us, fade_out_us)
+            add_segment(script, segment, track_name)
+
+
 def editor_process_name(editor):
     return "CapCut.exe" if editor == "capcut" else "JianyingPro.exe"
 
@@ -569,6 +606,7 @@ def main():
         add_overlay_tracks(script, payload.get("overlayClips", []))
         add_text_tracks(script, payload.get("textTracks", []))
         add_music_tracks(script, payload.get("musicTracks", []))
+        add_voiceover_tracks(script, payload.get("voiceoverTracks", []))
         script.save()
         if payload["clips"]:
             first_clip = payload["clips"][0]

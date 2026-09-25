@@ -114,7 +114,7 @@ pub(crate) fn editor_capabilities(id: EditorId) -> EditorCapabilities {
             crop_focus: Support::Full,
             overlays: Support::Full,
             music: Support::Restricted,
-            voiceover: Support::Unsupported,
+            voiceover: Support::Full,
             text: Support::Restricted,
             images: Support::Unsupported,
         },
@@ -127,7 +127,7 @@ pub(crate) fn editor_capabilities(id: EditorId) -> EditorCapabilities {
             crop_focus: Support::Full,
             overlays: Support::Full,
             music: Support::Restricted,
-            voiceover: Support::Unsupported,
+            voiceover: Support::Full,
             text: Support::Restricted,
             images: Support::Unsupported,
         },
@@ -514,7 +514,7 @@ pub(crate) mod tests {
         assert_eq!(EditorId::parse("premiere").unwrap(), EditorId::Fcpxml);
         assert_eq!(
             editor_capabilities(EditorId::Jianying).voiceover,
-            Support::Unsupported
+            Support::Full
         );
         assert_eq!(
             editor_capabilities(EditorId::Fcpxml).delivery,
@@ -538,7 +538,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn jianying_payload_includes_source_end_and_omits_voiceover() {
+    fn jianying_payload_includes_source_end_and_voiceover() {
         let plan = build_handoff_plan(&sample_timeline(), &sample_sources()).expect("plan");
         let payload = jianying_create_draft_input(
             &plan,
@@ -558,7 +558,10 @@ pub(crate) mod tests {
             payload["musicTracks"][0]["cues"][0]["sourceReference"],
             "D:/media/m.mp3"
         );
-        assert!(payload.get("voiceoverTracks").is_none());
+        assert_eq!(
+            payload["voiceoverTracks"][0]["cues"][0]["sourceReference"],
+            "D:/media/vo.wav"
+        );
         assert!(payload["clips"][0].get("assetId").is_none());
         let capcut = capcut_create_draft_input(
             &plan,
