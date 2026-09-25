@@ -2985,143 +2985,14 @@ fn generate_storyboard_internal(
     );
 
     // Phase 3: 每拍单独看 9 图、默认一镜；源窗短于旁白时放慢已选镜头，不换片。
-    let selected = {
-        let mut repair: Option<RepairPacket> = None;
-        let mut selected = None;
-        let mut last_candidate: Option<StoryboardContent> = None;
-        let mut budget = StepRetryBudget::new("Phase 3");
-        loop {
-            crate::execution_deadline::check()?;
-            let attempt = budget.semantic_attempt_number();
-            log::info!("Phase 3 attempt {attempt}: select one shot per beat");
-            match phases::phase3_select(&app, &access, brief, &rough, repair.as_ref(), &prior_shots) {
-                Ok((mut candidate, mut issues)) => {
-                    let alignment = audio_first
-                        .as_ref()
-                        .map(|(duration, prepared)| (&prepared.alignment, *duration));
-                    issues.extend(crate::storyboard::length::sync_narration_and_timing(
-                        &mut candidate,
-                        &mut rough,
-                        alignment,
-                    ));
-                    issues.extend(crate::storyboard::length::collect_usable_window_shortfalls(
-                        &mut candidate,
-                        &rough,
-                    ));
-                    last_candidate = Some(candidate.clone());
-                    log::info!(
-                        "Phase 3 candidate: shots={}, uncovered={}, issues={}",
-                        candidate.shots.len(),
-                        candidate.uncovered_beat_ids.len(),
-                        issues.len()
-                    );
-                    if issues.is_empty() || !issues.iter().any(|issue| issue.needs_model_decision) {
-                        selected = Some(candidate);
-                        break;
-                    }
-                    for issue in &issues {
-                        log::warn!(
-                            "Phase 3 semantic issue [{}]: {} (shots={:?})",
-                            issue.kind,
-                            issue.message,
-                            issue.affected_shots
-                        );
-                    }
-                    let has_snapshot = !candidate.shots.is_empty();
-                    if budget.can_retry_semantic() {
-                        budget.record_semantic_failure();
-                        repair = Some(build_repair_packet(
-                            attempt,
-                            issues,
-                            &candidate.shots,
-                            repair.as_ref(),
-                        ));
-                        continue;
-                    }
-                    if budget.can_validation_tail(has_snapshot) {
-                        budget.record_validation_tail();
-                        repair = Some(build_repair_packet(
-                            attempt,
-                            issues,
-                            &candidate.shots,
-                            repair.as_ref(),
-                        ));
-                        continue;
-                    }
-                    repair = Some(build_repair_packet(
-                        attempt,
-                        issues,
-                        &candidate.shots,
-                        repair.as_ref(),
-                    ));
-                    break;
-                }
-                Err(error) => {
-                    log::warn!("Phase 3 request failed: {error}");
-                    if is_transport_or_parse_error(&error) {
-                        if !budget.can_retry_transport() {
-                            repair = Some(RepairPacket::new(
-                                attempt,
-                                vec![StoryboardIssue::new("request_failed", error.clone(), false)],
-                            ));
-                            break;
-                        }
-                        budget.record_transport_failure();
-                        continue;
-                    }
-                    if !budget.can_retry_semantic() {
-                        repair = Some(RepairPacket::new(
-                            attempt,
-                            vec![StoryboardIssue::new("request_failed", error.clone(), true)],
-                        ));
-                        break;
-                    }
-                    budget.record_semantic_failure();
-                    repair = Some(RepairPacket::new(
-                        attempt,
-                        vec![StoryboardIssue::new("request_failed", error, true)],
-                    ));
-                }
-            }
-        }
-        selected.ok_or_else(|| {
-            let issues = repair.as_ref().map(|packet| packet.issues.as_slice()).unwrap_or(&[]);
-            if crate::storyboard::length::remaining_shortfall_issues(issues) {
-                let message = crate::storyboard::length::user_decision_error(
-                    last_candidate.as_ref(),
-                    &rough,
-                    issues,
-                );
-                log::error!("{message}");
-                return message;
-            }
-            if issues.iter().any(|issue| issue.kind == "insufficient_footage") {
-                let message =
-                    "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]"
-                        .to_owned();
-                log::error!("{message}");
-                return message;
-            }
-            let summary = partial_candidate_summary(
-                "Phase 3",
-                last_candidate.as_ref(),
-                &rough.uncovered_beat_ids,
-                repair.as_ref(),
-            );
-            let unresolved = repair
-                .as_ref()
-                .and_then(|packet| packet.issues.first())
-                .map(|issue| issue.message.clone())
-                .unwrap_or_else(|| "Phase 3 did not produce a valid selection.".to_owned());
-            let message = format!(
-                "{}; partialCandidateSummary={}",
-                budget.exhausted_message(&unresolved),
-                summary
-            );
-            log::error!("{message}");
-            message
-        })?
-    };
+    let selected = run_phase3_selection(
+        &app,
+        &access,
+        brief,
+        &mut rough,
+        &prior_shots,
+        audio_first.as_ref(),
+    )?;
     log::info!(
         "Phase 3 complete: {} shots locked, {} uncovered",
         selected.shots.len(),
@@ -3146,6 +3017,186 @@ fn generate_storyboard_internal(
     }
 
     // Phase 4 + Phase 5: 精修时间段；normalize 自修后校验；仅精修类失败回 Phase 4
+    let content = run_phase4_and_validate(&app, &access, brief, &selected, &rough, &sources)?;
+    crate::execution_deadline::check()?;
+    log::info!("Storyboard content finalized. Persisting to database.");
+    let version = persist_storyboard_version(
+        &connection,
+        project_id,
+        &editing_task_id,
+        brief,
+        content,
+        &rough.candidate_pools,
+        media_options,
+    )?;
+    if let Some((_, prepared)) = audio_first {
+        let _ =
+            finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
+    }
+    connection
+        .execute(
+            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
+            params![brief, now_millis(), editing_task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    log::info!("Completed AI storyboard generation.");
+    Ok(version)
+}
+
+/// Phase 3：逐拍看图选镜，带修复包重试；成功返回锁定镜头，失败返回给 Agent/用户的真实原因。
+fn run_phase3_selection(
+    app: &AppHandle,
+    access: &ModelAccess,
+    brief: &str,
+    rough: &mut phases::RoughStoryboard,
+    prior_shots: &[crate::models::StoryboardShot],
+    audio_first: Option<&(i64, crate::voice_provider::AudioFirstPrepared)>,
+) -> Result<StoryboardContent, String> {
+    let mut repair: Option<RepairPacket> = None;
+    let mut selected = None;
+    let mut last_candidate: Option<StoryboardContent> = None;
+    let mut budget = StepRetryBudget::new("Phase 3");
+    loop {
+        crate::execution_deadline::check()?;
+        let attempt = budget.semantic_attempt_number();
+        log::info!("Phase 3 attempt {attempt}: select one shot per beat");
+        match phases::phase3_select(app, access, brief, rough, repair.as_ref(), prior_shots) {
+            Ok((mut candidate, mut issues)) => {
+                let alignment =
+                    audio_first.map(|(duration, prepared)| (&prepared.alignment, *duration));
+                issues.extend(crate::storyboard::length::sync_narration_and_timing(
+                    &mut candidate,
+                    rough,
+                    alignment,
+                ));
+                issues.extend(crate::storyboard::length::collect_usable_window_shortfalls(
+                    &mut candidate,
+                    rough,
+                ));
+                last_candidate = Some(candidate.clone());
+                log::info!(
+                    "Phase 3 candidate: shots={}, uncovered={}, issues={}",
+                    candidate.shots.len(),
+                    candidate.uncovered_beat_ids.len(),
+                    issues.len()
+                );
+                if issues.is_empty() || !issues.iter().any(|issue| issue.needs_model_decision) {
+                    selected = Some(candidate);
+                    break;
+                }
+                for issue in &issues {
+                    log::warn!(
+                        "Phase 3 semantic issue [{}]: {} (shots={:?})",
+                        issue.kind,
+                        issue.message,
+                        issue.affected_shots
+                    );
+                }
+                let has_snapshot = !candidate.shots.is_empty();
+                if budget.can_retry_semantic() {
+                    budget.record_semantic_failure();
+                    repair = Some(build_repair_packet(
+                        attempt,
+                        issues,
+                        &candidate.shots,
+                        repair.as_ref(),
+                    ));
+                    continue;
+                }
+                if budget.can_validation_tail(has_snapshot) {
+                    budget.record_validation_tail();
+                    repair = Some(build_repair_packet(
+                        attempt,
+                        issues,
+                        &candidate.shots,
+                        repair.as_ref(),
+                    ));
+                    continue;
+                }
+                repair = Some(build_repair_packet(
+                    attempt,
+                    issues,
+                    &candidate.shots,
+                    repair.as_ref(),
+                ));
+                break;
+            }
+            Err(error) => {
+                log::warn!("Phase 3 request failed: {error}");
+                if is_transport_or_parse_error(&error) {
+                    if !budget.can_retry_transport() {
+                        repair = Some(RepairPacket::new(
+                            attempt,
+                            vec![StoryboardIssue::new("request_failed", error.clone(), false)],
+                        ));
+                        break;
+                    }
+                    budget.record_transport_failure();
+                    continue;
+                }
+                if !budget.can_retry_semantic() {
+                    repair = Some(RepairPacket::new(
+                        attempt,
+                        vec![StoryboardIssue::new("request_failed", error.clone(), true)],
+                    ));
+                    break;
+                }
+                budget.record_semantic_failure();
+                repair = Some(RepairPacket::new(
+                    attempt,
+                    vec![StoryboardIssue::new("request_failed", error, true)],
+                ));
+            }
+        }
+    }
+    selected.ok_or_else(|| {
+        let issues = repair.as_ref().map(|packet| packet.issues.as_slice()).unwrap_or(&[]);
+        if crate::storyboard::length::remaining_shortfall_issues(issues) {
+            let message = crate::storyboard::length::user_decision_error(
+                last_candidate.as_ref(),
+                &rough,
+                issues,
+            );
+            log::error!("{message}");
+            return message;
+        }
+        if issues.iter().any(|issue| issue.kind == "insufficient_footage") {
+            let message =
+                "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]"
+                    .to_owned();
+            log::error!("{message}");
+            return message;
+        }
+        let summary = partial_candidate_summary(
+            "Phase 3",
+            last_candidate.as_ref(),
+            &rough.uncovered_beat_ids,
+            repair.as_ref(),
+        );
+        let unresolved = repair
+            .as_ref()
+            .and_then(|packet| packet.issues.first())
+            .map(|issue| issue.message.clone())
+            .unwrap_or_else(|| "Phase 3 did not produce a valid selection.".to_owned());
+        let message = format!(
+            "{}; partialCandidateSummary={}",
+            budget.exhausted_message(&unresolved),
+            summary
+        );
+        log::error!("{message}");
+        message
+    })
+}
+
+/// Phase 4 + Phase 5：锁窗精修切点，normalize 自修后硬校验；仅精修类失败回 Phase 4。
+fn run_phase4_and_validate(
+    app: &AppHandle,
+    access: &ModelAccess,
+    brief: &str,
+    selected: &StoryboardContent,
+    rough: &phases::RoughStoryboard,
+    sources: &[StoryboardSource],
+) -> Result<StoryboardContent, String> {
     let mut repair: Option<RepairPacket> = None;
     let mut content = None;
     let mut budget = StepRetryBudget::new("Phase 4");
@@ -3155,12 +3206,12 @@ fn generate_storyboard_internal(
         let attempt = budget.semantic_attempt_number();
         log::info!("Phase 4 attempt {attempt}: refine source ranges");
         match phases::phase4_refine_ranges(
-            &app,
-            &access,
+            app,
+            access,
             brief,
-            &selected,
-            &rough,
-            &sources,
+            selected,
+            rough,
+            sources,
             repair.as_ref(),
             &mut phase4_session,
         ) {
@@ -3341,10 +3392,10 @@ fn generate_storyboard_internal(
             }
         }
     }
-    let content = content.ok_or_else(|| {
+    content.ok_or_else(|| {
         let summary = partial_candidate_summary(
             "Phase 4/5",
-            Some(&selected),
+            Some(selected),
             &selected.uncovered_beat_ids,
             repair.as_ref(),
         );
@@ -3360,9 +3411,19 @@ fn generate_storyboard_internal(
         );
         log::error!("{message}");
         message
-    })?;
-    crate::execution_deadline::check()?;
-    log::info!("Storyboard content finalized. Persisting to database.");
+    })
+}
+
+/// 把已校验的 storyboard 与候选池写成新版本（含本轮媒体选项），不触碰时间线。
+fn persist_storyboard_version(
+    connection: &Connection,
+    project_id: String,
+    editing_task_id: &str,
+    brief: &str,
+    content: StoryboardContent,
+    pools: &[phases::BeatCandidatePool],
+    media_options: Option<crate::media_options::MediaOptions>,
+) -> Result<StoryboardVersion, String> {
     let version_number = connection.query_row(
         "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",
         params![project_id], |row| row.get::<_, i64>(0),
@@ -3370,7 +3431,7 @@ fn generate_storyboard_internal(
     let version = StoryboardVersion {
         id: Uuid::new_v4().to_string(),
         project_id,
-        editing_task_id: editing_task_id.clone(),
+        editing_task_id: editing_task_id.to_owned(),
         version_number,
         brief: brief.to_owned(),
         title: content.title,
@@ -3389,7 +3450,7 @@ fn generate_storyboard_internal(
         "INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
         params![version.id, version.project_id, version.editing_task_id, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
-    crate::shot_replacement::store_pools(&transaction, &version.id, &rough.candidate_pools)?;
+    crate::shot_replacement::store_pools(&transaction, &version.id, pools)?;
     if let Some(options) = media_options {
         transaction.execute(
             "UPDATE storyboard_versions SET content_json = json_set(content_json, '$.mediaOptions', json(?2)) WHERE id = ?1",
@@ -3397,17 +3458,6 @@ fn generate_storyboard_internal(
         ).map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|e| e.to_string())?;
-    if let Some((_, prepared)) = audio_first {
-        let _ =
-            finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
-    }
-    connection
-        .execute(
-            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
-            params![brief, now_millis(), editing_task_id],
-        )
-        .map_err(|error| error.to_string())?;
-    log::info!("Completed AI storyboard generation.");
     Ok(version)
 }
 
