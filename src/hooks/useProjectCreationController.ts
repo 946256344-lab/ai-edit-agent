@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { listSharedLibraries } from '../lib/local-store'
 import type { SharedLibrary } from '../lib/local-store'
+import { messages } from '../lib/i18n'
 
 export function useProjectCreationController(create: (name: string, libraryIds: string[]) => Promise<void>) {
   const [isOpen, setIsOpen] = useState(false)
@@ -16,13 +17,13 @@ export function useProjectCreationController(create: (name: string, libraryIds: 
     try {
       const items = await listSharedLibraries()
       setLibraries(items); setSelectedIds(items.map((item) => item.id))
-    } catch { setError('素材库读取失败，请关闭后重新打开。') }
+    } catch { setError(messages().projectCreate.libraryLoadFailed) }
     finally { setLoading(false) }
   }
   async function submit() {
     setSaving(true); setError('')
     try { await create(name.trim(), selectedIds); setIsOpen(false) }
-    catch { setError('项目创建未完成，请检查本地工作区。') }
+    catch { setError(messages().projectCreate.createFailed) }
     finally { setSaving(false) }
   }
   return {

@@ -2,6 +2,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { AssetAnalysisProgress } from '../lib/local-store'
 import './asset-analysis.css'
+import { useI18n } from '../lib/i18n'
 
 type Props = {
   open: boolean
@@ -14,6 +15,8 @@ type Props = {
 
 export function AnalysisIncompleteDialog({ open, progress, importing, onUseReady, onCancel, onOpenLibrary }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const { t } = useI18n()
+  const copy = t.analysisGate
   useLayoutEffect(() => {
     const element = dialog.current
     if (open) element?.showModal()
@@ -24,21 +27,21 @@ export function AnalysisIncompleteDialog({ open, progress, importing, onUseReady
   const canUseReady = (progress?.readyVideo ?? 0) > 0
   return (
     <dialog ref={dialog} className="settings-dialog asset-analysis-dialog" aria-labelledby="analysis-gate-title" onCancel={(event) => { event.preventDefault(); onCancel() }}>
-      <span className="panel-kicker">素材准备</span>
-      <h2 id="analysis-gate-title">{importing ? '正在导入素材' : '素材尚未全部分析完成'}</h2>
+      <span className="panel-kicker">{copy.kicker}</span>
+      <h2 id="analysis-gate-title">{importing ? copy.importingTitle : copy.incompleteTitle}</h2>
       {importing ? (
-        <p>导入完成后才能开始剪辑。可取消这次发送，剪辑要求会留在输入框。</p>
+        <p>{copy.importingBody}</p>
       ) : (
         <>
-          <p>现在还有 {incomplete} 个素材没有分析完成，是否只使用已分析的素材进行剪辑？</p>
-          {progress && <p>已分析 {progress.ready} 个，其中 {progress.readyVideo} 条视频可用。</p>}
-          {!canUseReady && <p>目前还没有可剪辑的已分析视频，请等待分析或去素材库查看。</p>}
+          <p>{copy.incompleteBody(incomplete)}</p>
+          {progress && <p>{copy.readyBody(progress.ready, progress.readyVideo)}</p>}
+          {!canUseReady && <p>{copy.noReady}</p>}
         </>
       )}
       <footer className="asset-dialog-actions">
-        <button type="button" className="asset-dialog-secondary" onClick={onOpenLibrary}>去素材库</button>
-        <button type="button" autoFocus={importing || !canUseReady} onClick={onCancel}>取消</button>
-        {!importing && <button type="button" className="import-button" autoFocus={canUseReady} disabled={!canUseReady} onClick={onUseReady}>只用已分析素材</button>}
+        <button type="button" className="asset-dialog-secondary" onClick={onOpenLibrary}>{copy.openLibrary}</button>
+        <button type="button" autoFocus={importing || !canUseReady} onClick={onCancel}>{t.common.cancel}</button>
+        {!importing && <button type="button" className="import-button" autoFocus={canUseReady} disabled={!canUseReady} onClick={onUseReady}>{copy.useReady}</button>}
       </footer>
     </dialog>
   )

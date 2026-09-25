@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cancelAssetAnalysis, getAssetAnalysisProgress, resumeAssetAnalysis } from '../lib/local-store'
 import { analysisPendingCount, EMPTY_ANALYSIS_PROGRESS } from '../lib/asset-analysis'
+import { messages } from '../lib/i18n'
 
 type Batch = { projectId: string; assetIds?: string[]; startedAt: number; initialCompleted: number }
 
@@ -33,7 +34,7 @@ export function useAssetAnalysisController(projectId: string | null, onChanged: 
         if (pending > 0) timer = window.setTimeout(() => void refresh(), 1500)
         else changed.current()
       } catch {
-        if (!disposed) setNotice('暂时无法读取分析进度，请返回素材库查看。')
+        if (!disposed) setNotice(messages().analysis.progressReadFailed)
       }
     }
     void refresh()
@@ -57,12 +58,12 @@ export function useAssetAnalysisController(projectId: string | null, onChanged: 
     try {
       await (action === 'cancel' ? cancelAssetAnalysis : resumeAssetAnalysis)(projectId, assetIds)
       if (currentProject.current !== targetProject) return
-      if (action === 'cancel') setNotice('已取消后续分析。当前调用结束后退出，已完成的结果保留。')
+      if (action === 'cancel') setNotice(messages().analysis.cancelledNotice)
       else if (batch?.projectId === projectId) setBatch({ ...batch, startedAt: Date.now(), initialCompleted: progress.ready + progress.failed })
       setRevision(value => value + 1)
       changed.current()
     } catch {
-      if (currentProject.current === targetProject) setNotice(action === 'cancel' ? '取消分析未完成，请重试。' : '继续分析未完成，请检查素材文件后重试。')
+      if (currentProject.current === targetProject) setNotice(action === 'cancel' ? messages().analysis.cancelFailed : messages().analysis.resumeFailed)
     } finally { setBusy(false) }
   }
 

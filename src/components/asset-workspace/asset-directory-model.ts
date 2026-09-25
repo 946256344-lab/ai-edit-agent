@@ -1,5 +1,6 @@
 // 将后端安全目录键投影为可递归渲染的树，并计算祖先/后代关系。
 import type { AssetDirectory } from '../../lib/local-store'
+import type { Locale } from '../../lib/i18n'
 
 export type AssetTreeNode = {
   name: string
@@ -13,7 +14,7 @@ export type AssetDirectoryTreeModel = {
   nodes: Map<string, AssetTreeNode>
 }
 
-export function buildAssetDirectoryTree(directories: AssetDirectory[]): AssetDirectoryTreeModel {
+export function buildAssetDirectoryTree(directories: AssetDirectory[], locale: Locale): AssetDirectoryTreeModel {
   const nodes = new Map<string, AssetTreeNode>()
 
   for (const directory of directories) {
@@ -35,7 +36,7 @@ export function buildAssetDirectoryTree(directories: AssetDirectory[]): AssetDir
   }
 
   const sortNodes = (items: AssetTreeNode[]) => {
-    items.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+    items.sort((left, right) => left.name.localeCompare(right.name, locale))
     for (const item of items) sortNodes(item.children)
   }
   sortNodes(roots)

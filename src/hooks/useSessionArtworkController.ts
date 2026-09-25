@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { getLatestStoryboard, getAssetEvidence } from '../lib/local-store'
 import type { EditingSessionView } from '../components/workspace-types'
+import { messages } from '../lib/i18n'
 
 export function useSessionArtworkController(projectId: string | null, sessions: EditingSessionView[]) {
   const sessionIds = sessions.map((session) => session.id).join(',')
@@ -20,7 +21,7 @@ export function useSessionArtworkController(projectId: string | null, sessions: 
     })).then((entries) => {
       if (active) setArtwork({ projectId, covers: Object.fromEntries(entries), notice: null })
     }).catch(() => {
-      if (active) setArtwork({ projectId, covers: {}, notice: '会话封面未能读取' })
+      if (active) setArtwork({ projectId, covers: {}, notice: messages().app.coversFailed })
     })
     return () => { active = false }
   }, [projectId, sessionIds])

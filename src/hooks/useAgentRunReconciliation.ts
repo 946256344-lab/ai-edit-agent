@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { listAgentTasks } from '../lib/local-store'
+import { messages } from '../lib/i18n'
 import type { AgentEditEvent, StoredAgentTask } from '../lib/local-store'
 
 export type PendingAgentEdit = {
@@ -77,7 +78,7 @@ export function useAgentRunReconciliation(options: AgentRunReconciliationOptions
         observedActiveTaskIdsRef.current.delete(taskId)
       })
       .catch(() => {
-        setComposerNotice('Agent 已完成，但界面状态同步失败；请切换任务或重启应用后查看持久化结果。')
+        setComposerNotice(messages().app.composer.syncFailed)
       })
       .finally(() => {
         reconcilingTaskIdsRef.current.delete(taskId)

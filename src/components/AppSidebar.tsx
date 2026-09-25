@@ -6,6 +6,7 @@ import type { EditingSessionView, WorkspaceView } from './workspace-types'
 import { ProjectSettingsModal } from './ProjectSettingsModal'
 import { NameEditDialog } from './NameEditDialog'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { useI18n } from '../lib/i18n'
 
 export type AppSidebarModel = {
   projects: StoredProject[]
@@ -36,8 +37,10 @@ export type AppSidebarActions = {
 }
 export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions: AppSidebarActions }) {
   const sidebar = useRef<HTMLElement>(null)
+  const { t, locale, setLocale } = useI18n()
+  const copy = t.sidebar
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null)
-  const [renameTarget, setRenameTarget] = useState<{ kind: '项目' | '会话'; id: string; name: string } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ kind: 'project' | 'session'; id: string; name: string } | null>(null)
   const settingsProject = model.projects.find((project) => project.id === settingsProjectId)
   useEffect(() => {
     function closeOutsideMenus(event: PointerEvent) {
@@ -53,65 +56,66 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
     <aside ref={sidebar} className="sidebar project-sidebar">
       <span className="assembly-wordmark" data-tauri-drag-region>FellowCut</span>
       <div className="sidebar-project">
-        <span className="sidebar-label">当前项目</span>
+        <span className="sidebar-label">{copy.currentProject}</span>
         <details className="project-switcher" onKeyDown={(event) => {
           if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() }
         }}>
-          <summary className="project-selector" aria-label="选择项目" title={model.activeProjectName ?? '选择项目'}>
+          <summary className="project-selector" aria-label={copy.selectProject} title={model.activeProjectName ?? copy.selectProject}>
             <span className="project-symbol">{Object.values(model.covers).find(Boolean) ? <img src={Object.values(model.covers).find(Boolean)} alt="" /> : <WorkspaceIcon name="folder" />}</span>
-            <strong>{model.activeProjectName ?? '选择项目'}</strong><WorkspaceIcon name="chevron" />
+            <strong>{model.activeProjectName ?? copy.selectProject}</strong><WorkspaceIcon name="chevron" />
           </summary>
           <div className="project-popover">
-            <span className="sidebar-label">我的项目</span>
+            <span className="sidebar-label">{copy.myProjects}</span>
             {model.projects.map((project) => <div className="project-option" key={project.id}>
               <button className={project.id === model.activeProjectId ? 'selected' : ''} onClick={(event) => { actions.selectProject(project.id); event.currentTarget.closest('.project-switcher')?.removeAttribute('open') }}>{project.name}</button>
               <details className="item-actions">
-                <summary aria-label={`编辑${project.name}`} title="项目操作">•••</summary>
+                <summary aria-label={copy.editItem(project.name)} title={copy.projectActions}>•••</summary>
                 <div className="item-menu">
-                  <button onClick={() => setRenameTarget({ kind: '项目', id: project.id, name: project.name })}>重命名</button>
-                  <button onClick={() => setSettingsProjectId(project.id)}>项目设置</button>
-                  <button className="danger" onClick={() => actions.deleteProject(project.id)}>删除项目</button>
+                  <button onClick={() => setRenameTarget({ kind: 'project', id: project.id, name: project.name })}>{t.common.rename}</button>
+                  <button onClick={() => setSettingsProjectId(project.id)}>{copy.projectSettings}</button>
+                  <button className="danger" onClick={() => actions.deleteProject(project.id)}>{copy.deleteProject}</button>
                 </div>
               </details>
             </div>)}
-            <button onClick={(event) => { actions.createProject(); event.currentTarget.closest('details')?.removeAttribute('open') }}><WorkspaceIcon name="plus" />新建项目</button>
+            <button onClick={(event) => { actions.createProject(); event.currentTarget.closest('details')?.removeAttribute('open') }}><WorkspaceIcon name="plus" />{copy.newProject}</button>
           </div>
         </details>
-        <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label={model.analysisStatus === 'analyzing' ? `素材库，正在分析，共 ${model.assetCount} 个` : model.analysisStatus === 'attention' ? `素材库，有未完成分析，共 ${model.assetCount} 个` : `素材库，共 ${model.assetCount} 个`} aria-pressed={model.view === 'assets'} title={model.analysisStatus === 'idle' ? undefined : model.analysisHint} onClick={actions.openAssets}>
-          <WorkspaceIcon name="library" /><span>素材库</span><small>{model.assetCount}</small>
+        <button className={`sidebar-library ${model.view === 'assets' ? 'selected' : ''}`} aria-label={model.analysisStatus === 'analyzing' ? copy.libraryAnalyzing(model.assetCount) : model.analysisStatus === 'attention' ? copy.libraryAttention(model.assetCount) : copy.libraryIdle(model.assetCount)} aria-pressed={model.view === 'assets'} title={model.analysisStatus === 'idle' ? undefined : model.analysisHint} onClick={actions.openAssets}>
+          <WorkspaceIcon name="library" /><span>{copy.library}</span><small>{model.assetCount}</small>
           {model.analysisStatus !== 'idle' && <i className={`sidebar-library__status sidebar-library__status--${model.analysisStatus}`} aria-hidden="true" />}
         </button>
-        <button className="new-edit" onClick={actions.createSession} title="新建剪辑会话"><WorkspaceIcon name="plus" /><span>新建剪辑</span></button>
+        <button className="new-edit" onClick={actions.createSession} title={copy.newSessionTitle}><WorkspaceIcon name="plus" /><span>{copy.newEdit}</span></button>
       </div>
-      <nav className="sidebar-sessions" aria-label="剪辑会话">
-        <span className="sidebar-label">剪辑会话</span>
-        {!model.sessions.length && <p className="switcher-empty">从一个新的剪辑开始。</p>}
+      <nav className="sidebar-sessions" aria-label={copy.sessions}>
+        <span className="sidebar-label">{copy.sessions}</span>
+        {!model.sessions.length && <p className="switcher-empty">{copy.sessionsEmpty}</p>}
         {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''}`} key={session.id}>
-          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} data-initial={session.title.trim().charAt(0) || '剪'} onClick={() => actions.selectSession(session.id)}>
-            <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? '正在剪辑…' : session.updated}</small></span>
+          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} data-initial={session.title.trim().charAt(0) || copy.sessionInitial} onClick={() => actions.selectSession(session.id)}>
+            <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? copy.editing : session.updated}</small></span>
           </button>
           <details className="item-actions session-actions">
-            <summary aria-label={`编辑${session.title}`} title="会话操作">•••</summary>
+            <summary aria-label={copy.editItem(session.title)} title={copy.sessionActions}>•••</summary>
             <div className="item-menu">
-              <button onClick={() => setRenameTarget({ kind: '会话', id: session.id, name: session.title })}>重命名</button>
-              <button className="danger" onClick={() => actions.deleteSession(session.id)}>删除会话</button>
+              <button onClick={() => setRenameTarget({ kind: 'session', id: session.id, name: session.title })}>{t.common.rename}</button>
+              <button className="danger" onClick={() => actions.deleteSession(session.id)}>{copy.deleteSession}</button>
             </div>
           </details>
         </div>)}
         {model.artworkNotice && <p className="switcher-empty">{model.artworkNotice}</p>}
       </nav>
       <div className="project-sidebar-footer">
-        <button title={`模型设置 · ${model.providerLabel}`} aria-label="模型设置" onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>模型设置</span></button>
-        <button title="项目设置" aria-label="项目设置" onClick={() => setSettingsProjectId(model.activeProjectId)}><WorkspaceIcon name="settings" /><span>项目设置</span></button>
-        <span className="local-status"><i className={`connection-dot ${model.storeState}`} /><span>{model.storeState === 'ready' ? '本地工作区' : '本地未连接'}</span></span>
+        <button title={copy.modelSettingsTitle(model.providerLabel)} aria-label={copy.modelSettings} onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>{copy.modelSettings}</span></button>
+        <button title={copy.projectSettings} aria-label={copy.projectSettings} onClick={() => setSettingsProjectId(model.activeProjectId)}><WorkspaceIcon name="settings" /><span>{copy.projectSettings}</span></button>
+        <button title={t.language.switchTitle} aria-label={`${t.language.label}: ${t.language.switchTo}`} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><WorkspaceIcon name="language" /><span>{t.language.switchTo}</span></button>
+        <span className="local-status"><i className={`connection-dot ${model.storeState}`} /><span>{model.storeState === 'ready' ? t.common.localWorkspace : t.common.localDisconnected}</span></span>
       </div>
       <ProjectSettingsModal open={Boolean(settingsProjectId)} projectId={settingsProjectId} projectName={settingsProject?.name ?? null} onClose={() => setSettingsProjectId(null)} />
       <NameEditDialog
         open={Boolean(renameTarget)}
-        label={renameTarget?.kind ?? '项目'}
+        label={renameTarget?.kind === 'session' ? copy.kindSession : copy.kindProject}
         initialValue={renameTarget?.name ?? ''}
         onClose={() => setRenameTarget(null)}
-        onSave={(value) => renameTarget?.kind === '项目'
+        onSave={(value) => renameTarget?.kind === 'project'
           ? actions.renameProject(renameTarget.id, value)
           : actions.renameSession(renameTarget?.id ?? '', value)}
       />

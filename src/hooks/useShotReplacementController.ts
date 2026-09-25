@@ -1,6 +1,7 @@
 // 手动换镜 controller：试选不落盘，保存创建新版本；旧预览保留到新预览完成。
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
+import { messages } from '../lib/i18n'
 import { commitStudioEdits, generateShotRecommendations, listShotRecommendations, prepareShotReplacement, renderPreview } from '../lib/local-store'
 import type { PreparedShotReplacement, PreviewResult, ShotRecommendations, ShotScope, TimelineClipDto, TimelineVersion } from '../lib/local-store'
 
@@ -83,7 +84,7 @@ export function useShotReplacementController(options: Options) {
       const result = await (generate ? generateShotRecommendations(target) : listShotRecommendations(target))
       if (isCurrent(target, token)) setRecommendations(result)
     } catch {
-      if (isCurrent(target, token)) setNotice('无法读取此镜头的推荐，请确认素材可用；也可以通过对话调整。')
+      if (isCurrent(target, token)) setNotice(messages().preview.recommendationsFailed)
     } finally {
       if (isCurrent(target, token)) setPhase('idle')
     }
@@ -102,7 +103,7 @@ export function useShotReplacementController(options: Options) {
       const result = await prepareShotReplacement(target, candidateId)
       if (isCurrent(target, token)) setPrepared(result)
     } catch {
-      if (isCurrent(target, token)) setNotice('此候选的画面预览未能准备完成，请检查模型配置和素材，或选择其他镜头。原剪辑未改变。')
+      if (isCurrent(target, token)) setNotice(messages().preview.candidatePrepareFailed)
     } finally {
       if (isCurrent(target, token)) setPhase('idle')
     }
@@ -128,7 +129,7 @@ export function useShotReplacementController(options: Options) {
       onSaved(next)
     } catch {
       if (isCurrent(target, token)) {
-        setNotice('修改未保存，原剪辑保持不变。请再次保存。')
+        setNotice(messages().preview.changesNotSaved)
         setPhase('idle')
       }
       return
@@ -136,14 +137,14 @@ export function useShotReplacementController(options: Options) {
     const savedTarget = { ...target, timelineVersionId: next.id }
     if (!isCurrent(savedTarget, token)) return
     setPhase('rendering')
-    setNotice('修改已保存，正在更新预览。当前仍显示上一版画面。')
+    setNotice(messages().preview.savedRendering)
     try {
       const preview = await renderPreview(next.id)
       if (!isCurrent(savedTarget, token)) return
       options.applyCommit(next, preview)
-      setNotice('修改已保存，预览已更新。')
+      setNotice(messages().preview.savedRendered)
     } catch {
-      if (isCurrent(savedTarget, token)) setNotice('修改已保存，但新预览生成失败。可重新生成预览；剪映草稿将使用已保存的镜头。')
+      if (isCurrent(savedTarget, token)) setNotice(messages().preview.savedRenderFailed)
     } finally {
       if (isCurrent(savedTarget, token)) setPhase('idle')
     }

@@ -1,6 +1,7 @@
 // 对话与预览并排：默认约七成对话，中间分界可拖动。
 import { useCallback, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import { useI18n } from '../lib/i18n'
 
 const DEFAULT_RATIO = 0.72
 const MIN_CHAT = 280
@@ -15,6 +16,7 @@ type Props = {
 
 export function PairedWorkspace({ hidden, chat, preview }: Props) {
   const pane = useRef<HTMLDivElement>(null)
+  const copy = useI18n().t.header
   const [ratio, setRatio] = useState(DEFAULT_RATIO)
   const [resizing, setResizing] = useState(false)
 
@@ -78,12 +80,12 @@ export function PairedWorkspace({ hidden, chat, preview }: Props) {
       <button
         type="button"
         className="workspace-split"
-        aria-label="调整对话与预览宽度"
+        aria-label={copy.splitAria}
         aria-orientation="vertical"
         aria-valuemin={20}
         aria-valuemax={80}
         aria-valuenow={Math.round(ratio * 100)}
-        aria-valuetext={`对话区 ${Math.round(ratio * 100)}%`}
+        aria-valuetext={copy.splitValue(Math.round(ratio * 100))}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={stopResize}

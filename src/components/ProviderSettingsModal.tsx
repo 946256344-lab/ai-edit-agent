@@ -1,6 +1,7 @@
 // Provider 设置弹窗只编辑 controller 草稿并触发显式动作，关闭时不自动保存。
 import { useLayoutEffect, useRef } from 'react'
 import type { ProviderController } from '../hooks/useProviderController'
+import { useI18n } from '../lib/i18n'
 
 type ProviderSettingsModalProps = {
   controller: ProviderController
@@ -8,6 +9,8 @@ type ProviderSettingsModalProps = {
 
 export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const { t } = useI18n()
+  const copy = t.provider
   useLayoutEffect(() => {
     const element = dialog.current
     if (controller.model.isOpen) element?.showModal()
@@ -17,59 +20,59 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
   const { model, actions } = controller
 
   return (
-    <dialog ref={dialog} className="settings-dialog" aria-label="模型提供商设置" onCancel={(event) => { event.preventDefault(); dialog.current?.close(); actions.close() }}>
+    <dialog ref={dialog} className="settings-dialog" aria-label={copy.aria} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); actions.close() }}>
       <section className="provider-modal">
-        <button className="close-button" onClick={() => { dialog.current?.close(); actions.close() }} aria-label="关闭">×</button>
+        <button className="close-button" onClick={() => { dialog.current?.close(); actions.close() }} aria-label={t.common.close}>×</button>
         <span className="eyebrow">MODEL ACCESS</span>
-        <h2>连接 Agent 模型</h2>
-        <p>连接模型后即可开始 AI 剪辑。项目与原始素材保存在本机，理解需求和分析画面时会调用所选服务。</p>
+        <h2>{copy.title}</h2>
+        <p>{copy.intro}</p>
 
         <div className="provider-option chosen">
           <span>
             <strong>OpenAI OAuth</strong>
-            <small>实验性 OpenCode 兼容流。令牌只存储在 Windows 凭据库，可能随 OpenAI 服务变更失效。</small>
+            <small>{copy.oauthHint}</small>
           </span>
-          <b>{model.oauthStatus.state === 'connected' ? '已连接' : '实验性'}</b>
+          <b>{model.oauthStatus.state === 'connected' ? copy.connected : copy.experimental}</b>
         </div>
-        <p className="oauth-status">{model.oauthStatus.message ?? '尚未连接。'}</p>
+        <p className="oauth-status">{model.oauthStatus.message ?? copy.notConnected}</p>
         <button
           className="primary-button modal-button"
           onClick={actions.connectOAuth}
           disabled={model.oauthStatus.state === 'pending' || model.oauthStatus.state === 'connected'}
         >
-          {model.oauthStatus.state === 'pending' ? '等待浏览器授权' : model.oauthStatus.state === 'connected' ? 'OAuth 已连接' : '使用 ChatGPT 登录'}
+          {model.oauthStatus.state === 'pending' ? copy.waitingBrowser : model.oauthStatus.state === 'connected' ? copy.oauthConnected : copy.loginChatGpt}
         </button>
         {model.oauthStatus.state === 'connected' && (
-          <button className="outline-button modal-button" onClick={actions.disconnectOAuth}>退出登录</button>
+          <button className="outline-button modal-button" onClick={actions.disconnectOAuth}>{copy.logout}</button>
         )}
 
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
-            <strong>配音（Fish Audio）</strong>
-            <small>配置后优先用于配音；传输超时/服务不可用时可回退到已配置的 ElevenLabs（密钥错误不会切换）。API Key 只保存在 Windows 凭据库。</small>
+            <strong>{copy.fishTitle}</strong>
+            <small>{copy.fishHint}</small>
           </span>
-          <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已连接' : '密钥已存·未探通') : '未配置'}</b>
+          <b>{model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? copy.connected : copy.keyStoredUnreachable) : copy.notConfiguredBadge}</b>
         </div>
-        <p className="oauth-status">{model.fishAudioStatus.lastErrorCode ? `配音状态：${model.fishAudioStatus.lastErrorCode}（常见原因：本机代理未启动，或进程未读到 HTTPS_PROXY）` : model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? '已保存密钥，将使用 s2.1-pro-free。' : '密钥已存，但当前无法访问 Fish Audio；请确认本地代理可用。') : '尚未配置。'}</p>
+        <p className="oauth-status">{model.fishAudioStatus.lastErrorCode ? copy.fishStatusError(model.fishAudioStatus.lastErrorCode) : model.fishAudioStatus.keyStored ? (model.fishAudioStatus.voicesReadable ? copy.fishSaved : copy.fishUnreachable) : copy.notConfigured}</p>
         <form className="custom-api-form" onSubmit={actions.saveFishAudioKey}>
           <label><span>Fish Audio API Key</span><input type="password" value={model.form.fishAudioKey} onChange={(event) => actions.setFishAudioKey(event.target.value)} placeholder="Fish API Key" autoComplete="off" /></label>
-          <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.fishAudioKey.trim()}>{model.isSavingVoice ? '保存中' : '保存 Fish Audio 密钥'}</button>
+          <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.fishAudioKey.trim()}>{model.isSavingVoice ? t.common.saving : copy.saveFish}</button>
         </form>
-        {model.fishAudioStatus.importable && <button className="outline-button modal-button" onClick={actions.importFishAudioKey} disabled={model.isSavingVoice}>从 FISH_API_KEY 导入</button>}
-        {model.fishAudioStatus.keyStored && <button className="outline-button modal-button" onClick={actions.clearFishAudioKey}>清除 Fish Audio 密钥</button>}
+        {model.fishAudioStatus.importable && <button className="outline-button modal-button" onClick={actions.importFishAudioKey} disabled={model.isSavingVoice}>{copy.importFish}</button>}
+        {model.fishAudioStatus.keyStored && <button className="outline-button modal-button" onClick={actions.clearFishAudioKey}>{copy.clearFish}</button>}
 
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
-            <strong>自定义 API</strong>
-            <small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。配置后自定义 API 会优先生效。</small>
+            <strong>{copy.customTitle}</strong>
+            <small>{copy.customHint}</small>
           </span>
-          <b>{model.customApiStatus.state === 'connected' ? model.customApiStatus.model ?? '已连接' : '自定义'}</b>
+          <b>{model.customApiStatus.state === 'connected' ? model.customApiStatus.model ?? copy.connected : copy.customBadge}</b>
         </div>
         <p className="oauth-status">
-          {model.customApiStatus.message ?? '尚未配置。'}
-          {model.customApiStatus.state === 'connected' && ` 粗视觉：${model.customApiStatus.coarseVisualModel ?? '使用主 Model'}`}
+          {model.customApiStatus.message ?? copy.notConfigured}
+          {model.customApiStatus.state === 'connected' && copy.coarseVisual(model.customApiStatus.coarseVisualModel ?? copy.useMainModel)}
         </p>
         <form className="custom-api-form" onSubmit={actions.saveCustomApi}>
           <label>
@@ -77,12 +80,12 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
             <input value={model.form.baseUrl} onChange={(event) => actions.setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="off" />
           </label>
           <label>
-            <span>Model（必填，storyboard 与 Agent）</span>
-            <input value={model.form.model} onChange={(event) => actions.setModel(event.target.value)} placeholder="例如 main-model" autoComplete="off" />
+            <span>{copy.modelLabel}</span>
+            <input value={model.form.model} onChange={(event) => actions.setModel(event.target.value)} placeholder={copy.modelPlaceholder} autoComplete="off" />
           </label>
           <label>
-            <span>粗视觉 Model（可选）</span>
-            <input value={model.form.coarseVisualModel} onChange={(event) => actions.setCoarseVisualModel(event.target.value)} placeholder="留空则使用主 Model" autoComplete="off" />
+            <span>{copy.coarseLabel}</span>
+            <input value={model.form.coarseVisualModel} onChange={(event) => actions.setCoarseVisualModel(event.target.value)} placeholder={copy.coarsePlaceholder} autoComplete="off" />
           </label>
           <label>
             <span>API Key</span>
@@ -93,29 +96,29 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
             type="submit"
             disabled={model.isSaving || !model.form.baseUrl.trim() || !model.form.model.trim() || !model.form.apiKey.trim()}
           >
-            {model.isSaving ? '保存中' : '保存自定义 API'}
+            {model.isSaving ? t.common.saving : copy.saveCustom}
           </button>
         </form>
         {model.customApiStatus.state === 'connected' && (
-          <button className="outline-button modal-button" onClick={actions.disconnectCustomApi}>清除自定义 API</button>
+          <button className="outline-button modal-button" onClick={actions.disconnectCustomApi}>{copy.clearCustom}</button>
         )}
 
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
-            <strong>配音（ElevenLabs）</strong>
-            <small>API Key 只保存在 Windows 凭据库。保存后只探测音色列表，不会合成扣费。</small>
+            <strong>{copy.elevenTitle}</strong>
+            <small>{copy.elevenHint}</small>
           </span>
-          <b>{model.elevenLabsStatus.keyStored ? (model.elevenLabsStatus.voicesReadable ? '已连接' : '密钥已存·未探通') : '未配置'}</b>
+          <b>{model.elevenLabsStatus.keyStored ? (model.elevenLabsStatus.voicesReadable ? copy.connected : copy.keyStoredUnreachable) : copy.notConfiguredBadge}</b>
         </div>
         <p className="oauth-status">
           {model.elevenLabsStatus.lastErrorCode
-            ? `配音状态：${model.elevenLabsStatus.lastErrorCode}`
+            ? copy.voiceStatus(model.elevenLabsStatus.lastErrorCode)
             : model.elevenLabsStatus.keyStored
-              ? (model.elevenLabsStatus.voicesReadable ? '已保存密钥。' : '密钥已存，但当前无法读取音色列表。')
+              ? (model.elevenLabsStatus.voicesReadable ? copy.elevenSaved : copy.elevenUnreadable)
               : model.elevenLabsStatus.importable
-                ? '检测到本机环境变量，可以导入。'
-                : '尚未配置。'}
+                ? copy.elevenImportable
+                : copy.notConfigured}
         </p>
         <form className="custom-api-form" onSubmit={actions.saveElevenLabsKey}>
           <label>
@@ -123,16 +126,16 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
             <input type="password" value={model.form.elevenLabsKey} onChange={(event) => actions.setElevenLabsKey(event.target.value)} placeholder="xi-..." autoComplete="off" />
           </label>
           <button className="primary-button modal-button" type="submit" disabled={model.isSavingVoice || !model.form.elevenLabsKey.trim()}>
-            {model.isSavingVoice ? '保存中' : '保存配音密钥'}
+            {model.isSavingVoice ? t.common.saving : copy.saveEleven}
           </button>
         </form>
         {model.elevenLabsStatus.importable && (
-          <button className="outline-button modal-button" onClick={actions.importElevenLabsKey} disabled={model.isSavingVoice}>从环境变量导入</button>
+          <button className="outline-button modal-button" onClick={actions.importElevenLabsKey} disabled={model.isSavingVoice}>{copy.importEnv}</button>
         )}
         {model.elevenLabsStatus.keyStored && (
-          <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>清除配音密钥</button>
+          <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>{copy.clearEleven}</button>
         )}
-        <button className="outline-button modal-button" onClick={() => { dialog.current?.close(); actions.close() }}>关闭</button>
+        <button className="outline-button modal-button" onClick={() => { dialog.current?.close(); actions.close() }}>{t.common.close}</button>
       </section>
     </dialog>
   )

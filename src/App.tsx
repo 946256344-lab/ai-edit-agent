@@ -47,21 +47,23 @@ import {
 import type { AgentEditEvent, ConversationTurnResult, StoredAgentTask, StoredEditingSession, StoredMessage, StoredProject, TaskRouteResult } from './lib/local-store'
 import { toMessage } from './lib/message'
 import { analysisAmbientStatus, analysisSummary } from './lib/asset-analysis'
+import { formatClockTime, messages as uiMessages, useI18n } from './lib/i18n'
 
 function toEditingSession(session: StoredEditingSession): EditingSessionView {
   return {
     id: session.id,
     conversationId: session.conversationId,
     title: session.title,
-    preview: session.summary || session.brief || '暂无消息',
+    preview: session.summary || session.brief || uiMessages().app.noMessages,
     brief: session.brief,
-    updated: new Date(session.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    updated: formatClockTime(session.updatedAt),
     state: session.status === 'working' ? 'working' : session.status === 'review' ? 'review' : 'ready',
   }
 }
 
 function App() {
   const desktopRuntime = isDesktopRuntime()
+  const { t } = useI18n()
   const projectCreation = useProjectCreationController(createProjectWorkspace)
   const windowControls = useWindowController(desktopRuntime)
   const [projects, setProjects] = useState<StoredProject[]>([])
@@ -222,7 +224,7 @@ function App() {
     if (!desktopRuntime) return
     const project = await createStoredProject(name, libraryIds)
     setProjects((current) => [project, ...current])
-    const storedSession = await createStoredEditingSession(project.id, '新的剪辑会话')
+    const storedSession = await createStoredEditingSession(project.id, uiMessages().app.newSessionTitle)
     const session = toEditingSession(storedSession)
     setActiveProjectId(project.id)
     activeProjectRef.current = project.id
@@ -247,19 +249,19 @@ function App() {
     if (!desktopRuntime) return
     let projectId = activeProjectId
     if (!projectId) {
-      const project = await createStoredProject('未命名本地项目')
+      const project = await createStoredProject(uiMessages().app.untitledProject)
       setProjects((current) => [project, ...current])
       projectId = project.id
       setActiveProjectId(projectId)
       activeProjectRef.current = projectId
     }
-    const storedSession = await createStoredEditingSession(projectId, '新的剪辑会话')
+    const storedSession = await createStoredEditingSession(projectId, uiMessages().app.newSessionTitle)
     const session = toEditingSession(storedSession)
     const nextSessions = [session, ...editingSessions]
     setEditingSessions(nextSessions)
     await selectEditingSession(projectId, session.id, nextSessions)
     if (session.conversationId) {
-      await appendStoredMessage(session.conversationId, session.id, 'agent', '告诉我你想剪什么。导入素材后，也可以直接说成片目标，我会开始生成第一版。')
+      await appendStoredMessage(session.conversationId, session.id, 'agent', uiMessages().app.welcome)
       await refreshEditingSessions(projectId)
     }
     setActiveView('chat')
@@ -268,16 +270,14 @@ function App() {
   async function deleteEditingSessionWorkspace(sessionId: string) {
     if (!desktopRuntime || !activeProjectId) return
     const session = editingSessions.find((candidate) => candidate.id === sessionId)
-    const title = session?.title ?? '该剪辑会话'
-    const confirmed = window.confirm(
-      `确定删除「${title}」？\n\n将永久删除该会话的对话、Agent 记录、故事板、时间线和本地预览。项目素材不会删除。`,
-    )
+    const title = session?.title ?? uiMessages().app.sessionFallback
+    const confirmed = window.confirm(uiMessages().app.deleteSessionConfirm(title))
     if (!confirmed) return
     const projectId = activeProjectId
     try {
       await deleteStoredEditingSession(projectId, sessionId, true)
     } catch {
-      window.alert('删除失败，请稍后重试。')
+      window.alert(uiMessages().app.deleteFailed)
       return
     }
     const remaining = editingSessions.filter((candidate) => candidate.id !== sessionId)
@@ -297,7 +297,7 @@ function App() {
   async function ensureEditingSession() {
     let projectId = activeProjectId
     if (!projectId) {
-      const project = await createStoredProject('未命名本地项目')
+      const project = await createStoredProject(uiMessages().app.untitledProject)
       setProjects((current) => [project, ...current])
       projectId = project.id
       setActiveProjectId(projectId)
@@ -305,7 +305,7 @@ function App() {
     }
     let session = activeEditingSession
     if (!session) {
-      const createdSession = toEditingSession(await createStoredEditingSession(projectId, '新的剪辑会话'))
+      const createdSession = toEditingSession(await createStoredEditingSession(projectId, uiMessages().app.newSessionTitle))
       session = createdSession
       setEditingSessions((current) => [createdSession, ...current])
       setActiveEditingSessionId(session.id)
@@ -313,7 +313,7 @@ function App() {
     }
     let conversationId = session.conversationId
     if (!conversationId) {
-      const conversation = await createStoredConversation(projectId, session.id, '新的剪辑会话')
+      const conversation = await createStoredConversation(projectId, session.id, uiMessages().app.newSessionTitle)
       conversationId = conversation.id
       const updatedSession = { ...session, conversationId }
       session = updatedSession
@@ -324,7 +324,7 @@ function App() {
 
   async function ensureProject() {
     if (activeProjectId) return activeProjectId
-    const project = await createStoredProject('未命名本地项目')
+    const project = await createStoredProject(uiMessages().app.untitledProject)
     setProjects((current) => [project, ...current])
     setActiveProjectId(project.id)
     activeProjectRef.current = project.id
@@ -340,7 +340,7 @@ function App() {
     )
     setRouteStatusDetail(route.reasonCode)
     if (route.action === 'clarify') {
-      setRouteStatusText('需要任务澄清')
+      setRouteStatusText(uiMessages().app.route.needsClarification)
       setRouteStatusTone('warning')
       return { route, context: null }
     }
@@ -366,7 +366,7 @@ function App() {
     const nextSessions = storedSessions.map(toEditingSession)
     const selected = await selectEditingSession(projectId, targetSession.id, nextSessions)
     if (!selected) throw new Error('Resolved editing task could not be activated.')
-    setRouteStatusText(targetSession.id === activeEditingSessionRef.current ? '已归属到当前任务' : '已切换到匹配任务')
+    setRouteStatusText(targetSession.id === activeEditingSessionRef.current ? uiMessages().app.route.attachedCurrent : uiMessages().app.route.switched)
     setRouteStatusTone(targetSession.id === activeEditingSessionRef.current ? 'success' : 'info')
     return {
       route,
@@ -382,9 +382,9 @@ function App() {
   }
 
   function showTaskRouteClarification(request: string, question: string) {
-    const timestamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    const timestamp = formatClockTime(Date.now())
     const nonce = Date.now()
-    setRouteStatusText('需要你确认任务归属')
+    setRouteStatusText(uiMessages().app.route.needsConfirm)
     setRouteStatusDetail(question)
     setRouteStatusTone('warning')
     setMessages((current) => [
@@ -402,7 +402,7 @@ function App() {
     setIsSending(true)
     setComposerNotice(null)
     // 任务归属要等一次模型请求；先把用户消息显示出来并清空输入框，落库前失败或取消再放回。
-    setPendingUserMessage({ id: `pending-user-${Date.now()}`, role: 'user', content: trimmed, time: '发送中…' })
+    setPendingUserMessage({ id: `pending-user-${Date.now()}`, role: 'user', content: trimmed, time: uiMessages().app.composer.sending })
     setInput('')
     const restoreDraft = () => {
       setPendingUserMessage(null)
@@ -414,45 +414,45 @@ function App() {
       if (!await analysisGate.waitForAnalysis() || cancelRequestedRef.current) {
         restoreDraft()
         setIsSending(false)
-        setComposerNotice('已取消这次发送，剪辑要求已保留。')
+        setComposerNotice(uiMessages().app.composer.sendCancelled)
         return
       }
       if (!agentReconciliation.listenerReady && !await agentReconciliation.ensureListener()) {
         restoreDraft()
-        setComposerNotice('Agent 事件连接暂时不可用，请再次点击发送重试。')
+        setComposerNotice(uiMessages().app.composer.listenerUnavailable)
         setIsSending(false)
         return
       }
-      setRouteStatusText('正在确认剪辑任务…')
+      setRouteStatusText(uiMessages().app.route.confirming)
       setRouteStatusDetail(null)
       setRouteStatusTone('info')
       const resolved = await resolveMessageContext(trimmed)
       if (cancelRequestedRef.current) {
         restoreDraft()
         setIsSending(false)
-        setComposerNotice('已停止本轮处理。')
+        setComposerNotice(uiMessages().app.composer.stopped)
         return
       }
       if (!resolved.context) {
         setPendingUserMessage(null)
-        showTaskRouteClarification(trimmed, resolved.route.question || '请确认这条请求属于哪个剪辑任务。')
+        showTaskRouteClarification(trimmed, resolved.route.question || uiMessages().app.route.clarifyFallback)
         setIsSending(false)
         return
       }
-      setRouteStatusText(resolved.route.action === 'create_new' ? '将创建新的剪辑任务' : '已完成任务归属')
+      setRouteStatusText(resolved.route.action === 'create_new' ? uiMessages().app.route.createNew : uiMessages().app.route.resolved)
       setRouteStatusDetail(resolved.route.reasonCode)
       setRouteStatusTone('success')
       context = resolved.context
       const { conversationId, projectId, sessionId } = context
       composerMedia.rememberSent(sessionId, mediaOptions)
       const routedRequest = resolved.route.deferredRequest
-        ? `${resolved.route.deferredRequest}\n\n任务归属补充：${trimmed}`
+        ? uiMessages().app.route.supplement(resolved.route.deferredRequest, trimmed)
         : trimmed
       await appendStoredMessage(conversationId, sessionId, 'user', routedRequest, resolved.context.routeReceipt)
       persisted = true
       if (cancelRequestedRef.current) {
         setIsSending(false)
-        setComposerNotice('已停止本轮处理。')
+        setComposerNotice(uiMessages().app.composer.stopped)
         return
       }
       await setConversationStatus(conversationId, 'working')
@@ -461,7 +461,7 @@ function App() {
         await setConversationStatus(conversationId, 'ready')
         await refreshEditingSessions(projectId)
         setIsSending(false)
-        setComposerNotice('已停止本轮处理。')
+        setComposerNotice(uiMessages().app.composer.stopped)
         return
       }
       const turnResult: ConversationTurnResult = await submitConversationTurn(
@@ -495,32 +495,33 @@ function App() {
     } catch (error) {
       setIsSending(false)
       if (!persisted) restoreDraft()
-      setRouteStatusText('这轮请求未完成')
+      setRouteStatusText(uiMessages().app.route.failed)
       setRouteStatusDetail(null)
       setRouteStatusTone('warning')
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.error('[App] sendMessage failed:', errorMessage, error)
+      const errorCopy = uiMessages().app.errors
       let userMessage = context
-        ? '这次请求没有完成，请重试；已有结果不会被修改。'
-        : '无法准备当前剪辑任务，请重试或重新选择项目。'
+        ? errorCopy.requestFailed
+        : errorCopy.prepareFailed
 
       // 提供更具体的错误诊断
       if (errorMessage.includes('Task resolver model is unavailable')) {
-        userMessage = 'AI 模型服务暂时不可用。请检查自定义 API 配置或 OAuth 登录状态。'
+        userMessage = errorCopy.modelUnavailable
       } else if (errorMessage.includes('Custom API credential read failed')) {
-        userMessage = '自定义 API 凭据读取失败，请检查配置文件。'
+        userMessage = errorCopy.credentialFailed
       } else if (errorMessage.includes('OAuth not logged in')) {
-        userMessage = 'OAuth 未登录或已过期，请重新登录。'
+        userMessage = errorCopy.oauthExpired
       } else if (errorMessage.includes('Current local project could not be verified')) {
-        userMessage = '当前项目不存在或已损坏，请重新选择项目。'
+        userMessage = errorCopy.projectMissing
       } else if (errorMessage.includes('Task Resolver did not')) {
-        userMessage = `任务归属失败：${errorMessage}`
+        userMessage = errorCopy.routeFailed(errorMessage)
       }
 
       setComposerNotice(userMessage)
       if (context) {
         try {
-          await appendStoredMessage(context.conversationId, context.sessionId, 'agent', '这次操作没有完成，已有结果没有被修改。请重试，或补充你希望保留的素材和片段。')
+          await appendStoredMessage(context.conversationId, context.sessionId, 'agent', errorCopy.agentMessage)
           await setConversationStatus(context.conversationId, 'ready')
         } catch {
           // The composer still stays interactive when local persistence is unavailable.
@@ -544,7 +545,7 @@ function App() {
     }
     const pending = agentReconciliation.peekPendingEdit()
     if (!pending) {
-      setComposerNotice('正在停止…')
+      setComposerNotice(uiMessages().app.composer.stopping)
       return
     }
     void cancelStoredAgentEdit(
@@ -553,8 +554,8 @@ function App() {
       pending.conversationId,
       pending.taskId,
     )
-      .then(() => setComposerNotice('正在停止本轮处理…'))
-      .catch(() => setComposerNotice('停止请求未生效，请稍后再试。'))
+      .then(() => setComposerNotice(uiMessages().app.composer.stoppingRun))
+      .catch(() => setComposerNotice(uiMessages().app.composer.stopFailed))
   }
 
   if (!desktopRuntime) {
@@ -562,8 +563,8 @@ function App() {
       <main className="app-shell browser-notice">
         <section>
           <span className="eyebrow">DESKTOP APP REQUIRED</span>
-          <h1>请在 Windows 桌面应用中运行 FellowCut</h1>
-          <p>浏览器模式不能访问本地项目、媒体文件、FFmpeg 或 AI 凭据，因此不能用于剪辑测试。</p>
+          <h1>{t.app.browserTitle}</h1>
+          <p>{t.app.browserBody}</p>
           <code>npm run tauri:dev</code>
         </section>
       </main>
@@ -605,8 +606,8 @@ function App() {
       <section className="workspace">
         <WorkspaceHeader
           model={{
-            projectName: activeProject?.name ?? '新项目',
-            sessionTitle: activeEditingSession?.title ?? '开始剪辑',
+            projectName: activeProject?.name ?? t.app.newProject,
+            sessionTitle: activeEditingSession?.title ?? t.app.startEditing,
             storeReady: storeState === 'ready',
             view: activeView,
           }}
@@ -617,13 +618,13 @@ function App() {
         <ReleaseReadinessBanner enabled={storeState === 'ready'} />
         {activeView !== 'assets' && <header className="cut-heading">
           <div>
-            <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? '从灵感，到画面'}</h1>
+            <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? t.app.headingFallback}</h1>
             <p>{artifactWorkspace.timeline
-              ? `${(artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1)} 秒 · ${artifactWorkspace.timeline.clips.length} 个镜头 · 第 ${artifactWorkspace.timeline.versionNumber} 版`
-              : isSending ? '正在制作你的粗剪…' : '导入素材，开始你的下一段故事'}</p>
+              ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length, artifactWorkspace.timeline.versionNumber)
+              : isSending ? t.app.making : t.app.idle}</p>
             {artifactWorkspace.storyboardVersions.length > 0 && (
               <label className="storyboard-version-picker">
-                故事版
+                {t.app.storyboard}
                 <select
                   value={artifactWorkspace.storyboard?.id ?? ''}
                   onChange={(event) => {

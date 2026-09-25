@@ -3,35 +3,29 @@ import { useRef, useState, type MouseEvent } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { AssetEvidence } from '../../lib/local-store'
 import './asset-evidence.css'
+import { messages, useI18n } from '../../lib/i18n'
+import type { Messages } from '../../lib/i18n'
 
 function formatTimeMs(timeMs: number | null) {
-  if (timeMs === null) return '整条素材'
+  if (timeMs === null) return messages().assetDetail.wholeAsset
   const seconds = Math.max(0, Math.floor(timeMs / 1000))
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-function visualStatusLabel(status: AssetEvidence['visualAnalysisStatus']) {
-  switch (status) {
-    case 'ready': return '分析完成'
-    case 'running': return '分析中'
-    case 'queued': return '等待分析'
-    case 'failed': return '画面识别失败'
-    case 'skipped': return '已跳过视觉分析'
-  }
-}
-
-function evidenceLabel(item: AssetEvidence['visualEvidence'][number]) {
+function evidenceLabel(item: AssetEvidence['visualEvidence'][number], t: Messages) {
   return [
     item.narrativeRole ?? '',
     item.caption ?? '',
     ...item.subjects, item.scene ?? '', ...item.actions, ...item.products,
-    item.shotType ? `景别：${item.shotType}` : '',
-    item.cameraMotion ? `运镜：${item.cameraMotion}` : '',
-  ].filter(Boolean).join(' · ') || '暂无画面描述'
+    item.shotType ? t.assetDetail.shotType(item.shotType) : '',
+    item.cameraMotion ? t.assetDetail.cameraMotion(item.cameraMotion) : '',
+  ].filter(Boolean).join(' · ') || t.assetDetail.noVisualDescription
 }
 
 export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetEvidence; onClose: () => void }) {
   const player = useRef<HTMLVideoElement>(null)
+  const { t } = useI18n()
+  const copy = t.assetDetail
   const range = useRef<{ startMs: number; endMs: number } | null>(null)
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null)
   const [mediaReady, setMediaReady] = useState(false)
@@ -57,14 +51,14 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
   }
 
   return (
-    <section className="asset-evidence-card asset-detail" aria-label="素材详情">
+    <section className="asset-evidence-card asset-detail" aria-label={copy.aria}>
       <header className="asset-detail__header">
-        <div><span className="panel-kicker">素材详情</span><h3 title={evidence.displayName}>{evidence.displayName}</h3></div>
-        <button className="asset-detail__close" onClick={onClose} aria-label="关闭素材详情">关闭</button>
+        <div><span className="panel-kicker">{copy.kicker}</span><h3 title={evidence.displayName}>{evidence.displayName}</h3></div>
+        <button className="asset-detail__close" onClick={onClose} aria-label={copy.closeAria}>{t.common.close}</button>
       </header>
 
       <div className="asset-detail__media">
-        {isVideo && <video ref={player} src={mediaUrl} controls playsInline preload="metadata" aria-label="原始视频预览"
+        {isVideo && <video ref={player} src={mediaUrl} controls playsInline preload="metadata" aria-label={copy.videoAria}
           onLoadedMetadata={() => setMediaReady(true)} onError={() => setMediaError(true)}
           onPlay={() => {
             const video = player.current!
@@ -78,48 +72,48 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
               video.currentTime = range.current.endMs / 1000
             }
           }} />}
-        {evidence.kind === 'audio' && <audio src={mediaUrl} controls preload="metadata" aria-label="原始音频预览" onError={() => setMediaError(true)} />}
+        {evidence.kind === 'audio' && <audio src={mediaUrl} controls preload="metadata" aria-label={copy.audioAria} onError={() => setMediaError(true)} />}
         {evidence.kind === 'image' && <img src={mediaUrl} alt={evidence.displayName} onError={() => setMediaError(true)} />}
       </div>
-      {mediaError && <p className="asset-detail__error" role="status">此素材当前无法在播放器中打开。</p>}
+      {mediaError && <p className="asset-detail__error" role="status">{copy.mediaError}</p>}
       <p className="asset-detail__summary">
         {evidence.durationMs !== null && <span>{formatTimeMs(evidence.durationMs)}</span>}
-        <span>{segments.length > 0 ? `${segments.length} 个片段` : `${evidence.keyframes.length} 张关键帧`}</span>
-        <span>{evidence.analysisStatus === 'failed' ? '基础分析失败，请检查文件是否可读取' : evidence.kind === 'audio' || evidence.kind === 'other' ? (evidence.analysisStatus === 'ready' ? '分析完成' : '等待基础分析完成') : visualStatusLabel(evidence.visualAnalysisStatus)}</span>
+        <span>{segments.length > 0 ? copy.segmentCount(segments.length) : copy.keyframeCount(evidence.keyframes.length)}</span>
+        <span>{evidence.analysisStatus === 'failed' ? copy.basicFailed : evidence.kind === 'audio' || evidence.kind === 'other' ? (evidence.analysisStatus === 'ready' ? copy.analysisDone : copy.waitingBasic) : copy.visualStatus[evidence.visualAnalysisStatus]}</span>
       </p>
       {evidence.visualAnalysisNote && <p className="asset-detail__note">{evidence.visualAnalysisNote}</p>}
 
-      {segments.length > 0 && <section className="asset-detail__section" aria-label="场景片段">
-        <div className="asset-detail__section-heading"><h4>场景片段</h4>{isVideo && <button disabled={!mediaReady || mediaError} onClick={() => playSegment(null)}>播放完整视频</button>}</div>
+      {segments.length > 0 && <section className="asset-detail__section" aria-label={copy.segments}>
+        <div className="asset-detail__section-heading"><h4>{copy.segments}</h4>{isVideo && <button disabled={!mediaReady || mediaError} onClick={() => playSegment(null)}>{copy.playFull}</button>}</div>
         {segments.map((segment, index) => <article className={`asset-detail__segment ${selectedSegment === segment.id ? 'is-selected' : ''}`} key={segment.id}>
-          <button className="asset-detail__segment-play" disabled={!isVideo || !mediaReady || mediaError} aria-pressed={selectedSegment === segment.id} aria-label={`播放片段 ${index + 1}，${formatTimeMs(segment.usableStartMs ?? segment.startMs)} 至 ${formatTimeMs(segment.usableEndMs ?? segment.endMs)}`} onClick={() => playSegment(segment)}>
-            {segment.frames.length > 0 && <img src={convertFileSrc(segment.frames[0].imagePath)} alt={`片段 ${index + 1} 关键帧`} loading="lazy" />}
+          <button className="asset-detail__segment-play" disabled={!isVideo || !mediaReady || mediaError} aria-pressed={selectedSegment === segment.id} aria-label={copy.playSegmentAria(index + 1, formatTimeMs(segment.usableStartMs ?? segment.startMs), formatTimeMs(segment.usableEndMs ?? segment.endMs))} onClick={() => playSegment(segment)}>
+            {segment.frames.length > 0 && <img src={convertFileSrc(segment.frames[0].imagePath)} alt={copy.segmentFrameAlt(index + 1)} loading="lazy" />}
             <span>
-              <strong>片段 {index + 1}</strong>
+              <strong>{copy.segment(index + 1)}</strong>
               <small>{formatTimeMs(segment.startMs)} – {formatTimeMs(segment.endMs)}</small>
               {segment.usableStartMs != null && segment.usableEndMs != null
                 && (segment.usableStartMs !== segment.startMs || segment.usableEndMs !== segment.endMs)
-                && <small>可用 {formatTimeMs(segment.usableStartMs)} – {formatTimeMs(segment.usableEndMs)}</small>}
-              {segment.motionTailSettled === false && <small>结尾未收住</small>}
-              {segment.motionUncertain && <small>边界不确定</small>}
+                && <small>{copy.usable(formatTimeMs(segment.usableStartMs), formatTimeMs(segment.usableEndMs))}</small>}
+              {segment.motionTailSettled === false && <small>{copy.tailUnsettled}</small>}
+              {segment.motionUncertain && <small>{copy.boundaryUncertain}</small>}
             </span>
-            {isVideo && <span className="asset-detail__play-label">播放</span>}
+            {isVideo && <span className="asset-detail__play-label">{copy.play}</span>}
           </button>
           <MotionEnergyChart segment={segment} onSeek={isVideo && mediaReady && !mediaError ? seekTo : undefined} />
-          <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence) : '暂无片段画面描述'}</p>
+          <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence, t) : copy.noSegmentDescription}</p>
         </article>)}
       </section>}
 
-      {segments.length === 0 && evidence.keyframes.length > 0 && <section className="asset-detail__section"><h4>关键帧</h4><div className="asset-detail__frames">
-        {evidence.keyframes.map(frame => <figure key={frame.imagePath}><img src={convertFileSrc(frame.imagePath)} alt={`${formatTimeMs(frame.timeMs)} 关键帧`} loading="lazy" /><figcaption>{formatTimeMs(frame.timeMs)}</figcaption></figure>)}
+      {segments.length === 0 && evidence.keyframes.length > 0 && <section className="asset-detail__section"><h4>{copy.keyframes}</h4><div className="asset-detail__frames">
+        {evidence.keyframes.map(frame => <figure key={frame.imagePath}><img src={convertFileSrc(frame.imagePath)} alt={copy.keyframeAlt(formatTimeMs(frame.timeMs))} loading="lazy" /><figcaption>{formatTimeMs(frame.timeMs)}</figcaption></figure>)}
       </div></section>}
 
-      {evidence.visualEvidence.length > 0 && <section className="asset-detail__section" aria-label="素材视觉分析">
-        <h4>素材视觉分析</h4>
-        {evidence.visualEvidence.map((item, index) => <p className="asset-detail__visual" key={`${item.timeMs}-${index}`}><span>{formatTimeMs(item.timeMs)}</span>{evidenceLabel(item)}</p>)}
+      {evidence.visualEvidence.length > 0 && <section className="asset-detail__section" aria-label={copy.visualAnalysis}>
+        <h4>{copy.visualAnalysis}</h4>
+        {evidence.visualEvidence.map((item, index) => <p className="asset-detail__visual" key={`${item.timeMs}-${index}`}><span>{formatTimeMs(item.timeMs)}</span>{evidenceLabel(item, t)}</p>)}
       </section>}
 
-      {evidence.ocrEvidence.length > 0 && <details className="asset-detail__ocr"><summary>画面文字识别 <span>{evidence.ocrEvidence.length} 条</span></summary>
+      {evidence.ocrEvidence.length > 0 && <details className="asset-detail__ocr"><summary>{copy.ocr} <span>{copy.ocrCount(evidence.ocrEvidence.length)}</span></summary>
         {evidence.ocrEvidence.map(item => <p key={`${item.timeMs}-${item.text}`}><span>{formatTimeMs(item.timeMs)}</span>{item.text}</p>)}
       </details>}
     </section>
@@ -135,9 +129,10 @@ function MotionEnergyChart({
   segment: AssetSegment
   onSeek?: (timeMs: number) => void
 }) {
+  const copy = useI18n().t.assetDetail
   const samples = segment.motionEnergy ?? []
   if (samples.length < 2) {
-    return <p className="asset-detail__motion-empty">尚无运动能量曲线</p>
+    return <p className="asset-detail__motion-empty">{copy.motionEmpty}</p>
   }
   const width = 320
   const height = 52
@@ -163,12 +158,12 @@ function MotionEnergyChart({
 
   return (
     <figure className="asset-detail__motion">
-      <figcaption>运动能量{trimmed ? ' · 色带为可用窗' : ''}</figcaption>
+      <figcaption>{copy.motionCaption(trimmed)}</figcaption>
       <svg
         className={onSeek ? 'is-seekable' : undefined}
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label={`片段运动能量曲线，从 ${formatTimeMs(segment.startMs)} 到 ${formatTimeMs(segment.endMs)}`}
+        aria-label={copy.motionAria(formatTimeMs(segment.startMs), formatTimeMs(segment.endMs))}
         onClick={onSeek ? handlePointer : undefined}
       >
         {trimmed && <rect className="asset-detail__motion-usable" x={usableX} y={pad} width={usableW} height={height - pad * 2} rx="2" />}

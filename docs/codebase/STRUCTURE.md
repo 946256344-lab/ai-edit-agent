@@ -64,6 +64,7 @@ src/main.tsx
 | `components/` | `model/actions` 展示、局部纯 UI 状态 | `invoke`、文件系统、跨领域持久化 |
 | `lib/local-store.ts` | camelCase 类型和命名 Tauri wrapper | 业务工作流、React 状态 |
 | `lib/agent-tools.ts` | IDE 目标工具类型镜像 | 执行白名单；真实白名单在 Rust/fixture |
+| `lib/i18n/` | 当前界面语言、中英词典、随语言的时间/排序格式 | 项目数据、Rust 返回文案的翻译 |
 
 ## 4）Rust 模块地图
 

@@ -7,28 +7,35 @@ import {
   startRuntimeModelDownload,
 } from '../lib/local-store'
 import type { ReleaseReadinessReport, RuntimeModelStatus } from '../lib/local-store'
+import { useI18n } from '../lib/i18n'
+import type { Messages } from '../lib/i18n'
+
+// 前端自拼的“检查不可用”项：渲染时按当前语言取文案，切换语言后不残留旧语言。
+const LOCAL_FAILURE_ID = 'readiness-unavailable'
 
 type ReleaseReadinessBannerProps = {
   enabled: boolean
 }
 
-function formatDownloadProgress(status: RuntimeModelStatus): string {
+function formatDownloadProgress(status: RuntimeModelStatus, t: Messages): string {
   const active = status.artifacts.find((item) =>
     item.state === 'downloading' || item.state === 'verifying' || item.id === status.currentId,
   )
   if (!active) return status.message
   if (active.bytesTotal && active.bytesTotal > 0) {
     const percent = Math.min(100, Math.round((active.bytesDownloaded / active.bytesTotal) * 100))
-    return `${status.message}（${active.title} ${percent}%）`
+    return t.readiness.progressPercent(status.message, active.title, percent)
   }
   if (active.bytesDownloaded > 0) {
     const mb = (active.bytesDownloaded / (1024 * 1024)).toFixed(1)
-    return `${status.message}（${active.title} 已下 ${mb} MB）`
+    return t.readiness.progressMb(status.message, active.title, mb)
   }
   return status.message
 }
 
 export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps) {
+  const { t } = useI18n()
+  const copy = t.readiness
   const [report, setReport] = useState<ReleaseReadinessReport | null>(null)
   const [modelStatus, setModelStatus] = useState<RuntimeModelStatus | null>(null)
   const [dismissed, setDismissed] = useState(false)
@@ -51,10 +58,10 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
           setReport({
             overall: 'blocked',
             checks: [{
-              id: 'readiness',
-              title: '发行检查',
+              id: LOCAL_FAILURE_ID,
+              title: '',
               status: 'fail',
-              message: '无法完成启动检查，请重启应用后重试。',
+              message: '',
             }],
           })
         }
@@ -101,7 +108,7 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
       setModelStatus(next)
     } catch {
       setModelStatus((prev) => prev
-        ? { ...prev, overall: 'failed', message: '无法开始下载，请稍后重试。' }
+        ? { ...prev, overall: 'failed', message: copy.downloadStartFailed }
         : prev)
     } finally {
       setRetrying(false)
@@ -116,14 +123,14 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
           aria-live="polite"
         >
           <div>
-            <strong>{modelFailed ? '本地模型下载失败' : '正在下载本地选镜模型'}</strong>
+            <strong>{modelFailed ? copy.modelFailedTitle : copy.modelDownloading}</strong>
             <ul>
               <li>
-                <span>{modelStatus ? formatDownloadProgress(modelStatus) : '准备中…'}</span>
+                <span>{modelStatus ? formatDownloadProgress(modelStatus, t) : copy.preparing}</span>
               </li>
               {modelFailed ? (
                 <li>
-                  <span>应用会自动换官方源/国内镜像并续传；仍失败时可手动重试。选镜在此期间可降级使用。</span>
+                  <span>{copy.fallbackHint}</span>
                 </li>
               ) : null}
             </ul>
@@ -135,7 +142,7 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
               disabled={retrying}
               onClick={() => { void onRetryDownload() }}
             >
-              {retrying ? '重试中…' : '重试下载'}
+              {retrying ? copy.retrying : copy.retryDownload}
             </button>
           ) : null}
         </section>
@@ -146,18 +153,18 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
           aria-live="polite"
         >
           <div>
-            <strong>{blocked ? '启动检查未通过' : '启动检查有提醒'}</strong>
+            <strong>{blocked ? copy.blockedTitle : copy.degradedTitle}</strong>
             <ul>
               {problems.map((check) => (
                 <li key={check.id}>
-                  <b>{check.title}</b>
-                  <span>{check.message}</span>
+                  <b>{check.id === LOCAL_FAILURE_ID ? copy.checkTitle : check.title}</b>
+                  <span>{check.id === LOCAL_FAILURE_ID ? copy.checkFailed : check.message}</span>
                 </li>
               ))}
             </ul>
           </div>
           <button type="button" className="outline-button" onClick={() => setDismissed(true)}>
-            {blocked ? '暂时关闭' : '知道了'}
+            {blocked ? copy.dismissBlocked : copy.acknowledge}
           </button>
         </section>
       ) : null}

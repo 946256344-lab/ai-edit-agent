@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import { listen } from '@tauri-apps/api/event'
+import { messages } from '../lib/i18n'
 import {
   createTimelineDraft,
   deliverToEditor,
@@ -53,53 +54,56 @@ export function getDeliveryStatus(
   preview: PreviewResult | null,
   timelineState: TimelineState,
 ) {
-  if (!storyboard) return '等待开始剪辑'
-  if (!timeline) return '第一版镜头已选好'
-  if (timelineState === 'preview-generating') return '正在生成预览'
-  if (timelineState === 'jianying-pending') return '预览已完成 · 草稿待剪映注册'
-  if (timelineState === 'jianying') return '剪映草稿已就绪'
-  if (timelineState === 'exported') return '编辑器文件已导出'
-  if (!preview) return '剪辑已完成 · 等待预览'
-  return '预览已就绪'
+  const status = messages().output.status
+  if (!storyboard) return status.waiting
+  if (!timeline) return status.shotsSelected
+  if (timelineState === 'preview-generating') return status.previewGenerating
+  if (timelineState === 'jianying-pending') return status.jianyingPending
+  if (timelineState === 'jianying') return status.jianyingReady
+  if (timelineState === 'exported') return status.exported
+  if (!preview) return status.awaitingPreview
+  return status.previewReady
 }
 
 function deliverErrorMessage(error: unknown, editorLabel: string) {
   const raw = error instanceof Error ? error.message : String(error ?? '')
-  if (/尚未实现/.test(raw)) return raw
+  const copy = messages().output.errors
+  if (/尚未实现/.test(raw)) return raw // i18n-allow: 匹配 Rust 返回的中文原文
   if (/draft library is unavailable/i.test(raw)) {
-    return '找不到剪映草稿库。请先打开一次剪映并新建任意本地草稿，然后再试。'
+    return copy.noDraftLibrary
   }
   if (/not yet verified for Jianying/i.test(raw)) {
-    return '当前字幕样式还不支持交付剪映。请先用本地预览确认，或去掉未验证的字幕效果后再试。'
+    return copy.subtitleUnsupported
   }
   if (/Python with a draft SDK.*unavailable|No module named 'pyJianYingDraft'|No module named 'pycapcut'/i.test(raw)) {
-    return '本机缺少 Python 或剪映草稿 SDK（pyJianYingDraft），无法生成剪映草稿。请检查随包 Python 环境是否完整。'
+    return copy.missingSdk
   }
   if (/source media|unavailable asset|Music source|Voiceover media/i.test(raw)) {
-    return `有素材文件找不到了。请先在素材页重新定位缺失文件，再交付到${editorLabel}。`
+    return copy.missingMedia(editorLabel)
   }
   if (/Jianying Pro is still running/i.test(raw)) {
-    return '剪映仍在运行，草稿注册未完成。请完全退出剪映后，再回到这里点一次。'
+    return copy.jianyingRunning
   }
-  if (/无法写出|无法准备/.test(raw)) {
-    return `没能写出${editorLabel}文件。请确认本机数据目录可写后重试。`
+  if (/无法写出|无法准备/.test(raw)) { // i18n-allow: 匹配 Rust 返回的中文原文
+    return copy.writeFailed(editorLabel)
   }
   // 适配器报告的具体原因：优先取 Python 侧最内层的原因，方便排查。
   const adapterReason =
     raw.match(/adapter failed:\s*(.+)$/is)?.[1]?.trim() ??
     raw.match(/adapter could not create a draft:\s*(.+)$/is)?.[1]?.trim()
   if (adapterReason) {
-    return `${editorLabel}草稿生成失败：${adapterReason}`
+    return copy.adapterFailed(editorLabel, adapterReason)
   }
-  return `${editorLabel}未能交付。请确认编辑器已安装或改用其他输出端口后重试。`
+  return copy.generic(editorLabel)
 }
 
 export function deliverActionLabel(editorId: string, busy: boolean) {
-  if (busy) return '正在交付…'
-  if (editorId === 'fcpxml') return '导出 FCPXML'
-  if (editorId === 'otio') return '导出 OTIO'
-  if (editorId === 'capcut') return '生成 CapCut 草稿'
-  return '生成剪映草稿'
+  const copy = messages().output
+  if (busy) return copy.delivering
+  if (editorId === 'fcpxml') return copy.exportFcpxml
+  if (editorId === 'otio') return copy.exportOtio
+  if (editorId === 'capcut') return copy.createCapcut
+  return copy.createJianying
 }
 
 /**
@@ -147,7 +151,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         }
         if (active) setShotImages({ timelineId: timeline.id, images, error: null })
       })
-      .catch(() => { if (active) setShotImages({ timelineId: timeline.id, images: {}, error: '镜头缩略图未能读取，仍可按序号选择镜头。' }) })
+      .catch(() => { if (active) setShotImages({ timelineId: timeline.id, images: {}, error: messages().output.thumbnailsFailed }) })
     return () => { active = false }
   }, [timeline])
 
@@ -329,7 +333,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           options.session.id,
-          '剪辑已生成，你现在可以直接生成预览，或继续要求我调整镜头顺序。',
+          messages().output.timelineCreatedMessage,
         )
       }
       await refreshAudit(
@@ -356,13 +360,13 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
         await options.appendAgentMessage(
           options.session.conversationId,
           options.session.id,
-          '本地预览已经生成，你可以先检查节奏、镜头和字幕，再决定是否交付到所选编辑器。',
+          messages().output.previewReadyMessage,
         )
       }
     } catch {
       if (activeTimelineRef.current === timeline.id && options.activeSessionRef.current === options.sessionId) {
         setTimelineState('draft')
-        setDeliveryNotice('预览未能生成，已保存的粗剪仍保留。请检查素材是否可用后再生成预览。')
+        setDeliveryNotice(messages().output.previewFailed)
       }
     } finally {
       setIsRenderingPreview(false)
@@ -372,11 +376,11 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   async function deliverSelectedEditor(override?: TimelineVersion) {
     const deliveryTimeline = override ?? timeline
     const selected = editorCatalog.linkers.find((linker) => linker.id === editorCatalog.selectedId)
-    const editorLabel = selected?.label ?? '编辑器'
+    const editorLabel = selected?.label ?? messages().output.editorFallback
     if (!options.projectId || !deliveryTimeline || isDelivering) {
       if (!timeline) {
         setDeliveryNoticeTone('error')
-        setDeliveryNotice('还没有可交付的剪辑结果。请先在 Agent 里生成预览，或先创建时间线。')
+        setDeliveryNotice(messages().output.nothingToDeliver)
       }
       return
     }
@@ -419,7 +423,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     } catch (error) {
       const selected = editorCatalog.linkers.find((linker) => linker.id === editorId)
       setDeliveryNoticeTone('error')
-      setDeliveryNotice(deliverErrorMessage(error, selected?.label ?? '编辑器'))
+      setDeliveryNotice(deliverErrorMessage(error, selected?.label ?? messages().output.editorFallback))
     }
   }
 

@@ -1,6 +1,7 @@
 // 可开合素材目录树：expandedFolderIds 是唯一展开状态，aria-expanded 与条件渲染同步。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssetTreeNode } from './asset-directory-model'
+import { useI18n } from '../../lib/i18n'
 
 type AssetDirectoryTreeProps = {
   projectId: string | null
@@ -74,6 +75,7 @@ export function AssetDirectoryTree({
   unfiledAssetCount,
   onSelectDirectory,
 }: AssetDirectoryTreeProps) {
+  const copy = useI18n().t.assets
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set())
   const knownRootIdsRef = useRef<Set<string>>(new Set())
   const projectIdRef = useRef(projectId)
@@ -108,10 +110,10 @@ export function AssetDirectoryTree({
   }
 
   return (
-    <nav className="asset-tree-card" aria-label="素材目录">
+    <nav className="asset-tree-card" aria-label={copy.treeAria}>
       <div className="asset-tree-card__head">
-        <strong>目录</strong>
-        <small>按本地导入层级</small>
+        <strong>{copy.treeHeading}</strong>
+        <small>{copy.treeSubheading}</small>
       </div>
       <div className="asset-tree-card__body">
         <button
@@ -121,7 +123,7 @@ export function AssetDirectoryTree({
           onClick={() => onSelectDirectory('all')}
         >
           <span className="asset-tree-caret" aria-hidden="true">◎</span>
-          <span className="asset-tree-name">全部素材</span>
+          <span className="asset-tree-name">{copy.all}</span>
           <small>{totalAssetCount}</small>
         </button>
         {roots.length > 0 ? (
@@ -138,7 +140,7 @@ export function AssetDirectoryTree({
             ))}
           </ul>
         ) : (
-          <p className="asset-empty-hint">导入文件夹后，这里会显示原始目录层级。</p>
+          <p className="asset-empty-hint">{copy.treeEmpty}</p>
         )}
         {unfiledAssetCount > 0 && (
           <button
@@ -148,7 +150,7 @@ export function AssetDirectoryTree({
             onClick={() => onSelectDirectory('__unfiled__')}
           >
             <span className="asset-tree-caret" aria-hidden="true">•</span>
-            <span className="asset-tree-name">未归类素材</span>
+            <span className="asset-tree-name">{copy.unfiled}</span>
             <small>{unfiledAssetCount}</small>
           </button>
         )}

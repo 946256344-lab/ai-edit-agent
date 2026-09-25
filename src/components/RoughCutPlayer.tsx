@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { WorkspaceIcon } from './WorkspaceIcon'
+import { useI18n } from '../lib/i18n'
 
 function timestamp(seconds: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
@@ -13,6 +14,7 @@ export function RoughCutPlayer({ src, videoRef, onTimeChange }: {
   onTimeChange: (timeMs: number) => void
 }) {
   const stage = useRef<HTMLDivElement>(null)
+  const copy = useI18n().t.player
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
   const [duration, setDuration] = useState(0)
@@ -23,25 +25,25 @@ export function RoughCutPlayer({ src, videoRef, onTimeChange }: {
       onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); onTimeChange(0) }}
       onTimeUpdate={(event) => { setPosition(event.currentTarget.currentTime); onTimeChange(event.currentTarget.currentTime * 1000) }}
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
-      onError={() => setError('预览无法播放，请更新预览。')}
+      onError={() => setError(copy.playFailed)}
     />
     {error && <p className="player-error" role="status">{error}</p>}
     <div className="cut-player-controls">
-      <button className="player-play" aria-label={playing ? '暂停' : '播放'} title={playing ? '暂停' : '播放'} onClick={() => {
+      <button className="player-play" aria-label={playing ? copy.pause : copy.play} title={playing ? copy.pause : copy.play} onClick={() => {
         if (playing) videoRef.current?.pause()
-        else void videoRef.current?.play().catch(() => setError('预览无法播放，请更新预览。'))
+        else void videoRef.current?.play().catch(() => setError(copy.playFailed))
       }}><WorkspaceIcon name={playing ? 'pause' : 'play'} /></button>
-      <input aria-label="播放进度" type="range" min={0} max={duration} step={0.01} value={position} disabled={!duration} onChange={(event) => {
+      <input aria-label={copy.seek} type="range" min={0} max={duration} step={0.01} value={position} disabled={!duration} onChange={(event) => {
         const next = Number(event.currentTarget.value)
         if (videoRef.current) videoRef.current.currentTime = next
         setPosition(next)
         onTimeChange(next * 1000)
       }} />
       <span className="player-time">{timestamp(position)} / {timestamp(duration)}</span>
-      <button aria-label={muted ? '取消静音' : '静音'} title={muted ? '取消静音' : '静音'} onClick={() => setMuted(!muted)}><WorkspaceIcon name={muted ? 'muted' : 'volume'} /></button>
-      <button aria-label="全屏" title="全屏" onClick={() => {
+      <button aria-label={muted ? copy.unmute : copy.mute} title={muted ? copy.unmute : copy.mute} onClick={() => setMuted(!muted)}><WorkspaceIcon name={muted ? 'muted' : 'volume'} /></button>
+      <button aria-label={copy.fullscreen} title={copy.fullscreen} onClick={() => {
         const action = document.fullscreenElement ? document.exitFullscreen() : stage.current?.requestFullscreen()
-        void action?.catch(() => setError('当前窗口无法进入全屏。'))
+        void action?.catch(() => setError(copy.fullscreenFailed))
       }}><WorkspaceIcon name="fullscreen" /></button>
     </div>
   </div>
