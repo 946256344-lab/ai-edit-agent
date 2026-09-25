@@ -1,4 +1,15 @@
 // 简体中文界面文案：词典基准，en.ts 必须提供同样的键；带参数的文案写成函数。
+type Params = Record<string, string>
+
+const MODEL_NAMES: Record<string, string> = {
+  bge_onnx: '中文语义模型',
+  clip_vision_onnx: 'CLIP 视觉模型',
+  clip_text_onnx: 'CLIP 文本模型',
+}
+const SOURCE_NAMES: Record<string, string> = { official: '官方源', mirror: '国内镜像' }
+const modelName = (id: string) => MODEL_NAMES[id] ?? id
+const sourceName = (id: string) => SOURCE_NAMES[id] ?? id
+
 export const zhCN = {
   common: {
     cancel: '取消',
@@ -522,6 +533,86 @@ export const zhCN = {
     workbench: '粗剪工作台',
     splitAria: '调整对话与预览宽度',
     splitValue: (percent: number) => `对话区 ${percent}%`,
+  },
+  backend: {
+    readinessTitles: {
+      ffmpeg: '媒体处理',
+      ffprobe: '媒体探测',
+      tesseract: '文字识别',
+      provider: 'AI 模型',
+      jianying: '剪映草稿位置',
+      jianying_adapter: '剪映适配器',
+      semantic_model: '本地语义模型',
+      clip_model: '本地 CLIP 模型',
+      data_dir: '本地数据目录',
+      disk_space: '磁盘空间',
+      capcut: 'CapCut 草稿位置',
+    },
+    readiness: {
+      'ffmpeg.ok': () => 'FFmpeg 可用。',
+      'ffmpeg.missing': () => '未找到 FFmpeg。正式安装包应已包含；请重新安装应用后再试。',
+      'ffprobe.ok': () => 'FFprobe 可用。',
+      'ffprobe.missing': () => '未找到 FFprobe。正式安装包应已包含；请重新安装应用后再试。',
+      'tesseract.ok': () => 'Tesseract 英文 OCR 可用。',
+      'tesseract.missing': () => '未找到 Tesseract 或英文 OCR 数据。正式安装包应已包含；请重新安装应用后再试。',
+      'provider.customConnected': () => '自定义 API 已连接。',
+      'provider.oauthConnected': () => 'ChatGPT 登录已连接。',
+      'provider.credentialError': () => '模型凭据读取异常。请打开设置重新连接，凭据不会写入日志。',
+      'provider.notConnected': () => '尚未连接 AI 模型。导入素材可以继续，开始剪辑前请先在设置里连接。',
+      'jianying.ok': () => '已找到剪映草稿目录。',
+      'jianying.missing': () => '未找到剪映草稿目录。仍可预览；打开剪映前请先安装并启动过剪映。',
+      'jianyingAdapter.ok': () => '随包 Python 与剪映草稿 SDK 可用。',
+      'jianyingAdapter.scriptMissing': () => '缺少剪映草稿脚本资源。预览不受影响，无法创建剪映草稿。',
+      'jianyingAdapter.sdkMissing': () => 'Python 可用，但未找到 pyJianYingDraft/pycapcut。预览不受影响，无法创建剪映草稿。',
+      'jianyingAdapter.pythonMissing': () => '未找到随包 Python。预览不受影响，无法创建剪映草稿。',
+      'semanticModel.ok': () => '本地语义模型资源可用。',
+      'semanticModel.downloading': () => '正在下载本地语义模型。选镜仍可进行，完成前会降级为词面匹配。',
+      'semanticModel.missing': () => '本地语义模型资源缺失。选镜仍可进行，但会降级为词面匹配。可在提醒条中重试下载。',
+      'clipModel.ok': (p: Params) => `CLIP 图文模型可用（${p.vision} / ${p.text}）。`,
+      'clipModel.downloading': () => '正在下载 CLIP 图文模型。选镜仍可进行，完成前不会用画面向量加权。',
+      'clipModel.missing': () => 'CLIP 图文模型资源缺失。选镜仍可进行，但不会用画面向量加权。可在提醒条中重试下载。',
+      'dataDir.ok': () => '应用数据目录可写。',
+      'dataDir.notWritable': () => '本地数据目录不可写。请检查磁盘权限或更换用户数据目录。',
+      'diskSpace.ok': (p: Params) => `可用空间约 ${p.size}。`,
+      'diskSpace.low': (p: Params) => `可用空间约 ${p.size}，建议至少保留 2 GB 给预览与分析缓存。`,
+      'diskSpace.unknown': () => '无法读取剩余磁盘空间，请确保系统盘有足够空闲。',
+      'capcut.ok': () => '已找到本机 CapCut 草稿目录。',
+      'capcut.missing': () => '未找到 CapCut 草稿目录。仍可预览；换设备后请先打开一次 CapCut 并创建本地草稿。',
+    },
+    modelNames: MODEL_NAMES,
+    models: {
+      allReady: () => '本地选镜模型已就绪。',
+      failedRetryable: () => '本地模型下载失败，可重试。已尝试官方与国内镜像续传；选镜仍可用，但语义/画面加权会降级。',
+      downloadingAll: () => '正在后台下载本地选镜模型…',
+      notDownloaded: () => '本地选镜模型待下载。',
+      downloading: (p: Params) => `正在下载${modelName(p.model)}…`,
+      modelReady: (p: Params) => `${modelName(p.model)}已就绪。`,
+      modelFailed: (p: Params) => `${modelName(p.model)}下载失败：${p.error}`,
+      downloadingFrom: (p: Params) => `正在从${sourceName(p.source)}下载${modelName(p.model)}…`,
+      resumingFrom: (p: Params) => `正在从${sourceName(p.source)}续传${modelName(p.model)}（第 ${p.attempt}/${p.max} 次）…`,
+      interrupted: (p: Params) => `${modelName(p.model)}下载中断，即将自动换源/续传重试…`,
+      verifying: (p: Params) => `正在校验${modelName(p.model)}…`,
+    },
+    editorLabels: {
+      jianying: '剪映',
+      capcut: 'CapCut',
+      fcpxml: 'Premiere / Resolve / Final Cut',
+      otio: 'DaVinci Resolve (OTIO)',
+    } as Record<string, string>,
+    editorSummaries: {
+      jianying: '写入本机剪映草稿箱，可继续微调',
+      capcut: '写入本机 CapCut 草稿箱，可继续微调',
+      fcpxml: '写出 FCPXML，可导入 Premiere、DaVinci Resolve 或 Final Cut',
+      otio: '写出 OTIO，Resolve 可直接导入',
+    } as Record<string, string>,
+    deliveryPending: (name: string, editor: string) => `草稿「${name}」已写好，${editor}正在运行，退出后会自动完成注册。`,
+    deliveryReady: (name: string, editor: string) => `草稿「${name}」已生成，可在${editor}本地草稿中打开。`,
+    deliveryExported: (name: string, summary: string) => `已导出「${name}」。${summary}`,
+    oauthConnectedStatus: '实验性 OpenCode 兼容 OAuth。',
+    customConnectedStatus: '自定义 API 凭据已保存于 Windows 凭据库。',
+    candidateUnavailable: '素材当前不可用，请检查来源或分析状态',
+    candidateTooShort: (seconds: string) => `可用时长不足 ${seconds} 秒`,
+    notImplemented: (editor: string) => `${editor}输出尚未实现。`,
   },
   app: {
     noMessages: '暂无消息',

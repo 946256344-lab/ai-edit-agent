@@ -1,6 +1,17 @@
 // 英文界面文案：必须与 zh-CN.ts 键一一对应，类型保证漏键即编译失败；单复数在函数内处理。
 import type { zhCN } from './zh-CN'
 
+type Params = Record<string, string>
+
+const MODEL_NAMES: Record<string, string> = {
+  bge_onnx: 'Chinese semantic model',
+  clip_vision_onnx: 'CLIP vision model',
+  clip_text_onnx: 'CLIP text model',
+}
+const SOURCE_NAMES: Record<string, string> = { official: 'the official source', mirror: 'the China mirror' }
+const modelName = (id: string) => MODEL_NAMES[id] ?? id
+const sourceName = (id: string) => SOURCE_NAMES[id] ?? id
+
 function plural(count: number, singular: string, pluralForm = `${singular}s`) {
   return `${count} ${count === 1 ? singular : pluralForm}`
 }
@@ -529,8 +540,89 @@ export const en: typeof zhCN = {
     splitAria: 'Resize chat and preview',
     splitValue: (percent: number) => `Chat ${percent}%`,
   },
+  backend: {
+    readinessTitles: {
+      ffmpeg: 'Media processing',
+      ffprobe: 'Media probing',
+      tesseract: 'Text recognition',
+      provider: 'AI model',
+      jianying: 'Jianying draft folder',
+      jianying_adapter: 'Jianying adapter',
+      semantic_model: 'Local semantic model',
+      clip_model: 'Local CLIP model',
+      data_dir: 'Local data folder',
+      disk_space: 'Disk space',
+      capcut: 'CapCut draft folder',
+    },
+    readiness: {
+      'ffmpeg.ok': () => 'FFmpeg is available.',
+      'ffmpeg.missing': () => 'FFmpeg was not found. The installer should include it; please reinstall the app and try again.',
+      'ffprobe.ok': () => 'FFprobe is available.',
+      'ffprobe.missing': () => 'FFprobe was not found. The installer should include it; please reinstall the app and try again.',
+      'tesseract.ok': () => 'Tesseract English OCR is available.',
+      'tesseract.missing': () => 'Tesseract or its English OCR data was not found. The installer should include it; please reinstall the app and try again.',
+      'provider.customConnected': () => 'Custom API is connected.',
+      'provider.oauthConnected': () => 'ChatGPT sign-in is connected.',
+      'provider.credentialError': () => 'Model credentials could not be read. Reconnect in settings; credentials are never written to logs.',
+      'provider.notConnected': () => 'No AI model is connected. You can keep importing media; connect a model in settings before editing.',
+      'jianying.ok': () => 'Jianying draft folder found.',
+      'jianying.missing': () => 'Jianying draft folder not found. Previews still work; install and launch Jianying once before delivering to it.',
+      'jianyingAdapter.ok': () => 'Bundled Python and the Jianying draft SDK are available.',
+      'jianyingAdapter.scriptMissing': () => 'The Jianying draft script is missing. Previews are unaffected, but Jianying drafts cannot be created.',
+      'jianyingAdapter.sdkMissing': () => 'Python is available, but pyJianYingDraft/pycapcut was not found. Previews are unaffected, but Jianying drafts cannot be created.',
+      'jianyingAdapter.pythonMissing': () => 'Bundled Python was not found. Previews are unaffected, but Jianying drafts cannot be created.',
+      'semanticModel.ok': () => 'Local semantic model is available.',
+      'semanticModel.downloading': () => 'Downloading the local semantic model. Shot selection still works and uses keyword matching until it finishes.',
+      'semanticModel.missing': () => 'Local semantic model is missing. Shot selection still works but falls back to keyword matching. Retry the download from the banner.',
+      'clipModel.ok': (p: Params) => `CLIP image-text models are available (${p.vision} / ${p.text}).`,
+      'clipModel.downloading': () => 'Downloading the CLIP image-text models. Shot selection still works without visual weighting until they finish.',
+      'clipModel.missing': () => 'CLIP image-text models are missing. Shot selection still works but without visual weighting. Retry the download from the banner.',
+      'dataDir.ok': () => 'The app data folder is writable.',
+      'dataDir.notWritable': () => 'The local data folder is not writable. Check disk permissions or change the user data folder.',
+      'diskSpace.ok': (p: Params) => `About ${p.size} free.`,
+      'diskSpace.low': (p: Params) => `About ${p.size} free. Keep at least 2 GB for preview and analysis caches.`,
+      'diskSpace.unknown': () => 'Free disk space could not be read. Make sure the system drive has enough room.',
+      'capcut.ok': () => 'CapCut draft folder found.',
+      'capcut.missing': () => 'CapCut draft folder not found. Previews still work; on a new device, open CapCut once and create a local draft.',
+    },
+    modelNames: MODEL_NAMES,
+    models: {
+      allReady: () => 'Local shot-selection models are ready.',
+      failedRetryable: () => 'Local model download failed; you can retry. Both the official source and mirrors were tried; shot selection still works with reduced semantic/visual weighting.',
+      downloadingAll: () => 'Downloading local shot-selection models in the background…',
+      notDownloaded: () => 'Local shot-selection models are not downloaded yet.',
+      downloading: (p: Params) => `Downloading ${modelName(p.model)}…`,
+      modelReady: (p: Params) => `${modelName(p.model)} is ready.`,
+      modelFailed: (p: Params) => `${modelName(p.model)} download failed: ${p.error}`,
+      downloadingFrom: (p: Params) => `Downloading ${modelName(p.model)} from ${sourceName(p.source)}…`,
+      resumingFrom: (p: Params) => `Resuming ${modelName(p.model)} from ${sourceName(p.source)} (attempt ${p.attempt}/${p.max})…`,
+      interrupted: (p: Params) => `${modelName(p.model)} download was interrupted; switching source and retrying…`,
+      verifying: (p: Params) => `Verifying ${modelName(p.model)}…`,
+    },
+    editorLabels: {
+      jianying: 'Jianying',
+      capcut: 'CapCut',
+      fcpxml: 'Premiere / Resolve / Final Cut',
+      otio: 'DaVinci Resolve (OTIO)',
+    },
+    editorSummaries: {
+      jianying: 'Writes to the local Jianying draft box for further editing',
+      capcut: 'Writes to the local CapCut draft box for further editing',
+      fcpxml: 'Writes FCPXML for Premiere, DaVinci Resolve or Final Cut',
+      otio: 'Writes OTIO that Resolve can import directly',
+    },
+    deliveryPending: (name: string, editor: string) => `Draft “${name}” is written. ${editor} is running; registration completes automatically after you quit it.`,
+    deliveryReady: (name: string, editor: string) => `Draft “${name}” is ready; open it from ${editor}'s local drafts.`,
+    deliveryExported: (name: string, summary: string) => `Exported “${name}”. ${summary}.`,
+    oauthConnectedStatus: 'Experimental OpenCode-compatible OAuth.',
+    customConnectedStatus: 'Custom API credentials are stored in Windows Credential Manager.',
+    candidateUnavailable: 'This media is unavailable right now; check its source or analysis status',
+    candidateTooShort: (seconds: string) => `Usable length is under ${seconds}s`,
+    notImplemented: (editor: string) => `${editor} output is not available yet.`,
+  },
   app: {
     noMessages: 'No messages yet',
+    // Rust 把这个默认名当占位标题（首条用户消息会替换它），改名时同步 src-tauri/src/projects.rs。
     newSessionTitle: 'New edit session',
     untitledProject: 'Untitled local project',
     welcome: 'Tell me what you want to make. After importing media you can simply describe the final video and I will start on a first version.',

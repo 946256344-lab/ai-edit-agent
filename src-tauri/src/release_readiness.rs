@@ -8,7 +8,7 @@ use crate::process::{
 };
 use crate::storyboard::semantic;
 use serde::Serialize;
-use std::{fs, path::Path, time::Duration};
+use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 use tauri::{AppHandle, Manager};
 
 const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -20,6 +20,9 @@ pub struct ReleaseReadinessCheck {
     pub title: String,
     pub status: String,
     pub message: String,
+    /// 稳定文案键：前端按界面语言翻译；中文 title/message 保留作回落与日志。
+    pub message_key: String,
+    pub message_params: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +38,20 @@ fn check(id: &str, title: &str, status: &str, message: impl Into<String>) -> Rel
         title: title.to_owned(),
         status: status.to_owned(),
         message: message.into(),
+        message_key: String::new(),
+        message_params: BTreeMap::new(),
+    }
+}
+
+impl ReleaseReadinessCheck {
+    fn key(mut self, key: &str) -> Self {
+        self.message_key = key.to_owned();
+        self
+    }
+
+    fn param(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.message_params.insert(name.to_owned(), value.into());
+        self
     }
 }
 
@@ -108,7 +125,7 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
         .unwrap_or(false);
     vec![
         if ffmpeg_ok {
-            check("ffmpeg", "媒体处理", "ok", "FFmpeg 可用。")
+            check("ffmpeg", "媒体处理", "ok", "FFmpeg 可用。").key("ffmpeg.ok")
         } else {
             check(
                 "ffmpeg",
@@ -116,9 +133,10 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "fail",
                 "未找到 FFmpeg。正式安装包应已包含；请重新安装应用后再试。",
             )
+            .key("ffmpeg.missing")
         },
         if ffprobe_ok {
-            check("ffprobe", "媒体探测", "ok", "FFprobe 可用。")
+            check("ffprobe", "媒体探测", "ok", "FFprobe 可用。").key("ffprobe.ok")
         } else {
             check(
                 "ffprobe",
@@ -126,9 +144,10 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "fail",
                 "未找到 FFprobe。正式安装包应已包含；请重新安装应用后再试。",
             )
+            .key("ffprobe.missing")
         },
         if tesseract_ok {
-            check("tesseract", "文字识别", "ok", "Tesseract 英文 OCR 可用。")
+            check("tesseract", "文字识别", "ok", "Tesseract 英文 OCR 可用。").key("tesseract.ok")
         } else {
             check(
                 "tesseract",
@@ -136,6 +155,7 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
                 "fail",
                 "未找到 Tesseract 或英文 OCR 数据。正式安装包应已包含；请重新安装应用后再试。",
             )
+            .key("tesseract.missing")
         },
     ]
 }
@@ -143,11 +163,13 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
 fn provider_check() -> ReleaseReadinessCheck {
     let custom = get_custom_api_status();
     if custom.state == "connected" {
-        return check("provider", "AI 模型", "ok", "自定义 API 已连接。");
+        return check("provider", "AI 模型", "ok", "自定义 API 已连接。")
+            .key("provider.customConnected");
     }
     let oauth = get_experimental_openai_oauth_status();
     if oauth.state == "connected" {
-        return check("provider", "AI 模型", "ok", "ChatGPT 登录已连接。");
+        return check("provider", "AI 模型", "ok", "ChatGPT 登录已连接。")
+            .key("provider.oauthConnected");
     }
     if custom.state == "failed" || oauth.state == "failed" {
         return check(
@@ -155,7 +177,8 @@ fn provider_check() -> ReleaseReadinessCheck {
             "AI 模型",
             "warn",
             "模型凭据读取异常。请打开设置重新连接，凭据不会写入日志。",
-        );
+        )
+        .key("provider.credentialError");
     }
     check(
         "provider",
@@ -163,12 +186,13 @@ fn provider_check() -> ReleaseReadinessCheck {
         "warn",
         "尚未连接 AI 模型。导入素材可以继续，开始剪辑前请先在设置里连接。",
     )
+    .key("provider.notConnected")
 }
 
 fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
     let mut checks = Vec::new();
     checks.push(if crate::jianying::draft_location_available() {
-        check("jianying", "剪映草稿位置", "ok", "已找到剪映草稿目录。")
+        check("jianying", "剪映草稿位置", "ok", "已找到剪映草稿目录。").key("jianying.ok")
     } else {
         check(
             "jianying",
@@ -176,6 +200,7 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "warn",
             "未找到剪映草稿目录。仍可预览；打开剪映前请先安装并启动过剪映。",
         )
+        .key("jianying.missing")
     });
 
     let script_ok = crate::jianying::adapter_script_available(app);
@@ -194,6 +219,7 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "ok",
             "随包 Python 与剪映草稿 SDK 可用。",
         )
+        .key("jianyingAdapter.ok")
     } else if !script_ok {
         check(
             "jianying_adapter",
@@ -201,6 +227,7 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "warn",
             "缺少剪映草稿脚本资源。预览不受影响，无法创建剪映草稿。",
         )
+        .key("jianyingAdapter.scriptMissing")
     } else if python_ok {
         check(
             "jianying_adapter",
@@ -208,6 +235,7 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "warn",
             "Python 可用，但未找到 pyJianYingDraft/pycapcut。预览不受影响，无法创建剪映草稿。",
         )
+        .key("jianyingAdapter.sdkMissing")
     } else {
         check(
             "jianying_adapter",
@@ -215,6 +243,7 @@ fn jianying_checks(app: &AppHandle) -> Vec<ReleaseReadinessCheck> {
             "warn",
             "未找到随包 Python。预览不受影响，无法创建剪映草稿。",
         )
+        .key("jianyingAdapter.pythonMissing")
     });
     checks
 }
@@ -226,7 +255,8 @@ fn semantic_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
             "本地语义模型",
             "ok",
             "本地语义模型资源可用。",
-        ),
+        )
+        .key("semanticModel.ok"),
         Ok(false) | Err(_) => {
             let downloading = crate::runtime_models::get_runtime_model_status(app.clone())
                 .ok()
@@ -239,6 +269,7 @@ fn semantic_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                     "warn",
                     "正在下载本地语义模型。选镜仍可进行，完成前会降级为词面匹配。",
                 )
+                .key("semanticModel.downloading")
             } else {
                 check(
                     "semantic_model",
@@ -246,6 +277,7 @@ fn semantic_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                     "warn",
                     "本地语义模型资源缺失。选镜仍可进行，但会降级为词面匹配。可在提醒条中重试下载。",
                 )
+        .key("semanticModel.missing")
             }
         }
     }
@@ -262,7 +294,10 @@ fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                 crate::storyboard::clip::CLIP_VISION_MODEL,
                 crate::storyboard::clip::CLIP_TEXT_MODEL
             ),
-        ),
+        )
+        .key("clipModel.ok")
+        .param("vision", crate::storyboard::clip::CLIP_VISION_MODEL)
+        .param("text", crate::storyboard::clip::CLIP_TEXT_MODEL),
         Ok(false) | Err(_) => {
             let downloading = crate::runtime_models::get_runtime_model_status(app.clone())
                 .ok()
@@ -275,6 +310,7 @@ fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                     "warn",
                     "正在下载 CLIP 图文模型。选镜仍可进行，完成前不会用画面向量加权。",
                 )
+                .key("clipModel.downloading")
             } else {
                 check(
                     "clip_model",
@@ -282,6 +318,7 @@ fn clip_model_check(app: &AppHandle) -> ReleaseReadinessCheck {
                     "warn",
                     "CLIP 图文模型资源缺失。选镜仍可进行，但不会用画面向量加权。可在提醒条中重试下载。",
                 )
+        .key("clipModel.missing")
             }
         }
     }
@@ -293,38 +330,50 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
     checks.extend(media_runtime_checks());
 
     checks.push(match data_directory_writable(&app) {
-        Ok(()) => check("data_dir", "本地数据目录", "ok", "应用数据目录可写。"),
+        Ok(()) => check("data_dir", "本地数据目录", "ok", "应用数据目录可写。").key("dataDir.ok"),
         Err(_) => check(
             "data_dir",
             "本地数据目录",
             "fail",
             "本地数据目录不可写。请检查磁盘权限或更换用户数据目录。",
-        ),
+        )
+        .key("dataDir.notWritable"),
     });
 
     if let Ok(directory) = app.path().app_data_dir() {
         match free_bytes_for_path(&directory) {
-            Some(bytes) if bytes >= MIN_FREE_BYTES => checks.push(check(
-                "disk_space",
-                "磁盘空间",
-                "ok",
-                format!("可用空间约 {}。", format_gib(bytes)),
-            )),
-            Some(bytes) => checks.push(check(
-                "disk_space",
-                "磁盘空间",
-                "warn",
-                format!(
-                    "可用空间约 {}，建议至少保留 2 GB 给预览与分析缓存。",
-                    format_gib(bytes)
-                ),
-            )),
-            None => checks.push(check(
-                "disk_space",
-                "磁盘空间",
-                "warn",
-                "无法读取剩余磁盘空间，请确保系统盘有足够空闲。",
-            )),
+            Some(bytes) if bytes >= MIN_FREE_BYTES => checks.push(
+                check(
+                    "disk_space",
+                    "磁盘空间",
+                    "ok",
+                    format!("可用空间约 {}。", format_gib(bytes)),
+                )
+                .key("diskSpace.ok")
+                .param("size", format_gib(bytes)),
+            ),
+            Some(bytes) => checks.push(
+                check(
+                    "disk_space",
+                    "磁盘空间",
+                    "warn",
+                    format!(
+                        "可用空间约 {}，建议至少保留 2 GB 给预览与分析缓存。",
+                        format_gib(bytes)
+                    ),
+                )
+                .key("diskSpace.low")
+                .param("size", format_gib(bytes)),
+            ),
+            None => checks.push(
+                check(
+                    "disk_space",
+                    "磁盘空间",
+                    "warn",
+                    "无法读取剩余磁盘空间，请确保系统盘有足够空闲。",
+                )
+                .key("diskSpace.unknown"),
+            ),
         }
     }
 
@@ -337,6 +386,7 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
             "ok",
             "已找到本机 CapCut 草稿目录。",
         )
+        .key("capcut.ok")
     } else {
         check(
             "capcut",
@@ -344,6 +394,7 @@ pub fn get_release_readiness(app: AppHandle) -> Result<ReleaseReadinessReport, S
             "warn",
             "未找到 CapCut 草稿目录。仍可预览；换设备后请先打开一次 CapCut 并创建本地草稿。",
         )
+        .key("capcut.missing")
     });
     checks.push(semantic_model_check(&app));
     checks.push(clip_model_check(&app));

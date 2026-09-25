@@ -34,7 +34,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
           </span>
           <b>{model.oauthStatus.state === 'connected' ? copy.connected : copy.experimental}</b>
         </div>
-        <p className="oauth-status">{model.oauthStatus.message ?? copy.notConnected}</p>
+        <p className="oauth-status">{model.oauthStatus.state === 'pending' ? copy.oauthPending : model.oauthStatus.state === 'connected' ? t.backend.oauthConnectedStatus : model.oauthStatus.message ?? copy.notConnected}</p>
         <button
           className="primary-button modal-button"
           onClick={actions.connectOAuth}
@@ -71,7 +71,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
           <b>{model.customApiStatus.state === 'connected' ? model.customApiStatus.model ?? copy.connected : copy.customBadge}</b>
         </div>
         <p className="oauth-status">
-          {model.customApiStatus.message ?? copy.notConfigured}
+          {model.customApiStatus.state === 'connected' ? t.backend.customConnectedStatus : model.customApiStatus.message ?? copy.notConfigured}
           {model.customApiStatus.state === 'connected' && copy.coarseVisual(model.customApiStatus.coarseVisualModel ?? copy.useMainModel)}
         </p>
         <form className="custom-api-form" onSubmit={actions.saveCustomApi}>

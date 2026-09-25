@@ -543,6 +543,9 @@ export type ReleaseReadinessCheck = {
   title: string
   status: 'ok' | 'warn' | 'fail' | string
   message: string
+  /** 稳定文案键；前端按界面语言翻译，未知键回落到 message。 */
+  messageKey: string
+  messageParams: Record<string, string>
 }
 
 export type ReleaseReadinessReport = {
@@ -568,6 +571,9 @@ export type RuntimeModelStatus = {
   overall: string
   currentId: string | null
   message: string
+  /** 稳定文案键；前端按界面语言翻译，未知键回落到 message。 */
+  messageKey: string
+  messageParams: Record<string, string>
   artifacts: RuntimeModelArtifactStatus[]
 }
 
@@ -603,9 +609,9 @@ export async function executeAgentEdit(projectId: string, editingTaskId: string,
   return invoke<string>('execute_agent_edit', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt })
 }
 
-export async function submitConversationTurn(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string, mediaOptions: MediaOptions) {
+export async function submitConversationTurn(projectId: string, editingTaskId: string, conversationId: string, storyboardVersionId: string | null, timelineVersionId: string | null, request: string, routeReceipt: string, mediaOptions: MediaOptions, uiLocale: string) {
   requireDesktopRuntime()
-  return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt, mediaOptions })
+  return invoke<ConversationTurnResult>('submit_conversation_turn', { projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt, mediaOptions, uiLocale })
 }
 export async function cancelAgentEdit(projectId: string, editingTaskId: string, conversationId: string, agentTaskId: string) {
   requireDesktopRuntime()

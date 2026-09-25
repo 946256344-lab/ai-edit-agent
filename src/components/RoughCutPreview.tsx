@@ -24,6 +24,13 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   const currentClip = clips.find((clip) => playhead >= clip.timelineStartMs && playhead < clip.timelineEndMs) ?? clips[0]
   const stalePreview = artifact.preview && artifact.preview.timelineVersionId !== artifact.timeline?.id
   const selected = recommendations?.candidates.find((candidate) => candidate.candidateId === selectedId)
+  // Rust 只给中文原因：可用窗短于原镜头即“时长不足”，否则为素材不可用；按界面语言重述。
+  const shotMs = shot ? shot.timelineEndMs - shot.timelineStartMs : 0
+  const unavailableText = (candidate: { unavailableReason: string | null; durationMs: number | null }) => candidate.unavailableReason
+    ? (candidate.durationMs ?? 0) < shotMs
+      ? t.backend.candidateTooShort((shotMs / 1000).toFixed(1))
+      : t.backend.candidateUnavailable
+    : null
   useEffect(() => {
     if (replacement.pending) pendingDialog.current?.showModal()
     else pendingDialog.current?.close()
@@ -47,9 +54,9 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
           {recommendations?.saved && !recommendations.candidates.length && <p className="workspace-notice">{copy.noCandidates}</p>}
           <div className="candidate-grid">
             {recommendations?.candidates.map((candidate, index) => (
-              <button key={candidate.candidateId} className={`candidate-card ${candidate.candidateId === selectedId ? 'selected' : ''}`} disabled={busy || phase === 'preparing' || candidate.current || Boolean(candidate.unavailableReason)} onClick={() => actions.replacement.select(candidate.candidateId)} aria-pressed={candidate.candidateId === selectedId} title={candidate.unavailableReason ?? candidate.displayName}>
+              <button key={candidate.candidateId} className={`candidate-card ${candidate.candidateId === selectedId ? 'selected' : ''}`} disabled={busy || phase === 'preparing' || candidate.current || Boolean(candidate.unavailableReason)} onClick={() => actions.replacement.select(candidate.candidateId)} aria-pressed={candidate.candidateId === selectedId} title={unavailableText(candidate) ?? candidate.displayName}>
                 <div className="candidate-image">{candidate.thumbnailPath ? <img src={convertFileSrc(candidate.thumbnailPath)} alt="" loading="lazy" decoding="async" /> : <span>{copy.noThumbnail}</span>}<b>{String(index + 1).padStart(2, '0')}</b><small>{candidate.current ? copy.currentShot : candidate.usedInTimeline ? copy.usedElsewhere : `${((candidate.durationMs ?? 0) / 1000).toFixed(1)}s`}</small></div>
-                <span>{candidate.displayName}</span><small>{copy.sourceRange((candidate.sourceStartMs / 1000).toFixed(1), (candidate.sourceEndMs / 1000).toFixed(1))}</small>{candidate.unavailableReason && <small>{candidate.unavailableReason}</small>}
+                <span>{candidate.displayName}</span><small>{copy.sourceRange((candidate.sourceStartMs / 1000).toFixed(1), (candidate.sourceEndMs / 1000).toFixed(1))}</small>{candidate.unavailableReason && <small>{unavailableText(candidate)}</small>}
               </button>
             ))}
           </div>

@@ -70,6 +70,17 @@ export function useI18n() {
   return { t: catalogs[locale], locale, setLocale }
 }
 
+/** 按 Rust 给的稳定文案键翻译；键未知（旧版本或新增未翻译）时原样显示 Rust 的回落文案。 */
+export function translateKeyed(
+  table: Record<string, (params: Record<string, string>) => string>,
+  key: string | null | undefined,
+  params: Record<string, string> | null | undefined,
+  fallback: string,
+) {
+  const format = key ? table[key] : undefined
+  return format ? format(params ?? {}) : fallback
+}
+
 /** 时:分，跟随当前语言。 */
 export function formatClockTime(timestampMs: number) {
   return new Date(timestampMs).toLocaleTimeString(current, { hour: '2-digit', minute: '2-digit' })

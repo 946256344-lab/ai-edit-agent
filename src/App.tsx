@@ -47,7 +47,7 @@ import {
 import type { AgentEditEvent, ConversationTurnResult, StoredAgentTask, StoredEditingSession, StoredMessage, StoredProject, TaskRouteResult } from './lib/local-store'
 import { toMessage } from './lib/message'
 import { analysisAmbientStatus, analysisSummary } from './lib/asset-analysis'
-import { formatClockTime, messages as uiMessages, useI18n } from './lib/i18n'
+import { formatClockTime, getLocale, messages as uiMessages, useI18n } from './lib/i18n'
 
 function toEditingSession(session: StoredEditingSession): EditingSessionView {
   return {
@@ -473,6 +473,7 @@ function App() {
         routedRequest,
         resolved.context.routeReceipt,
         mediaOptions,
+        getLocale(),
       )
       if (turnResult.kind === 'immediate') {
         await appendStoredMessage(conversationId, sessionId, 'agent', turnResult.message)

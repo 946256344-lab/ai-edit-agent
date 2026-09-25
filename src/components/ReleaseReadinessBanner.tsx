@@ -7,7 +7,7 @@ import {
   startRuntimeModelDownload,
 } from '../lib/local-store'
 import type { ReleaseReadinessReport, RuntimeModelStatus } from '../lib/local-store'
-import { useI18n } from '../lib/i18n'
+import { translateKeyed, useI18n } from '../lib/i18n'
 import type { Messages } from '../lib/i18n'
 
 // 前端自拼的“检查不可用”项：渲染时按当前语言取文案，切换语言后不残留旧语言。
@@ -21,16 +21,18 @@ function formatDownloadProgress(status: RuntimeModelStatus, t: Messages): string
   const active = status.artifacts.find((item) =>
     item.state === 'downloading' || item.state === 'verifying' || item.id === status.currentId,
   )
-  if (!active) return status.message
+  const message = translateKeyed(t.backend.models, status.messageKey, status.messageParams, status.message)
+  if (!active) return message
+  const title = t.backend.modelNames[active.id] ?? active.title
   if (active.bytesTotal && active.bytesTotal > 0) {
     const percent = Math.min(100, Math.round((active.bytesDownloaded / active.bytesTotal) * 100))
-    return t.readiness.progressPercent(status.message, active.title, percent)
+    return t.readiness.progressPercent(message, title, percent)
   }
   if (active.bytesDownloaded > 0) {
     const mb = (active.bytesDownloaded / (1024 * 1024)).toFixed(1)
-    return t.readiness.progressMb(status.message, active.title, mb)
+    return t.readiness.progressMb(message, title, mb)
   }
-  return status.message
+  return message
 }
 
 export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps) {
@@ -62,6 +64,8 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
               title: '',
               status: 'fail',
               message: '',
+              messageKey: '',
+              messageParams: {},
             }],
           })
         }
@@ -108,7 +112,7 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
       setModelStatus(next)
     } catch {
       setModelStatus((prev) => prev
-        ? { ...prev, overall: 'failed', message: copy.downloadStartFailed }
+        ? { ...prev, overall: 'failed', message: copy.downloadStartFailed, messageKey: '', messageParams: {} }
         : prev)
     } finally {
       setRetrying(false)
@@ -157,8 +161,8 @@ export function ReleaseReadinessBanner({ enabled }: ReleaseReadinessBannerProps)
             <ul>
               {problems.map((check) => (
                 <li key={check.id}>
-                  <b>{check.id === LOCAL_FAILURE_ID ? copy.checkTitle : check.title}</b>
-                  <span>{check.id === LOCAL_FAILURE_ID ? copy.checkFailed : check.message}</span>
+                  <b>{check.id === LOCAL_FAILURE_ID ? copy.checkTitle : (t.backend.readinessTitles as Record<string, string>)[check.id] ?? check.title}</b>
+                  <span>{check.id === LOCAL_FAILURE_ID ? copy.checkFailed : translateKeyed(t.backend.readiness, check.messageKey, check.messageParams, check.message)}</span>
                 </li>
               ))}
             </ul>

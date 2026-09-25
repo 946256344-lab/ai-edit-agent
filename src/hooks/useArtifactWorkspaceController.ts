@@ -18,6 +18,7 @@ import {
 } from '../lib/local-store'
 import type {
   AgentEditEvent,
+  EditorDeliveryResult,
   EditorLinkerCatalog,
   JianyingRegistrationStatus,
   PreviewResult,
@@ -67,8 +68,8 @@ export function getDeliveryStatus(
 
 function deliverErrorMessage(error: unknown, editorLabel: string) {
   const raw = error instanceof Error ? error.message : String(error ?? '')
-  const copy = messages().output.errors
-  if (/尚未实现/.test(raw)) return raw // i18n-allow: 匹配 Rust 返回的中文原文
+  const copy = { ...messages().output.errors, notImplemented: messages().backend.notImplemented }
+  if (/尚未实现/.test(raw)) return copy.notImplemented(editorLabel) // i18n-allow: 匹配 Rust 返回的中文原文
   if (/draft library is unavailable/i.test(raw)) {
     return copy.noDraftLibrary
   }
@@ -95,6 +96,27 @@ function deliverErrorMessage(error: unknown, editorLabel: string) {
     return copy.adapterFailed(editorLabel, adapterReason)
   }
   return copy.generic(editorLabel)
+}
+
+/** 编辑器名称按 id 取当前语言；未知编辑器用 Rust 名称，都没有时用通用称呼。 */
+function linkerLabel(linker: { id: string; label: string } | undefined) {
+  if (!linker) return messages().output.editorFallback
+  return messages().backend.editorLabels[linker.id] ?? linker.label
+}
+
+/** 交付结果文案由 editorId/status/displayName 在前端按当前语言拼出；Rust 的中文 message 只作未知类型的回落。 */
+function deliveryMessage(delivery: EditorDeliveryResult) {
+  const copy = messages().backend
+  const label = copy.editorLabels[delivery.editorId] ?? delivery.editorId
+  if (delivery.deliveryKind === 'dropInDraft') {
+    return delivery.status === 'pending'
+      ? copy.deliveryPending(delivery.displayName, label)
+      : copy.deliveryReady(delivery.displayName, label)
+  }
+  if (delivery.deliveryKind === 'importFile') {
+    return copy.deliveryExported(delivery.displayName, copy.editorSummaries[delivery.editorId] ?? '')
+  }
+  return delivery.message
 }
 
 export function deliverActionLabel(editorId: string, busy: boolean) {
@@ -376,7 +398,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   async function deliverSelectedEditor(override?: TimelineVersion) {
     const deliveryTimeline = override ?? timeline
     const selected = editorCatalog.linkers.find((linker) => linker.id === editorCatalog.selectedId)
-    const editorLabel = selected?.label ?? messages().output.editorFallback
+    const editorLabel = linkerLabel(selected)
     if (!options.projectId || !deliveryTimeline || isDelivering) {
       if (!timeline) {
         setDeliveryNoticeTone('error')
@@ -399,12 +421,13 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
           : 'exported',
       )
       setDeliveryNoticeTone('info')
-      setDeliveryNotice(delivery.message)
+      const notice = deliveryMessage(delivery)
+      setDeliveryNotice(notice)
       if (options.session?.conversationId) {
         await options.appendAgentMessage(
           options.session.conversationId,
           options.session.id,
-          delivery.message,
+          notice,
         )
       }
     } catch (error) {
@@ -423,7 +446,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     } catch (error) {
       const selected = editorCatalog.linkers.find((linker) => linker.id === editorId)
       setDeliveryNoticeTone('error')
-      setDeliveryNotice(deliverErrorMessage(error, selected?.label ?? messages().output.editorFallback))
+      setDeliveryNotice(deliverErrorMessage(error, linkerLabel(selected)))
     }
   }
 

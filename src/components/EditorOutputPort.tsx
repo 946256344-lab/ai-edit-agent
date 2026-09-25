@@ -21,10 +21,12 @@ export function EditorOutputPort({
   onSelect,
   onDeliver,
 }: EditorOutputPortProps) {
-  const copy = useI18n().t.output
+  const { t } = useI18n()
+  const copy = t.output
+  const editorLabel = (linker: EditorLinkerInfo) => t.backend.editorLabels[linker.id] ?? linker.label
   const options = linkers.length
     ? linkers
-    : [{ id: 'jianying', label: copy.jianying, summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' }]
+    : [{ id: 'jianying', label: copy.jianying, summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' } satisfies EditorLinkerInfo]
   const selected = options.find((linker) => linker.id === selectedId)
   const unavailable = selected !== undefined && selected.implemented && !selected.available
   return (
@@ -39,7 +41,7 @@ export function EditorOutputPort({
         >
           {options.map((linker) => (
             <option key={linker.id} value={linker.id} disabled={!linker.implemented}>
-              {linker.implemented ? linker.label : copy.comingSoon(linker.label)}
+              {linker.implemented ? editorLabel(linker) : copy.comingSoon(editorLabel(linker))}
             </option>
           ))}
         </select>
@@ -48,13 +50,13 @@ export function EditorOutputPort({
         className="outline-button deliver-button"
         disabled={disabled || busy || unavailable}
         onClick={onDeliver}
-        title={selected?.summary}
+        title={selected ? t.backend.editorSummaries[selected.id] ?? selected.summary : undefined}
       >
         {deliverLabel} ↗
       </button>
       {unavailable && (
         <p className="deliver-unavailable-hint" role="alert">
-          {copy.unavailableBefore(selected!.label)}
+          {copy.unavailableBefore(editorLabel(selected!))}
           <button
             className="deliver-recheck-button"
             onClick={() => onSelect(selectedId)}
