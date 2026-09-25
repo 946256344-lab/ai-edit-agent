@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] 实施中（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5）与 `refine_shot_ranges`（只走 P4→P5），其余镜头冻结，拍时长取当前时间线，写派生 storyboard + 新 timeline；`generate_storyboard` 保留为默认流程。M1 纯重构进行中。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
 - [ ] 待修（2026-09-25）：`npm run harness:check` 在 master 上已失败：`src/App.tsx` 有 15 个 `useState`，超过预算 14（14ad3d7 新增 `pendingUserMessage`）。需把发送相关状态移入 controller，不应提高预算。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：助手消息按 Markdown 渲染（`react-markdown` + `remark-gfm`），保留单个换行；不执行原始 HTML、不加载远程图片，外部链接交给系统浏览器。仿真回复渲染与链接不跳转已核对；真实桌面点链接待验收。见 docs/changes/2026-09-25-message-markdown.md。
