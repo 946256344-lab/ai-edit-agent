@@ -20,6 +20,7 @@ import {
   startExperimentalOpenAIOAuth,
 } from '../lib/local-store'
 import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus, FishAudioStatus } from '../lib/local-store'
+import { messages } from '../lib/i18n'
 
 const DISCONNECTED_OAUTH: ExperimentalOAuthStatus = {
   state: 'disconnected',
@@ -69,7 +70,7 @@ export function useProviderController(desktopRuntime: boolean) {
     let stopListening: (() => void) | undefined
     const refreshStatus = () => void getExperimentalOpenAIOAuthStatus()
       .then(setOAuthStatus)
-      .catch(() => setOAuthStatus({ state: 'failed', message: '无法读取 OAuth 状态。', experimental: true }))
+      .catch(() => setOAuthStatus({ state: 'failed', message: messages().provider.oauthReadFailed, experimental: true }))
     void listen<ExperimentalOAuthStatus>('experimental-openai-oauth-status', (event) => setOAuthStatus(event.payload))
       .then((unlisten) => { stopListening = unlisten })
     refreshStatus()
@@ -91,7 +92,7 @@ export function useProviderController(desktopRuntime: boolean) {
       .then(setCustomApiStatus)
       .catch(() => setCustomApiStatus({
         state: 'failed',
-        message: '无法读取自定义 API 状态。',
+        message: messages().provider.customReadFailed,
         baseUrl: null,
         model: null,
         coarseVisualModel: null,
@@ -111,10 +112,10 @@ export function useProviderController(desktopRuntime: boolean) {
   async function connectOAuth() {
     try {
       const start = await startExperimentalOpenAIOAuth()
-      setOAuthStatus({ state: 'pending', message: '请在浏览器中完成登录。', experimental: start.experimental })
+      setOAuthStatus({ state: 'pending', message: messages().provider.oauthPending, experimental: start.experimental })
       await openUrl(start.authorizationUrl)
     } catch {
-      setOAuthStatus({ state: 'failed', message: '无法启动实验性 OAuth 登录。', experimental: true })
+      setOAuthStatus({ state: 'failed', message: messages().provider.oauthStartFailed, experimental: true })
     }
   }
 
@@ -122,7 +123,7 @@ export function useProviderController(desktopRuntime: boolean) {
     try {
       setOAuthStatus(await clearExperimentalOpenAIOAuth())
     } catch {
-      setOAuthStatus({ state: 'failed', message: '退出登录失败。', experimental: true })
+      setOAuthStatus({ state: 'failed', message: messages().provider.logoutFailed, experimental: true })
     }
   }
 
@@ -137,7 +138,7 @@ export function useProviderController(desktopRuntime: boolean) {
         apiKey.trim(),
       ).catch(() => ({
         state: 'failed' as const,
-        message: '保存自定义 API 凭据失败。',
+        message: messages().provider.customSaveFailed,
         baseUrl: null,
         model: null,
         coarseVisualModel: null,
@@ -160,7 +161,7 @@ export function useProviderController(desktopRuntime: boolean) {
     } catch {
       setCustomApiStatus({
         state: 'failed',
-        message: '清除自定义 API 失败。',
+        message: messages().provider.customClearFailed,
         baseUrl: null,
         model: null,
         coarseVisualModel: null,
@@ -232,10 +233,10 @@ export function useProviderController(desktopRuntime: boolean) {
       isSaving,
       isSavingVoice,
       providerLabel: customApiStatus.state === 'connected'
-        ? '自定义 API 已连接'
+        ? messages().provider.labelCustom
         : oauthStatus.state === 'connected'
-          ? 'GPT OAuth 已连接'
-          : '模型未连接',
+          ? messages().provider.labelOauth
+          : messages().provider.labelNone,
       form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey, fishAudioKey },
     },
     actions: {

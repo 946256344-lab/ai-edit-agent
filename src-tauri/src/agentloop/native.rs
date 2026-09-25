@@ -119,6 +119,18 @@ pub(crate) fn run_native_tool_loop(
         let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
         input[0]["content"][0]["text"] = json!(format!("{prompt}\n{instruction}"));
     }
+    // 界面语言只决定回复用什么语言；旁白、字幕与分镜文案仍跟随用户文案，不得因此翻译。
+    let reply_language = match crate::agent::task_ui_locale(connection, agent_task_id) {
+        crate::agent::UiLocale::En => "English",
+        crate::agent::UiLocale::ZhCn => "Simplified Chinese",
+    };
+    {
+        let instruction = format!(
+            "REPLY LANGUAGE: The user's interface language is {reply_language}. Write every reply to the user in {reply_language}, unless the user writes this turn in a different language, then reply in that language. This only affects your replies: never translate or rewrite narration, voiceover scripts, subtitles or on-screen text the user provides, and keep the video content in the language of the user's script."
+        );
+        let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
+        input[0]["content"][0]["text"] = json!(format!("{prompt}\n{instruction}"));
+    }
     let mut state = LoopState {
         app,
         connection,

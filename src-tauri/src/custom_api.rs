@@ -131,12 +131,12 @@ fn validate_input(base_url: &str, model: &str, api_key: &str) -> Result<(), Stri
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_custom_api_status() -> CustomApiStatus {
     with_stored_status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_custom_api(
     base_url: String,
     model: String,
@@ -174,7 +174,7 @@ pub fn save_custom_api(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_custom_api() -> CustomApiStatus {
     match credential_entry() {
         Ok(entry) => match entry.delete_credential() {

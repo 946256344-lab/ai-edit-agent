@@ -224,7 +224,7 @@ fn record_jianying_registration_task(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_jianying_registration_status(
     app: AppHandle,
     timeline_version_id: String,
@@ -396,7 +396,7 @@ pub(crate) fn text_tracks_are_ready_for_jianying(timeline: &TimelineVersion) -> 
         .all(|cue| cue.jianying_compatibility == "verified")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_jianying_draft(
     app: AppHandle,
     timeline_version_id: String,

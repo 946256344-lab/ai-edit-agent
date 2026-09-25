@@ -13,8 +13,9 @@
     "agent:test": "node scripts/test-agent-contracts.mjs",
     "branch:check": "node scripts/check-branch-policy.mjs",
     "branch:test": "node scripts/test-branch-policy.mjs",
-    "harness:check": "node scripts/check-architecture-budgets.mjs && node scripts/check-agent-contracts.mjs && node scripts/check-doc-sync.mjs",
-    "harness:staged": "node scripts/check-architecture-budgets.mjs --staged && node scripts/check-agent-contracts.mjs --staged && node scripts/check-doc-sync.mjs --staged",
+    "i18n:check": "node scripts/check-i18n-literals.mjs",
+    "harness:check": "node scripts/check-architecture-budgets.mjs && node scripts/check-agent-contracts.mjs && node scripts/check-doc-sync.mjs && node scripts/check-i18n-literals.mjs",
+    "harness:staged": "node scripts/check-architecture-budgets.mjs --staged && node scripts/check-agent-contracts.mjs --staged && node scripts/check-doc-sync.mjs --staged && node scripts/check-i18n-literals.mjs --staged",
     "harness:test": "node scripts/test-architecture-budgets.mjs && node scripts/test-agent-contracts.mjs && node scripts/test-branch-policy.mjs && node scripts/test-doc-sync.mjs",
     "harness:install": "node scripts/install-git-hooks.mjs",
     "preview": "vite preview",
@@ -38,7 +39,9 @@
     "@tauri-apps/plugin-opener": "^2.5.4",
     "jassub": "^1.2.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

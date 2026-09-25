@@ -152,7 +152,7 @@ fn inherit_voiceover_from_prior(
     (text_tracks, Vec::new())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 /// 从指定 storyboard 创建新的 timeline v1；镜头源范围来自 storyboard 证据，不从文件名推断。
 pub fn create_timeline_draft(
     app: AppHandle,
@@ -1582,7 +1582,7 @@ pub(crate) fn select_timeline_candidate(
     timelines.first().cloned()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_latest_timeline(
     app: AppHandle,
     project_id: String,
@@ -1624,7 +1624,7 @@ pub fn get_latest_timeline(
     Ok(Some(LatestTimeline { timeline, preview }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_timeline_versions(
     app: AppHandle,
     project_id: String,

@@ -247,7 +247,7 @@ fn recommendations(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_shot_recommendations(
     app: AppHandle,
     project_id: String,

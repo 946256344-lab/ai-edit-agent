@@ -2552,7 +2552,7 @@ mod tests {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn generate_storyboard(
     app: AppHandle,
     project_id: String,
@@ -3403,7 +3403,7 @@ fn generate_storyboard_internal(
     }
     connection
         .execute(
-            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
+            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
             params![brief, now_millis(), editing_task_id],
         )
         .map_err(|error| error.to_string())?;
@@ -3411,7 +3411,7 @@ fn generate_storyboard_internal(
     Ok(version)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_latest_storyboard(
     app: AppHandle,
     project_id: String,
@@ -3424,7 +3424,7 @@ pub fn get_latest_storyboard(
         .map_or(Ok(None), |version| Ok(Some(version)))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_storyboard_versions(
     app: AppHandle,
     project_id: String,
@@ -3444,7 +3444,7 @@ pub fn list_storyboard_versions(
     storyboard_versions_for_task(&connection, &project_id, &editing_task_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_storyboard_version(
     app: AppHandle,
     project_id: String,

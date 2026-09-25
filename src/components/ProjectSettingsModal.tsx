@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clearPreviewCache, getCandidateScoreFirstSlots, getPreviewCacheStatus, setCandidateScoreFirstSlots } from '../lib/local-store'
 import type { PreviewCacheStatus } from '../lib/local-store'
+import { messages, useI18n } from '../lib/i18n'
 
 type ProjectSettingsModalProps = {
   open: boolean
@@ -19,6 +20,8 @@ function formatBytes(bytes: number) {
 
 export function ProjectSettingsModal({ open, projectId, projectName, onClose }: ProjectSettingsModalProps) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const { t } = useI18n()
+  const copy = t.projectSettings
   useLayoutEffect(() => {
     const element = dialog.current
     if (open) element?.showModal()
@@ -47,7 +50,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
         }
       })
       .catch(() => {
-        if (active) setError('无法读取项目设置。')
+        if (active) setError(messages().projectSettings.loadFailed)
       })
       .finally(() => {
         if (active) setBusy(false)
@@ -61,9 +64,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
 
   async function handleClear() {
     if (!projectId || busy) return
-    const confirmed = window.confirm(
-      '清理当前项目的预览缓存？\n\n已生成的预览仍可重新渲染，不会删除素材或剪辑结果。',
-    )
+    const confirmed = window.confirm(copy.clearConfirm)
     if (!confirmed) return
     setBusy(true)
     setError(null)
@@ -71,7 +72,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
       const next = await clearPreviewCache(projectId, true)
       setStatus(next)
     } catch {
-      setError('清理失败，请稍后重试。')
+      setError(copy.clearFailed)
     } finally {
       setBusy(false)
     }
@@ -84,47 +85,47 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
     try {
       setScoreFirstSlots(await setCandidateScoreFirstSlots(projectId, next))
     } catch {
-      setError('保存候选比例失败。')
+      setError(copy.slotsSaveFailed)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <dialog ref={dialog} className="settings-dialog" aria-label="项目设置" onCancel={(event) => { event.preventDefault(); dialog.current?.close(); onClose() }}>
+    <dialog ref={dialog} className="settings-dialog" aria-label={copy.title} onCancel={(event) => { event.preventDefault(); dialog.current?.close(); onClose() }}>
       <section className="provider-modal">
-        <button className="close-button" onClick={() => { dialog.current?.close(); onClose() }} aria-label="关闭">×</button>
+        <button className="close-button" onClick={() => { dialog.current?.close(); onClose() }} aria-label={t.common.close}>×</button>
         <span className="eyebrow">PROJECT</span>
-        <h2>项目设置</h2>
-        <p>{projectName ? `项目：${projectName}` : '请先选择一个项目。'}</p>
+        <h2>{copy.title}</h2>
+        <p>{projectName ? copy.projectLine(projectName) : copy.selectProjectFirst}</p>
 
         <label className="provider-option chosen">
           <span>
-            <strong>候选镜头：综合分优先数量</strong>
-            <small>每拍最多 9 条。其余名额从画面、语义和关键词高分候选中补入；下次生成生效。</small>
+            <strong>{copy.slotsTitle}</strong>
+            <small>{copy.slotsHint}</small>
           </span>
           <select
-            aria-label="综合分优先数量"
+            aria-label={copy.slotsAria}
             value={scoreFirstSlots ?? 5}
             onChange={(event) => void handleScoreFirstSlots(Number(event.target.value))}
             disabled={!projectId || busy || scoreFirstSlots === null}
           >
-            {[3, 4, 5, 6, 7, 8, 9].map((count) => <option key={count} value={count}>{count} 条</option>)}
+            {[3, 4, 5, 6, 7, 8, 9].map((count) => <option key={count} value={count}>{copy.slotsOption(count)}</option>)}
           </select>
         </label>
 
         <div className="provider-option chosen">
           <span>
-            <strong>预览缓存</strong>
+            <strong>{copy.cacheTitle}</strong>
             <small>
-              单个项目最多约 {status ? formatBytes(status.limitBytes) : '2 GB'}。超出后自动淘汰最旧中间文件。
+              {copy.cacheHint(status ? formatBytes(status.limitBytes) : '2 GB')}
             </small>
           </span>
-          <b>{status ? formatBytes(status.bytesUsed) : busy ? '读取中' : '—'}</b>
+          <b>{status ? formatBytes(status.bytesUsed) : busy ? copy.reading : '—'}</b>
         </div>
         {status && (
           <p className="oauth-status">
-            {status.fileCount} 个缓存文件 · 上限 {formatBytes(status.limitBytes)}
+            {copy.cacheFiles(status.fileCount, formatBytes(status.limitBytes))}
           </p>
         )}
         {error && <p className="oauth-status">{error}</p>}
@@ -133,7 +134,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
           onClick={() => void handleClear()}
           disabled={!projectId || busy}
         >
-          {busy ? '处理中…' : '清理预览缓存'}
+          {busy ? t.common.processing : copy.clearCache}
         </button>
       </section>
     </dialog>

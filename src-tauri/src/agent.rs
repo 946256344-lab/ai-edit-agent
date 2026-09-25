@@ -209,7 +209,10 @@ fn finalize_agent_task(
             )?;
             let result = failed_agent_edit_result(
                 agent_task_id.to_owned(),
-                "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
+                task_ui_locale(connection, agent_task_id).pick(
+                    "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
+                    "This restricted operation did not complete, and I did not change the existing storyboard, timeline or preview. Please retry, or tell me which media and clips you want to keep.",
+                ),
             );
             persist_agent_completion_message_with_role(
                 &transaction,
@@ -226,7 +229,7 @@ fn finalize_agent_task(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn execute_agent_edit(
     app: AppHandle,
     project_id: String,
@@ -260,6 +263,7 @@ pub fn execute_agent_edit(
         request,
         None,
         None,
+        None,
     )
 }
 
@@ -275,11 +279,12 @@ pub async fn submit_conversation_turn(
     request: String,
     route_receipt: String,
     media_options: Option<crate::media_options::MediaOptions>,
+    ui_locale: Option<String>,
 ) -> Result<ConversationTurnResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         submit_conversation_turn_blocking(
             app, project_id, editing_task_id, conversation_id, storyboard_version_id,
-            timeline_version_id, request, route_receipt, media_options,
+            timeline_version_id, request, route_receipt, media_options, ui_locale,
         )
     })
     .await
@@ -296,6 +301,7 @@ fn submit_conversation_turn_blocking(
     request: String,
     route_receipt: String,
     media_options: Option<crate::media_options::MediaOptions>,
+    ui_locale: Option<String>,
 ) -> Result<ConversationTurnResult, String> {
     if request.trim().is_empty() {
         return Err("Conversation request cannot be empty.".to_owned());
@@ -328,12 +334,13 @@ fn submit_conversation_turn_blocking(
         request,
         media_options,
         user_message_id,
+        Some(UiLocale::parse(ui_locale.as_deref())),
     )?;
     Ok(ConversationTurnResult::Run { agent_task_id })
 }
 
 /// 取消当前作用域内仍在排队或运行的 Agent 编辑任务；循环在下一步检查点停止。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_agent_edit(
     app: AppHandle,
     project_id: String,
@@ -388,6 +395,51 @@ pub fn cancel_agent_edit(
     Ok(())
 }
 
+/// 界面语言：只决定 Agent 回复与系统兜底文案的语言，不决定成片的旁白或字幕语言。
+/// 旧任务与旧入口没有记录时按简体中文，保持改造前行为。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum UiLocale {
+    #[default]
+    ZhCn,
+    En,
+}
+
+impl UiLocale {
+    pub(crate) fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("en") => Self::En,
+            _ => Self::ZhCn,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ZhCn => "zh-CN",
+            Self::En => "en",
+        }
+    }
+
+    pub(crate) fn pick(self, zh: &'static str, en: &'static str) -> &'static str {
+        match self {
+            Self::ZhCn => zh,
+            Self::En => en,
+        }
+    }
+}
+
+/// 读取任务提交时记录的界面语言；读不到时回落简体中文。
+pub(crate) fn task_ui_locale(connection: &Connection, agent_task_id: &str) -> UiLocale {
+    let raw: Option<String> = connection
+        .query_row(
+            "SELECT json_extract(input_json, '$.uiLocale') FROM agent_tasks WHERE id = ?1",
+            params![agent_task_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    UiLocale::parse(raw.as_deref())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_agent_run(
     app: AppHandle,
@@ -399,6 +451,7 @@ fn spawn_agent_run(
     request: String,
     media_options: Option<crate::media_options::MediaOptions>,
     user_message_id: Option<String>,
+    ui_locale: Option<UiLocale>,
 ) -> Result<String, String> {
     if request.trim().is_empty() {
         return Err("Agent request cannot be empty.".to_owned());
@@ -422,7 +475,8 @@ fn spawn_agent_run(
                     "storyboardVersionId": storyboard_version_id,
                     "timelineVersionId": timeline_version_id,
                     "mediaOptions": media_options,
-                    "userMessageId": user_message_id
+                    "userMessageId": user_message_id,
+                    "uiLocale": ui_locale.map(UiLocale::as_str)
                 })
                 .to_string(),
                 now_millis()
@@ -493,9 +547,16 @@ fn run_agent_edit(
         Err(error) => {
             log::warn!("Agent task pipeline failed: {error}");
             let connection = open_connection(&app).ok();
+            let locale = connection
+                .as_ref()
+                .map(|connection| task_ui_locale(connection, agent_task_id))
+                .unwrap_or_default();
             let result = failed_agent_edit_result(
                 agent_task_id.to_owned(),
-                "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
+                locale.pick(
+                    "这次受限操作没有完成，我没有修改现有 storyboard、时间线或 preview。请重试，或补充你希望保留的素材和片段。",
+                    "This restricted operation did not complete, and I did not change the existing storyboard, timeline or preview. Please retry, or tell me which media and clips you want to keep.",
+                ),
             );
             if let Some(connection) = &connection {
                 let _ = crate::audit::record_agent_diagnostic(
@@ -755,7 +816,11 @@ fn run_agent_edit_pipeline(
                 &tool_name,
                 Ok(AgentEditResult {
                     agent_task_id: agent_task_id.to_owned(),
-                    message: "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。"
+                    message: task_ui_locale(&connection, agent_task_id)
+                        .pick(
+                            "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。",
+                            "Stopped this run; the existing storyboard, timeline and preview were not changed.",
+                        )
                         .to_owned(),
                     storyboard: None,
                     timeline: None,
@@ -791,7 +856,10 @@ fn run_agent_edit_pipeline(
             )?;
             return Ok(failed_agent_edit_result(
                 agent_task_id.to_owned(),
-                "当前无法连接 Agent 模型，因此没有执行剪辑操作。请检查模型连接后重试。",
+                task_ui_locale(&connection, agent_task_id).pick(
+                    "当前无法连接 Agent 模型，因此没有执行剪辑操作。请检查模型连接后重试。",
+                    "The agent model cannot be reached right now, so no edit was made. Check the model connection and try again.",
+                ),
             ));
         }
     };

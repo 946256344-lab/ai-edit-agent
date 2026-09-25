@@ -20,7 +20,7 @@ pub(super) fn task_running(app: &AppHandle, task_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_asset_analysis_progress(
     app: AppHandle,
     project_id: String,
@@ -92,7 +92,7 @@ fn cancel_in_scope(
     Ok((updated, remaining.into_iter().collect()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_asset_analysis(
     app: AppHandle,
     project_id: String,
@@ -105,7 +105,7 @@ pub fn cancel_asset_analysis(
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn resume_asset_analysis(
     app: AppHandle,
     project_id: String,
@@ -151,7 +151,7 @@ pub fn resume_asset_analysis(
     Ok(rows.len())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_library_asset(
     app: AppHandle,
     project_id: String,
@@ -168,7 +168,7 @@ pub fn rename_library_asset(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_library_assets(
     app: AppHandle,
     project_id: String,

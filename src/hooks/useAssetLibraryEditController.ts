@@ -1,6 +1,7 @@
 // 素材库编辑状态：批量选择、显示名修改和移除确认；不修改源文件。
 import { useState } from 'react'
 import { removeLibraryAssets, renameLibraryAsset } from '../lib/local-store'
+import { messages } from '../lib/i18n'
 import type { AssetView } from '../components/asset-workspace/AssetBrowser'
 
 export function useAssetLibraryEditController(projectId: string | null, assets: AssetView[], onChanged: () => void) {
@@ -20,7 +21,7 @@ export function useAssetLibraryEditController(projectId: string | null, assets: 
       else await removeLibraryAssets(projectId, selectedIds)
       clear()
       onChanged()
-    } catch { setNotice(rename ? '重命名未完成，请重试。' : '移除未完成，请重试。') }
+    } catch { setNotice(rename ? messages().assets.renameFailed : messages().assets.removeFailed) }
     finally { setBusy(false) }
   }
   return {

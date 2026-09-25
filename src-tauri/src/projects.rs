@@ -34,7 +34,7 @@ pub(crate) fn candidate_score_first_slots(
         .unwrap_or(DEFAULT_CANDIDATE_SCORE_FIRST_SLOTS))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_candidate_score_first_slots(
     app: AppHandle,
     project_id: String,
@@ -43,7 +43,7 @@ pub fn get_candidate_score_first_slots(
     candidate_score_first_slots(&connection, &project_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_candidate_score_first_slots(
     app: AppHandle,
     project_id: String,
@@ -166,7 +166,7 @@ fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<
     Ok(missing.len())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     let start = std::time::Instant::now();
     log::info!("[PERF] initialize_local_store: starting");
@@ -283,7 +283,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_project(
     app: AppHandle,
     name: String,
@@ -331,7 +331,7 @@ pub fn create_project(
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_projects(app: AppHandle) -> Result<Vec<Project>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection
@@ -351,7 +351,7 @@ pub fn list_projects(app: AppHandle) -> Result<Vec<Project>, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_project(app: AppHandle, project_id: String, name: String) -> Result<Project, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -392,7 +392,7 @@ fn rename_project_record(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_conversation(
     app: AppHandle,
     project_id: String,
@@ -454,7 +454,7 @@ pub fn create_conversation(
     Ok(conversation)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_editing_session(
     app: AppHandle,
     project_id: String,
@@ -497,7 +497,7 @@ pub fn create_editing_session(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_editing_sessions(
     app: AppHandle,
     project_id: String,
@@ -506,7 +506,7 @@ pub fn list_editing_sessions(
     editing_sessions_for_project(&connection, &project_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_editing_session(
     app: AppHandle,
     project_id: String,
@@ -549,7 +549,7 @@ fn rename_editing_session_record(
     transaction.commit().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_project(app: AppHandle, project_id: String, confirmed: bool) -> Result<(), String> {
     if !confirmed {
         return Err("Deleting a project requires explicit confirmation.".to_owned());
@@ -631,7 +631,7 @@ fn delete_project_records(
 
 /// 删除剪辑会话（editing task）及其会话消息、Agent 记录、storyboard/timeline 与本地 preview。
 /// 项目级素材保留。必须 `confirmed=true`。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_editing_session(
     app: AppHandle,
     project_id: String,
@@ -770,7 +770,7 @@ fn editing_sessions_for_project(
               editing_tasks.project_id,
               conversations.id,
               CASE
-                WHEN editing_tasks.title NOT IN ('新的剪辑任务', '新的剪辑会话')
+                WHEN editing_tasks.title NOT IN ('新的剪辑任务', '新的剪辑会话', 'New edit session')
                   THEN editing_tasks.title
                 WHEN conversations.title IS NOT NULL
                   THEN conversations.title
@@ -823,7 +823,7 @@ fn editing_sessions_for_project(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_conversations(
     app: AppHandle,
     project_id: String,
@@ -860,7 +860,7 @@ pub fn list_conversations(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_editing_task(
     app: AppHandle,
     project_id: String,
@@ -887,7 +887,7 @@ pub fn create_editing_task(
     Ok(task)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_editing_tasks(app: AppHandle, project_id: String) -> Result<Vec<EditingTask>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection.prepare(
@@ -926,7 +926,7 @@ pub fn list_editing_tasks(app: AppHandle, project_id: String) -> Result<Vec<Edit
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_editing_task_brief(
     app: AppHandle,
     editing_task_id: String,
@@ -938,7 +938,7 @@ pub fn update_editing_task_brief(
     }
     let connection = open_connection(&app)?;
     let changed = connection.execute(
-        "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
+        "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
         params![brief, now_millis(), editing_task_id],
     ).map_err(|error| error.to_string())?;
     if changed != 1 {
@@ -947,7 +947,31 @@ pub fn update_editing_task_brief(
     Ok(())
 }
 
-#[tauri::command]
+/// 新消息写入后刷新会话、任务与项目时间；用户首条消息把占位标题换成请求摘要。
+/// 占位标题含前端中英两种默认名，改前端默认名时必须同步这里。
+fn touch_after_message(connection: &Connection, message: &Message) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE conversations SET updated_at = ?1, summary = ?2, title = CASE WHEN title IN ('新的剪辑会话', 'New edit session') AND ?3 = 'user' THEN substr(?2, 1, 28) ELSE title END WHERE id = ?4",
+            params![message.created_at, message.content, message.role, message.conversation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE editing_tasks SET updated_at = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') AND ?2 = 'user' THEN substr(?3, 1, 28) ELSE title END WHERE id = (SELECT editing_task_id FROM conversations WHERE id = ?4)",
+            params![message.created_at, message.role, message.content, message.conversation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE projects SET updated_at = ?1 WHERE id = (SELECT project_id FROM conversations WHERE id = ?2)",
+            params![message.created_at, message.conversation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn create_message(
     app: AppHandle,
     conversation_id: String,
@@ -990,29 +1014,12 @@ pub fn create_message(
         "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![message.id, message.conversation_id, message.role, message.content, message.created_at],
     ).map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE conversations SET updated_at = ?1, summary = ?2, title = CASE WHEN title = '新的剪辑会话' AND ?3 = 'user' THEN substr(?2, 1, 28) ELSE title END WHERE id = ?4",
-            params![message.created_at, message.content, message.role, message.conversation_id],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE editing_tasks SET updated_at = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话') AND ?2 = 'user' THEN substr(?3, 1, 28) ELSE title END WHERE id = (SELECT editing_task_id FROM conversations WHERE id = ?4)",
-            params![message.created_at, message.role, message.content, message.conversation_id],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "UPDATE projects SET updated_at = ?1 WHERE id = (SELECT project_id FROM conversations WHERE id = ?2)",
-            params![message.created_at, message.conversation_id],
-        )
-        .map_err(|error| error.to_string())?;
+    touch_after_message(&transaction, &message)?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_conversation_status(
     app: AppHandle,
     conversation_id: String,
@@ -1034,7 +1041,7 @@ pub fn set_conversation_status(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_messages(app: AppHandle, conversation_id: String) -> Result<Vec<Message>, String> {
     let connection = open_connection(&app)?;
     let mut statement = connection.prepare(
@@ -1116,6 +1123,46 @@ mod tests {
             .expect("count deleted messages");
         assert_eq!(remaining_projects, 1);
         assert_eq!(deleted_messages, 0);
+    }
+
+    #[test]
+    fn first_user_message_retitles_english_placeholder_session() {
+        let connection = Connection::open_in_memory().expect("open retitle test database");
+        crate::db::migrate(&connection).expect("create current schema");
+        connection
+            .execute_batch(
+                "
+                INSERT INTO projects (id, name, created_at, updated_at)
+                VALUES ('project-1', 'Project', 1, 1);
+                INSERT INTO editing_tasks (id, project_id, title, brief, created_at, updated_at)
+                VALUES ('session-1', 'project-1', 'New edit session', '', 2, 2);
+                INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                VALUES ('conversation-1', 'project-1', 'session-1', 'New edit session', 'ready', 2, 2);
+                ",
+            )
+            .expect("insert english placeholder session");
+        let message = Message {
+            id: "message-1".to_owned(),
+            conversation_id: "conversation-1".to_owned(),
+            role: "user".to_owned(),
+            content: "Make a travel vlog".to_owned(),
+            created_at: 3,
+        };
+
+        touch_after_message(&connection, &message).expect("touch after message");
+
+        let titles: (String, String) = connection
+            .query_row(
+                "SELECT editing_tasks.title, conversations.title FROM editing_tasks
+                 JOIN conversations ON conversations.editing_task_id = editing_tasks.id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read retitled names");
+        assert_eq!(
+            titles,
+            ("Make a travel vlog".to_owned(), "Make a travel vlog".to_owned())
+        );
     }
 
     #[test]

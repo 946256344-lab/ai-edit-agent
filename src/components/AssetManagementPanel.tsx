@@ -10,6 +10,8 @@ import { AssetDirectoryTree } from './asset-workspace/AssetDirectoryTree'
 import { AssetEvidenceInspector } from './asset-workspace/AssetEvidenceInspector'
 import { AssetSourceRecovery } from './asset-workspace/AssetSourceRecovery'
 import { buildAssetDirectoryTree } from './asset-workspace/asset-directory-model'
+import { useI18n } from '../lib/i18n'
+import type { Messages } from '../lib/i18n'
 
 export type AssetWorkspaceModel = {
   projectId: string | null
@@ -49,20 +51,22 @@ export type AssetWorkspaceActions = {
   cancelRelink: () => void
 }
 
-function directoryBreadcrumb(directoryKey: string) {
-  if (directoryKey === 'all') return '项目中的全部素材'
-  if (directoryKey === '__unfiled__') return '未归类素材'
+function directoryBreadcrumb(directoryKey: string, t: Messages) {
+  if (directoryKey === 'all') return t.assets.allInProject
+  if (directoryKey === '__unfiled__') return t.assets.unfiled
   return directoryKey.split('\\').join(' / ')
 }
 
 export function AssetManagementPanel({ model, actions }: { model: AssetWorkspaceModel; actions: AssetWorkspaceActions }) {
-  const tree = useMemo(() => buildAssetDirectoryTree(model.directories), [model.directories])
+  const { t, locale } = useI18n()
+  const copy = t.assets
+  const tree = useMemo(() => buildAssetDirectoryTree(model.directories, locale), [model.directories, locale])
   const selectedNode = tree.nodes.get(model.selectedDirectoryKey)
   const currentTitle = model.selectedDirectoryKey === 'all'
-    ? '全部素材'
+    ? copy.all
     : model.selectedDirectoryKey === '__unfiled__'
-      ? '未归类素材'
-      : selectedNode?.name ?? '素材目录'
+      ? copy.unfiled
+      : selectedNode?.name ?? copy.directoryFallback
   const projectReady = Boolean(model.projectId && model.storeReady && !model.importing)
   const healthIssues = model.health
     ? model.health.missing + model.health.changed + model.health.unreadable
@@ -79,13 +83,13 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
     <section className="asset-workbench">
       <header className="asset-workbench__header">
         <div>
-          <span className="panel-kicker">素材</span>
-          <strong>{model.page.counts.total} 个本地素材</strong>
-          <p>{model.projectId ? '显示项目所选素材库。导入文件夹会创建共享子素材库，并用于当前项目。' : '请选择项目后导入素材。'}</p>
+          <span className="panel-kicker">{copy.kicker}</span>
+          <strong>{copy.localCount(model.page.counts.total)}</strong>
+          <p>{model.projectId ? copy.projectHint : copy.noProjectHint}</p>
         </div>
         <div className="asset-workbench__actions">
-          <button className="import-button" onClick={actions.importFiles} disabled={!projectReady}>导入文件</button>
-          <button className="import-button" onClick={actions.importFolder} disabled={!projectReady}>导入文件夹</button>
+          <button className="import-button" onClick={actions.importFiles} disabled={!projectReady}>{copy.importFiles}</button>
+          <button className="import-button" onClick={actions.importFolder} disabled={!projectReady}>{copy.importFolder}</button>
         </div>
       </header>
 
@@ -104,7 +108,8 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
         <main className="asset-workbench__center">
           <AssetBrowser
             title={currentTitle}
-            breadcrumb={directoryBreadcrumb(model.selectedDirectoryKey)}
+            breadcrumb={directoryBreadcrumb(model.selectedDirectoryKey, t)}
+            isRoot={model.selectedDirectoryKey === 'all'}
             matchingAssetCount={model.page.total}
             assets={model.assets}
             filtered={model.analysisFilter !== null}

@@ -7,6 +7,7 @@ import {
   renameProject,
 } from '../lib/local-store'
 import type { StoredProject } from '../lib/local-store'
+import { messages } from '../lib/i18n'
 
 type NavigationEditControllerOptions = {
   projects: StoredProject[]
@@ -35,13 +36,13 @@ export function useNavigationEditController(options: NavigationEditControllerOpt
   async function deleteProjectWorkspace(projectId: string) {
     const project = options.projects.find((candidate) => candidate.id === projectId)
     const confirmed = window.confirm(
-      `确定删除项目「${project?.name ?? '该项目'}」？\n\n将永久删除项目内的素材索引、分析结果、剪辑会话和本地预览。原始媒体与已创建的剪映草稿不会删除。`,
+      messages().app.deleteProjectConfirm(project?.name ?? messages().app.projectFallback),
     )
     if (!confirmed) return
     try {
       await deleteProject(projectId, true)
     } catch {
-      window.alert('删除项目失败，请稍后重试。')
+      window.alert(messages().app.deleteProjectFailed)
       return
     }
     const remaining = options.projects.filter((candidate) => candidate.id !== projectId)

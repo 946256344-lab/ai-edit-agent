@@ -1,6 +1,6 @@
 # 文档与检查说明
 
-`npm run harness:check` 会串联仓库当前的三项检查：架构预算、Agent 上下文和文档同步。它们的目的只是防止明显的结构漂移，不是替代代码审查或测试。
+`npm run harness:check` 会串联仓库当前的四项检查：架构预算、Agent 上下文、文档同步和界面文案（前端不得写死中文，文案进 `src/lib/i18n` 词典）。它们的目的只是防止明显的结构漂移，不是替代代码审查或测试。
 
 ## 什么时候会检查
 
@@ -16,6 +16,7 @@
 npm run harness:install
 npm run architecture:check
 npm run agent:check
+npm run i18n:check
 npm run harness:check
 ```
 

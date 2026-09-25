@@ -1482,7 +1482,7 @@ pub(crate) fn backfill_queued_visual_batches(app: &AppHandle) -> Result<(), Stri
 }
 
 /// 用户主动跳过视觉分析；已 skipped 的素材不被在途批次覆盖。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn skip_asset_visual_analysis_batch(
     app: AppHandle,
     project_id: String,

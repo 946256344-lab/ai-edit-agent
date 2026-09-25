@@ -110,7 +110,7 @@ fn run_asset_health_scan(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_asset_health_scan(
     app: AppHandle,
     project_id: String,
@@ -138,7 +138,7 @@ pub fn start_asset_health_scan(
     Ok(AssetHealthScanStart { task_id })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_asset_health_scan(
     app: AppHandle,
     project_id: String,
@@ -148,7 +148,7 @@ pub fn cancel_asset_health_scan(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_asset_health_scan_summary(
     app: AppHandle,
     project_id: String,

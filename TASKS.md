@@ -6,6 +6,12 @@
 
 - [ ] 部分已验证（2026-09-25，codex/fellowcut-auth-trial）：桌面端接入 FellowCut 邮箱密码登录与 Firestore 试用资格只读显示。真实开发版打开了旧本机项目和剪辑会话；用户提供截图显示测试账号已登录、邮箱已验证、试用中，有效期为 2026-10-02 17:31:35。关闭后重新启动，顶栏恢复显示同一测试账号及旧项目；退出登录和安装包仍待验收。模型额度与付费控制留待服务端网关实施。
 
+- [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
+- [x] 已修复（2026-09-25，codex/fellowcut-auth-trial）：合并新版界面时将临时用户消息状态移入 controller，恢复 `App.tsx` 的架构预算；未提高预算。
+- [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：助手消息按 Markdown 渲染（`react-markdown` + `remark-gfm`），保留单个换行；不执行原始 HTML、不加载远程图片，外部链接交给系统浏览器。仿真回复渲染与链接不跳转已核对；真实桌面点链接待验收。见 docs/changes/2026-09-25-message-markdown.md。
+- [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第二步。启动检查、模型下载、交付结果、编辑器名称、连接状态、候选不可用原因随界面语言显示；Rust 给 `messageKey`/`messageParams`，中文原文作回落。发送时带 `uiLocale`，Agent 回复与系统兜底文案跟随界面语言，成片语言不变。修复英文默认会话名不被首条消息改名。cargo check、新回归测试、tsc、lint、harness 通过；待真实桌面验收。见 docs/changes/2026-09-25-backend-text-i18n.md。
+- [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第一步。前端文案收进 `src/lib/i18n` 类型化词典（英文漏键即编译失败），侧栏切换语言，偏好存本机，首次按系统语言；时间与排序跟随语言；`harness:check` 拦截组件里新写死的中文。tsc、lint、harness 通过，浏览器模拟 IPC 下中英切换与主要页面已看过；待真实桌面验收。见 docs/changes/2026-09-25-ui-i18n.md。
+- [ ] implemented_unverified（2026-09-25）：修复启动卡顿与输入延迟。同步 Tauri 命令全部改为 `#[tauri::command(async)]` 移出 UI 主线程；模型权重校验按大小+修改时间缓存，不再每次启动整读约 2 GB 哈希；数据库迁移每进程只跑一次，不再每次打开连接争写锁；发送后立即显示用户消息并清空输入框，不再等任务归属模型返回。`cargo check` 通过；待桌面重建后验收。见 docs/changes/2026-09-25-startup-input-lag.md。
 - [ ] implemented_unverified（2026-09-25）：剪映/CapCut 草稿交付补上配音轨。两者 `voiceover` 能力改为 Full，交付前解析配音来源，适配器新增 `add_voiceover_tracks` 写入独立音频轨 `assembly-voiceover-N`（不循环、源短于时间线取较短）。适配器 20 项、handoff 5 项 Rust 测试通过，真实最小输入生成含视频+配音轨的草稿；待桌面重建后用真实带配音项目验收。
 - [ ] implemented_unverified（2026-09-25）：修复剪映草稿交付失败。根因是随包 pyJianYingDraft 0.3.0 把 `ScriptFile.add_track` 改成 `append_track(TrackSpec)`，适配器仍按旧 API 调用，立即抛 AttributeError；pycapcut 0.0.3 仍是旧 API，故在适配器加兼容层。同时日志带出适配器真实原因，前端交付错误显示具体原因，选剪映时检测草稿库并提示连接。适配器 19 项测试、lint、cargo check、harness 通过，真实最小输入已生成含视频+字幕轨的草稿；待桌面重建后走真实交付验收。
 <!-- ACTIVE_TASKS_START -->

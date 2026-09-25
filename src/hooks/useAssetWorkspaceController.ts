@@ -8,6 +8,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import type { AssetView } from '../components/asset-workspace/AssetBrowser'
 import { analysisPendingCount, assetAnalysisState, EMPTY_ANALYSIS_PROGRESS } from '../lib/asset-analysis'
+import { messages } from '../lib/i18n'
 import type { EditingSessionView } from '../components/workspace-types'
 import {
   cancelAssetHealthScan,
@@ -249,11 +250,11 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       await options.appendAgentMessage(
         context.conversationId,
         context.sessionId,
-        `已导入 ${imported.length} 个素材，正在分析，完成后可开始剪辑。你可以先填写剪辑要求。`,
+        messages().assets.imported(imported.length),
       )
       await options.refreshEditingSessions(context.projectId)
     } catch {
-      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice('导入未完成，请检查所选文件后重试。')
+      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice(messages().assets.importFilesFailed)
     } finally {
       setImportingProjectId(current => current === context.projectId ? null : current)
     }
@@ -276,11 +277,11 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       await options.appendAgentMessage(
         context.conversationId,
         context.sessionId,
-        `已从文件夹导入 ${imported.length} 个素材，正在分析，完成后可开始剪辑。你可以先填写剪辑要求。`,
+        messages().assets.importedFolder(imported.length),
       )
       await options.refreshEditingSessions(context.projectId)
     } catch {
-      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice('导入未完成，请检查所选文件夹后重试。')
+      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice(messages().assets.importFolderFailed)
     } finally {
       setImportingProjectId(current => current === context.projectId ? null : current)
     }
@@ -308,10 +309,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
         updated += result.updatedCount
       }
       if (options.activeProjectRef.current === projectId) {
-        setAnalysisNotice(updated ? `已将 ${updated} 个失败素材重新加入分析队列。` : '没有可重试的素材。请检查文件是否可读取、是否已排除或跳过分析。')
+        setAnalysisNotice(updated ? messages().assets.requeued(updated) : messages().assets.nothingToRetry)
       }
     } catch {
-      if (options.activeProjectRef.current === projectId) setAnalysisNotice('重试未完成，请检查分析服务配置和素材文件后再试。')
+      if (options.activeProjectRef.current === projectId) setAnalysisNotice(messages().assets.retryFailed)
     } finally {
       setRetryingProjectId(current => current === projectId ? null : current)
       if (options.activeProjectRef.current === projectId) setPageRevision(value => value + 1)
@@ -320,13 +321,13 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
 
   async function openRelink() {
     if (!options.desktopRuntime || !options.projectId) return
-    const selected = await open({ directory: true, multiple: false, title: '选择新的素材根目录' })
+    const selected = await open({ directory: true, multiple: false, title: messages().assets.pickRelinkRoot })
     if (!selected || Array.isArray(selected)) return
     const nextPreview = await previewAssetRelink(options.projectId, selected)
     setRelinkPreview(nextPreview)
     setRelinkSourceDirectory(selected)
     if (!nextPreview.matches.length) {
-      window.alert('没有找到可安全重链路的素材。请选择保留原有文件夹结构的素材根目录。')
+      window.alert(messages().assets.relinkNone)
     }
   }
 
@@ -342,7 +343,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       setPageRevision((value) => value + 1)
       setHealthRevision((value) => value + 1)
     }
-    window.alert(`已重新链路 ${result.relinkedCount} 个素材并保留分析信息。`)
+    window.alert(messages().assets.relinked(result.relinkedCount))
     cancelRelink()
   }
 

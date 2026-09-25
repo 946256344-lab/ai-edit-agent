@@ -173,7 +173,7 @@ pub(crate) fn remove_orphan_project_caches(
     Ok(freed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_preview_cache_status(
     app: AppHandle,
     project_id: String,
@@ -188,7 +188,7 @@ pub fn get_preview_cache_status(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_preview_cache(
     app: AppHandle,
     project_id: String,

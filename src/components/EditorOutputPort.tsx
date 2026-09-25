@@ -1,5 +1,6 @@
 // 输出端口：选择目标编辑器并触发单向交付。
 import type { EditorLinkerInfo } from '../lib/local-store'
+import { useI18n } from '../lib/i18n'
 
 type EditorOutputPortProps = {
   linkers: EditorLinkerInfo[]
@@ -20,47 +21,49 @@ export function EditorOutputPort({
   onSelect,
   onDeliver,
 }: EditorOutputPortProps) {
+  const { t } = useI18n()
+  const copy = t.output
+  const editorLabel = (linker: EditorLinkerInfo) => t.backend.editorLabels[linker.id] ?? linker.label
   const options = linkers.length
     ? linkers
-    : [{ id: 'jianying', label: '剪映', summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' }]
+    : [{ id: 'jianying', label: copy.jianying, summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' } satisfies EditorLinkerInfo]
   const selected = options.find((linker) => linker.id === selectedId)
   const unavailable = selected !== undefined && selected.implemented && !selected.available
   return (
     <div className="deliver-port">
       <label className="storyboard-version-picker">
-        输出到
+        {copy.outputTo}
         <select
           value={selectedId}
           onChange={(event) => onSelect(event.target.value)}
           disabled={busy}
-          aria-label="选择输出编辑器"
+          aria-label={copy.selectEditor}
         >
           {options.map((linker) => (
             <option key={linker.id} value={linker.id} disabled={!linker.implemented}>
-              {linker.implemented ? linker.label : `${linker.label}（即将支持）`}
+              {linker.implemented ? editorLabel(linker) : copy.comingSoon(editorLabel(linker))}
             </option>
           ))}
         </select>
       </label>
       <button
-        className="outline-button deliver-button"
+        className="primary-button deliver-button"
         disabled={disabled || busy || unavailable}
         onClick={onDeliver}
-        title={selected?.summary}
+        title={selected ? t.backend.editorSummaries[selected.id] ?? selected.summary : undefined}
       >
         {deliverLabel} ↗
       </button>
       {unavailable && (
         <p className="deliver-unavailable-hint" role="alert">
-          未检测到 {selected!.label} 草稿目录。请先打开 {selected!.label}，新建一个本地草稿后，
-          再{' '}
+          {copy.unavailableBefore(editorLabel(selected!))}
           <button
             className="deliver-recheck-button"
             onClick={() => onSelect(selectedId)}
           >
-            重新检测
+            {copy.recheck}
           </button>
-          。
+          {copy.unavailableAfter}
         </p>
       )}
     </div>

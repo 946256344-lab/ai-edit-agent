@@ -1,5 +1,6 @@
 // 名称编辑弹窗：项目与剪辑会话共用，只负责输入和保存反馈。
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useI18n } from '../lib/i18n'
 
 type NameEditDialogProps = {
   open: boolean
@@ -11,6 +12,7 @@ type NameEditDialogProps = {
 
 export function NameEditDialog({ open, label, initialValue, onClose, onSave }: NameEditDialogProps) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const { t } = useI18n()
   const input = useRef<HTMLInputElement>(null)
   const [value, setValue] = useState(initialValue)
   const [saving, setSaving] = useState(false)
@@ -43,26 +45,26 @@ export function NameEditDialog({ open, label, initialValue, onClose, onSave }: N
       dialog.current?.close()
       onClose()
     } catch {
-      setError('保存失败，请稍后重试。')
+      setError(t.nameEdit.saveFailed)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <dialog ref={dialog} className="settings-dialog name-edit-dialog" aria-label={`重命名${label}`} onCancel={(event) => { event.preventDefault(); onClose() }}>
+    <dialog ref={dialog} className="settings-dialog name-edit-dialog" aria-label={t.nameEdit.title(label)} onCancel={(event) => { event.preventDefault(); onClose() }}>
       <form className="provider-modal" onSubmit={(event) => { event.preventDefault(); void handleSave() }}>
-        <button type="button" className="close-button" onClick={onClose} aria-label="关闭">×</button>
+        <button type="button" className="close-button" onClick={onClose} aria-label={t.common.close}>×</button>
         <span className="eyebrow">EDIT NAME</span>
-        <h2>重命名{label}</h2>
+        <h2>{t.nameEdit.title(label)}</h2>
         <label className="name-edit-field">
-          <span>名称</span>
+          <span>{t.nameEdit.name}</span>
           <input ref={input} value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
         {error && <p className="oauth-status">{error}</p>}
         <div className="name-edit-actions">
-          <button type="button" className="outline-button" onClick={onClose}>取消</button>
-          <button type="submit" className="primary-button" disabled={!value.trim() || saving}>{saving ? '保存中…' : '保存'}</button>
+          <button type="button" className="outline-button" onClick={onClose}>{t.common.cancel}</button>
+          <button type="submit" className="primary-button" disabled={!value.trim() || saving}>{saving ? t.common.savingEllipsis : t.common.save}</button>
         </div>
       </form>
     </dialog>

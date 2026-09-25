@@ -1301,7 +1301,7 @@ pub(crate) fn retry_failed_asset_analysis(
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn retry_asset_analysis_batch(
     app: AppHandle,
     project_id: String,
@@ -1770,7 +1770,7 @@ fn run_segment_reanalysis(app: AppHandle, asset_id: String, task_id: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_asset_task_center(
     app: AppHandle,
     project_id: String,

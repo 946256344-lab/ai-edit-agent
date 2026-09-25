@@ -7,12 +7,14 @@ use crate::outbound_http;
 use crate::storyboard::{clip, semantic};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 
 const PROGRESS_EVENT: &str = "runtime-model-progress";
@@ -131,6 +133,9 @@ pub struct RuntimeModelStatus {
     pub overall: String,
     pub current_id: Option<String>,
     pub message: String,
+    /// 稳定文案键：前端按界面语言翻译；中文 message 保留作回落与日志。
+    pub message_key: String,
+    pub message_params: BTreeMap<String, String>,
     pub artifacts: Vec<RuntimeModelArtifactStatus>,
 }
 
@@ -158,8 +163,22 @@ struct DownloadState {
     overall: String,
     current: Option<ArtifactId>,
     message: String,
+    message_key: String,
+    message_params: BTreeMap<String, String>,
     artifacts: [ArtifactProgress; 3],
     worker_running: bool,
+}
+
+impl DownloadState {
+    /// 同时写中文回落文案与界面文案键；参数里的模型用 id，由前端翻成当前语言的名称。
+    fn say(&mut self, key: &str, params: &[(&str, String)], message: String) {
+        self.message = message;
+        self.message_key = key.to_owned();
+        self.message_params = params
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone()))
+            .collect();
+    }
 }
 
 impl Default for DownloadState {
@@ -168,6 +187,8 @@ impl Default for DownloadState {
             overall: "idle".to_owned(),
             current: None,
             message: String::new(),
+            message_key: String::new(),
+            message_params: BTreeMap::new(),
             artifacts: [
                 ArtifactProgress::default(),
                 ArtifactProgress::default(),
@@ -320,15 +341,34 @@ fn artifact_ready_on_disk(app: &AppHandle, id: ArtifactId) -> bool {
         return false;
     };
     let path = directory.join(required);
-    let Ok(bytes) = fs::read(&path) else {
+    let Ok(metadata) = fs::metadata(&path) else {
         return false;
     };
-    hash_bytes(&bytes) == id.sha256()
+    // 权重合计约 700 MB：同一进程内按路径+大小+修改时间记住已校验通过的文件，
+    // 避免启动与每次状态快照重复整文件哈希；文件被替换后元数据变化即重新校验。
+    let fingerprint = (metadata.len(), metadata.modified().ok());
+    let verified = verified_artifacts();
+    if verified
+        .lock()
+        .map(|cache| cache.get(&path) == Some(&fingerprint))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let ready = hash_file(&path).is_ok_and(|actual| actual == id.sha256());
+    if ready {
+        if let Ok(mut cache) = verified.lock() {
+            cache.insert(path, fingerprint);
+        }
+    }
+    ready
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+type ArtifactFingerprint = (u64, Option<SystemTime>);
+
+fn verified_artifacts() -> &'static Mutex<HashMap<PathBuf, ArtifactFingerprint>> {
+    static VERIFIED: OnceLock<Mutex<HashMap<PathBuf, ArtifactFingerprint>>> = OnceLock::new();
+    VERIFIED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
@@ -393,23 +433,45 @@ fn snapshot_status(app: &AppHandle, state: &DownloadState) -> RuntimeModelStatus
         state.overall.clone()
     };
 
-    let message = if all_ready {
-        "本地选镜模型已就绪。".to_owned()
+    let (message, message_key, message_params) = if all_ready {
+        (
+            "本地选镜模型已就绪。".to_owned(),
+            "allReady".to_owned(),
+            BTreeMap::new(),
+        )
     } else if !state.message.is_empty() {
-        state.message.clone()
+        (
+            state.message.clone(),
+            state.message_key.clone(),
+            state.message_params.clone(),
+        )
     } else if any_failed {
-        "本地模型下载失败，可重试。已尝试官方与国内镜像续传；选镜仍可用，但语义/画面加权会降级。"
-            .to_owned()
+        (
+            "本地模型下载失败，可重试。已尝试官方与国内镜像续传；选镜仍可用，但语义/画面加权会降级。"
+                .to_owned(),
+            "failedRetryable".to_owned(),
+            BTreeMap::new(),
+        )
     } else if matches!(overall.as_str(), "downloading" | "pending") {
-        "正在后台下载本地选镜模型…".to_owned()
+        (
+            "正在后台下载本地选镜模型…".to_owned(),
+            "downloadingAll".to_owned(),
+            BTreeMap::new(),
+        )
     } else {
-        "本地选镜模型待下载。".to_owned()
+        (
+            "本地选镜模型待下载。".to_owned(),
+            "notDownloaded".to_owned(),
+            BTreeMap::new(),
+        )
     };
 
     RuntimeModelStatus {
         overall,
         current_id: state.current.map(|id| id.as_str().to_owned()),
         message,
+        message_key,
+        message_params,
         artifacts,
     }
 }
@@ -431,7 +493,7 @@ fn refresh_artifact_baselines(app: &AppHandle, state: &mut DownloadState) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_runtime_model_status(app: AppHandle) -> Result<RuntimeModelStatus, String> {
     let mut state = state_lock()
         .lock()
@@ -440,7 +502,7 @@ pub fn get_runtime_model_status(app: AppHandle) -> Result<RuntimeModelStatus, St
     Ok(snapshot_status(&app, &state))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_runtime_model_download(app: AppHandle) -> Result<RuntimeModelStatus, String> {
     let status = {
         let mut state = state_lock()
@@ -452,12 +514,16 @@ pub fn start_runtime_model_download(app: AppHandle) -> Result<RuntimeModelStatus
         }
         if ARTIFACTS.iter().all(|id| artifact_ready_on_disk(&app, *id)) {
             state.overall = "ready".to_owned();
-            state.message = "本地选镜模型已就绪。".to_owned();
+            state.say("allReady", &[], "本地选镜模型已就绪。".to_owned());
             return Ok(snapshot_status(&app, &state));
         }
         state.worker_running = true;
         state.overall = "downloading".to_owned();
-        state.message = "正在后台下载本地选镜模型…".to_owned();
+        state.say(
+            "downloadingAll",
+            &[],
+            "正在后台下载本地选镜模型…".to_owned(),
+        );
         for id in ARTIFACTS {
             let index = artifact_index(id);
             if state.artifacts[index].state != "ready" {
@@ -506,7 +572,11 @@ fn run_download_worker(app: AppHandle) {
             state.current = Some(id);
             state.artifacts[index].state = "downloading".to_owned();
             state.artifacts[index].error = None;
-            state.message = format!("正在下载{}…", id.title());
+            state.say(
+                "downloading",
+                &[("model", id.as_str().to_owned())],
+                format!("正在下载{}…", id.title()),
+            );
             emit_status(&app, &state);
         }
 
@@ -518,7 +588,11 @@ fn run_download_worker(app: AppHandle) {
                     let index = artifact_index(id);
                     state.artifacts[index].state = "ready".to_owned();
                     state.artifacts[index].error = None;
-                    state.message = format!("{}已就绪。", id.title());
+                    state.say(
+                        "modelReady",
+                        &[("model", id.as_str().to_owned())],
+                        format!("{}已就绪。", id.title()),
+                    );
                     emit_status(&app, &state);
                 }
             }
@@ -528,7 +602,11 @@ fn run_download_worker(app: AppHandle) {
                     state.artifacts[index].state = "failed".to_owned();
                     state.artifacts[index].error = Some(error.clone());
                     state.overall = "failed".to_owned();
-                    state.message = format!("{}下载失败：{error}", id.title());
+                    state.say(
+                        "modelFailed",
+                        &[("model", id.as_str().to_owned()), ("error", error.clone())],
+                        format!("{}下载失败：{error}", id.title()),
+                    );
                     state.current = None;
                     state.worker_running = false;
                     emit_status(&app, &state);
@@ -544,7 +622,7 @@ fn run_download_worker(app: AppHandle) {
         refresh_artifact_baselines(&app, &mut state);
         if ARTIFACTS.iter().all(|id| artifact_ready_on_disk(&app, *id)) {
             state.overall = "ready".to_owned();
-            state.message = "本地选镜模型已就绪。".to_owned();
+            state.say("allReady", &[], "本地选镜模型已就绪。".to_owned());
         }
         emit_status(&app, &state);
     }
@@ -583,16 +661,37 @@ fn download_artifact(app: &AppHandle, id: ArtifactId) -> Result<(), String> {
             state.artifacts[index].bytes_downloaded = existing;
             state.artifacts[index].state = "downloading".to_owned();
             state.artifacts[index].error = None;
-            state.message = if attempt == 0 {
-                format!("正在从{source_label}下载{}…", id.title())
+            let source = if url.starts_with(HF_MIRROR_HOST) {
+                "mirror"
             } else {
-                format!(
-                    "正在从{source_label}续传{}（第 {}/{} 次）…",
-                    id.title(),
-                    attempt + 1,
-                    MAX_DOWNLOAD_ATTEMPTS
-                )
+                "official"
             };
+            if attempt == 0 {
+                state.say(
+                    "downloadingFrom",
+                    &[
+                        ("model", id.as_str().to_owned()),
+                        ("source", source.to_owned()),
+                    ],
+                    format!("正在从{source_label}下载{}…", id.title()),
+                );
+            } else {
+                state.say(
+                    "resumingFrom",
+                    &[
+                        ("model", id.as_str().to_owned()),
+                        ("source", source.to_owned()),
+                        ("attempt", (attempt + 1).to_string()),
+                        ("max", MAX_DOWNLOAD_ATTEMPTS.to_string()),
+                    ],
+                    format!(
+                        "正在从{source_label}续传{}（第 {}/{} 次）…",
+                        id.title(),
+                        attempt + 1,
+                        MAX_DOWNLOAD_ATTEMPTS
+                    ),
+                );
+            }
             emit_status(app, &state);
         }
 
@@ -611,7 +710,11 @@ fn download_artifact(app: &AppHandle, id: ArtifactId) -> Result<(), String> {
                 {
                     if let Ok(mut state) = state_lock().lock() {
                         let index = artifact_index(id);
-                        state.message = format!("{}下载中断，即将自动换源/续传重试…", id.title());
+                        state.say(
+                            "interrupted",
+                            &[("model", id.as_str().to_owned())],
+                            format!("{}下载中断，即将自动换源/续传重试…", id.title()),
+                        );
                         state.artifacts[index].error = Some(error);
                         emit_status(app, &state);
                     }
@@ -725,7 +828,11 @@ fn download_artifact_attempt(
         let index = artifact_index(id);
         state.artifacts[index].state = "verifying".to_owned();
         state.artifacts[index].bytes_downloaded = downloaded;
-        state.message = format!("正在校验{}…", id.title());
+        state.say(
+            "verifying",
+            &[("model", id.as_str().to_owned())],
+            format!("正在校验{}…", id.title()),
+        );
         emit_status(app, &state);
     }
 
