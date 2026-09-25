@@ -32,7 +32,7 @@ export function FellowCutAccountModal({ controller }: { controller: ReturnType<t
       <dl><div><dt>邮箱</dt><dd>{model.status.email}</dd></div><div><dt>邮箱状态</dt><dd>{model.status.state === 'verified' ? '已验证' : '待验证'}</dd></div>
         {model.status.state === 'verified' && <><div><dt>使用资格</dt><dd>{access}</dd></div>{expiry !== null && <div><dt>有效期</dt><dd>{new Date(expiry).toLocaleString('zh-CN')}</dd></div>}</>}
       </dl>
-      <p>{model.status.state === 'unverified' ? '请先在邮箱中完成验证，再刷新账号状态。' : model.status.entitlement === null ? '请先在网站账号页开通试用，再刷新账号状态。' : '此处显示账号资格；模型调用将在服务端接入资格校验。'}</p>
+      <p>{model.status.state === 'unverified' ? '请先在邮箱中完成验证，再刷新账号状态。' : model.status.entitlement === null ? '请先在网站账号页开通试用，再刷新账号状态。' : '模型调用时由 FellowCut 服务端再次校验使用资格。'}</p>
       <div className="fellowcut-account-actions"><button type="button" className="outline-button" disabled={model.busy} onClick={() => void actions.refresh()}>刷新状态</button><button type="button" className="outline-button" disabled={model.busy} onClick={() => void actions.signOut()}>退出登录</button></div>
     </div>}
     {model.error && <p role="alert" className="fellowcut-account-error">{model.error}</p>}

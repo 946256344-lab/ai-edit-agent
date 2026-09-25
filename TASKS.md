@@ -2,6 +2,8 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-25，codex/fellowcut-auth-trial）：桌面模型请求接入 FellowCut 网关；每次请求携带刷新后的 Firebase ID token，由服务端检查已验证账号及 7 天试用资格，模型密钥只保存在服务端。公开构建无网关时失败封闭；代码和模拟测试通过，真实模型调用待部署配置后验收。见 `docs/changes/2026-09-25-fellowcut-model-gateway.md`。
+
 - [ ] 部分已验证（2026-09-25，codex/fellowcut-auth-trial）：桌面端接入 FellowCut 邮箱密码登录与 Firestore 试用资格只读显示。真实开发版打开了旧本机项目和剪辑会话；用户提供截图显示测试账号已登录、邮箱已验证、试用中，有效期为 2026-10-02 17:31:35。关闭后重新启动，顶栏恢复显示同一测试账号及旧项目；退出登录和安装包仍待验收。模型额度与付费控制留待服务端网关实施。
 
 - [ ] implemented_unverified（2026-09-25）：剪映/CapCut 草稿交付补上配音轨。两者 `voiceover` 能力改为 Full，交付前解析配音来源，适配器新增 `add_voiceover_tracks` 写入独立音频轨 `assembly-voiceover-N`（不循环、源短于时间线取较短）。适配器 20 项、handoff 5 项 Rust 测试通过，真实最小输入生成含视频+配音轨的草稿；待桌面重建后用真实带配音项目验收。

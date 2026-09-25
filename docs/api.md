@@ -2,7 +2,7 @@
 
 ## 2026-09-25：FellowCut 桌面账号展示
 
-新增 `sign_in_fellowcut(email, password)`、`get_fellowcut_account_status()`、`sign_out_fellowcut()`。返回 `{ state, email, entitlement, trialStartedAt }`；`state` 为 `signedOut`、`unverified` 或 `verified`。账号使用网站同一个 Firebase Authentication 项目；已验证账号只读 Firestore `entitlements/{uid}`，缺失时返回空资格。桌面不创建或续期试用。刷新令牌只存 Windows 凭据库 `AssemblyVideoAgent/fellowcut-firebase-refresh-token`，密码与 ID token 不持久化。当前命令仅用于界面展示，模型访问尚未通过服务端资格检查。见 `docs/changes/2026-09-25-fellowcut-desktop-account.md`。
+新增 `sign_in_fellowcut(email, password)`、`get_fellowcut_account_status()`、`sign_out_fellowcut()`。返回 `{ state, email, entitlement, trialStartedAt }`；`state` 为 `signedOut`、`unverified` 或 `verified`。账号使用网站同一个 Firebase Authentication 项目；已验证账号只读 Firestore `entitlements/{uid}`，缺失时返回空资格。桌面不创建或续期试用。刷新令牌只存 Windows 凭据库 `AssemblyVideoAgent/fellowcut-firebase-refresh-token`，密码与 ID token 不持久化。公开构建的模型请求通过内置 `FELLOWCUT_GATEWAY_BASE_URL` 指向 FellowCut 网关，每次刷新 ID token 并由服务端复核资格；这些命令本身仍只负责账号界面。见 `docs/changes/2026-09-25-fellowcut-desktop-account.md`、`docs/changes/2026-09-25-fellowcut-model-gateway.md`。
 
 | 命令 | 参数 | 返回 |
 | --- | --- | --- |

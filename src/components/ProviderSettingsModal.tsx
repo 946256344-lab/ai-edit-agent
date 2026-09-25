@@ -22,7 +22,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         <button className="close-button" onClick={() => { dialog.current?.close(); actions.close() }} aria-label="关闭">×</button>
         <span className="eyebrow">MODEL ACCESS</span>
         <h2>连接 Agent 模型</h2>
-        <p>连接模型后即可开始 AI 剪辑。项目与原始素材保存在本机，理解需求和分析画面时会调用所选服务。</p>
+        <p>FellowCut 公开版登录账号后使用服务端模型。项目与原始素材保存在本机，理解需求和分析画面时会调用模型服务。以下模型连接供开发版使用。</p>
 
         <div className="provider-option chosen">
           <span>
@@ -63,7 +63,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         <div className="provider-option chosen">
           <span>
             <strong>自定义 API</strong>
-            <small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。配置后自定义 API 会优先生效。</small>
+            <small>任何 OpenAI 兼容的托管端点。主 Model 用于 storyboard 与 Agent；可选粗视觉 Model 仅用于批量画面分析。开发版未配置 FellowCut 网关时，自定义 API 会优先生效。</small>
           </span>
           <b>{model.customApiStatus.state === 'connected' ? model.customApiStatus.model ?? '已连接' : '自定义'}</b>
         </div>

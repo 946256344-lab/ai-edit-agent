@@ -1,4 +1,4 @@
-//! FellowCut 桌面账号展示；模型调用的资格与额度由后续服务端网关校验。
+//! FellowCut 桌面账号与登录令牌；模型调用的资格由服务端网关校验。
 
 use keyring::Entry;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -168,7 +168,7 @@ fn sign_in(email: String, password: String) -> Result<FellowCutAccountStatus, St
 }
 
 fn get_status() -> Result<FellowCutAccountStatus, String> {
-    let Some(refresh_token) = saved_refresh_token()? else {
+    if saved_refresh_token()?.is_none() {
         return Ok(FellowCutAccountStatus {
             state: "signedOut",
             email: None,
@@ -176,6 +176,14 @@ fn get_status() -> Result<FellowCutAccountStatus, String> {
             trial_started_at: None,
         });
     };
+    let agent = http_agent();
+    let id_token = fresh_id_token()?;
+    status_from_token(&agent, &id_token)
+}
+
+pub(crate) fn fresh_id_token() -> Result<String, String> {
+    let refresh_token = saved_refresh_token()?
+        .ok_or_else(|| "请先登录 FellowCut 账号。".to_owned())?;
     let agent = http_agent();
     let response = agent
         .post(&format!(
@@ -193,7 +201,41 @@ fn get_status() -> Result<FellowCutAccountStatus, String> {
     if response.refresh_token != refresh_token {
         save_refresh_token(&response.refresh_token)?;
     }
-    status_from_token(&agent, &response.id_token)
+    Ok(response.id_token)
+}
+
+/// 正式构建必须内置公开网关地址；开发构建可用环境变量连接本地网关。
+pub(crate) fn gateway_base_url() -> Result<Option<String>, String> {
+    let configured = if cfg!(debug_assertions) {
+        std::env::var("FELLOWCUT_GATEWAY_BASE_URL")
+            .ok()
+            .or_else(|| option_env!("FELLOWCUT_GATEWAY_BASE_URL").map(str::to_owned))
+    } else {
+        option_env!("FELLOWCUT_GATEWAY_BASE_URL").map(str::to_owned)
+    };
+    let Some(base_url) = configured else {
+        return if cfg!(debug_assertions) {
+            Ok(None)
+        } else {
+            Err("此版本未配置 FellowCut 模型服务。".to_owned())
+        };
+    };
+    let url = url::Url::parse(&base_url)
+        .map_err(|_| "FellowCut 模型服务地址无效。".to_owned())?;
+    let local_dev = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"));
+    if (url.scheme() != "https" && !local_dev)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path().trim_end_matches('/') != "/api/model"
+    {
+        return Err("FellowCut 模型服务地址无效。".to_owned());
+    }
+    Ok(Some(base_url.trim_end_matches('/').to_owned()))
 }
 
 #[tauri::command]
