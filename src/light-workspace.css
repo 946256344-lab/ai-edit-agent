@@ -114,7 +114,10 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .cut-heading p { margin: 0; color: #6e6e6e; font-size: 12px; letter-spacing: .2px; }
 .storyboard-version-picker { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; color: #6e6e6e; font-size: 12px; }
 .storyboard-version-picker select { min-width: 88px; border: 1px solid #d8d4cc; border-radius: 6px; background: #fff; color: #1b1b1b; padding: 4px 8px; font-size: 12px; }
-.deliver-port { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.deliver-port { display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+.deliver-unavailable-hint { flex-basis: 100%; margin: 3px 0 0; font-size: 12px; color: #a12b25; }
+.deliver-recheck-button { display: inline; padding: 0; background: none; border: none; color: #a12b25; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.deliver-recheck-button:hover { color: #7a1e1a; }
 .deliver-port .storyboard-version-picker { margin-top: 0; }
 .deliver-port .storyboard-version-picker select { min-width: 168px; }
 .deliver-button { flex-shrink: 0; align-self: center; margin-top: 0; }

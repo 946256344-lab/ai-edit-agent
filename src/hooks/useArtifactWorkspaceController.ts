@@ -72,8 +72,8 @@ function deliverErrorMessage(error: unknown, editorLabel: string) {
   if (/not yet verified for Jianying/i.test(raw)) {
     return '当前字幕样式还不支持交付剪映。请先用本地预览确认，或去掉未验证的字幕效果后再试。'
   }
-  if (/Python with pyJianYingDraft is unavailable/i.test(raw)) {
-    return '本机缺少 Python（py）或 pyJianYingDraft，无法生成剪映草稿。'
+  if (/Python with a draft SDK.*unavailable|No module named 'pyJianYingDraft'|No module named 'pycapcut'/i.test(raw)) {
+    return '本机缺少 Python 或剪映草稿 SDK（pyJianYingDraft），无法生成剪映草稿。请检查随包 Python 环境是否完整。'
   }
   if (/source media|unavailable asset|Music source|Voiceover media/i.test(raw)) {
     return `有素材文件找不到了。请先在素材页重新定位缺失文件，再交付到${editorLabel}。`
@@ -83,6 +83,13 @@ function deliverErrorMessage(error: unknown, editorLabel: string) {
   }
   if (/无法写出|无法准备/.test(raw)) {
     return `没能写出${editorLabel}文件。请确认本机数据目录可写后重试。`
+  }
+  // 适配器报告的具体原因：优先取 Python 侧最内层的原因，方便排查。
+  const adapterReason =
+    raw.match(/adapter failed:\s*(.+)$/is)?.[1]?.trim() ??
+    raw.match(/adapter could not create a draft:\s*(.+)$/is)?.[1]?.trim()
+  if (adapterReason) {
+    return `${editorLabel}草稿生成失败：${adapterReason}`
   }
   return `${editorLabel}未能交付。请确认编辑器已安装或改用其他输出端口后重试。`
 }

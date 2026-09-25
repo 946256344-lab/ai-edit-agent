@@ -132,14 +132,11 @@ class TextTrackExportTests(unittest.TestCase):
         add_text_tracks(script, tracks)
 
         self.assertEqual(
-            [call.kwargs for call in script.add_track.call_args_list],
-            [
-                {"track_name": "assembly-text-layer-1-1", "relative_index": 1},
-                {"track_name": "assembly-text-layer-4-0", "relative_index": 4},
-            ],
+            [call.args[0].name for call in script.append_track.call_args_list],
+            ["assembly-text-layer-1-1", "assembly-text-layer-4-0"],
         )
         self.assertEqual(
-            [call.kwargs["track_name"] for call in script.add_segment.call_args_list],
+            [call.kwargs["track"] for call in script.add_segment.call_args_list],
             ["assembly-text-layer-1-1", "assembly-text-layer-4-0"],
         )
 
@@ -183,12 +180,14 @@ class MusicTrackExportTests(unittest.TestCase):
 
             add_music_tracks(script, tracks)
 
-        script.add_track.assert_called_once_with(TrackType.audio, track_name="assembly-music-0")
+        script.append_track.assert_called_once()
+        spec = script.append_track.call_args.args[0]
+        self.assertEqual((spec.track_type, spec.name), (TrackType.audio, "assembly-music-0"))
         self.assertEqual(audio_segment.call_count, 2)
         first_segment.add_fade.assert_called_once_with(120_000, 0)
         last_segment.add_fade.assert_called_once_with(0, 180_000)
         self.assertEqual(
-            [call.kwargs["track_name"] for call in script.add_segment.call_args_list],
+            [call.kwargs["track"] for call in script.add_segment.call_args_list],
             ["assembly-music-0", "assembly-music-0"],
         )
 

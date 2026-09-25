@@ -432,7 +432,7 @@ pub fn create_jianying_draft(
         },
     );
     let result = run_jianying_adapter(&app, &input).map_err(|error| {
-        log::error!("Jianying draft adapter failed.");
+        log::error!("Jianying draft adapter failed: {error}");
         format!("Jianying draft adapter could not create a draft: {error}")
     })?;
     let registration = PendingJianyingRegistration {

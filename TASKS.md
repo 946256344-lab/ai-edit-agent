@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-25）：修复剪映草稿交付失败。根因是随包 pyJianYingDraft 0.3.0 把 `ScriptFile.add_track` 改成 `append_track(TrackSpec)`，适配器仍按旧 API 调用，立即抛 AttributeError；pycapcut 0.0.3 仍是旧 API，故在适配器加兼容层。同时日志带出适配器真实原因，前端交付错误显示具体原因，选剪映时检测草稿库并提示连接。适配器 19 项测试、lint、cargo check、harness 通过，真实最小输入已生成含视频+字幕轨的草稿；待桌面重建后走真实交付验收。
 <!-- ACTIVE_TASKS_START -->
 - [ ] implemented_unverified（2026-09-25）：Phase 3 增量重跑。每次生成分镜时，Phase 1 完成后从 DB 加载上一版 storyboard 的 shots，构造 `prior_shots_to_selections` 映射；beat id 未变且上次选中的 assetId/segmentId 仍在新候选池里的 beat 直接复用结果，跳过该 beat 的模型调用。修复轮（repair 不为 None）的受影响 beat 始终重跑。编译与单元测试通过；待真实多次迭代回合验收节省效果。
 - [ ] implemented_unverified（2026-09-25）：五处 storyboard pipeline 智能化改进：①`StoryboardBeat` 新增 per-beat `paceHint`（short/default/long），Phase 1 模型生成叙事时按 beat 写节奏，Phase 3 优先使用 per-beat 值覆盖全局 `shotLengthHint`；②Phase 2 低分自适应扩池，最高分低于阈值时静默扩展到 12 条候选；③Phase 3 已选镜头上下文携带 beat purpose，帮助模型判断叙事连贯性；④Phase 3 低分池预警，明确告知模型库存匹配度有限；⑤Phase 4 Pass C 早停，全部 Pass B 镜头收敛时跳过 Pass C 省去冗余精修。编译通过，既有单元测试全绿；待真实模型回合验收。

@@ -18,7 +18,7 @@ from pathlib import Path
 
 AudioMaterial = AudioSegment = ClipSettings = DraftFolder = FontType = None
 TextBackground = TextBorder = TextIntro = TextOutro = TextSegment = TextShadow = None
-TextStyle = Timerange = TrackType = VideoMaterial = VideoSegment = None
+TextStyle = Timerange = TrackSpec = TrackType = VideoMaterial = VideoSegment = None
 
 
 _bound_editor = None
@@ -28,7 +28,7 @@ def bind_sdk(editor):
     """按本机所选编辑器绑定 SDK。换设备不改代码，只换本机安装的包与草稿注册表。"""
     global AudioMaterial, AudioSegment, ClipSettings, DraftFolder, FontType
     global TextBackground, TextBorder, TextIntro, TextOutro, TextSegment, TextShadow
-    global TextStyle, Timerange, TrackType, VideoMaterial, VideoSegment, _bound_editor
+    global TextStyle, Timerange, TrackSpec, TrackType, VideoMaterial, VideoSegment, _bound_editor
     if editor == _bound_editor:
         return editor
     if editor == "capcut":
@@ -50,6 +50,7 @@ def bind_sdk(editor):
     TextShadow = getattr(pkg, "TextShadow", None)
     TextStyle = pkg.TextStyle
     Timerange = pkg.Timerange
+    TrackSpec = getattr(pkg, "TrackSpec", None)
     TrackType = pkg.TrackType
     VideoMaterial = pkg.VideoMaterial
     VideoSegment = pkg.VideoSegment
@@ -58,6 +59,27 @@ def bind_sdk(editor):
 
 
 bind_sdk("jianying")
+
+
+def add_track(script, track_type, track_name=None):
+    """pyJianYingDraft 0.3 起改为 append_track(TrackSpec)；pycapcut 0.0.3 仍是 add_track。
+
+    轨道按调用顺序逐条叠到最上层，文本层已按 layer 升序调用，无需再传 relative_index。
+    """
+    if hasattr(script, "append_track"):
+        return script.append_track(TrackSpec(track_type, name=track_name))
+    if track_name is None:
+        return script.add_track(track_type)
+    return script.add_track(track_type, track_name=track_name)
+
+
+def add_segment(script, segment, track_name=None):
+    """新版 add_segment 的轨道参数叫 track，旧版叫 track_name。"""
+    if track_name is None:
+        return script.add_segment(segment)
+    if hasattr(script, "append_track"):
+        return script.add_segment(segment, track=track_name)
+    return script.add_segment(segment, track_name=track_name)
 
 
 SOURCE_DURATION_TOLERANCE_US = 50_000
@@ -253,7 +275,7 @@ def add_text_tracks(script, tracks):
     for track_index, track in ordered_tracks:
         layer = int(track.get("layer", 0))
         track_name = f"assembly-text-layer-{layer}-{track_index}"
-        script.add_track(TrackType.text, track_name=track_name, relative_index=layer)
+        add_track(script, TrackType.text, track_name)
         previous_end_ms = None
         for cue in track.get("cues", []):
             start_ms, duration_ms = fit_adjacent_cue_range(
@@ -291,7 +313,7 @@ def add_text_tracks(script, tracks):
             )
             add_supported_text_animation(segment, cue.get("entrance"), "in")
             add_supported_text_animation(segment, cue.get("exit"), "out")
-            script.add_segment(segment, track_name=track_name)
+            add_segment(script, segment, track_name)
             escape_text_material_unicode(script)
 
 
@@ -308,7 +330,7 @@ def add_overlay_tracks(script, clips):
         material = VideoMaterial(str(source))
         source_duration_us = clip_source_duration_us(clip, material)
         prepared.append((clip, material, timeline_duration_us, source_start_us, source_duration_us))
-    script.add_track(TrackType.video, track_name="overlay-main")
+    add_track(script, TrackType.video, "overlay-main")
     for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared:
         segment = VideoSegment(
             material,
@@ -316,14 +338,14 @@ def add_overlay_tracks(script, clips):
             source_timerange=Timerange(source_start_us, source_duration_us),
             clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
         )
-        script.add_segment(segment, track_name="overlay-main")
+        add_segment(script, segment, "overlay-main")
 
 
 def add_music_tracks(script, tracks):
     enabled_tracks = [track for track in tracks if track.get("enabled", True)]
     for track_index, track in enumerate(enabled_tracks):
         track_name = f"assembly-music-{track_index}"
-        script.add_track(TrackType.audio, track_name=track_name)
+        add_track(script, TrackType.audio, track_name)
         for cue in track.get("cues", []):
             source = Path(cue["sourceReference"])
             if not source.is_file():
@@ -353,7 +375,7 @@ def add_music_tracks(script, tracks):
                 fade_out_us = to_microseconds(int(cue.get("fadeOutMs", 0))) if is_last else 0
                 if fade_in_us or fade_out_us:
                     segment.add_fade(fade_in_us, fade_out_us)
-                script.add_segment(segment, track_name=track_name)
+                add_segment(script, segment, track_name)
                 segment_start_us += segment_duration_us
                 remaining_us -= segment_duration_us
 
@@ -535,7 +557,7 @@ def main():
         script = DraftFolder(str(root)).create_draft(
             draft_name, 540, 960, 30, allow_replace=False
         )
-        script.add_track(TrackType.video)
+        add_track(script, TrackType.video)
         for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared_clips:
             segment = VideoSegment(
                 material,
@@ -543,7 +565,7 @@ def main():
                 source_timerange=Timerange(source_start_us, source_duration_us),
                 clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
             )
-            script.add_segment(segment)
+            add_segment(script, segment)
         add_overlay_tracks(script, payload.get("overlayClips", []))
         add_text_tracks(script, payload.get("textTracks", []))
         add_music_tracks(script, payload.get("musicTracks", []))

@@ -23,6 +23,8 @@ export function EditorOutputPort({
   const options = linkers.length
     ? linkers
     : [{ id: 'jianying', label: '剪映', summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' }]
+  const selected = options.find((linker) => linker.id === selectedId)
+  const unavailable = selected !== undefined && selected.implemented && !selected.available
   return (
     <div className="deliver-port">
       <label className="storyboard-version-picker">
@@ -42,12 +44,25 @@ export function EditorOutputPort({
       </label>
       <button
         className="outline-button deliver-button"
-        disabled={disabled || busy}
+        disabled={disabled || busy || unavailable}
         onClick={onDeliver}
-        title={options.find((linker) => linker.id === selectedId)?.summary}
+        title={selected?.summary}
       >
         {deliverLabel} ↗
       </button>
+      {unavailable && (
+        <p className="deliver-unavailable-hint" role="alert">
+          未检测到 {selected!.label} 草稿目录。请先打开 {selected!.label}，新建一个本地草稿后，
+          再{' '}
+          <button
+            className="deliver-recheck-button"
+            onClick={() => onSelect(selectedId)}
+          >
+            重新检测
+          </button>
+          。
+        </p>
+      )}
     </div>
   )
 }
