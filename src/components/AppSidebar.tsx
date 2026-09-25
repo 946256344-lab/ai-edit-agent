@@ -51,7 +51,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
   }, [])
   return (
     <aside ref={sidebar} className="sidebar project-sidebar">
-      <span className="assembly-wordmark" data-tauri-drag-region>Assembly</span>
+      <span className="assembly-wordmark" data-tauri-drag-region>FellowCut</span>
       <div className="sidebar-project">
         <span className="sidebar-label">当前项目</span>
         <details className="project-switcher" onKeyDown={(event) => {

@@ -547,7 +547,7 @@ function App() {
       <main className="app-shell browser-notice">
         <section>
           <span className="eyebrow">DESKTOP APP REQUIRED</span>
-          <h1>请在 Windows 桌面应用中运行 Assembly Video Agent</h1>
+          <h1>请在 Windows 桌面应用中运行 FellowCut</h1>
           <p>浏览器模式不能访问本地项目、媒体文件、FFmpeg 或 AI 凭据，因此不能用于剪辑测试。</p>
           <code>npm run tauri:dev</code>
         </section>

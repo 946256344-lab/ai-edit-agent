@@ -86,7 +86,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         setShowLatest(!followLatest.current)
       }}>
         {!model.messages.length && <div className="session-intro">
-          <span>ASSEMBLY</span>
+          <span>FELLOWCUT</span>
           <strong>{model.storyboard?.title ?? model.session?.title ?? '从一句话开始剪辑'}</strong>
           <p>
             {model.storyboard?.summary
@@ -116,7 +116,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-content">
               <div className="message-meta">
-                {message.role === 'agent' ? 'Assembly' : '你'} <time>{message.time}</time>
+                {message.role === 'agent' ? 'FellowCut' : '你'} <time>{message.time}</time>
               </div>
               <p>{message.content}</p>
               {mediaOptions && <small className="message-media-options">本轮自动添加 · {mediaSummary(mediaOptions)}</small>}

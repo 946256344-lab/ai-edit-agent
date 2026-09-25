@@ -393,7 +393,7 @@ def registry_write_lock(registry_path):
                 break
             except OSError:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Another Assembly Video Agent Jianying export is still running.")
+                    raise RuntimeError("Another FellowCut Jianying export is still running.")
                 time.sleep(0.1)
         try:
             yield

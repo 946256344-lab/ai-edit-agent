@@ -55,7 +55,7 @@ pub(crate) fn unique_draft_name(connection: &rusqlite::Connection, project_id: &
         .ok()
         .map(|name| sanitize_draft_name_fragment(&name))
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "Assembly".to_owned());
+        .unwrap_or_else(|| "FellowCut".to_owned());
     let suffix = &Uuid::new_v4().to_string()[..8];
     format!("{project_name}-{suffix}")
 }

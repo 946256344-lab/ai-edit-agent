@@ -1,6 +1,6 @@
-# Assembly Video Agent
+# FellowCut
 
-面向 Windows 的本地优先 AI 视频剪辑 Agent 原型。用户通过自然语言协作，Agent 将媒体分析、storyboard、内部时间线、低清 preview 和 Jianying draft 创建作为受控本地工具执行。
+面向 Windows 的本地优先 AI 视频剪辑 Agent 原型。用户通过自然语言协作，Agent 将媒体分析、storyboard、内部时间线、低清 preview 和 Jianying draft 创建作为受控本地工具执行。FellowCut 是对外展示名称；现有应用标识、数据库文件名和凭据服务名保持不变，以读取本机原有数据。
 
 ## 当前实现
 

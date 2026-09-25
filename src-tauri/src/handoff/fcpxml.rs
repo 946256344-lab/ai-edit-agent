@@ -118,7 +118,7 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
     <resources>
 {resources}    </resources>
     <library>
-        <event name="Assembly">
+        <event name="FellowCut">
             <project name="{name}">
                 <sequence format="r1" tcStart="0s" duration="{}">
                     <spine>

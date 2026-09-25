@@ -576,6 +576,15 @@ fn drive_native_loop(
         if cancelled() {
             return Err("native_tool_loop_cancelled".to_owned());
         }
+        if step_number == MAX_STEPS {
+            input.push(json!({
+                "role": "system",
+                "content": [{
+                    "type": "input_text",
+                    "text": "This is the final model step. Do not call tools. Summarize only confirmed results and clearly name any unfinished parts."
+                }]
+            }));
+        }
         let exposed_tools = full_native_tool_catalog();
         compact_native_context(
             input,
@@ -593,7 +602,7 @@ fn drive_native_loop(
             "store": false,
             "stream": false,
             "parallel_tool_calls": false,
-            "tool_choice": "auto",
+            "tool_choice": if step_number == MAX_STEPS { "none" } else { "auto" },
             "tools": exposed_tools,
             "input": input,
         });
@@ -2711,6 +2720,48 @@ mod tests {
         assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
         assert!(result.storyboard.is_some());
         assert!(result.message.contains("步骤上限"));
+    }
+
+    #[test]
+    fn final_model_step_requests_a_summary_without_more_tools() {
+        let mut responses = (0..MAX_STEPS - 1)
+            .map(|_| MAIN_CHAIN_STORYBOARD_CALL)
+            .chain(std::iter::once(HELLO));
+        let mut choices = Vec::new();
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "生成分镜"}]
+        })];
+        let mut respond = |payload: &Value, _timeout: Duration| {
+            choices.push(payload["tool_choice"].as_str().unwrap().to_owned());
+            Ok::<_, String>(responses.next().expect("bounded response").to_owned())
+        };
+        let mut calls = 0;
+        let mut execute = |_call: &FunctionCall, _step: usize| {
+            calls += 1;
+            Ok::<_, String>(json!({"status":"ok","storyboardVersionId":"storyboard-1"}))
+        };
+        let mut receipt = NativeRunReceipt::default();
+        let result = drive_native_loop(
+            &mut input,
+            false,
+            false,
+            &mut receipt,
+            "生成分镜",
+            Instant::now() + Duration::from_secs(5),
+            &mut respond,
+            &mut execute,
+            &mut || Ok(None),
+            || false,
+            |_body, _step| {},
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, MAX_STEPS - 1);
+        assert_eq!(choices.len(), MAX_STEPS);
+        assert!(choices[..MAX_STEPS - 1]
+            .iter()
+            .all(|choice| choice == "auto"));
+        assert_eq!(choices[MAX_STEPS - 1], "none");
     }
 
     #[test]

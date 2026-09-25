@@ -6,8 +6,8 @@ import process from 'node:process'
 const endpoint = process.env.TAURI_CDP_URL ?? 'http://127.0.0.1:9222/json'
 const screenshotPath = process.env.TAURI_VERIFY_SCREENSHOT
 const targets = await fetch(endpoint).then((response) => response.json())
-const target = targets.find((candidate) => candidate.title === 'Assembly Video Agent')
-assert.ok(target, 'Assembly Video Agent WebView target was not found.')
+const target = targets.find((candidate) => candidate.title === 'FellowCut')
+assert.ok(target, 'FellowCut WebView target was not found.')
 
 const socket = new WebSocket(target.webSocketDebuggerUrl)
 await new Promise((resolve, reject) => {
@@ -95,7 +95,7 @@ const initial = await evaluate(`({
   preview: document.querySelectorAll('.rough-preview').length,
   overflow: document.documentElement.scrollWidth > window.innerWidth,
 })`)
-assert.equal(initial.title, 'Assembly Video Agent')
+assert.equal(initial.title, 'FellowCut')
 assert.equal(initial.hasOverlay, false)
 assert.deepEqual([initial.chat, initial.preview], [1, 1])
 assert.equal(initial.overflow, false)
