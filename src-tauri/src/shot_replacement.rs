@@ -7,19 +7,15 @@ use crate::models::{
 };
 use crate::provider::ModelAccess;
 use crate::storyboard::{
-    load_storyboard_version,
+    clip, load_storyboard_version,
     phases::{self, BeatCandidatePool, NarrativeStructure, RoughStoryboard},
-    storyboard_sources,
+    semantic, storyboard_sources, storyboard_usage_counts,
     timing::{BeatTiming, SpeechTiming, SpeechTimingKind},
 };
 use crate::timeline::load_timeline_version;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    path::Path,
-};
+use std::{collections::HashSet, fs, path::Path};
 use tauri::{AppHandle, Manager};
 
 #[derive(Serialize)]
@@ -295,15 +291,78 @@ pub async fn generate_shot_recommendations(
             shot_length_hint: String::new(),
             beats: ctx.storyboard.beats.clone(),
         };
+        // 与生成分镜同一套召回信号：语义/CLIP 编码失败时降级为词面与质量排序。
+        let (embeddings, clip_embeddings) = std::thread::scope(|scope| {
+            let embedding_job = scope.spawn(|| semantic::encode_beats(&app, &narrative.beats));
+            let clip_job = scope.spawn(|| clip::encode_beats(&app, &narrative.beats));
+            let embeddings = embedding_job
+                .join()
+                .map_err(|_| "Semantic encoding worker failed.".to_owned())?;
+            let clip_embeddings = clip_job
+                .join()
+                .map_err(|_| "CLIP encoding worker failed.".to_owned())?;
+            Ok::<_, String>((embeddings, clip_embeddings))
+        })?;
+        let embeddings = embeddings.unwrap_or_else(|error| {
+            log::warn!("Local semantic ranking unavailable: {error}");
+            Vec::new()
+        });
+        let clip_embeddings = clip_embeddings.unwrap_or_else(|error| {
+            log::warn!("Local CLIP ranking unavailable: {error}");
+            Vec::new()
+        });
+        let usage_counts = storyboard_usage_counts(&connection, &project_id)?;
+        // 每拍目标时长取当前时间线里该拍镜头的实际总时长；时间线里没有的拍回落均分。
+        let mut beat_timings: Vec<BeatTiming> = Vec::new();
+        for item in &ctx.timeline.clips {
+            let original_index = item.derived_from_shot_index.unwrap_or(item.shot_index);
+            let Some(shot) = ctx
+                .storyboard
+                .shots
+                .iter()
+                .find(|shot| shot.order_index == original_index)
+            else {
+                continue;
+            };
+            let duration = (item.timeline_end_ms - item.timeline_start_ms).max(0);
+            match beat_timings
+                .iter_mut()
+                .find(|timing| timing.beat_id == shot.beat_id)
+            {
+                Some(timing) => timing.end_ms += duration,
+                None => beat_timings.push(BeatTiming {
+                    beat_id: shot.beat_id.clone(),
+                    start_ms: item.timeline_start_ms,
+                    end_ms: item.timeline_start_ms + duration,
+                }),
+            }
+        }
+        let speech_timing = SpeechTiming {
+            beats: beat_timings,
+            ..SpeechTiming::default()
+        };
         let rough = phases::phase2_rough_shot_selection(
             &narrative,
             &sources,
-            &HashMap::new(),
-            &[],
-            &[],
-            SpeechTiming::default(),
+            &usage_counts,
+            &embeddings,
+            &clip_embeddings,
+            speech_timing,
             crate::projects::candidate_score_first_slots(&connection, &project_id)?,
         )?;
+        let mut pool_asset_ids = Vec::new();
+        for candidate in rough.candidate_pools.iter().flat_map(|pool| &pool.candidates) {
+            if !pool_asset_ids.contains(&candidate.asset_id) {
+                pool_asset_ids.push(candidate.asset_id.clone());
+            }
+        }
+        match clip::refresh_assets_clip_embeddings(&app, &pool_asset_ids) {
+            Ok(updated) if updated > 0 => {
+                log::info!("Shot recommendations CLIP image embeddings updated for {updated} pool segments.");
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!("Shot recommendations CLIP image embedding skipped: {error}"),
+        }
         store_pools(&connection, &ctx.storyboard.id, &rough.candidate_pools)?;
         recommendations(&connection, &ctx)
     })

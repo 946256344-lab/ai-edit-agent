@@ -357,7 +357,7 @@ fn segment_source(
     }
 }
 
-fn storyboard_usage_counts(
+pub(crate) fn storyboard_usage_counts(
     connection: &Connection,
     project_id: &str,
 ) -> Result<HashMap<String, i32>, String> {
