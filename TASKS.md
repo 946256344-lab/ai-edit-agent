@@ -3,6 +3,7 @@
 ## 当前任务窗口
 
 <!-- ACTIVE_TASKS_START -->
+- [ ] implemented_unverified（2026-09-25）：Phase 3 增量重跑。每次生成分镜时，Phase 1 完成后从 DB 加载上一版 storyboard 的 shots，构造 `prior_shots_to_selections` 映射；beat id 未变且上次选中的 assetId/segmentId 仍在新候选池里的 beat 直接复用结果，跳过该 beat 的模型调用。修复轮（repair 不为 None）的受影响 beat 始终重跑。编译与单元测试通过；待真实多次迭代回合验收节省效果。
 - [ ] implemented_unverified（2026-09-25）：五处 storyboard pipeline 智能化改进：①`StoryboardBeat` 新增 per-beat `paceHint`（short/default/long），Phase 1 模型生成叙事时按 beat 写节奏，Phase 3 优先使用 per-beat 值覆盖全局 `shotLengthHint`；②Phase 2 低分自适应扩池，最高分低于阈值时静默扩展到 12 条候选；③Phase 3 已选镜头上下文携带 beat purpose，帮助模型判断叙事连贯性；④Phase 3 低分池预警，明确告知模型库存匹配度有限；⑤Phase 4 Pass C 早停，全部 Pass B 镜头收敛时跳过 Pass C 省去冗余精修。编译通过，既有单元测试全绿；待真实模型回合验收。
 - [ ] implemented_unverified（2026-09-25）：用户对单镜长短的原话偏好经 `shotLengthHint` 从 Phase 1 透传到 Phase 3，区分快切与长镜；`default` 逐字保持改造前行为。编译、142 项 storyboard 测试与 harness 通过，待真实模型回合验收。见 docs/changes/2026-09-25-shot-length-hint.md。
 - [ ] implemented_unverified（2026-09-25）：Agent 最后一个模型步骤改为只总结已确认产物与未完成事项，避免预览已生成后继续多轮读工具而落入步骤上限。单元回归和 Release 编译通过；重建版桌面读取既有演示项目成功，最后一步路径待真实模型回合触发。
