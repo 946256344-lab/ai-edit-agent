@@ -5,6 +5,7 @@ import type { ArtifactWorkspaceController } from '../hooks/useArtifactWorkspaceC
 import type { ShotReplacementController } from '../hooks/useShotReplacementController'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { RoughCutPlayer } from './RoughCutPlayer'
+import { StoryboardVersionPicker } from './StoryboardVersionPicker'
 import { useI18n } from '../lib/i18n'
 
 type Props = {
@@ -44,9 +45,15 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   }, [replacement.pending])
   return (
     <section className="rough-preview" aria-label={copy.aria}>
+      {/* 标题行：左侧标题与有信息量的状态，右侧故事版版本；替换镜头时换成保留时长，避免中途切版本。 */}
       <header className="preview-heading">
-        <h2>{shot ? copy.replaceTitle(String(shot.shotIndex).padStart(2, '0')) : copy.title}</h2>
-        <span className="format-label">{shot ? copy.durationKept(((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1)) : artifact.deliveryStatus}</span>
+        <div className="preview-title">
+          <h2>{shot ? copy.replaceTitle(String(shot.shotIndex).padStart(2, '0')) : copy.title}</h2>
+          {!shot && artifact.deliveryStatus && <span className="format-label">{artifact.deliveryStatus}</span>}
+        </div>
+        {shot
+          ? <span className="format-label">{copy.durationKept(((shot.timelineEndMs - shot.timelineStartMs) / 1000).toFixed(1))}</span>
+          : <StoryboardVersionPicker versions={artifact.storyboardVersions} selectedId={artifact.storyboard?.id ?? null} onSelect={(nextId) => actions.replacement.requestAction(() => actions.artifact.openStoryboard(nextId))} />}
       </header>
       {shot ? (
         <div className="replacement-body">

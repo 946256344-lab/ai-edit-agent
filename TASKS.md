@@ -2,7 +2,7 @@
 
 ## 当前任务窗口
 
-- [ ] implemented_unverified（2026-09-26，claude/product-naming-voycut-3663a1）：剪辑标题下信息行收成一行：胶囊只留时长与镜头数（去掉易与故事版号混淆的时间线版本号），故事版下拉去掉可见标签、只有一版时隐藏。tsc、lint、i18n 通过；待桌面确认。见 docs/changes/2026-09-26-cut-heading-meta-row.md。
+- [ ] implemented_unverified（2026-09-26，claude/product-naming-voycut-3663a1）：故事版版本下拉移到预览面板标题行右侧；标题下只留时长与镜头数（去掉时间线版本号）；预览状态不再显示「预览已就绪」等平稳状态。tsc、lint、i18n 通过；待桌面确认。见 docs/changes/2026-09-26-cut-heading-meta-row.md。
 - [ ] implemented_unverified（2026-09-25，claude/p2-p3-quota-allocation-939155）：Phase 3 网格上限跟候选池走。弱匹配扩池到 12 条时，后 3 条过去只有文字卡；现在池内每条都附网格，上限等于 Phase 2 最大池，提示词写实际附图数。cargo check 通过；待真实弱匹配回合验收。见 docs/changes/2026-09-25-phase3-grid-follows-pool.md。
 - [ ] implemented_unverified（2026-09-26，claude/send-error-real-cause）：发送失败显示真实原因。任务归属的模型请求失败带稳定码前缀（`provider_timeout` 等），前端 `describeSendError` 按码给出超时、连不上、凭据被拒、限流、服务端错误等具体提示，兜底附脱敏原因摘录，不再只说「无法准备当前剪辑任务」。cargo check、lint、tsc、i18n 通过；待桌面实测。见 docs/changes/2026-09-26-send-error-real-cause.md。
 - [ ] implemented_unverified（2026-09-25，claude/lens-p1-p5-selection-89a5aa）：选镜局部编辑工具。新增 `reselect_shots`（指定 beat 走 P2→P5，默认排除当前素材）与 `refine_shot_ranges`（只走 P4→P5），其余镜头、配音、字幕冻结，拍时长取当前时间线，同事务写派生 storyboard + 新 timeline 并出预览；`generate_storyboard` 保留为默认流程。cargo check、storyboard/tools 测试通过；真实桌面已验「换第 3 个镜头」与「精修第 2 个镜头切点」：只目标镜头变化，其余 6 镜、配音、字幕、音乐与总时长 18081ms 逐字不变。两拍同时重选、按素材名替换与派生版本标注待模型服务恢复后验收。前端派生版本标注、手动换镜召回升级另开任务。见 docs/changes/2026-09-25-storyboard-edit-primitives.md。

@@ -16,7 +16,6 @@ import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
-import { StoryboardVersionPicker } from './components/StoryboardVersionPicker'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
 import { useProjectCreationController } from './hooks/useProjectCreationController'
@@ -609,11 +608,6 @@ function App() {
             <p>{artifactWorkspace.timeline
               ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length)
               : isSending ? t.app.making : t.app.idle}</p>
-            <StoryboardVersionPicker
-              versions={artifactWorkspace.storyboardVersions}
-              selectedId={artifactWorkspace.storyboard?.id ?? null}
-              onSelect={(nextId) => shotReplacement.actions.requestAction(() => void artifactWorkspace.actions.openStoryboard(nextId))}
-            />
             </div>
           </div>
           <EditorOutputPort

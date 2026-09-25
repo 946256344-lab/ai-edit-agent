@@ -49,21 +49,22 @@ type ArtifactWorkspaceControllerOptions = {
   appendAgentMessage: (conversationId: string, sessionId: string, content: string) => Promise<void>
 }
 
+// 预览面板标题旁的状态：尚未开始、预览已就绪时画面本身已说明，返回 null 不显示。
 export function getDeliveryStatus(
   storyboard: StoryboardVersion | null,
   timeline: TimelineVersion | null,
   preview: PreviewResult | null,
   timelineState: TimelineState,
-) {
+): string | null {
   const status = messages().output.status
-  if (!storyboard) return status.waiting
+  if (!storyboard) return null
   if (!timeline) return status.shotsSelected
   if (timelineState === 'preview-generating') return status.previewGenerating
   if (timelineState === 'jianying-pending') return status.jianyingPending
   if (timelineState === 'jianying') return status.jianyingReady
   if (timelineState === 'exported') return status.exported
   if (!preview) return status.awaitingPreview
-  return status.previewReady
+  return null
 }
 
 function deliverErrorMessage(error: unknown, editorLabel: string) {
