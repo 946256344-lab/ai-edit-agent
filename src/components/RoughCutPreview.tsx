@@ -17,6 +17,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
   const { t } = useI18n()
   const copy = t.preview
   const pendingDialog = useRef<HTMLDialogElement>(null)
+  const strip = useRef<HTMLDivElement>(null)
   const [playhead, setPlayhead] = useState(0)
   const { shot, prepared, phase, recommendations, selectedId } = replacement
   const busy = phase === 'saving' || phase === 'rendering' || artifact.busy.renderingPreview || artifact.busy.delivering || agentBusy
@@ -31,6 +32,10 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
       ? t.backend.candidateTooShort((shotMs / 1000).toFixed(1))
       : t.backend.candidateUnavailable
     : null
+  // 镜头条一屏只放 6 个：播放到哪一镜，就把它滚到可见位置。
+  useEffect(() => {
+    strip.current?.querySelector<HTMLElement>('button.selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [currentClip?.shotIndex])
   useEffect(() => {
     if (replacement.pending) pendingDialog.current?.showModal()
     else pendingDialog.current?.close()
@@ -64,25 +69,25 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
       ) : (
         <>
           <div className={`rough-player ${artifact.preview ? 'has-video' : ''}`}>
-            {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? copy.makingFirstCut : copy.firstCutFromChat}</h3><p>{copy.emptyLine1}<br />{copy.emptyLine2}</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? copy.renderPreview : copy.createTimeline}</button>}</div>}
-          </div>
-          <div className="shot-strip" aria-label={copy.stripAria}>
-            {clips.map((clip) => {
-              const image = artifact.shotImages[clip.shotIndex]
-              return <button key={clip.shotIndex} className={clip.shotIndex === currentClip?.shotIndex ? 'selected' : ''} onClick={() => { setPlayhead(clip.timelineStartMs); if (video.current) video.current.currentTime = clip.timelineStartMs / 1000 }} aria-label={copy.locateShot(clip.shotIndex)} aria-pressed={clip.shotIndex === currentClip?.shotIndex} title={image?.displayName ?? copy.shot(clip.shotIndex)}>
-                <span className="shot-thumbnail">{image ? <img src={convertFileSrc(image.imagePath)} alt="" loading="lazy" /> : <WorkspaceIcon name="film" />}</span>
-                <span className="shot-caption"><b>{String(clip.shotIndex).padStart(2, '0')}</b> · {((clip.timelineEndMs - clip.timelineStartMs) / 1000).toFixed(1)}s</span>
-              </button>
-            })}
+            {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} segments={stalePreview ? [] : clips.map((clip) => ({ startMs: clip.timelineStartMs, endMs: clip.timelineEndMs }))} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? copy.makingFirstCut : copy.firstCutFromChat}</h3><p>{copy.emptyLine1}<br />{copy.emptyLine2}</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? copy.renderPreview : copy.createTimeline}</button>}</div>}
           </div>
           <div className="preview-tools">
             <span className="current-shot">{currentClip ? copy.currentShotLine(String(currentClip.shotIndex).padStart(2, '0'), ((currentClip.timelineEndMs - currentClip.timelineStartMs) / 1000).toFixed(1)) : copy.waitingShot}</span>
             <div><button className="outline-button" disabled={!currentClip || busy || (currentClip.clipKind ?? 'source') !== 'source'} onClick={() => { if (currentClip) actions.replacement.open(currentClip) }}>{copy.replaceCurrent}</button><button className="text-button icon-button" title={copy.undo} aria-label={copy.undo} disabled={!replacement.canUndo || busy} onClick={actions.replacement.undo}><WorkspaceIcon name="undo" /></button><button className="text-button icon-button" title={copy.redo} aria-label={copy.redo} disabled={!replacement.canRedo || busy} onClick={actions.replacement.redo}><WorkspaceIcon name="redo" /></button>{artifact.timeline && <button className="text-button" disabled={busy} onClick={actions.artifact.renderPreview}>{copy.updatePreview}</button>}</div>
           </div>
+          <div className="shot-strip" ref={strip} aria-label={copy.stripAria}>
+            {clips.map((clip) => {
+              const image = artifact.shotImages[clip.shotIndex]
+              return <button key={clip.shotIndex} className={clip.shotIndex === currentClip?.shotIndex ? 'selected' : ''} onClick={() => { setPlayhead(clip.timelineStartMs); if (video.current) video.current.currentTime = clip.timelineStartMs / 1000 }} aria-label={copy.locateShot(clip.shotIndex)} aria-pressed={clip.shotIndex === currentClip?.shotIndex} title={image?.displayName ?? copy.shot(clip.shotIndex)}>
+                <span className="shot-thumbnail">{image ? <img src={convertFileSrc(image.imagePath)} alt="" loading="lazy" /> : <WorkspaceIcon name="film" />}</span>
+                <span className="shot-caption">{String(clip.shotIndex).padStart(2, '0')}</span>
+              </button>
+            })}
+          </div>
         </>
       )}
       {(replacement.notice || stalePreview || artifact.deliveryNotice || artifact.thumbnailNotice) && <div className="workspace-notice" role="status">{replacement.notice && <p>{replacement.notice}</p>}{stalePreview && !replacement.notice && <p>{copy.stalePreview}</p>}{artifact.deliveryNotice && <p>{artifact.deliveryNotice}</p>}{artifact.thumbnailNotice && <p>{artifact.thumbnailNotice}</p>}</div>}
-      <footer className="preview-footer"><span>{shot ? copy.footerReplacing : copy.footerIdle}</span>{shot && <div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>{t.common.cancel}</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? t.common.savingEllipsis : copy.saveChanges}</button></div>}</footer>
+      {shot && <footer className="preview-footer"><span>{copy.footerReplacing}</span><div><button className="outline-button" disabled={phase === 'saving'} onClick={actions.replacement.cancel}>{t.common.cancel}</button><button className="primary-button" disabled={!prepared || phase !== 'idle' || busy} onClick={actions.replacement.save}>{phase === 'saving' ? t.common.savingEllipsis : copy.saveChanges}</button></div></footer>}
       <dialog ref={pendingDialog} aria-labelledby="pending-title" className="pending-dialog" onCancel={actions.replacement.keepEditing}><h3 id="pending-title">{copy.pendingTitle}</h3><p>{copy.pendingBody}</p><button className="primary-button" disabled={!prepared || phase !== 'idle'} onClick={actions.replacement.saveAndContinue}>{copy.saveAndContinue}</button><button className="outline-button" onClick={actions.replacement.discardAndContinue}>{copy.discardAndContinue}</button><button className="text-button" onClick={actions.replacement.keepEditing}>{copy.keepEditing}</button></dialog>
     </section>
   )

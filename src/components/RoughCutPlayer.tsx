@@ -1,4 +1,4 @@
-// 粗剪播放器：轻量播放、定位与全屏控件，仅管理媒体展示状态。
+// 粗剪播放器：轻量播放、定位与全屏控件，仅管理媒体展示状态；进度条按镜头分段显示已播与当前镜头。
 import { useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { WorkspaceIcon } from './WorkspaceIcon'
@@ -8,10 +8,11 @@ function timestamp(seconds: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 }
 
-export function RoughCutPlayer({ src, videoRef, onTimeChange }: {
+export function RoughCutPlayer({ src, videoRef, onTimeChange, segments = [] }: {
   src: string
   videoRef: RefObject<HTMLVideoElement | null>
   onTimeChange: (timeMs: number) => void
+  segments?: Array<{ startMs: number; endMs: number }>
 }) {
   const stage = useRef<HTMLDivElement>(null)
   const copy = useI18n().t.player
@@ -33,13 +34,23 @@ export function RoughCutPlayer({ src, videoRef, onTimeChange }: {
         if (playing) videoRef.current?.pause()
         else void videoRef.current?.play().catch(() => setError(copy.playFailed))
       }}><WorkspaceIcon name={playing ? 'pause' : 'play'} /></button>
-      <input aria-label={copy.seek} type="range" min={0} max={duration} step={0.01} value={position} disabled={!duration} onChange={(event) => {
-        const next = Number(event.currentTarget.value)
-        if (videoRef.current) videoRef.current.currentTime = next
-        setPosition(next)
-        onTimeChange(next * 1000)
-      }} />
-      <span className="player-time">{timestamp(position)} / {timestamp(duration)}</span>
+      <span className="player-time">{timestamp(position)}</span>
+      <div className={`player-track ${segments.length ? 'has-segments' : ''}`}>
+        {segments.length > 0 && <div className="player-segments" aria-hidden="true">
+          {segments.map((segment) => {
+            const ms = position * 1000
+            const state = ms >= segment.endMs ? 'played' : ms >= segment.startMs ? 'current' : ''
+            return <span key={`${segment.startMs}-${segment.endMs}`} className={state} style={{ flexGrow: Math.max(1, segment.endMs - segment.startMs) }} />
+          })}
+        </div>}
+        <input aria-label={copy.seek} type="range" min={0} max={duration} step={0.01} value={position} disabled={!duration} onChange={(event) => {
+          const next = Number(event.currentTarget.value)
+          if (videoRef.current) videoRef.current.currentTime = next
+          setPosition(next)
+          onTimeChange(next * 1000)
+        }} />
+      </div>
+      <span className="player-time player-time--total">{timestamp(duration)}</span>
       <button aria-label={muted ? copy.unmute : copy.mute} title={muted ? copy.unmute : copy.mute} onClick={() => setMuted(!muted)}><WorkspaceIcon name={muted ? 'muted' : 'volume'} /></button>
       <button aria-label={copy.fullscreen} title={copy.fullscreen} onClick={() => {
         const action = document.fullscreenElement ? document.exitFullscreen() : stage.current?.requestFullscreen()

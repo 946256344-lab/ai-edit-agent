@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { listAgentRunSteps } from '../lib/local-store'
 import type { StoredAgentRunStep, StoredAgentTask } from '../lib/local-store'
+import { WorkspaceIcon } from './WorkspaceIcon'
 import { useI18n } from '../lib/i18n'
 import type { Messages } from '../lib/i18n'
 
@@ -61,7 +62,7 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
   const { t } = useI18n()
   const copy = t.agentRun
   const [steps, setSteps] = useState<StoredAgentRunStep[]>([])
-  const [expanded, setExpanded] = useState(ACTIVE_TASK_STATUSES.has(task.status))
+  const [expanded, setExpanded] = useState(false)
   const [, setClock] = useState(0)
 
   useEffect(() => {
@@ -108,45 +109,33 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
     || artifacts.includes('timeline_version')
     || artifacts.includes('preview')
 
-  return <section className={`agent-run-card ${task.status}`} aria-live={ACTIVE_TASK_STATUSES.has(task.status) ? 'polite' : 'off'}>
-    <button className="agent-run-summary" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-      <span className={`agent-run-state ${task.status}`} aria-hidden="true" />
-      <span className="agent-run-copy">
+  // 平时只露一行状态；步骤明细点开才显示。需要用户处理的提示始终可见。
+  return <section className={`agent-run ${task.status}`} aria-live={ACTIVE_TASK_STATUSES.has(task.status) ? 'polite' : 'off'}>
+    <div className="agent-run-line">
+      <button className="agent-run-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? copy.collapse : copy.viewSteps}>
+        <span className={`agent-run-state ${task.status}`} aria-hidden="true" />
         <strong>{currentCopy}</strong>
-        <small>{copy.taskStatus[task.status]} · {copy.stepsDone(completedCount)} · {elapsedCopy(task, t)}</small>
-      </span>
-      <span className="agent-run-toggle">{expanded ? copy.collapse : copy.viewSteps}</span>
-    </button>
+        <small>{elapsedCopy(task, t)} · {copy.stepsDone(completedCount)}</small>
+        <WorkspaceIcon name="chevron" />
+      </button>
+      {hasResult && !ACTIVE_TASK_STATUSES.has(task.status) && <button type="button" className="text-button agent-run-result" onClick={onOpenStoryboard}>{copy.viewResult}</button>}
+    </div>
     {expanded && <div className="agent-run-details">
       {sortedSteps.length > 0
-        ? <ol className="agent-step-list">{sortedSteps.map((step) => <li className={step.status} key={step.id}>
-          <span className="agent-step-icon" aria-hidden="true" />
-          <span><strong>{copy.tools[step.toolName] ?? copy.toolFallback}</strong><small>{copy.stepStatus[step.status]}</small></span>
+        ? <ol className="agent-run-steps">{sortedSteps.map((step) => <li className={step.status} key={step.id}>
+          <span>{copy.tools[step.toolName] ?? copy.toolFallback}</span><small>{copy.stepStatus[step.status]}</small>
         </li>)}</ol>
         : <p className="agent-run-waiting">{copy.waiting}</p>}
-      {artifacts.length > 0 && (
-        <div className="agent-run-artifacts">
-          <strong>{copy.generated}</strong>
-          <ul>
-            {artifacts.map((artifact) => (
-              <li key={artifact}>
-                <span>✓</span>
-                {copy.artifacts[artifact] ?? copy.artifactFallback}
-              </li>
-            ))}
-          </ul>
-          {hasResult && <button type="button" onClick={onOpenStoryboard}>{copy.viewResult}</button>}
-        </div>
-      )}
-      {(task.status === 'needs_clarification' || task.status === 'needs_review') && (
-        <p className="agent-run-attention">
-          {task.status === 'needs_clarification'
-            ? copy.needsAnswer
-            : copy.needsReview}
-        </p>
-      )}
-      {task.status === 'cancelled' && <p className="agent-run-attention">{copy.cancelled}</p>}
-      {task.status === 'failed' && <p className="agent-run-attention error">{copy.failed}</p>}
+      {artifacts.length > 0 && <p className="agent-run-artifacts">{copy.generated} · {artifacts.map((artifact) => copy.artifacts[artifact] ?? copy.artifactFallback).join(' · ')}</p>}
     </div>}
+    {(task.status === 'needs_clarification' || task.status === 'needs_review') && (
+      <p className="agent-run-attention">
+        {task.status === 'needs_clarification'
+          ? copy.needsAnswer
+          : copy.needsReview}
+      </p>
+    )}
+    {task.status === 'cancelled' && <p className="agent-run-attention">{copy.cancelled}</p>}
+    {task.status === 'failed' && <p className="agent-run-attention error">{copy.failed}</p>}
   </section>
 }

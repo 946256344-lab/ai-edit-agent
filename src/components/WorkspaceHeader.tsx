@@ -1,4 +1,4 @@
-// 一体化窗口顶栏：可拖动面包屑、窗口操作与返回粗剪入口。
+// 一体化窗口顶栏：可拖动面包屑与窗口操作；返回剪辑由侧栏会话或素材库开关负责。
 import type { WorkspaceView } from './workspace-types'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { useI18n } from '../lib/i18n'
@@ -14,13 +14,14 @@ type WindowControls = {
   toggleMaximize: () => Promise<void>
   close: () => Promise<void>
 }
-export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { selectView: (view: WorkspaceView) => void; windowControls: WindowControls } }) {
-  const { selectView, windowControls } = actions
+export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { windowControls: WindowControls } }) {
+  const { windowControls } = actions
   const { t } = useI18n()
   const copy = t.header
-  return <>
+  const current = model.view === 'assets' ? t.sidebar.library : model.sessionTitle
+  return (
     <header className="topbar" data-tauri-drag-region>
-      <div className="crumbs" data-tauri-drag-region title={`${model.projectName} / ${model.sessionTitle}`}>{model.projectName}<span data-tauri-drag-region>/</span><strong data-tauri-drag-region>{model.sessionTitle}</strong></div>
+      <div className="crumbs" data-tauri-drag-region title={`${model.projectName} / ${current}`}>{model.projectName}<span data-tauri-drag-region>/</span><strong data-tauri-drag-region>{current}</strong></div>
       <span data-tauri-drag-region className={`saved ${model.storeReady ? 'is-ready' : ''}`}>{model.storeReady ? t.common.localWorkspace : t.common.localDisconnected}</span>
       <div className="window-controls" role="group" aria-label={copy.windowActions}>
         <button type="button" aria-label={copy.minimize} title={copy.minimize} onClick={windowControls.minimize}><WorkspaceIcon name="minimize" /></button>
@@ -28,9 +29,5 @@ export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderMode
         <button type="button" className="window-close" aria-label={copy.closeWindow} title={copy.closeWindow} onClick={windowControls.close}><WorkspaceIcon name="close" /></button>
       </div>
     </header>
-    <nav className="workspace-tabs" aria-label={copy.tabs}>
-      <button className={model.view !== 'assets' ? 'selected' : ''} aria-pressed={model.view !== 'assets'} onClick={() => selectView('chat')}><WorkspaceIcon name="film" />{copy.workbench}</button>
-      {model.view === 'assets' && <span className="workspace-location">{t.sidebar.library}</span>}
-    </nav>
-  </>
+  )
 }

@@ -55,6 +55,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
   const { analysis } = model
   const { t } = useI18n()
   const copy = t.chat
+  const stopLabel = analysis.waiting ? t.common.cancel : model.listenerReady ? copy.stop : copy.stopConnecting
 
   useLayoutEffect(() => {
     const textarea = composer.current
@@ -82,7 +83,6 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
 
   return (
     <section className="conversation-workspace conversation-workspace--chat">
-      <header className="chat-heading"><strong>{copy.heading}</strong><span>{model.isSending && !analysis.waiting ? copy.processing : ''}</span></header>
       <div className="message-stream" ref={stream} onScroll={(event) => {
         const element = event.currentTarget
         followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
@@ -129,7 +129,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         })}
 
         {model.tasks[0] && (
-          <details className="agent-details" open={model.isSending}><summary>{model.isSending ? copy.viewProgress : copy.runRecord}</summary><AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} /></details>
+          <AgentRunCard key={model.tasks[0].id} task={model.tasks[0]} onOpenStoryboard={actions.openArtifacts} />
         )}
       </div>
       {showLatest && <button className="latest-message" onClick={() => {
@@ -171,23 +171,25 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
               </button>
             ))}
           </div>
+          <small className="composer-shortcut">{copy.shortcut}</small>
           {model.isSending ? (
             <button
               className="send-button send-button--stop"
               type="button"
+              aria-label={stopLabel}
+              title={stopLabel}
               onClick={actions.stopAgentRun}
             >
-              {analysis.waiting ? t.common.cancel : model.listenerReady ? copy.stop : copy.stopConnecting}
+              <WorkspaceIcon name="stop" />
             </button>
           ) : (
             <button className={`send-button${analysis.importing ? ' send-button--analysis' : ''}`} type="submit" aria-label={model.editBusy ? t.common.saving : copy.send} disabled={!model.input.trim() || model.editBusy || analysis.importing}>
-              {model.editBusy ? '…' : analysis.importing ? copy.importing : <WorkspaceIcon name="arrow" />}
+              {model.editBusy ? '…' : analysis.importing ? copy.importing : <WorkspaceIcon name="send" />}
             </button>
           )}
         </div>
         {model.composerNotice && <span role="status" className="composer-notice">{model.composerNotice}</span>}
       </form>
-      <small className="composer-shortcut">{copy.shortcut}</small>
     </section>
   )
 }

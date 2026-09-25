@@ -20,8 +20,6 @@ export type AppSidebarModel = {
   assetCount: number
   analysisStatus: AnalysisAmbientStatus
   analysisHint: string
-  covers: Record<string, string>
-  artworkNotice: string | null
 }
 export type AppSidebarActions = {
   createSession: () => void
@@ -61,7 +59,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
           if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() }
         }}>
           <summary className="project-selector" aria-label={copy.selectProject} title={model.activeProjectName ?? copy.selectProject}>
-            <span className="project-symbol">{Object.values(model.covers).find(Boolean) ? <img src={Object.values(model.covers).find(Boolean)} alt="" /> : <WorkspaceIcon name="folder" />}</span>
+            <span className="project-symbol"><WorkspaceIcon name="stack" /></span>
             <strong>{model.activeProjectName ?? copy.selectProject}</strong><WorkspaceIcon name="chevron" />
           </summary>
           <div className="project-popover">
@@ -89,8 +87,9 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
       <nav className="sidebar-sessions" aria-label={copy.sessions}>
         <span className="sidebar-label">{copy.sessions}</span>
         {!model.sessions.length && <p className="switcher-empty">{copy.sessionsEmpty}</p>}
-        {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''}`} key={session.id}>
-          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} data-initial={session.title.trim().charAt(0) || copy.sessionInitial} onClick={() => actions.selectSession(session.id)}>
+        {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''} ${session.state === 'working' ? 'is-working' : ''}`} key={session.id}>
+          <button className="session-select" aria-current={session.id === model.activeSessionId && model.view !== 'assets' ? 'page' : undefined} title={session.title} onClick={() => actions.selectSession(session.id)}>
+            <span className="session-icon" aria-hidden="true"><WorkspaceIcon name="portrait" /></span>
             <span className="session-copy"><strong>{session.title}</strong><small>{session.state === 'working' ? copy.editing : session.updated}</small></span>
           </button>
           <details className="item-actions session-actions">
@@ -101,7 +100,6 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
             </div>
           </details>
         </div>)}
-        {model.artworkNotice && <p className="switcher-empty">{model.artworkNotice}</p>}
       </nav>
       <div className="project-sidebar-footer">
         <button title={copy.modelSettingsTitle(model.providerLabel)} aria-label={copy.modelSettings} onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>{copy.modelSettings}</span></button>

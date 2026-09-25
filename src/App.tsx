@@ -1,7 +1,11 @@
 // 应用组合根：选择项目/会话，装配领域 controller 与并排对话、粗剪预览。
 import { useEffect, useRef, useState } from 'react'
-import './App.css'
-import './light-workspace.css'
+import './styles/shell.css'
+import './styles/conversation.css'
+import './styles/preview.css'
+import './styles/assets.css'
+import './styles/dialogs.css'
+import './styles/responsive.css'
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { PairedWorkspace } from './components/PairedWorkspace'
 import { AssetAnalysisModal } from './components/AssetAnalysisModal'
@@ -13,7 +17,6 @@ import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
-import { useSessionArtworkController } from './hooks/useSessionArtworkController'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
 import { useProjectCreationController } from './hooks/useProjectCreationController'
 import { ProjectCreationModal } from './components/ProjectCreationModal'
@@ -88,7 +91,6 @@ function App() {
   const activeEditingSessionRef = useRef<string | null>(null)
   const activeProject = projects.find((project) => project.id === activeProjectId)
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
-  const sessionArtwork = useSessionArtworkController(activeProjectId, editingSessions)
   const provider = useProviderController(desktopRuntime)
   const artifactWorkspace = useArtifactWorkspaceController({
     desktopRuntime,
@@ -583,8 +585,6 @@ function App() {
           providerLabel: provider.model.providerLabel,
           storeState,
           activeProjectName: activeProject?.name ?? null,
-          covers: sessionArtwork?.covers ?? {},
-          artworkNotice: sessionArtwork?.notice ?? null,
           view: activeView,
           assetCount: assetWorkspace.page.counts.total,
           analysisStatus: analysisAmbientStatus(assetWorkspace.page.progress),
@@ -600,7 +600,7 @@ function App() {
           deleteProject: (projectId) => void navigationEditing.actions.deleteProject(projectId),
           renameSession: navigationEditing.actions.renameSession,
           openProvider: provider.actions.open,
-          openAssets: () => shotReplacement.actions.requestAction(() => setActiveView('assets')),
+          openAssets: () => shotReplacement.actions.requestAction(() => setActiveView(activeView === 'assets' ? 'chat' : 'assets')),
         }}
       />
 
@@ -612,7 +612,7 @@ function App() {
             storeReady: storeState === 'ready',
             view: activeView,
           }}
-          actions={{ windowControls, selectView: (view) => shotReplacement.actions.requestAction(() => setActiveView(view)) }}
+          actions={{ windowControls }}
         />
 
         <div className="workspace-canvas">
@@ -620,6 +620,7 @@ function App() {
         {activeView !== 'assets' && <header className="cut-heading">
           <div>
             <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? t.app.headingFallback}</h1>
+            <div className="cut-meta">
             <p>{artifactWorkspace.timeline
               ? t.app.timelineSummary((artifactWorkspace.timeline.clips.reduce((end, clip) => Math.max(end, clip.timelineEndMs), 0) / 1000).toFixed(1), artifactWorkspace.timeline.clips.length, artifactWorkspace.timeline.versionNumber)
               : isSending ? t.app.making : t.app.idle}</p>
@@ -641,6 +642,7 @@ function App() {
                 </select>
               </label>
             )}
+            </div>
           </div>
           <EditorOutputPort
             linkers={artifactWorkspace.model.editorCatalog.linkers}

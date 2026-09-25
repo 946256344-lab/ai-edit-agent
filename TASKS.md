@@ -2,6 +2,9 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
+- [ ] 待修（2026-09-25）：`npm run harness:check` 在 master 上已失败：`src/App.tsx` 有 15 个 `useState`，超过预算 14（14ad3d7 新增 `pendingUserMessage`）。需把发送相关状态移入 controller，不应提高预算。
+- [ ] 后续（2026-09-25）：助手回复为 Markdown，但消息按纯文本显示，露出 `##`、`**` 等符号；需做消息 Markdown 渲染。
 - [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第二步。启动检查、模型下载、交付结果、编辑器名称、连接状态、候选不可用原因随界面语言显示；Rust 给 `messageKey`/`messageParams`，中文原文作回落。发送时带 `uiLocale`，Agent 回复与系统兜底文案跟随界面语言，成片语言不变。修复英文默认会话名不被首条消息改名。cargo check、新回归测试、tsc、lint、harness 通过；待真实桌面验收。见 docs/changes/2026-09-25-backend-text-i18n.md。
 - [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第一步。前端文案收进 `src/lib/i18n` 类型化词典（英文漏键即编译失败），侧栏切换语言，偏好存本机，首次按系统语言；时间与排序跟随语言；`harness:check` 拦截组件里新写死的中文。tsc、lint、harness 通过，浏览器模拟 IPC 下中英切换与主要页面已看过；待真实桌面验收。见 docs/changes/2026-09-25-ui-i18n.md。
 - [ ] implemented_unverified（2026-09-25）：修复启动卡顿与输入延迟。同步 Tauri 命令全部改为 `#[tauri::command(async)]` 移出 UI 主线程；模型权重校验按大小+修改时间缓存，不再每次启动整读约 2 GB 哈希；数据库迁移每进程只跑一次，不再每次打开连接争写锁；发送后立即显示用户消息并清空输入框，不再等任务归属模型返回。`cargo check` 通过；待桌面重建后验收。见 docs/changes/2026-09-25-startup-input-lag.md。

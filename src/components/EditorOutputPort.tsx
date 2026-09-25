@@ -47,7 +47,7 @@ export function EditorOutputPort({
         </select>
       </label>
       <button
-        className="outline-button deliver-button"
+        className="primary-button deliver-button"
         disabled={disabled || busy || unavailable}
         onClick={onDeliver}
         title={selected ? t.backend.editorSummaries[selected.id] ?? selected.summary : undefined}

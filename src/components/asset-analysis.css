@@ -1,43 +1,25 @@
-/* 素材分析进度：沿用工作台颜色，数字与状态文字共同表达进度。 */
-.asset-analysis { padding: 14px 18px; border: 1px solid var(--line, #e6e1db); border-radius: 12px; background: #fffdfa; margin-bottom: 16px; }
-.asset-analysis__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #59544f; }
-.asset-analysis__actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.asset-analysis button { border: 0; border-radius: 6px; background: transparent; color: #756095; font-size: 11px; padding: 5px 8px; }
-.asset-analysis button:hover:not(:disabled), .asset-analysis button[aria-pressed="true"] { background: #eee8f6; color: #604881; }
-.asset-analysis button:focus-visible { outline: 2px solid var(--accent, #7964ad); outline-offset: 2px; }
-.asset-analysis__bar { display: flex; height: 7px; overflow: hidden; border-radius: 5px; background: #e7e3de; margin-top: 10px; }
+/* 素材分析进度：工具栏里是分段筛选加细进度条，数字与状态文字共同表达进度；弹窗样式见 styles/dialogs.css。 */
+.asset-analysis { margin-bottom: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.asset-analysis__heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--text-strong); font-size: var(--text-xs); }
+.asset-analysis__actions { display: flex; align-items: center; flex-shrink: 0; gap: 4px; color: var(--text-2); }
+.asset-analysis button { height: 30px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--accent); font-size: var(--text-xs); }
+.asset-analysis button:hover:not(:disabled) { background: var(--accent-wash); }
+.asset-analysis__bar { display: flex; height: 6px; margin-top: 10px; overflow: hidden; border-radius: 3px; background: var(--fill); }
 .asset-analysis__segment { height: 100%; transition: width .3s ease; }
-.asset-analysis__segment--ready { background: #7a9f86; }
-.asset-analysis__segment--analyzing { background: #9480b7; animation: analysis-pulse 1.6s ease-in-out infinite; }
-.asset-analysis__segment--queued { background: #d9d5cf; }
-.asset-analysis__segment--failed { background: #c28189; }
+.asset-analysis__segment--ready { background: var(--ok); }
+.asset-analysis__segment--analyzing { background: var(--warn); animation: analysis-pulse 1.6s ease-in-out infinite; }
+.asset-analysis__segment--queued { background: var(--line-strong); }
+.asset-analysis__segment--failed { background: var(--danger); }
 .asset-analysis__legend { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-.asset-analysis__dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
-.asset-analysis__notice { color: #756354; font-size: 11px; margin: 8px 0 0; }
-.asset-analysis--toolbar { margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; }
+.asset-analysis__legend > span { margin-right: 12px; font-size: var(--text-xs); }
+.asset-analysis__dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; animation: none; }
+.asset-analysis__notice { margin: 8px 0 0; color: var(--warn-text); font-size: var(--text-xs); }
+
+/* 素材列表上方：分段控件样式的状态筛选。 */
+.asset-analysis--toolbar { margin: 0 0 12px; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .asset-analysis--toolbar .asset-analysis__heading { gap: 8px; }
-.asset-analysis--toolbar .asset-analysis__legend { margin-top: 0; flex: 1; }
-.asset-analysis--toolbar .asset-analysis__actions { font-size: 11px; color: #756095; }
-.asset-analysis--toolbar .asset-analysis__bar { height: 6px; border-radius: 4px; margin: 8px 0 0; }
-.composer .analysis-waiting { justify-content: flex-start; align-items: flex-start; }
-.composer .analysis-waiting > span { font: inherit; color: inherit; }
-.analysis-waiting { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: #756095; margin-bottom: 10px; }
-.analysis-waiting button { font-size: 11px; padding: 6px 10px; border: 1px solid #dcd3e8; border-radius: 7px; background: #f4eff8; color: #67517f; }
-.send-button.send-button--analysis { width: auto; padding: 8px 12px; }
-.asset-status-chip--queued { color: #827c74; background: #eeeae5; border-color: #ddd6ce; }
-@keyframes analysis-pulse { 50% { opacity: .55; } }
-@media (prefers-reduced-motion: reduce) { .asset-analysis__segment, .sidebar-library__status--analyzing { transition: none; animation: none; } }
-
-.asset-analysis-dialog { width: min(520px, calc(100vw - 40px)); padding: 28px; border-radius: 18px; }
-.asset-analysis-dialog h2 { margin: 12px 0; font-size: 24px; }
-.asset-analysis-dialog p { color: #756b61; line-height: 1.7; }
-.asset-analysis-dialog::backdrop { background: #211c1866; }
-.asset-dialog-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 24px; }
-.asset-dialog-actions button, .asset-edit-toolbar button { padding: 9px 14px; border: 1px solid #ded8cf; border-radius: 8px; cursor: pointer; }
-.asset-dialog-actions .asset-dialog-secondary { border-color: transparent; background: transparent; color: #81766b; margin-right: auto; }
-.asset-name-input { display: block; width: 100%; padding: 12px; margin-top: 10px; border: 1px solid #ded8cf; border-radius: 8px; }
-.asset-edit-toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #e7e1d8; font-size: 12px; }
-.asset-select { display: flex; align-items: center; gap: 6px; padding: 8px 10px; font-size: 12px; color: #756b61; }
-
-.settings-dialog.asset-analysis-dialog { padding: 28px; background: #fffdf9; color: #302a25; border: 1px solid #e7e1d8; box-shadow: 0 24px 80px #211c182b; }
-.asset-analysis__legend > span { margin-right: 12px; font-size: 12px; }
+.asset-analysis--toolbar .asset-analysis__legend { flex: 0 1 auto; gap: 2px; margin: 0; padding: 3px; border-radius: 11px; background: var(--fill); }
+.asset-analysis--toolbar .asset-analysis__legend button { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: var(--radius-sm); color: var(--text); font-size: var(--text-sm); }
+.asset-analysis--toolbar .asset-analysis__legend button:hover:not(:disabled) { background: rgba(255, 255, 255, .6); }
+.asset-analysis--toolbar .asset-analysis__legend button[aria-pressed="true"] { background: var(--surface); font-weight: 500; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.asset-analysis--toolbar .asset-analysis__bar { height: 4px; margin: 10px 0 0; }
