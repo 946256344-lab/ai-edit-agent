@@ -90,7 +90,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
         setShowLatest(!followLatest.current)
       }}>
         {!model.messages.length && <div className="session-intro">
-          <span>FELLOWCUT</span>
+          <span>VOYCUT</span>
           <strong>{model.storyboard?.title ?? model.session?.title ?? copy.introTitle}</strong>
           <p>
             {model.storyboard?.summary
@@ -120,7 +120,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           <article key={message.id} className={`message ${message.role}`}>
             <div className="message-content">
               <div className="message-meta">
-                {message.role === 'agent' ? 'FellowCut' : copy.you} <time>{message.time}</time>
+                {message.role === 'agent' ? 'Voycut' : copy.you} <time>{message.time}</time>
               </div>
               {message.role === 'agent' ? <MessageMarkdown content={message.content} /> : <p>{message.content}</p>}
               {mediaOptions && <small className="message-media-options">{copy.autoAdded} · {mediaSummary(mediaOptions, t)}</small>}

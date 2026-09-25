@@ -649,7 +649,7 @@ export const zhCN = {
       routeFailed: (detail: string) => `任务归属失败：${detail}`,
       agentMessage: '这次操作没有完成，已有结果没有被修改。请重试，或补充你希望保留的素材和片段。',
     },
-    browserTitle: '请在 Windows 桌面应用中运行 FellowCut',
+    browserTitle: '请在 Windows 桌面应用中运行 Voycut',
     browserBody: '浏览器模式不能访问本地项目、媒体文件、FFmpeg 或 AI 凭据，因此不能用于剪辑测试。',
     newProject: '新项目',
     startEditing: '开始剪辑',

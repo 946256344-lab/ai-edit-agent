@@ -350,7 +350,7 @@ fn wait_for_callback(
                         respond(
                             &mut stream,
                             "200 OK",
-                            "<p>FellowCut connected and saved the credential. You can close this tab.</p>",
+                            "<p>Voycut connected and saved the credential. You can close this tab.</p>",
                         );
                     }
                     Err(error) => {
@@ -359,7 +359,7 @@ fn wait_for_callback(
                         respond(
                             &mut stream,
                             "400 Bad Request",
-                            "<p>Connection failed. Return to FellowCut.</p>",
+                            "<p>Connection failed. Return to Voycut.</p>",
                         );
                     }
                 }

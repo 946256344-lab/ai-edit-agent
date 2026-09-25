@@ -656,7 +656,7 @@ export const en: typeof zhCN = {
       routeFailed: (detail: string) => `Task matching failed: ${detail}`,
       agentMessage: 'This run did not complete and existing results were not changed. Please retry, or tell me which media and clips to keep.',
     },
-    browserTitle: 'Please run FellowCut in the Windows desktop app',
+    browserTitle: 'Please run Voycut in the Windows desktop app',
     browserBody: 'Browser mode cannot access local projects, media files, FFmpeg or AI credentials, so it cannot be used for editing tests.',
     newProject: 'New project',
     startEditing: 'Start editing',

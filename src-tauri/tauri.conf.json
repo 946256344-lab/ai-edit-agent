@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "FellowCut",
+  "productName": "Voycut",
   "version": "0.1.2",
   "identifier": "com.assembly.videoagent",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FellowCut",
+        "title": "Voycut",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,

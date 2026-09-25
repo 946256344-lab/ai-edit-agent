@@ -52,7 +52,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
   }, [])
   return (
     <aside ref={sidebar} className="sidebar project-sidebar">
-      <span className="assembly-wordmark" data-tauri-drag-region>FellowCut</span>
+      <span className="assembly-wordmark" data-tauri-drag-region>Voycut</span>
       <div className="sidebar-project">
         <span className="sidebar-label">{copy.currentProject}</span>
         <details className="project-switcher" onKeyDown={(event) => {

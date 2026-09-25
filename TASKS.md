@@ -16,7 +16,7 @@
 - [ ] implemented_unverified（2026-09-25）：五处 storyboard pipeline 智能化改进：①`StoryboardBeat` 新增 per-beat `paceHint`（short/default/long），Phase 1 模型生成叙事时按 beat 写节奏，Phase 3 优先使用 per-beat 值覆盖全局 `shotLengthHint`；②Phase 2 低分自适应扩池，最高分低于阈值时静默扩展到 12 条候选；③Phase 3 已选镜头上下文携带 beat purpose，帮助模型判断叙事连贯性；④Phase 3 低分池预警，明确告知模型库存匹配度有限；⑤Phase 4 Pass C 早停，全部 Pass B 镜头收敛时跳过 Pass C 省去冗余精修。编译通过，既有单元测试全绿；待真实模型回合验收。
 - [ ] implemented_unverified（2026-09-25）：用户对单镜长短的原话偏好经 `shotLengthHint` 从 Phase 1 透传到 Phase 3，区分快切与长镜；`default` 逐字保持改造前行为。编译、142 项 storyboard 测试与 harness 通过，待真实模型回合验收。见 docs/changes/2026-09-25-shot-length-hint.md。
 - [ ] implemented_unverified（2026-09-25）：Agent 最后一个模型步骤改为只总结已确认产物与未完成事项，避免预览已生成后继续多轮读工具而落入步骤上限。单元回归和 Release 编译通过；重建版桌面读取既有演示项目成功，最后一步路径待真实模型回合触发。
-- [ ] 实施中（2026-09-24）：将桌面应用对外品牌更名为 FellowCut，保留应用标识、数据库和凭据服务以兼容本机旧数据；构建并验收更名安装包。网站在独立仓库实施。
+- [ ] 实施中（2026-09-25，claude/product-naming-voycut-3663a1）：对外品牌由 FellowCut 改为 Voycut（按设计稿字标写法），保留应用标识、数据库、凭据服务与语言偏好存储键以兼容本机旧数据；图标待设计源文件到位后更换；构建并验收更名安装包。网站在独立仓库实施。见 docs/changes/2026-09-25-rename-to-voycut.md。
 - [ ] implemented_unverified（2026-09-24）：修复发送时界面短暂卡住。任务归属模型请求与对话提交在后台工作线程执行，发送时显示任务归属状态；待真实桌面交互验收。见 docs/changes/2026-09-24-send-ui-responsiveness.md。
 - [x] 已实现（2026-09-24）：分析失败自动补跑；画面识别最后不足 6 段（如 4 段）也立即送审。瞬时网络/超时最多补 3 次，技术超时最多 2 次；用户跳过与不适用不补。见 docs/changes/2026-09-24-analysis-auto-retry.md。
 - [x] 已实现（2026-09-24）：Phase 3 可从全部 9 条候选中选镜；项目设置可调综合分优先名额（默认 5/9），其余从画面、语义、关键词分项高分候选补入。见 docs/changes/2026-09-24-candidate-recall-mix.md。
