@@ -204,7 +204,7 @@ pub(crate) fn phase1_generate_narrative(
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should cover one concrete idea, action, or emotional turn — split here rather than collapsing a whole product act (intro / problem / proof / CTA) into one beat. One picture shot is selected per beat, so a 6-second beat produces a 6-second hold.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
-        targetDurationMs is your creative proposal for the final video duration and must stay consistent with spoken narration length (full_script) or the user's duration / 15-45s guidance (key_message).\n\
+        targetDurationMs priority: if the system already gave you a fixed duration above (voiceover pre-synthesized, or user named one), copy it exactly — do not invent a different value. Otherwise propose a duration consistent with the script length (full_script) or the 15-45s guidance (key_message).\n\
         {feedback_context}{inventory_block}"
     );
 
