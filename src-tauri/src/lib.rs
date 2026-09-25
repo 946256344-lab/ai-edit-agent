@@ -22,6 +22,8 @@ mod custom_api;
 mod db;
 /// 同步 Agent 子步骤共享截止时间，后台分析保持独立。
 mod execution_deadline;
+/// FellowCut 邮箱登录和只读试用资格；模型授权由服务端网关负责。
+mod fellowcut_account;
 /// 编辑器无关交接计划；链接器只消费本结构，不替换内部时间线。
 mod handoff;
 /// 剪映链接器：单向 draft 创建与延迟注册。
@@ -91,6 +93,9 @@ pub fn run() {
             custom_api::get_custom_api_status,
             custom_api::save_custom_api,
             custom_api::clear_custom_api,
+            fellowcut_account::sign_in_fellowcut,
+            fellowcut_account::get_fellowcut_account_status,
+            fellowcut_account::sign_out_fellowcut,
             music_provider::get_jamendo_status,
             music_provider::save_jamendo_client_id,
             music_provider::get_elevenlabs_status,

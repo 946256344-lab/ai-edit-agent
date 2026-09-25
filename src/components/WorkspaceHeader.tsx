@@ -5,6 +5,7 @@ export type WorkspaceHeaderModel = {
   projectName: string
   sessionTitle: string
   storeReady: boolean
+  accountLabel: string
   view: WorkspaceView
 }
 type WindowControls = {
@@ -13,12 +14,13 @@ type WindowControls = {
   toggleMaximize: () => Promise<void>
   close: () => Promise<void>
 }
-export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { selectView: (view: WorkspaceView) => void; windowControls: WindowControls } }) {
-  const { selectView, windowControls } = actions
+export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { selectView: (view: WorkspaceView) => void; openAccount: () => void; windowControls: WindowControls } }) {
+  const { selectView, openAccount, windowControls } = actions
   return <>
     <header className="topbar" data-tauri-drag-region>
       <div className="crumbs" data-tauri-drag-region title={`${model.projectName} / ${model.sessionTitle}`}>{model.projectName}<span data-tauri-drag-region>/</span><strong data-tauri-drag-region>{model.sessionTitle}</strong></div>
       <span data-tauri-drag-region className={`saved ${model.storeReady ? 'is-ready' : ''}`}>{model.storeReady ? '本地工作区' : '本地未连接'}</span>
+      <button type="button" className="topbar-account" onClick={openAccount}>{model.accountLabel}</button>
       <div className="window-controls" role="group" aria-label="窗口操作">
         <button type="button" aria-label="最小化" title="最小化" onClick={windowControls.minimize}><WorkspaceIcon name="minimize" /></button>
         <button type="button" aria-label={windowControls.maximized ? '还原' : '最大化'} title={windowControls.maximized ? '还原' : '最大化'} onClick={windowControls.toggleMaximize}><WorkspaceIcon name={windowControls.maximized ? 'restore' : 'maximize'} /></button>

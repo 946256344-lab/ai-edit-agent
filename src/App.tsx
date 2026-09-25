@@ -13,6 +13,8 @@ import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
+import { FellowCutAccountModal } from './components/FellowCutAccountModal'
+import { useFellowCutAccountController } from './hooks/useFellowCutAccountController'
 import { useSessionArtworkController } from './hooks/useSessionArtworkController'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
 import { useProjectCreationController } from './hooks/useProjectCreationController'
@@ -86,6 +88,7 @@ function App() {
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
   const sessionArtwork = useSessionArtworkController(activeProjectId, editingSessions)
   const provider = useProviderController(desktopRuntime)
+  const fellowcutAccount = useFellowCutAccountController(desktopRuntime)
   const artifactWorkspace = useArtifactWorkspaceController({
     desktopRuntime,
     projectId: activeProjectId,
@@ -593,9 +596,10 @@ function App() {
             projectName: activeProject?.name ?? '新项目',
             sessionTitle: activeEditingSession?.title ?? '开始剪辑',
             storeReady: storeState === 'ready',
+            accountLabel: fellowcutAccount.model.status.email ?? '登录 FellowCut',
             view: activeView,
           }}
-          actions={{ windowControls, selectView: (view) => shotReplacement.actions.requestAction(() => setActiveView(view)) }}
+          actions={{ windowControls, openAccount: fellowcutAccount.actions.open, selectView: (view) => shotReplacement.actions.requestAction(() => setActiveView(view)) }}
         />
 
         <div className="workspace-canvas">
@@ -693,6 +697,7 @@ function App() {
       />
       <AssetAnalysisModal controller={assetWorkspace.analysis} />
       <ProviderSettingsModal controller={provider} />
+      <FellowCutAccountModal controller={fellowcutAccount} />
       <ProjectCreationModal controller={projectCreation} />
     </main>
   )

@@ -21,6 +21,13 @@ export type CustomApiStatus = {
   coarseVisualModel: string | null
 }
 
+export type FellowCutAccountStatus = {
+  state: 'signedOut' | 'unverified' | 'verified'
+  email: string | null
+  entitlement: string | null
+  trialStartedAt: string | null
+}
+
 export type ElevenLabsStatus = { keyStored: boolean; voicesReadable: boolean; ttsAuthorized: boolean | null; lastErrorCode: string | null; importable: boolean }
 export type FishAudioStatus = { keyStored: boolean; voicesReadable: boolean; lastErrorCode: string | null; importable: boolean }
 
@@ -396,6 +403,9 @@ export async function clearExperimentalOpenAIOAuth() { requireDesktopRuntime(); 
 export async function getCustomApiStatus() { requireDesktopRuntime(); return invoke<CustomApiStatus>('get_custom_api_status') }
 export async function saveCustomApi(baseUrl: string, model: string, coarseVisualModel: string, apiKey: string) { requireDesktopRuntime(); return invoke<CustomApiStatus>('save_custom_api', { baseUrl, model, coarseVisualModel, apiKey }) }
 export async function clearCustomApi() { requireDesktopRuntime(); return invoke<CustomApiStatus>('clear_custom_api') }
+export async function signInFellowCut(email: string, password: string) { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('sign_in_fellowcut', { email, password }) }
+export async function getFellowCutAccountStatus() { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('get_fellowcut_account_status') }
+export async function signOutFellowCut() { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('sign_out_fellowcut') }
 
 export async function getElevenLabsStatus() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('get_elevenlabs_status') }
 export async function saveElevenLabsApiKey(apiKey: string) { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('save_elevenlabs_api_key', { apiKey }) }

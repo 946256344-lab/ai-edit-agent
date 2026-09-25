@@ -93,6 +93,9 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .topbar { height: 48px; min-height: 48px; flex-shrink: 0; padding: 0 0 0 22px; gap: 20px; border: 0; background: transparent; user-select: none; }
 .assembly-wordmark { user-select: none; }
 .topbar .saved { margin-left: auto; }
+.topbar-account { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; align-self: center; padding: 5px 10px; border: 1px solid #ded8ed; border-radius: 8px; background: #f8f5fd; color: #654898; font-size: 12px; cursor: pointer; }
+.topbar-account:hover { background: #eee7fa; }
+.topbar-account:focus-visible { outline: 2px solid #654898; outline-offset: 2px; }
 .window-controls { display: flex; align-self: stretch; flex-shrink: 0; }
 .window-controls button { display: grid; place-items: center; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #66666b; }
 .window-controls button:hover { background: #27272d0d; color: var(--ink); }
@@ -282,6 +285,14 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .provider-option select { flex: 0 0 auto; align-self: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); }
 .provider-divider { background: var(--line); }.provider-modal input, .provider-modal select, .provider-modal textarea { min-height: 38px; font-size: 12px; color: #525252; background: white; border-color: #cbcbcb; }
 .provider-modal .modal-button { background: #2a2a2a; border-color: #2a2a2a; color: white; }.provider-modal .close-button { color: #919191; }
+.fellowcut-account-dialog { width: min(460px, calc(100vw - 32px)); padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); color: var(--ink); box-shadow: 0 20px 80px #2b2b2b26; }
+.fellowcut-account-dialog h2 { margin: 8px 0 16px; font-size: 24px; }
+.fellowcut-account-dialog p { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.fellowcut-account-dialog form label { display: block; margin: 14px 0; font-size: 13px; }
+.fellowcut-account-dialog form input { display: block; width: 100%; margin-top: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--ink); }
+.fellowcut-account-dialog dl { margin: 0; }.fellowcut-account-dialog dl div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }.fellowcut-account-dialog dt { color: var(--muted); }.fellowcut-account-dialog dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.fellowcut-account-actions { display: flex; gap: 10px; margin: 20px 0 0; }.fellowcut-account-close { display: block; margin: 18px 0 0 auto; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.fellowcut-account-error { color: #a52d39 !important; }
 .name-edit-dialog { width: min(440px, calc(100vw - 48px)); }
 .name-edit-field { display: grid; gap: 7px; margin-top: 22px; color: var(--muted); font-size: 12px; }
 .name-edit-field input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; }

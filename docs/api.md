@@ -1,5 +1,15 @@
 # API 与工具契约
 
+## 2026-09-25：FellowCut 桌面账号展示
+
+新增 `sign_in_fellowcut(email, password)`、`get_fellowcut_account_status()`、`sign_out_fellowcut()`。返回 `{ state, email, entitlement, trialStartedAt }`；`state` 为 `signedOut`、`unverified` 或 `verified`。账号使用网站同一个 Firebase Authentication 项目；已验证账号只读 Firestore `entitlements/{uid}`，缺失时返回空资格。桌面不创建或续期试用。刷新令牌只存 Windows 凭据库 `AssemblyVideoAgent/fellowcut-firebase-refresh-token`，密码与 ID token 不持久化。当前命令仅用于界面展示，模型访问尚未通过服务端资格检查。见 `docs/changes/2026-09-25-fellowcut-desktop-account.md`。
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `sign_in_fellowcut` | email, password | FellowCutAccountStatus |
+| `get_fellowcut_account_status` | 无 | FellowCutAccountStatus |
+| `sign_out_fellowcut` | 无 | FellowCutAccountStatus |
+
 ## 2026-09-18：CapCut 投放链接器
 
 `deliver_to_editor` 可选 CapCut。草稿库从该设备 `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\root_meta_info.json` 读取 `draft_root_path`，不写死盘符。未打开过 CapCut 则拒绝。见 `docs/changes/2026-09-18-capcut-linker.md`。

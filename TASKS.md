@@ -2,6 +2,8 @@
 
 ## 当前任务窗口
 
+- [ ] implemented_unverified（2026-09-25，codex/fellowcut-auth-trial）：桌面端接入 FellowCut 邮箱密码登录、邮箱验证状态与既有 Firestore 试用资格只读显示；刷新令牌存 Windows 凭据库，旧本机项目路径不变。lint、TypeScript、Rust 编译及 harness 通过；真实桌面账号登录和旧项目读取待验收。模型额度与付费控制留待服务端网关实施。
+
 - [ ] implemented_unverified（2026-09-25）：剪映/CapCut 草稿交付补上配音轨。两者 `voiceover` 能力改为 Full，交付前解析配音来源，适配器新增 `add_voiceover_tracks` 写入独立音频轨 `assembly-voiceover-N`（不循环、源短于时间线取较短）。适配器 20 项、handoff 5 项 Rust 测试通过，真实最小输入生成含视频+配音轨的草稿；待桌面重建后用真实带配音项目验收。
 - [ ] implemented_unverified（2026-09-25）：修复剪映草稿交付失败。根因是随包 pyJianYingDraft 0.3.0 把 `ScriptFile.add_track` 改成 `append_track(TrackSpec)`，适配器仍按旧 API 调用，立即抛 AttributeError；pycapcut 0.0.3 仍是旧 API，故在适配器加兼容层。同时日志带出适配器真实原因，前端交付错误显示具体原因，选剪映时检测草稿库并提示连接。适配器 19 项测试、lint、cargo check、harness 通过，真实最小输入已生成含视频+字幕轨的草稿；待桌面重建后走真实交付验收。
 <!-- ACTIVE_TASKS_START -->
