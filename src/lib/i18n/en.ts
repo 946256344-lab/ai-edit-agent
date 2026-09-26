@@ -565,6 +565,20 @@ export const en: typeof zhCN = {
     serverCheckHint: 'The Voycut server checks access again for each model request.',
     refresh: 'Refresh status',
     signOut: 'Sign out',
+    // Keyed by the account_* codes returned by src-tauri/src/fellowcut_account.rs.
+    errors: {
+      account_credential_store: 'Voycut could not access Windows Credential Manager. Restart Voycut and try again.',
+      account_service_invalid: 'The account service returned unexpected data. Try again later.',
+      account_verify_failed: 'Could not verify your Voycut account. Check your network or sign in again.',
+      account_not_found: 'This account no longer exists. Sign in again.',
+      account_entitlement_unavailable: 'Could not read your trial status. Try again later.',
+      account_missing_credentials: 'Enter your email and password.',
+      account_invalid_credentials: 'Incorrect email or password.',
+      account_sign_in_unavailable: 'The sign-in service is unavailable. Check your network.',
+      account_signed_out: 'Sign in to your Voycut account first.',
+      account_session_expired: 'Your sign-in expired or the network is unavailable. Sign in again.',
+      account_task_interrupted: 'The account request did not finish. Try again.',
+    },
   },
   backend: {
     readinessTitles: {

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { getFellowCutAccountStatus, signInFellowCut, signOutFellowCut } from '../lib/local-store'
 import type { FellowCutAccountStatus } from '../lib/local-store'
+import { describeAccountError } from '../lib/account-error'
 
 const SIGNED_OUT: FellowCutAccountStatus = {
   state: 'signedOut', email: null, entitlement: null, trialStartedAt: null, accountPageUrl: null,
@@ -21,14 +22,14 @@ export function useFellowCutAccountController(desktopRuntime: boolean) {
     let active = true
     void getFellowCutAccountStatus()
       .then((next) => { if (active) setStatus(next) })
-      .catch((reason) => { if (active) setError(String(reason)) })
+      .catch((reason) => { if (active) setError(describeAccountError(reason)) })
     return () => { active = false }
   }, [desktopRuntime])
 
   async function refresh() {
     setBusy(true); setError('')
     try { setStatus(await getFellowCutAccountStatus()) }
-    catch (reason) { setError(String(reason)) }
+    catch (reason) { setError(describeAccountError(reason)) }
     finally { setBusy(false) }
   }
 
@@ -37,14 +38,14 @@ export function useFellowCutAccountController(desktopRuntime: boolean) {
     try {
       setStatus(await signInFellowCut(email, password))
       setPassword('')
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) { setError(describeAccountError(reason)) }
     finally { setBusy(false) }
   }
 
   async function signOut() {
     setBusy(true); setError('')
     try { setStatus(await signOutFellowCut()); setPassword('') }
-    catch (reason) { setError(String(reason)) }
+    catch (reason) { setError(describeAccountError(reason)) }
     finally { setBusy(false) }
   }
 

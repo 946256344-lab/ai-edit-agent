@@ -559,6 +559,20 @@ export const zhCN = {
     serverCheckHint: '模型调用时由 Voycut 服务端再次校验使用资格。',
     refresh: '刷新状态',
     signOut: '退出登录',
+    // 按 src-tauri/src/fellowcut_account.rs 返回的 account_* 码取文案。
+    errors: {
+      account_credential_store: 'Voycut 无法访问 Windows 凭据管理器，请重启 Voycut 后重试。',
+      account_service_invalid: '账号服务返回了无效数据，请稍后重试。',
+      account_verify_failed: '无法核验 Voycut 账号，请检查网络或重新登录。',
+      account_not_found: '账号不存在，请重新登录。',
+      account_entitlement_unavailable: '无法读取试用资格，请稍后重试。',
+      account_missing_credentials: '请输入邮箱和密码。',
+      account_invalid_credentials: '邮箱或密码不正确。',
+      account_sign_in_unavailable: '登录服务暂时不可用，请检查网络。',
+      account_signed_out: '请先登录 Voycut 账号。',
+      account_session_expired: '登录已失效或网络不可用，请重新登录。',
+      account_task_interrupted: '账号请求没有完成，请重试。',
+    },
   },
   backend: {
     readinessTitles: {

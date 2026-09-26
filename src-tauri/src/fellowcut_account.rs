@@ -48,23 +48,29 @@ struct AccountUser {
     email_verified: bool,
 }
 
+/// 账号错误带稳定码前缀（`account_*: 中文原文`），前端按码显示当前界面语言；
+/// 中文原文作为未知码的回落与日志。
+fn account_error(code: &str, message: &str) -> String {
+    format!("{code}: {message}")
+}
+
 fn credential_entry() -> Result<Entry, String> {
     Entry::new(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
-        .map_err(|_| "Windows 凭据库不可用。".to_owned())
+        .map_err(|_| account_error("account_credential_store", "Windows 凭据库不可用。"))
 }
 
 fn saved_refresh_token() -> Result<Option<String>, String> {
     match credential_entry()?.get_password() {
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("无法读取 Voycut 登录凭据。".to_owned()),
+        Err(_) => Err(account_error("account_credential_store", "无法读取 Voycut 登录凭据。")),
     }
 }
 
 fn save_refresh_token(token: &str) -> Result<(), String> {
     credential_entry()?
         .set_password(token)
-        .map_err(|_| "无法保存 Voycut 登录凭据。".to_owned())
+        .map_err(|_| account_error("account_credential_store", "无法保存 Voycut 登录凭据。"))
 }
 
 fn http_agent() -> ureq::Agent {
@@ -80,8 +86,8 @@ fn auth_url(method: &str) -> String {
 fn response_json<T: DeserializeOwned>(response: ureq::Response) -> Result<T, String> {
     let body = response
         .into_string()
-        .map_err(|_| "账号服务返回了无效数据。".to_owned())?;
-    serde_json::from_str(&body).map_err(|_| "账号服务返回了无效数据。".to_owned())
+        .map_err(|_| account_error("account_service_invalid", "账号服务返回了无效数据。"))?;
+    serde_json::from_str(&body).map_err(|_| account_error("account_service_invalid", "账号服务返回了无效数据。"))
 }
 
 fn account_info(agent: &ureq::Agent, id_token: &str) -> Result<AccountUser, String> {
@@ -89,13 +95,13 @@ fn account_info(agent: &ureq::Agent, id_token: &str) -> Result<AccountUser, Stri
         .post(&auth_url("lookup"))
         .set("Content-Type", "application/json")
         .send_string(&json!({ "idToken": id_token }).to_string())
-        .map_err(|_| "无法核验 Voycut 账号，请检查网络或重新登录。".to_owned())?;
+        .map_err(|_| account_error("account_verify_failed", "无法核验 Voycut 账号，请检查网络或重新登录。"))?;
     let response: AccountInfo = response_json(response)?;
     response
         .users
         .into_iter()
         .next()
-        .ok_or_else(|| "账号不存在，请重新登录。".to_owned())
+        .ok_or_else(|| account_error("account_not_found", "账号不存在，请重新登录。"))
 }
 
 fn entitlement(
@@ -113,12 +119,12 @@ fn entitlement(
     {
         Ok(response) => response,
         Err(ureq::Error::Status(404, _)) => return Ok(None),
-        Err(_) => return Err("无法读取试用资格，请稍后重试。".to_owned()),
+        Err(_) => return Err(account_error("account_entitlement_unavailable", "无法读取试用资格，请稍后重试。")),
     };
     let document: Value = response_json(response)?;
     let status = document["fields"]["status"]["stringValue"]
         .as_str()
-        .ok_or_else(|| "试用资格数据无效。".to_owned())?;
+        .ok_or_else(|| account_error("account_service_invalid", "试用资格数据无效。"))?;
     let started_at = document["fields"]["startedAt"]["timestampValue"]
         .as_str()
         .map(str::to_owned);
@@ -151,7 +157,7 @@ fn status_from_token(
 
 fn sign_in(email: String, password: String) -> Result<FellowCutAccountStatus, String> {
     if email.trim().is_empty() || password.is_empty() {
-        return Err("请输入邮箱和密码。".to_owned());
+        return Err(account_error("account_missing_credentials", "请输入邮箱和密码。"));
     }
     let agent = http_agent();
     let response = agent
@@ -162,8 +168,8 @@ fn sign_in(email: String, password: String) -> Result<FellowCutAccountStatus, St
                 .to_string(),
         )
         .map_err(|error| match error {
-            ureq::Error::Status(400, _) => "邮箱或密码不正确。".to_owned(),
-            _ => "登录服务暂时不可用，请检查网络。".to_owned(),
+            ureq::Error::Status(400, _) => account_error("account_invalid_credentials", "邮箱或密码不正确。"),
+            _ => account_error("account_sign_in_unavailable", "登录服务暂时不可用，请检查网络。"),
         })?;
     let response: SignInResponse = response_json(response)?;
     let status = status_from_token(&agent, &response.id_token)?;
@@ -188,7 +194,7 @@ fn get_status() -> Result<FellowCutAccountStatus, String> {
 
 pub(crate) fn fresh_id_token() -> Result<String, String> {
     let refresh_token = saved_refresh_token()?
-        .ok_or_else(|| "请先登录 Voycut 账号。".to_owned())?;
+        .ok_or_else(|| account_error("account_signed_out", "请先登录 Voycut 账号。"))?;
     let agent = http_agent();
     let response = agent
         .post(&format!(
@@ -201,7 +207,7 @@ pub(crate) fn fresh_id_token() -> Result<String, String> {
                 .append_pair("refresh_token", &refresh_token)
                 .finish(),
         )
-        .map_err(|_| "登录已失效或网络不可用，请重新登录。".to_owned())?;
+        .map_err(|_| account_error("account_session_expired", "登录已失效或网络不可用，请重新登录。"))?;
     let response: RefreshResponse = response_json(response)?;
     if response.refresh_token != refresh_token {
         save_refresh_token(&response.refresh_token)?;
@@ -228,11 +234,11 @@ pub(crate) fn gateway_base_url() -> Result<Option<String>, String> {
         return if cfg!(debug_assertions) {
             Ok(None)
         } else {
-            Err("此版本未配置 Voycut 模型服务。".to_owned())
+            Err("provider_gateway_not_configured: This build has no Voycut model service configured.".to_owned())
         };
     };
     let url = url::Url::parse(&base_url)
-        .map_err(|_| "Voycut 模型服务地址无效。".to_owned())?;
+        .map_err(|_| "provider_gateway_not_configured: The Voycut model service address in this build is invalid.".to_owned())?;
     let local_dev = cfg!(debug_assertions)
         && url.scheme() == "http"
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost"));
@@ -244,7 +250,7 @@ pub(crate) fn gateway_base_url() -> Result<Option<String>, String> {
         || url.fragment().is_some()
         || url.path().trim_end_matches('/') != "/api/model"
     {
-        return Err("Voycut 模型服务地址无效。".to_owned());
+        return Err("provider_gateway_not_configured: The Voycut model service address in this build is invalid.".to_owned());
     }
     Ok(Some(base_url.trim_end_matches('/').to_owned()))
 }
@@ -256,14 +262,14 @@ pub async fn sign_in_fellowcut(
 ) -> Result<FellowCutAccountStatus, String> {
     tauri::async_runtime::spawn_blocking(move || sign_in(email, password))
         .await
-        .map_err(|_| "登录任务未完成。".to_owned())?
+        .map_err(|_| account_error("account_task_interrupted", "登录任务未完成。"))?
 }
 
 #[tauri::command]
 pub async fn get_fellowcut_account_status() -> Result<FellowCutAccountStatus, String> {
     tauri::async_runtime::spawn_blocking(get_status)
         .await
-        .map_err(|_| "账号状态读取未完成。".to_owned())?
+        .map_err(|_| account_error("account_task_interrupted", "账号状态读取未完成。"))?
 }
 
 #[tauri::command]
@@ -276,6 +282,6 @@ pub fn sign_out_fellowcut() -> Result<FellowCutAccountStatus, String> {
             trial_started_at: None,
             account_page_url: account_page_url(),
         }),
-        Err(_) => Err("无法清除 Voycut 登录凭据。".to_owned()),
+        Err(_) => Err(account_error("account_credential_store", "无法清除 Voycut 登录凭据。")),
     }
 }
