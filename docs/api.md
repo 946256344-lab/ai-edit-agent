@@ -444,7 +444,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 
 NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 复核全局白名单与作用域，不以请求关键词收缩执行集。
 
-`read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`，模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
+`read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`（单文件上限 10 MB，另保留最近 5 份轮转文件），模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
 
 开发诊断阶段可通过 `list_agent_diagnostics({ projectId, editingTaskId, agentTaskId })` 读取本地诊断记录。它只包含同一作用域内的受控阶段标记、响应长度和安全错误码，用于定位模型请求、响应解析、工具或管线在哪一步失败；绝不保存模型原文、会话内容、媒体证据、凭据或本机路径。
 
