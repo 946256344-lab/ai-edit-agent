@@ -769,6 +769,29 @@ fn spoken_duration_conflicts(spoken_ms: i64, requested_ms: i64) -> bool {
     delta * 10 > spoken * 3
 }
 
+/// 旁白稿长度：以汉字为主按字计，否则按空白分词计，供按实测语速换算改稿目标。
+fn spoken_script_length(brief: &str) -> (usize, &'static str) {
+    let han = brief
+        .chars()
+        .filter(|character| ('\u{4e00}'..='\u{9fff}').contains(character))
+        .count();
+    let words = brief
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .count();
+    if han > words {
+        (han, "characters")
+    } else {
+        (words, "words")
+    }
+}
+
+/// 按本次配音实测语速，把稿长换算到用户要的时长；不用固定语速假设。
+fn scaled_script_length(length: usize, spoken_ms: i64, requested_ms: i64) -> usize {
+    let scaled = length as f64 * requested_ms.max(0) as f64 / spoken_ms.max(1) as f64;
+    scaled.round() as usize
+}
+
 fn brief_has_voiceover_script(brief: &str) -> bool {
     estimated_storyboard_duration_ms(brief) >= 3_000
 }
@@ -2754,8 +2777,10 @@ fn generate_storyboard_internal(
                 if let Some(requested) = requested_duration_ms.filter(|value| *value > 0) {
                     if spoken_duration_conflicts(prepared.duration_ms, requested) {
                         let spoken = prepared.duration_ms;
+                        let (length, unit) = spoken_script_length(brief);
+                        let target = scaled_script_length(length, spoken, requested);
                         return Err(format!(
-                            "storyboard_needs_user_decision: spoken audio is {spoken}ms but the user asked for {requested}ms. Ask which duration to keep. facts={{\"spokenMs\":{spoken},\"requestedMs\":{requested}}}"
+                            "storyboard_needs_user_decision: spoken audio is {spoken}ms but the user asked for {requested}ms. Ask which duration to keep. facts={{\"spokenMs\":{spoken},\"requestedMs\":{requested},\"scriptLength\":{length},\"scriptUnit\":\"{unit}\",\"targetScriptLength\":{target}}}"
                         ));
                     }
                 }

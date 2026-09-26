@@ -189,8 +189,8 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
                     format!("durations={facts}")
                 ],
                 "retryable": false,
-                "recovery": "Stop this run. Quote the spoken audio length and the user's requested length. Ask which duration to keep. Do not call generate_storyboard again until they answer.",
-                "responseInstruction": "Tell the user generation paused because the spoken voiceover is much longer or shorter than the duration they asked for. Quote both numbers. Ask which to keep. Do not claim a storyboard was saved."
+                "recovery": "Stop this run. Quote the spoken audio length and the user's requested length. Ask which duration to keep. Do not call generate_storyboard again until they answer. targetScriptLength is the script length that fits the requested duration at the speech rate just measured. If the user keeps the requested duration, rewrite the script to about targetScriptLength scriptUnit (within 10%), count it before calling generate_storyboard, and pass the same requestedDurationMs. Do not add only a sentence or two.",
+                "responseInstruction": "Tell the user generation paused because the spoken voiceover is much longer or shorter than the duration they asked for. Quote both durations, the current script length and targetScriptLength with scriptUnit. Offer two choices: keep the current script and its spoken length, or rewrite the script to about targetScriptLength scriptUnit to reach the requested duration. Do not claim a storyboard was saved."
             });
         }
         return json!({
