@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-26：generate_storyboard 返回实际落地的媒体
+
+公开 Tauri 命令不变。Native `generate_storyboard` 输出新增 `appliedMedia`（`voiceover` / `subtitles` / `bgm`，按时间线上启用且非空的轨道判断）和 `timelineVersionNumber`；`requestedMedia` 只回显要求。要求了却没落地的媒体列在 `mediaNotApplied`，`bgm` 附恢复方式（该工具从不加音乐）。英文逐词 alignment 字幕保留词间空格，只在空格处换行。见 `docs/changes/2026-09-26-english-subtitles-applied-media.md`。
+
 ## 2026-09-25：选镜局部编辑工具
 
 新增 Native 工具 `reselect_shots` 与 `refine_shot_ranges`，只改指定 beat / 镜头，其余镜头、配音、字幕、音乐原样保留，拍时长取当前时间线。两者都写派生 storyboard 版本（`derivedFromVersionId`、`changedBeatIds`）加新时间线并渲染预览，不新建剪映草稿。`StoryboardVersion` 的这两个字段对整条生成的版本为 `null` / `[]`。见 `docs/changes/2026-09-25-storyboard-edit-primitives.md`。

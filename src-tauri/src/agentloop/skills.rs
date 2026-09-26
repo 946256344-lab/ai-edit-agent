@@ -1154,6 +1154,31 @@ pub(super) fn apply_skill(
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
                     // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
+                    // requestedMedia 只是用户要求；appliedMedia 按时间线实际轨道给出，模型只能据此汇报。
+                    let applied_media = json!({
+                        "voiceover": timeline.voiceover_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()),
+                        "subtitles": timeline.text_tracks.iter().any(|track| track.enabled && track.role == "subtitle" && !track.cues.is_empty()),
+                        "bgm": timeline.music_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()),
+                    });
+                    let media_not_applied = media_options
+                        .map(|options| {
+                            [
+                                ("voiceover", options.voiceover),
+                                ("subtitles", options.subtitles),
+                                ("bgm", options.bgm),
+                            ]
+                            .into_iter()
+                            .filter(|(key, requested)| *requested && applied_media[*key] != true)
+                            .map(|(key, _)| key)
+                            .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if !media_not_applied.is_empty() {
+                        message.push_str(&format!(
+                            "\n已要求但时间线中没有：{}。",
+                            media_not_applied.join("、")
+                        ));
+                    }
                     let (preview, jianying_draft, preview_error, editor_error) =
                         deliver_playable_preview_and_editor(
                             state.app.clone(),
@@ -1166,9 +1191,25 @@ pub(super) fn apply_skill(
                         "storyboardVersionId": storyboard_version_id,
                         "timelineVersionId": timeline_version_id,
                         "versionNumber": version_number,
+                        "timelineVersionNumber": timeline.version_number,
                         "qualityWarnings": quality_warnings,
                         "requestedMedia": media_options,
+                        "appliedMedia": applied_media,
                     });
+                    if !media_not_applied.is_empty() {
+                        result["mediaNotApplied"] = media_not_applied
+                            .iter()
+                            .map(|key| {
+                                let note = if *key == "bgm" {
+                                    "generate_storyboard never adds music. Add it with replace_music_tracks using a ready local audio asset, or search_music then download_music; otherwise tell the user the video has no music."
+                                } else {
+                                    "Requested but not on the timeline."
+                                };
+                                ((*key).to_owned(), json!(note))
+                            })
+                            .collect::<serde_json::Map<_, _>>()
+                            .into();
+                    }
                     if preview.is_some() {
                         result["previewTimelineVersionId"] = json!(timeline_version_id);
                     }

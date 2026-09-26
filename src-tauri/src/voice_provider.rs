@@ -378,7 +378,7 @@ pub(crate) fn cues_from_alignment_text(
             })
             .collect::<Vec<_>>();
         return (units.iter().any(|unit| !unit.text.trim().is_empty()))
-            .then(|| group_alignment_units(units, narration_text))
+            .then(|| group_alignment_units(units, narration_text, true))
             .ok_or_else(|| "incomplete_alignment".to_owned());
     }
     let characters = alignment
@@ -416,7 +416,7 @@ pub(crate) fn cues_from_alignment_text(
     if units.iter().all(|unit| unit.text.trim().is_empty()) {
         return Err("incomplete_alignment".to_owned());
     }
-    let cues = group_alignment_units(units, None);
+    let cues = group_alignment_units(units, None, false);
     if cues.is_empty() {
         return Err("incomplete_alignment".to_owned());
     }
@@ -429,11 +429,44 @@ pub(crate) fn cues_from_alignment_text(
     Ok(cues)
 }
 
-/// 语音服务可能逐字返回时间戳；字幕按短句显示，仍使用首尾字的真实时间。
+/// 中日文字与全角标点之间不加空格，拉丁文字按词拼接时才需要。
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3000}'..='\u{30ff}' | '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{ff00}'..='\u{ffef}'
+    )
+}
+
+/// 按词返回的时间戳（Fish segments）不带空格；两侧都是非中日文字时补一个空格。
+fn push_word_unit(text: &mut String, unit: &str) {
+    let joins_words = text
+        .chars()
+        .last()
+        .is_some_and(|ch| !ch.is_whitespace() && !is_cjk(ch))
+        && unit
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_alphanumeric() && !is_cjk(ch));
+    if joins_words {
+        text.push(' ');
+    }
+    text.push_str(unit);
+}
+
+/// 语音服务可能逐字或逐词返回时间戳；字幕按短句显示，仍使用首尾单元的真实时间。
+/// `word_units` 为 true 时单元是不带空格的词，拼接时按文字种类补空格。
 fn group_alignment_units(
     units: Vec<AlignmentCue>,
     narration_text: Option<&str>,
+    word_units: bool,
 ) -> Vec<AlignmentCue> {
+    let append = |text: &mut String, unit: &str| {
+        if word_units {
+            push_word_unit(text, unit);
+        } else {
+            text.push_str(unit);
+        }
+    };
     let spoken = |text: &str| {
         text.chars()
             .filter(|ch| ch.is_alphanumeric())
@@ -477,12 +510,13 @@ fn group_alignment_units(
     let mut spoken_count = 0;
     for unit in units {
         if let Some(cue) = current.as_ref() {
-            let cjk = cue
-                .text
-                .chars()
-                .chain(unit.text.chars())
-                .any(|ch| matches!(ch, '\u{3400}'..='\u{9fff}'));
-            let max_chars = if cjk { 16 } else { 32 };
+            let cjk = cue.text.chars().chain(unit.text.chars()).any(is_cjk);
+            // 每条字幕最多两行，见 wrap_subtitle_text 的每行字数。
+            let max_chars = if cjk {
+                CJK_LINE_CHARS * 2
+            } else {
+                LATIN_LINE_CHARS * 2
+            };
             if (cue.text.chars().count() >= 4 && unit.start_ms - cue.end_ms >= 300)
                 || (cue.text.chars().count() >= 12 && unit.start_ms - cue.end_ms >= 120)
                 || cue.text.chars().count() + unit.text.chars().count() > max_chars
@@ -495,7 +529,7 @@ fn group_alignment_units(
             end_ms: unit.end_ms,
             text: String::new(),
         });
-        cue.text.push_str(&unit.text);
+        append(&mut cue.text, &unit.text);
         cue.end_ms = cue.end_ms.max(unit.end_ms);
         let added_spoken = unit.text.chars().filter(|ch| ch.is_alphanumeric()).count();
         spoken_count += added_spoken;
@@ -524,7 +558,7 @@ fn group_alignment_units(
     {
         let tail = cues.pop().unwrap();
         let previous = cues.last_mut().unwrap();
-        previous.text.push_str(&tail.text);
+        append(&mut previous.text, &tail.text);
         previous.end_ms = tail.end_ms;
     }
     for index in 0..cues.len().saturating_sub(1) {
@@ -586,20 +620,60 @@ pub(crate) fn subtitle_track_from_cues(generation_id: &str, cues: &[AlignmentCue
     }
 }
 
+/// 默认字号在 540 宽竖屏上约容纳 8 个汉字或 20 个拉丁字符。
+const CJK_LINE_CHARS: usize = 8;
+const LATIN_LINE_CHARS: usize = 20;
+
 fn wrap_subtitle_text(text: &str) -> String {
-    let line_chars = if text.chars().any(|ch| matches!(ch, '\u{3400}'..='\u{9fff}')) {
-        8
-    } else {
-        24
-    };
+    if !text.chars().any(is_cjk) {
+        return wrap_subtitle_words(text);
+    }
     let mut wrapped = String::new();
     for (index, ch) in text.chars().enumerate() {
-        if index > 0 && index % line_chars == 0 {
+        if index > 0 && index % CJK_LINE_CHARS == 0 {
             wrapped.push('\n');
         }
         wrapped.push(ch);
     }
     wrapped
+}
+
+/// 拉丁文字只在空格处换行：两行放得下时取最接近中点的空格，否则逐词换行；超长单词整词保留。
+fn wrap_subtitle_words(text: &str) -> String {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    let joined = words.join(" ");
+    let total = joined.chars().count();
+    if total <= LATIN_LINE_CHARS {
+        return joined;
+    }
+    let mut best: Option<(usize, usize)> = None;
+    let mut left = 0;
+    for split in 1..words.len() {
+        left += words[split - 1].chars().count() + usize::from(split > 1);
+        let right = total - left - 1;
+        if left <= LATIN_LINE_CHARS && right <= LATIN_LINE_CHARS {
+            let imbalance = left.abs_diff(right);
+            if best.map_or(true, |(current, _)| imbalance < current) {
+                best = Some((imbalance, split));
+            }
+        }
+    }
+    if let Some((_, split)) = best {
+        return format!("{}\n{}", words[..split].join(" "), words[split..].join(" "));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for word in words {
+        match lines.last_mut() {
+            Some(line)
+                if line.chars().count() + 1 + word.chars().count() <= LATIN_LINE_CHARS =>
+            {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_owned()),
+        }
+    }
+    lines.join("\n")
 }
 
 fn project_lock(project_id: &str) -> Arc<Mutex<()>> {
@@ -1289,6 +1363,40 @@ mod tests {
             .cues
             .iter()
             .all(|cue| { cue.text.lines().all(|line| line.chars().count() <= 8) }));
+    }
+
+    #[test]
+    fn fish_word_alignment_keeps_spaces_and_wraps_at_words() {
+        let words = "Every day precision meets power on the factory floor Robotic arms move with pinpoint accuracy";
+        let segments = words
+            .split(' ')
+            .enumerate()
+            .map(|(index, word)| {
+                json!({"text": word, "start": index as f64 * 0.3, "end": (index + 1) as f64 * 0.3})
+            })
+            .collect::<Vec<_>>();
+        let cues = cues_from_alignment_text(
+            &json!({"segments": segments}),
+            6_000,
+            Some("Every day, precision meets power on the factory floor. Robotic arms move with pinpoint accuracy."),
+        )
+        .expect("cues");
+        assert_eq!(cues[0].text, "Every day,");
+        assert_eq!(
+            cues.iter().map(|cue| cue.text.as_str()).collect::<Vec<_>>().join(" "),
+            "Every day, precision meets power on the factory floor. Robotic arms move with pinpoint accuracy."
+        );
+        let track = subtitle_track_from_cues("fish", &cues);
+        let spoken = words.split(' ').collect::<Vec<_>>();
+        for cue in &track.cues {
+            for line in cue.text.lines() {
+                assert!(line.chars().count() <= LATIN_LINE_CHARS, "{line}");
+                for word in line.split(' ') {
+                    let bare = word.trim_end_matches(|ch: char| !ch.is_alphanumeric());
+                    assert!(spoken.contains(&bare), "{word} is not a whole word");
+                }
+            }
+        }
     }
 
     #[test]

@@ -853,6 +853,8 @@ A generated storyboard with status needs_confirmation must be summarized for use
 do not create or edit a timeline until the user confirms it in a later turn.\n\
 \n\
 AFTER A WRITE FUNCTION SUCCEEDS: Claim an artifact was created only when its function output confirms success. \
+requestedMedia only echoes what was asked; report voiceover, subtitles, and music only as appliedMedia shows them, \
+and state plainly anything listed in mediaNotApplied. \
 If the output includes qualityWarnings, adjust picture with allowed functions; \
 do not treat warnings as a finished edit and do not rewrite spoken narration after voiceover exists. \
 generate_storyboard already renders preview and creates a new draft when clips are playable — \
@@ -867,7 +869,7 @@ The state snapshot is authoritative. If it shows 暂停于=generate_storyboard(s
 the user's message answers that pause: call generate_storyboard again as they chose. \
 brief=null reuses the saved approved script and its cached voiceover; to keep the spoken length pass requestedDurationMs=null; \
 to reach the named duration pass the rewritten script as brief with requestedDurationMs. \
-Never report a storyboard, voiceover, preview, or editor draft as created unless a function in this turn returned it \
+Never report a storyboard, voiceover, subtitles, music, preview, or editor draft as created unless a function in this turn returned it \
 or the snapshot shows it.\
 ".to_owned();
     prompt.push_str("\n\nAvailable tool directory:\n");
