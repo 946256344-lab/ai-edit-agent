@@ -77,6 +77,18 @@ pub(crate) struct ModelRequestFailureClass {
 const GATEWAY_AUTH: &str = "provider_gateway_auth";
 const GATEWAY_ENTITLEMENT: &str = "provider_gateway_entitlement";
 const GATEWAY_PAYLOAD_TOO_LARGE: &str = "provider_gateway_payload_too_large";
+const GATEWAY_UPGRADE_REQUIRED: &str = "provider_gateway_upgrade_required";
+
+/// 重试也不会成功的模型失败：网关登录、资格、版本与请求体过大，以及除 408/429 外的 HTTP 4xx。
+/// 调用方遇到时应立即结束本步，不再按传输或语义预算重发，避免空耗时间和上游额度。
+/// 错误可能被上层加了前缀，因此按子串识别网关码。
+pub(crate) fn is_final_model_failure(error: &str) -> bool {
+    if error.contains("provider_gateway_") {
+        return true;
+    }
+    provider_http_status(error)
+        .is_some_and(|status| (400..500).contains(&status) && status != 408 && status != 429)
+}
 
 pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailureClass {
     if let Some(code) = existing_failure_code(error) {
@@ -1102,6 +1114,9 @@ fn post_model_payload_with_custom_model(
                                 413 => format!(
                                     "{GATEWAY_PAYLOAD_TOO_LARGE}: Visual analysis payload exceeded the model service limit."
                                 ),
+                                426 => format!(
+                                    "{GATEWAY_UPGRADE_REQUIRED}: This Voycut version is no longer supported by the model service."
+                                ),
                                 _ => format!("Voycut model service unavailable:HTTP {status}"),
                             }
                         } else {
@@ -1557,6 +1572,24 @@ mod tests {
     #[test]
     fn model_requests_share_one_process_wide_http_agent() {
         assert!(std::ptr::eq(http_agent(), http_agent()));
+    }
+
+    #[test]
+    fn rejected_requests_and_gateway_denials_are_final() {
+        for error in [
+            "Voycut model service unavailable:HTTP 400",
+            "Phase 3 beat 'b1': provider_gateway_entitlement: Voycut access is not active for this account.",
+            "provider_gateway_upgrade_required: This Voycut version is no longer supported by the model service.",
+        ] {
+            assert!(is_final_model_failure(error), "{error}");
+        }
+        for error in [
+            "Voycut model service unavailable:HTTP 429",
+            "Voycut model service unavailable:HTTP 502",
+            "Voycut model service connection failed (network error).",
+        ] {
+            assert!(!is_final_model_failure(error), "{error}");
+        }
     }
 
     #[test]

@@ -477,6 +477,10 @@ fn native_model_reply_unavailable_result(
             "本次画面分析数据过大，模型服务无法接收。",
             "This visual analysis request is too large for the model service.",
         )),
+        "provider_gateway_upgrade_required" => Some(locale.pick(
+            "当前 Voycut 版本已停止支持，请到网站下载最新版本。",
+            "This version of Voycut is no longer supported. Download the latest version from the website.",
+        )),
         _ => None,
     };
     let message = match gateway_reason {

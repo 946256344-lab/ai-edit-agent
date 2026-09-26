@@ -3114,6 +3114,9 @@ fn run_phase3_selection(
             }
             Err(error) => {
                 log::warn!("Phase 3 request failed: {error}");
+                if crate::provider::is_final_model_failure(&error) {
+                    return Err(error);
+                }
                 if is_transport_or_parse_error(&error) {
                     if !budget.can_retry_transport() {
                         repair = Some(RepairPacket::new(
@@ -3363,6 +3366,9 @@ pub(crate) fn run_phase4_and_validate(
             }
             Err(error) => {
                 log::warn!("Phase 4 request failed: {error}");
+                if crate::provider::is_final_model_failure(&error) {
+                    return Err(error);
+                }
                 if is_transport_or_parse_error(&error) {
                     if !budget.can_retry_transport() {
                         repair = Some(RepairPacket::new(

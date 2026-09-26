@@ -693,6 +693,7 @@ export const zhCN = {
       gatewayAuth: '未登录 Voycut 或登录已失效。请在账号菜单重新登录；已登录时请检查网络。',
       gatewayEntitlement: 'Voycut 使用资格不可用，试用可能已到期。请在账号页查看试用状态。',
       gatewayPayloadTooLarge: '本次画面分析数据过大，模型服务无法接收。请减少一次处理的素材或镜头后重试。',
+      gatewayUpgrade: '当前 Voycut 版本已停止支持，请到网站下载最新版本。',
       withCause: (summary: string, detail: string) => `${summary}原因：${detail}`,
       agentMessage: '这次操作没有完成，已有结果没有被修改。请重试，或补充你希望保留的素材和片段。',
     },

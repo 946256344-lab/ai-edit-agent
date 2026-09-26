@@ -2580,6 +2580,9 @@ pub(crate) fn phase3_select(
                 }
                 Err(error) => {
                     log::warn!("Phase 3 beat '{beat_id}' attempt {attempt} failed: {error}");
+                    if crate::provider::is_final_model_failure(&error) {
+                        return Err(error);
+                    }
                     last_error = Some(error);
                 }
             }
@@ -2697,6 +2700,9 @@ pub(crate) fn phase3_select_beats(
                         "Local reselect beat '{}' attempt {attempt} failed: {error}",
                         pool.beat_id
                     );
+                    if crate::provider::is_final_model_failure(&error) {
+                        return Err(error);
+                    }
                     last_error = error;
                 }
             }

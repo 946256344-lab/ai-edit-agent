@@ -699,6 +699,7 @@ export const en: typeof zhCN = {
       gatewayAuth: 'You are not signed in to Voycut, or your sign-in has expired. Sign in again from the account menu; if you are already signed in, check your network.',
       gatewayEntitlement: 'Your Voycut access is not active; the trial may have ended. Check your trial status on the account page.',
       gatewayPayloadTooLarge: 'This visual analysis request is too large for the model service. Process fewer clips or shots at once and try again.',
+      gatewayUpgrade: 'This version of Voycut is no longer supported. Download the latest version from the website.',
       withCause: (summary: string, detail: string) => `${summary} Cause: ${detail}`,
       agentMessage: 'This run did not complete and existing results were not changed. Please retry, or tell me which media and clips to keep.',
     },
