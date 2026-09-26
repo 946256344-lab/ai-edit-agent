@@ -77,8 +77,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.handle().plugin(
+                // 默认 40 KB 且只留一份，一次生成的日志会被截掉；放大并保留最近几份供排查耗时。
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
+                    .max_file_size(10_000_000)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
                     .build(),
             )?;
             process::install_bundled_media_tools(&app.handle());

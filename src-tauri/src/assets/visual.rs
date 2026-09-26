@@ -588,6 +588,7 @@ fn commit_coarse_visual_cards(
             metadata.visual_analysis_status = "queued".to_owned();
             metadata.visual_analysis_note = None;
         }
+        let embedding_started = std::time::Instant::now();
         if crate::storyboard::semantic::refresh_metadata_embedding(app, &mut metadata).is_err() {
             embedding_unavailable = true;
         }
@@ -596,6 +597,10 @@ fn commit_coarse_visual_cards(
         {
             embedding_unavailable = true;
         }
+        log::info!(
+            "[PERF] visual commit embeddings asset={asset_id} {}ms",
+            embedding_started.elapsed().as_millis()
+        );
         updates.push((
             asset_id.clone(),
             metadata_json,

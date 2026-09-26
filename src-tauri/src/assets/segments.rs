@@ -66,6 +66,14 @@ pub(crate) fn detect_scene_cuts(source: &Path, duration_ms: i64, budget: Duratio
         .collect()
 }
 
+/// 计时日志只写文件名，不写完整本地路径。
+fn file_label(source: &Path) -> String {
+    source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn is_remote_source(path: &Path) -> bool {
     let raw = path.to_string_lossy();
     let stripped = raw
@@ -349,6 +357,7 @@ fn verify_hard_cuts(
         log::info!("Hard-cut CLIP verify skipped (no app handle); keeping no cuts.");
         return Vec::new();
     };
+    let extract_started = Instant::now();
     let mut pairs: Vec<(i64, Vec<u8>, Vec<u8>)> = Vec::new();
     for cut in &cuts {
         let before_ms = (*cut - CUT_PROBE_OFFSET_MS).max(0);
@@ -381,7 +390,17 @@ fn verify_hard_cuts(
         image_refs.push(before);
         image_refs.push(after);
     }
-    let embeddings = match crate::storyboard::clip::encode_image_bytes(app, &image_refs) {
+    let extract_ms = extract_started.elapsed().as_millis();
+    let clip_started = Instant::now();
+    let clip_result = crate::storyboard::clip::encode_image_bytes(app, &image_refs);
+    log::info!(
+        "[PERF] cut verify file={} probes={} extract={}ms clip={}ms",
+        file_label(source),
+        pairs.len(),
+        extract_ms,
+        clip_started.elapsed().as_millis()
+    );
+    let embeddings = match clip_result {
         Ok(embeddings) => embeddings,
         Err(error) => {
             log::warn!("Hard-cut CLIP verify failed ({error}); keeping no cuts.");
@@ -413,8 +432,14 @@ pub(crate) fn analyze_video_segments(
     duration_ms: Option<i64>,
 ) -> Result<(Vec<KeyframeMetadata>, Vec<SceneSegment>), String> {
     let duration_ms = duration_ms.unwrap_or(0).max(0);
+    let detect_started = Instant::now();
     let raw_cuts = detect_scene_cuts(source, duration_ms, SCENE_DETECT_BUDGET);
+    let detect_ms = detect_started.elapsed().as_millis();
+    let raw_cut_count = raw_cuts.len();
+    let verify_started = Instant::now();
     let cuts = verify_hard_cuts(app, source, derived_dir, duration_ms, raw_cuts);
+    let verify_ms = verify_started.elapsed().as_millis();
+    let kept_cut_count = cuts.len();
     let ranges = build_segment_ranges(&cuts, duration_ms);
     let ranges = if ranges.is_empty() && duration_ms > 0 {
         vec![(0, duration_ms)]
@@ -422,6 +447,8 @@ pub(crate) fn analyze_video_segments(
         ranges
     };
 
+    let samples_started = Instant::now();
+    let mut sampled_frames = 0usize;
     let mut segments = Vec::with_capacity(ranges.len());
     let mut midpoint_keyframes = Vec::new();
     for (index, (start_ms, end_ms)) in ranges.into_iter().enumerate() {
@@ -432,6 +459,7 @@ pub(crate) fn analyze_video_segments(
         for (frame_index, time_ms) in sample_times.iter().enumerate() {
             let destination =
                 derived_dir.join(format!("seg_{segment_id}_{:02}.jpg", frame_index + 1));
+            sampled_frames += 1;
             if extract_frame(source, *time_ms, &destination) {
                 if let Some(score) = frame_quality_score(&destination) {
                     quality_scores.push(score);
@@ -469,7 +497,21 @@ pub(crate) fn analyze_video_segments(
         });
     }
 
+    let samples_ms = samples_started.elapsed().as_millis();
+    let motion_started = Instant::now();
     super::motion::attach_motion_profiles(source, &mut segments);
+    log::info!(
+        "[PERF] segments file={} detect={}ms verify={}ms (cuts {}->{}) samples={}ms ({} frames, {} segments) motion={}ms",
+        file_label(source),
+        detect_ms,
+        verify_ms,
+        raw_cut_count,
+        kept_cut_count,
+        samples_ms,
+        sampled_frames,
+        segments.len(),
+        motion_started.elapsed().as_millis()
+    );
     midpoint_keyframes.truncate(MAX_KEYFRAMES_FOR_GRID);
     Ok((midpoint_keyframes, segments))
 }
