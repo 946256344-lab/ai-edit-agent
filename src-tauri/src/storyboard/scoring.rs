@@ -521,7 +521,7 @@ fn evidence_blob(candidate: &StoryboardSource) -> String {
         if let Some(caption) = &evidence.caption {
             parts.push(caption.clone());
         }
-        parts.extend(evidence.change_descriptions().cloned());
+        parts.extend(evidence.detail_phrases().cloned());
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }

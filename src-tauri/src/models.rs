@@ -1103,11 +1103,17 @@ pub struct VisualEvidence {
 }
 
 impl VisualEvidence {
-    /// 召回文本用：按时间的画面变化描述。
-    pub(crate) fn change_descriptions(&self) -> impl Iterator<Item = &String> {
-        self.detail
-            .iter()
-            .flat_map(|detail| detail.changes.iter().map(|change| &change.description))
+    /// 召回文本用：变化、高光的描述，以及抽象概念与氛围词。
+    pub(crate) fn detail_phrases(&self) -> impl Iterator<Item = &String> {
+        self.detail.iter().flat_map(|detail| {
+            detail
+                .changes
+                .iter()
+                .map(|change| &change.description)
+                .chain(detail.highlights.iter().map(|moment| &moment.description))
+                .chain(detail.concepts.iter())
+                .chain(detail.mood.iter())
+        })
     }
 }
 
@@ -1139,6 +1145,67 @@ pub struct ShotDetail {
     pub(crate) exhibition: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) best_range: Option<BestRange>,
+    /// 每张大图里主体横向左右边界（占画面宽度 0–1），用于竖屏裁切。
+    #[serde(default)]
+    pub(crate) subject_spans: Vec<SubjectSpan>,
+    /// 9:16 竖屏裁切能否保住主体：good / partial / poor。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) vertical_crop_fit: Option<String>,
+    /// 最有看点的瞬间（火花、机械到位、产品落下等）。
+    #[serde(default)]
+    pub(crate) highlights: Vec<ShotMoment>,
+    /// 开头 / 结尾能否直接做剪辑点（无人半身进出、无闪白、镜头已稳）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) clean_start: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) clean_end: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) edge_note: Option<String>,
+    /// left-to-right / right-to-left / toward-camera / away-from-camera / up / down / none。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) subject_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) camera_direction: Option<String>,
+    /// 这段画面能表达的抽象概念，如 precision、automation、teamwork。
+    #[serde(default)]
+    pub(crate) concepts: Vec<String>,
+    #[serde(default)]
+    pub(crate) mood: Vec<String>,
+    /// indoor / outdoor。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) setting: Option<String>,
+    /// day / night / unknown。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) time_of_day: Option<String>,
+    /// warm / neutral / cool。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) color_tone: Option<String>,
+    /// bright / normal / dark。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) brightness: Option<String>,
+    /// none / one / few / many。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) people_count: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) faces_visible: Option<bool>,
+    /// 可见的防护装备：helmet、gloves、goggles、mask、vest、ear protection 等。
+    #[serde(default)]
+    pub(crate) safety_gear: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectSpan {
+    pub(crate) time_ms: i64,
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotMoment {
+    pub(crate) time_ms: i64,
+    pub(crate) description: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

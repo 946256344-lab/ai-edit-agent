@@ -970,7 +970,33 @@ fn compact_candidate_card(
             "brandLogos": detail.brand_logos,
             "crowd": detail.crowd,
             "exhibition": detail.exhibition,
+            "peopleCount": detail.people_count,
+            "facesVisible": detail.faces_visible,
+            "safetyGear": detail.safety_gear,
         });
+        card["highlights"] = json!(detail
+            .highlights
+            .iter()
+            .map(|moment| format!("{}ms: {}", moment.time_ms, moment.description))
+            .collect::<Vec<_>>());
+        card["verticalCropFit"] = json!(detail.vertical_crop_fit);
+        card["cleanEdges"] = json!({
+            "start": detail.clean_start,
+            "end": detail.clean_end,
+            "note": detail.edge_note,
+        });
+        card["direction"] = json!({
+            "subject": detail.subject_direction,
+            "camera": detail.camera_direction,
+        });
+        card["look"] = json!({
+            "setting": detail.setting,
+            "timeOfDay": detail.time_of_day,
+            "colorTone": detail.color_tone,
+            "brightness": detail.brightness,
+        });
+        card["concepts"] = json!(detail.concepts);
+        card["mood"] = json!(detail.mood);
     }
     card
 }
@@ -3190,7 +3216,7 @@ fn select_one_beat(
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
         If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
-        Some candidates also carry whole-shot labels from import: changes (what happens when, in source ms), focus (shallow_depth_of_field is intentional background blur, out_of_focus is a defect), bestRangeMs, and contentFlags (visible text, brand logos, crowd, exhibition). Use them to judge fit, but they are unverified too.
+        Some candidates also carry whole-shot labels from import: changes and highlights (what happens when, in source ms), focus (shallow_depth_of_field is intentional background blur, out_of_focus is a defect), bestRangeMs, verticalCropFit, cleanEdges, direction, look (lighting and color), concepts, mood, and contentFlags (visible text, brand logos, crowd, exhibition, people, faces, safety gear). Use them to judge fit and continuity with neighboring beats, but they are unverified too.
         Selection order: (1) look at the attached frames first; visibleCaption/scene/subjects/actions are unverified labels — if they conflict with the frames, trust the frames; (2) prefer the candidate whose frames best cover this beat's requiredVisual; (3) if none cover it literally, pick the closest honest scene-setting clip from this pool.\n\
         Narrative continuity: consider what already-selected shots show (see already-selected list above) and choose a visually distinct angle or scene to advance the story — avoid repeating the same location or subject if variety is available.\n\
         Narration is what will be spoken and how long the picture must last. Do not pick a clip only because it echoes abstract wording in the narration or brief.\n\

@@ -34,8 +34,11 @@ const MAX_KEYFRAMES_FOR_GRID: usize = 8;
 const QUALITY_FRAME_WIDTH: u32 = 320;
 /// 段内样本帧宽度：整段识别要放大其中一帧看细节，按大图尺寸抽。
 const SAMPLE_FRAME_WIDTH: u32 = 960;
-/// 每段抽样帧数：清晰度评分与整段画面识别共用（识别图为 1 帧大图 + 4 帧小图）。
-pub(crate) const SEGMENT_SAMPLE_FRAMES: usize = 5;
+/// 整段识别每张图的帧数（1 帧大图 + 4 帧小图），每张图覆盖约 15 秒。
+pub(crate) const FRAMES_PER_SHEET: usize = 5;
+const SHEET_SPAN_MS: i64 = 15_000;
+/// 单次模型请求最多 4 张图，超过 60 秒的段固定 4 张、帧在整段均匀铺开。
+pub(crate) const MAX_SHEETS_PER_SEGMENT: usize = crate::provider::MAX_IMAGES_PER_REQUEST;
 const CUT_PROBE_OFFSET_MS: i64 = 250;
 /// 与 Phase 2 去似同一阈值：切点两侧仍像同一画面则丢掉该切。
 const CUT_VERIFY_SIMILAR_COSINE: f64 = 0.92;
@@ -354,15 +357,19 @@ fn extract_frames(source: &Path, requests: &[(i64, PathBuf)], width: u32) -> Vec
     extracted
 }
 
-/// 每段固定取 5 帧：把段均分 5 份取各份中点，避开切点两侧的过渡帧；极短段去重后可少于 5 帧。
-/// 这 5 帧既算清晰度，也拼成「中间帧大图 + 其余 4 帧小图」做整段画面识别。
+/// 每 15 秒一张识别图、每张 5 帧（15 秒内 5 帧，15–30 秒 10 帧……最多 4 张 20 帧）：
+/// 把段均分成相应份数取各份中点，避开切点两侧的过渡帧；极短段去重后可少于 5 帧。
+/// 这些帧既算清晰度，也按每 5 帧拼成「中间帧大图 + 其余 4 帧小图」做整段画面识别。
 fn sample_times_for_segment(start_ms: i64, end_ms: i64) -> Vec<i64> {
     let duration = (end_ms - start_ms).max(0);
     if duration == 0 {
         return Vec::new();
     }
-    let mut times = (0..SEGMENT_SAMPLE_FRAMES as i64)
-        .map(|index| start_ms + duration * (2 * index + 1) / (2 * SEGMENT_SAMPLE_FRAMES as i64))
+    let sheets = ((duration + SHEET_SPAN_MS - 1) / SHEET_SPAN_MS)
+        .clamp(1, MAX_SHEETS_PER_SEGMENT as i64);
+    let count = sheets * FRAMES_PER_SHEET as i64;
+    let mut times = (0..count)
+        .map(|index| start_ms + duration * (2 * index + 1) / (2 * count))
         .collect::<Vec<_>>();
     times.dedup();
     times
@@ -607,15 +614,17 @@ mod tests {
     }
 
     #[test]
-    fn sample_times_take_five_centered_frames_per_segment() {
+    fn sample_times_take_five_frames_per_fifteen_seconds() {
         assert_eq!(
             sample_times_for_segment(0, 6_000),
             vec![600, 1_800, 3_000, 4_200, 5_400]
         );
+        assert_eq!(sample_times_for_segment(0, 20_000).len(), 10);
+        assert_eq!(sample_times_for_segment(0, 45_000).len(), 15);
         let long = sample_times_for_segment(10_000, 130_000);
-        assert_eq!(long.len(), SEGMENT_SAMPLE_FRAMES);
-        assert_eq!(long.first(), Some(&22_000));
-        assert_eq!(long.last(), Some(&118_000));
+        assert_eq!(long.len(), FRAMES_PER_SHEET * MAX_SHEETS_PER_SEGMENT);
+        assert_eq!(long.first(), Some(&13_000));
+        assert_eq!(long.last(), Some(&127_000));
         assert_eq!(sample_times_for_segment(0, 3), vec![0, 1, 2]);
     }
 

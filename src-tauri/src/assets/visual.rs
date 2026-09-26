@@ -26,8 +26,8 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-/// 整段 6 帧识别的输出比单帧长得多。
-const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(60);
+/// 整段多图识别的输出比单帧长得多。
+const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const VISUAL_ANALYSIS_BATCH_SIZE: usize = 6;
 
 /// 同时执行的画面分析任务上限，只为不让本机同时编码过多图片；请求本身不限速。
@@ -125,6 +125,40 @@ struct VisualBatchAsset {
     exhibition: Value,
     #[serde(default)]
     best_range: Value,
+    #[serde(default)]
+    subject_spans: Value,
+    #[serde(default)]
+    vertical_crop_fit: Value,
+    #[serde(default)]
+    highlights: Value,
+    #[serde(default)]
+    clean_start: Value,
+    #[serde(default)]
+    clean_end: Value,
+    #[serde(default)]
+    edge_note: Value,
+    #[serde(default)]
+    subject_direction: Value,
+    #[serde(default)]
+    camera_direction: Value,
+    #[serde(default)]
+    concepts: Value,
+    #[serde(default)]
+    mood: Value,
+    #[serde(default)]
+    setting: Value,
+    #[serde(default)]
+    time_of_day: Value,
+    #[serde(default)]
+    color_tone: Value,
+    #[serde(default)]
+    brightness: Value,
+    #[serde(default)]
+    people_count: Value,
+    #[serde(default)]
+    faces_visible: Value,
+    #[serde(default)]
+    safety_gear: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,6 +336,42 @@ fn value_texts(value: &Value, limit: usize) -> Vec<String> {
         .collect()
 }
 
+fn value_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) => match text.trim().to_lowercase().as_str() {
+            "true" | "yes" => Some(true),
+            "false" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 画面宽度比例：接受 0–1，也接受 0–100 的百分数，夹在 0–1。
+fn value_fraction(value: &Value) -> Option<f64> {
+    let number = match value {
+        Value::Number(number) => number.as_f64()?,
+        Value::String(text) => text.trim().trim_end_matches('%').trim().parse().ok()?,
+        _ => return None,
+    };
+    if !number.is_finite() || number < 0.0 {
+        return None;
+    }
+    Some(if number > 1.0 { number / 100.0 } else { number }.clamp(0.0, 1.0))
+}
+
+/// 由主体左右边界中心换算五档横向位置。
+fn position_from_span(left: f64, right: f64) -> &'static str {
+    match (left + right) / 2.0 {
+        center if center < 0.2 => "left",
+        center if center < 0.4 => "center-left",
+        center if center <= 0.6 => "center",
+        center if center <= 0.8 => "center-right",
+        _ => "right",
+    }
+}
+
 /// 把自由写法收成固定取值：小写、空格和下划线视作连字符，匹配不上就丢弃。
 fn normalized_choice(value: Option<&str>, allowed: &[&str]) -> Option<String> {
     let normalized = value?
@@ -332,7 +402,7 @@ fn is_frame_tag(text: &str) -> bool {
 }
 
 fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::ShotDetail {
-    use crate::models::{BestRange, ShotChange, ShotDetail, SubjectPosition};
+    use crate::models::{BestRange, ShotChange, ShotDetail, ShotMoment, SubjectPosition, SubjectSpan};
     let changes = value_items(&item.changes)
         .into_iter()
         .filter_map(|change| {
@@ -358,8 +428,8 @@ fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::Sho
                 )?,
             })
         })
-        .take(crate::assets::segments::SEGMENT_SAMPLE_FRAMES)
-        .collect();
+        .take(crate::assets::segments::MAX_SHEETS_PER_SEGMENT)
+        .collect::<Vec<_>>();
     let best_range = item.best_range.as_object().and_then(|best| {
         let start_ms = seconds_to_ms(best.get("startSec")?, range)?;
         let end_ms = seconds_to_ms(best.get("endSec")?, range)?;
@@ -387,15 +457,54 @@ fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::Sho
     } else {
         value_texts(&item.text_languages, 5)
     };
-    let exhibition = match &item.exhibition {
-        Value::Bool(flag) => Some(*flag),
-        Value::String(text) => match text.trim().to_lowercase().as_str() {
-            "true" | "yes" => Some(true),
-            "false" | "no" => Some(false),
-            _ => None,
-        },
-        _ => None,
+    let exhibition = value_bool(&item.exhibition);
+    let subject_spans = value_items(&item.subject_spans)
+        .into_iter()
+        .filter_map(|entry| {
+            let left = value_fraction(entry.get("left")?)?;
+            let right = value_fraction(entry.get("right")?)?;
+            (right > left).then_some(SubjectSpan {
+                time_ms: seconds_to_ms(entry.get("timeSec")?, range)?,
+                left,
+                right,
+            })
+        })
+        .take(crate::assets::segments::MAX_SHEETS_PER_SEGMENT)
+        .collect::<Vec<_>>();
+    // 不再单独问五档位置；由主体边界换算，旧写法仍兼容。
+    let subject_positions = if subject_positions.is_empty() {
+        subject_spans
+            .iter()
+            .map(|span| SubjectPosition {
+                time_ms: span.time_ms,
+                position: position_from_span(span.left, span.right).to_owned(),
+            })
+            .collect()
+    } else {
+        subject_positions
     };
+    let highlights = value_items(&item.highlights)
+        .into_iter()
+        .filter_map(|entry| {
+            Some(ShotMoment {
+                time_ms: seconds_to_ms(entry.get("timeSec")?, range)?,
+                description: nonempty_text(entry.get("description").and_then(Value::as_str))?
+                    .chars()
+                    .take(200)
+                    .collect(),
+            })
+        })
+        .take(5)
+        .collect();
+    let directions = [
+        "left-to-right",
+        "right-to-left",
+        "toward-camera",
+        "away-from-camera",
+        "up",
+        "down",
+        "none",
+    ];
     ShotDetail {
         changes,
         subject_positions,
@@ -410,6 +519,29 @@ fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::Sho
         crowd: normalized_choice(item.crowd.as_str(), &["none", "few", "crowd"]),
         exhibition,
         best_range,
+        subject_spans,
+        vertical_crop_fit: normalized_choice(
+            item.vertical_crop_fit.as_str(),
+            &["good", "partial", "poor"],
+        ),
+        highlights,
+        clean_start: value_bool(&item.clean_start),
+        clean_end: value_bool(&item.clean_end),
+        edge_note: nonempty_text(item.edge_note.as_str()).map(|note| note.chars().take(200).collect()),
+        subject_direction: normalized_choice(item.subject_direction.as_str(), &directions),
+        camera_direction: normalized_choice(item.camera_direction.as_str(), &directions),
+        concepts: value_texts(&item.concepts, 6),
+        mood: value_texts(&item.mood, 3),
+        setting: normalized_choice(item.setting.as_str(), &["indoor", "outdoor"]),
+        time_of_day: normalized_choice(item.time_of_day.as_str(), &["day", "night", "unknown"]),
+        color_tone: normalized_choice(item.color_tone.as_str(), &["warm", "neutral", "cool"]),
+        brightness: normalized_choice(item.brightness.as_str(), &["bright", "normal", "dark"]),
+        people_count: normalized_choice(
+            item.people_count.as_str(),
+            &["none", "one", "few", "many"],
+        ),
+        faces_visible: value_bool(&item.faces_visible),
+        safety_gear: value_texts(&item.safety_gear, 6),
     }
 }
 
@@ -1017,11 +1149,13 @@ struct VisualRequestUnit {
     segment_id: String,
     frame_times_ms: Vec<i64>,
     range_ms: Option<(i64, i64)>,
-    image: Vec<u8>,
+    images: Vec<Vec<u8>>,
 }
 
-/// 整段多帧拼成「中间帧大图 + 其余帧小图」，每帧标编号与源时间；拼不出或只有一帧时退回单帧。
-fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
+/// 整段帧按时间每 5 帧拼一张「中间帧大图 + 其余帧小图」（最多 4 张），编号在整段内连续；
+/// 任一张拼不出或只有一帧时退回单帧。
+fn visual_unit_images(unit: &CoarseVisualUnit) -> Option<(Vec<Vec<u8>>, Vec<i64>)> {
+    use crate::assets::segments::{FRAMES_PER_SHEET, MAX_SHEETS_PER_SEGMENT};
     if unit.frames.len() >= 2 {
         let labeled = unit
             .frames
@@ -1034,30 +1168,47 @@ fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
                 )
             })
             .collect::<Vec<_>>();
-        let output = Path::new(&unit.frames[0].1)
-            .with_file_name(format!("visual_grid_{}.jpg", unit.segment_id));
-        if let Some(grid) = crate::storyboard::multimodal::compose_feature_frame_sheet(
-            &labeled,
-            labeled.len() / 2,
-            &output,
-        ) {
-            if let Ok(bytes) = fs::read(grid) {
-                return Some((bytes, unit.frames.iter().map(|(time, _)| *time).collect()));
-            }
+        let per_sheet = FRAMES_PER_SHEET.max(labeled.len().div_ceil(MAX_SHEETS_PER_SEGMENT));
+        let sheets = labeled
+            .chunks(per_sheet)
+            .enumerate()
+            .map(|(sheet, frames)| {
+                let output = Path::new(&unit.frames[0].1).with_file_name(format!(
+                    "visual_grid_{}_{}.jpg",
+                    unit.segment_id,
+                    sheet + 1
+                ));
+                crate::storyboard::multimodal::compose_feature_frame_sheet(
+                    frames,
+                    frames.len() / 2,
+                    &output,
+                )
+                .and_then(|path| fs::read(path).ok())
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(sheets) = sheets {
+            return Some((sheets, unit.frames.iter().map(|(time, _)| *time).collect()));
         }
     }
     let bytes = fs::read(&unit.image_path).ok()?;
-    Some((bytes, unit.time_ms.into_iter().collect()))
+    Some((vec![bytes], unit.time_ms.into_iter().collect()))
 }
 
-const VISUAL_SEGMENT_PROMPT: &str = "The image shows ONE shot from a video. When it holds several frames, they are sampled across the shot: the large frame is the middle of the shot and the small frames are the other moments. Every frame is tagged in its top-left corner with its frame number (numbers follow time order) and source time in seconds. Use the large frame for detail and the small frames for how the shot changes. Describe the shot as a whole and how it changes over time. \
-Return JSON {assets:[{assetId,segmentId,caption,narrativeRole,scene,subjects,actions,products,shotType,cameraMotion,changes,subjectPositions,focus,qualityNotes,onScreenText,textLanguages,brandLogos,crowd,exhibition,bestRange}]}. \
+const VISUAL_SEGMENT_PROMPT: &str = "The images show ONE shot from a video, split into consecutive parts of about 15 seconds; the images are in time order. Each image has one large frame (the middle of that part) and small frames for the other moments of that part. Every frame is tagged in its top-left corner with its frame number (numbers follow time order across all images) and source time in seconds; these tags are added by us and are not part of the footage. Use the large frames for detail and the small frames for how the shot changes. Describe the shot as a whole and how it changes over time. \
+Return JSON {assets:[{assetId,segmentId,caption,narrativeRole,scene,subjects,actions,products,shotType,cameraMotion,changes,highlights,subjectSpans,verticalCropFit,cleanStart,cleanEnd,edgeNote,subjectDirection,cameraDirection,focus,qualityNotes,onScreenText,textLanguages,brandLogos,crowd,exhibition,peopleCount,facesVisible,safetyGear,setting,timeOfDay,colorTone,brightness,concepts,mood,bestRange}]}. \
 caption: one sentence of what stays visible across the frames. narrativeRole: in your own words, the story job this shot could do in an edited video. scene: a short place phrase. subjects, actions, products: short visible words. \
 shotType: wide | medium | close-up | detail. cameraMotion: static | pan | tilt | handheld | zoom | tracking. \
-changes: list of {startSec,endSec,description} for what changes over time: an action starting or ending, people or objects entering or leaving, camera moves, focus changes. Use the labeled source times. Empty list if nothing changes or there is only one frame. \
-subjectPositions: one {timeSec,position} for the main subject in the large frame; position is left | center-left | center | center-right | right of that frame's full width. \
+changes: list of {startSec,endSec,description} for what changes over time: an action starting or ending, people or objects entering or leaving, camera moves, focus changes. Use the tagged source times. Empty list if nothing changes or there is only one frame. \
+highlights: list of {timeSec,description} for the most eye-catching moments, such as sparks, a machine reaching position or a product dropping; empty if none. \
+subjectSpans: one {timeSec,left,right} for the main subject in each large frame; left and right are the subject's horizontal edges as fractions 0-1 of that frame's width. \
+verticalCropFit: good | partial | poor, whether a 9:16 vertical crop (centered or shifted) can keep the main subject whole. \
+cleanStart, cleanEnd: true if the first / last moments work as a cut point (no person half in frame, no flash, camera already steady). edgeNote: a short reason when either is false. \
+subjectDirection, cameraDirection: left-to-right | right-to-left | toward-camera | away-from-camera | up | down | none. \
 focus: sharp | shallow_depth_of_field (subject sharp, background blurred on purpose) | out_of_focus (the intended subject itself is blurred) | motion_blur. qualityNotes: only other problems such as shaky, too dark, overexposed, low resolution. \
-onScreenText: short examples of words, signs, screens or captions that appear in the footage itself, empty if none. The black number-and-seconds tags in the top-left corner of each frame are added by us, not part of the footage: never report them as text. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
+onScreenText: short examples of words, signs, screens or captions that appear in the footage itself, empty if none; never report our frame tags. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
+peopleCount: none | one | few | many. facesVisible: true if a face is clearly recognizable. safetyGear: protective gear visibly worn, such as helmet, gloves, goggles, mask, high-visibility vest, ear protection. \
+setting: indoor | outdoor. timeOfDay: day | night | unknown. colorTone: warm | neutral | cool. brightness: bright | normal | dark. \
+concepts: up to 6 abstract ideas this shot can illustrate in a script, such as precision, automation, teamwork, scale, innovation, craftsmanship. mood: up to 3 short words for the atmosphere. \
 bestRange: {startSec,endSec,reason} for the most usable continuous part of the shot for an edit. \
 Match assetId and segmentId to the supplied label. Empty fields are allowed. Do not infer facts that are not visible.";
 
@@ -1083,7 +1234,9 @@ fn visual_model_content(units: &[&VisualRequestUnit]) -> Vec<Value> {
             label.push_str(&format!("; frameTimes: {times}"));
         }
         content.push(serde_json::json!({ "type": "input_text", "text": label }));
-        content.push(serde_json::json!({ "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(&unit.image)) }));
+        for image in &unit.images {
+            content.push(serde_json::json!({ "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(image)) }));
+        }
     }
     content
 }
@@ -1256,7 +1409,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             continue;
         };
         expected.insert(unit_key(asset_id, &unit.segment_id), unit.time_ms);
-        let Some((image, frame_times_ms)) = visual_unit_image(&unit) else {
+        let Some((images, frame_times_ms)) = visual_unit_images(&unit) else {
             fail_or_retry_visual_batch(
                 &app,
                 &task_id,
@@ -1271,7 +1424,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             segment_id: unit.segment_id,
             frame_times_ms,
             range_ms: unit.range_ms,
-            image,
+            images,
         });
     }
     if frames.is_empty() {
@@ -1937,7 +2090,7 @@ mod tests {
             segment_id: "s001".to_owned(),
             frame_times_ms: vec![1_200, 4_800],
             range_ms: Some((0, 10_000)),
-            image: vec![1, 2, 3],
+            images: vec![vec![1, 2, 3]],
         };
         let content = visual_model_content(&[&unit]);
         let payload = serde_json::to_string(&content).expect("visual content should serialize");
@@ -2106,6 +2259,15 @@ mod tests {
             "crowd": "Crowd",
             "exhibition": "yes",
             "bestRange": {"startSec": 0.4, "endSec": 1.2, "reason": "动作完整"},
+            "subjectSpans": [{"timeSec": 1, "left": 70, "right": "90%"}],
+            "verticalCropFit": "Partial",
+            "highlights": [{"timeSec": "1.1s", "description": "火花四溅"}],
+            "cleanStart": "no",
+            "subjectDirection": "left to right",
+            "peopleCount": "One",
+            "facesVisible": true,
+            "safetyGear": ["gloves"],
+            "concepts": ["precision"],
             "unknownField": "ignored"
         }))
         .expect("matching card");
@@ -2135,6 +2297,14 @@ mod tests {
         assert_eq!((detail.changes[0].start_ms, detail.changes[0].end_ms), (500, 2_000));
         assert_eq!(detail.subject_positions.len(), 1);
         assert_eq!(detail.subject_positions[0].position, "center-right");
+        assert_eq!(detail.subject_spans.len(), 1);
+        assert_eq!((detail.subject_spans[0].left, detail.subject_spans[0].right), (0.7, 0.9));
+        assert_eq!(detail.vertical_crop_fit.as_deref(), Some("partial"));
+        assert_eq!(detail.highlights[0].time_ms, 1_100);
+        assert_eq!(detail.clean_start, Some(false));
+        assert_eq!(detail.subject_direction.as_deref(), Some("left-to-right"));
+        assert_eq!(detail.people_count.as_deref(), Some("one"));
+        assert_eq!(detail.safety_gear, vec!["gloves".to_owned()]);
         assert_eq!(detail.focus.as_deref(), Some("shallow_depth_of_field"));
         assert_eq!(detail.on_screen_text, vec!["EXIT".to_owned()]);
         assert_eq!(detail.crowd.as_deref(), Some("crowd"));

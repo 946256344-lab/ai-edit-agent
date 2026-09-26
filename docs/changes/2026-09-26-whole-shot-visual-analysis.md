@@ -40,6 +40,22 @@
 
 原 3×2 网格函数删除。浅景深/失焦的区分按用户意见暂不处理。
 
+## 追加：按时长加图，补充信息（同日）
+
+用户定帧数规则：每 15 秒一张「一大四小」图，15 秒内 5 帧、15–30 秒 10 帧、30–45 秒 15 帧，以此类推。单请求最多 4 张图，超过 60 秒的段固定 4 张 20 帧并在整段均匀铺开（库里仅 3 段超过 60 秒）。编号在整段内连续，一段的全部图放在同一个请求。
+
+补充要模型给出（水印按用户意见暂不做）：
+- `highlights`：高光时刻；
+- `subjectSpans`：每张大图里主体左右边界（画面宽度比例），五档位置由它换算；
+- `verticalCropFit`：竖屏 9:16 能否保住主体；
+- `cleanStart` / `cleanEnd` / `edgeNote`：开头结尾能否直接做剪辑点；
+- `subjectDirection` / `cameraDirection`：运动方向；
+- `setting` / `timeOfDay` / `colorTone` / `brightness`：光线色调；
+- `peopleCount` / `facesVisible` / `safetyGear`：人物与防护装备；
+- `concepts`：可表达的抽象概念；`mood`：氛围。
+
+变化、高光、概念与氛围进入召回语义与词面文本；全部进入 Phase 3 候选卡，提示词要求结合相邻拍的连贯性使用。请求超时 60→90 秒。按用户意见先不拆成两个请求，信息多到模型答不好时再拆。
+
 ## 同步文档
 
 `docs/api.md`、`docs/architecture.md`、`docs/decisions.md`、`TASKS.md`。
