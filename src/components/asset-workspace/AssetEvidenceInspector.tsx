@@ -1,7 +1,7 @@
-// 素材详情：原片预览、源片段播放与真实视觉内容；OCR 按需展开，不修改素材或时间线。
+// 素材详情：原片预览、源片段播放与真实视觉内容（含导入时整段识别的细节）；OCR 按需展开，不修改素材或时间线。
 import { useRef, useState, type MouseEvent } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
-import type { AssetEvidence } from '../../lib/local-store'
+import type { AssetEvidence, ShotDetail } from '../../lib/local-store'
 import './asset-evidence.css'
 import { messages, useI18n } from '../../lib/i18n'
 import type { Messages } from '../../lib/i18n'
@@ -101,6 +101,7 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
           </button>
           <MotionEnergyChart segment={segment} onSeek={isVideo && mediaReady && !mediaError ? seekTo : undefined} />
           <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence, t) : copy.noSegmentDescription}</p>
+          {segment.visualEvidence?.detail && <ShotDetailFacts detail={segment.visualEvidence.detail} />}
         </article>)}
       </section>}
 
@@ -121,6 +122,54 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
 }
 
 type AssetSegment = NonNullable<AssetEvidence['segments']>[number]
+
+function formatSeconds(timeMs: number) {
+  return `${(Math.max(0, timeMs) / 1000).toFixed(1)}s`
+}
+
+/** 整段识别细节按原样展示供核对：枚举值翻译成界面语言，模型自由文本保持原文，空项不显示。 */
+function ShotDetailFacts({ detail }: { detail: ShotDetail }) {
+  const copy = useI18n().t.assetDetail.detail
+  const values: Record<string, string> = copy.values
+  const pick = (value: string | null | undefined, map: Record<string, string> = values) => (value ? map[value] ?? value : '')
+  const direction = (value: string | null | undefined) => (value === 'none' ? copy.directionNone : pick(value))
+  const join = (items: Array<string | false | null | undefined>, separator = ' · ') => items.filter(Boolean).join(separator)
+  const span = (from: number, to: number) => `${formatSeconds(from)}–${formatSeconds(to)}`
+  const positions = detail.subjectSpans?.length
+    ? detail.subjectSpans.map(item => `${formatSeconds(item.timeMs)} ${Math.round(item.left * 100)}%–${Math.round(item.right * 100)}%`)
+    : (detail.subjectPositions ?? []).map(item => `${formatSeconds(item.timeMs)} ${pick(item.position)}`)
+  const hasPeople = detail.peopleCount != null && detail.peopleCount !== 'none'
+  const safetyGear = (detail.safetyGear ?? []).filter(item => item.trim().toLowerCase() !== 'none')
+  const rows: Array<[string, string | string[]]> = [
+    [copy.changes, (detail.changes ?? []).map(item => `${span(item.startMs, item.endMs)} ${item.description}`)],
+    [copy.highlights, (detail.highlights ?? []).map(item => `${formatSeconds(item.timeMs)} ${item.description}`)],
+    [copy.bestRange, detail.bestRange ? join([span(detail.bestRange.startMs, detail.bestRange.endMs), detail.bestRange.reason]) : ''],
+    [copy.subjectSpans, positions.join(' · ')],
+    [copy.verticalCropFit, pick(detail.verticalCropFit)],
+    [copy.edges, detail.cleanStart != null || detail.cleanEnd != null
+      ? join([join([detail.cleanStart != null && copy.clean(detail.cleanStart), detail.cleanEnd != null && copy.clean(detail.cleanEnd)], ' / '), detail.edgeNote])
+      : ''],
+    [copy.direction, join([detail.subjectDirection && copy.subject(direction(detail.subjectDirection)), detail.cameraDirection && copy.camera(direction(detail.cameraDirection))])],
+    [copy.focus, pick(detail.focus)],
+    [copy.look, join([pick(detail.setting), detail.timeOfDay !== 'unknown' && pick(detail.timeOfDay), pick(detail.colorTone), pick(detail.brightness)])],
+    [copy.people, join([pick(detail.peopleCount, copy.peopleValues), hasPeople && detail.facesVisible != null && copy.faces(detail.facesVisible), safetyGear.join(', ')])],
+    [copy.onScreenText, join([(detail.onScreenText ?? []).join(' / '), (detail.textLanguages ?? []).join(', ')])],
+    [copy.brandLogos, (detail.brandLogos ?? []).join(', ')],
+    [copy.crowd, join([pick(detail.crowd, copy.crowdValues), detail.exhibition != null && copy.exhibition(detail.exhibition)])],
+    [copy.concepts, (detail.concepts ?? []).join(', ')],
+    [copy.mood, (detail.mood ?? []).join(', ')],
+  ]
+  const shown = rows.filter(([, value]) => value.length > 0)
+  if (shown.length === 0) return null
+  return (
+    <details className="asset-detail__facts" open>
+      <summary>{copy.title}</summary>
+      <dl>
+        {shown.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{Array.isArray(value) ? value.map((line, index) => <span key={index}>{line}</span>) : value}</dd></div>)}
+      </dl>
+    </details>
+  )
+}
 
 function MotionEnergyChart({
   segment,

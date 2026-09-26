@@ -150,6 +150,36 @@ export type AssetRelinkResult = {
 export type CollectProjectMediaPreview = { collectableCount: number; unavailableCount: number; totalBytes: number }
 export type CollectProjectMediaResult = { copiedCount: number; unavailableCount: number; outputDirectory: string }
 
+/** 导入时整段识别的细节（模型输出，未经核实）；时间为源毫秒，主体边界为画面宽度比例 0–1。 */
+export type ShotDetail = {
+  changes?: Array<{ startMs: number; endMs: number; description: string }>
+  subjectPositions?: Array<{ timeMs: number; position: string }>
+  focus?: string | null
+  onScreenText?: string[]
+  textLanguages?: string[]
+  brandLogos?: string[]
+  crowd?: string | null
+  exhibition?: boolean | null
+  bestRange?: { startMs: number; endMs: number; reason?: string | null } | null
+  subjectSpans?: Array<{ timeMs: number; left: number; right: number }>
+  verticalCropFit?: string | null
+  highlights?: Array<{ timeMs: number; description: string }>
+  cleanStart?: boolean | null
+  cleanEnd?: boolean | null
+  edgeNote?: string | null
+  subjectDirection?: string | null
+  cameraDirection?: string | null
+  concepts?: string[]
+  mood?: string[]
+  setting?: string | null
+  timeOfDay?: string | null
+  colorTone?: string | null
+  brightness?: string | null
+  peopleCount?: string | null
+  facesVisible?: boolean | null
+  safetyGear?: string[]
+}
+
 export type AssetEvidence = {
   id: string
   displayName: string
@@ -161,7 +191,7 @@ export type AssetEvidence = {
   analysisVersion?: number
   keyframes: Array<{ timeMs: number; imagePath: string }>
   ocrEvidence: Array<{ timeMs: number | null; text: string }>
-  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null; narrativeRole?: string | null; caption?: string | null }>
+  visualEvidence: Array<{ timeMs: number | null; subjects: string[]; scene: string | null; actions: string[]; products: string[]; qualityNotes: string[]; shotType?: string | null; cameraMotion?: string | null; segmentId?: string | null; narrativeRole?: string | null; caption?: string | null; detail?: ShotDetail | null }>
   visualAnalysisNote: string | null
   segments?: Array<{
     id: string
@@ -185,6 +215,7 @@ export type AssetEvidence = {
       segmentId?: string | null
       narrativeRole?: string | null
       caption?: string | null
+      detail?: ShotDetail | null
     } | null
   }>
 }

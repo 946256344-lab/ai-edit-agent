@@ -531,4 +531,6 @@ preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成
 维护记录（2026-09-15）：素材切段只认 FFmpeg 硬切并用 CLIP 验真；无已验证硬切则整条一段。`analysisVersion=3`。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
 维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。`analysisVersion=4`。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
 维护记录（2026-09-16）：素材详情展示片段运动能量曲线与可用窗。见 `docs/changes/2026-09-16-motion-energy-detail.md`。
+
+维护记录（2026-09-26）：片段视觉证据带 `detail`（导入时整段识别）时，素材详情在该片段下展示「识别细节」：变化、高光、最佳区间、主体位置、竖屏裁切、开头结尾、运动方向、焦点、场景光线、人物、画面文字、品牌标识、人群/展会、抽象概念、氛围；枚举值按界面语言显示，模型自由文本保持原文，空项不显示。前端类型为 `local-store.ts` 的 `ShotDetail`，命令返回值不变。见 `docs/changes/2026-09-26-shot-detail-in-asset-panel.md`。
 维护记录（2026-09-18）：技术分析先扫关键帧，缩略图/抽帧超时不整条失败。见 `docs/changes/2026-09-18-faster-asset-analysis.md`。
