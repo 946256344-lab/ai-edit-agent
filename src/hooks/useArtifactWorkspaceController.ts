@@ -154,7 +154,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
   const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null)
   const [deliveryNoticeTone, setDeliveryNoticeTone] = useState<'info' | 'error'>('info')
   const [editorCatalog, setEditorCatalog] = useState<EditorLinkerCatalog>({
-    selectedId: 'jianying',
+    selectedId: 'capcut',
     linkers: [],
   })
   const [editorRecheck, setEditorRecheck] = useState<'idle' | 'checking' | 'stillMissing'>('idle')
@@ -214,7 +214,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       })
       .catch(() => {
         if (active) {
-          setEditorCatalog({ selectedId: 'jianying', linkers: [] })
+          setEditorCatalog({ selectedId: 'capcut', linkers: [] })
         }
       })
     return () => {

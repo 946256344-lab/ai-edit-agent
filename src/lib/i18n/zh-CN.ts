@@ -310,7 +310,6 @@ export const zhCN = {
     confirm: '确认重新定位',
   },
   output: {
-    jianying: '剪映',
     editorFallback: '编辑器',
     outputTo: '输出到',
     selectEditor: '选择输出编辑器',

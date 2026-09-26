@@ -12,7 +12,7 @@
 
 ## 输出端口可选编辑器（2026-09-18）
 
-输出编辑器是项目级选择，记在 `settings_json.outputEditor`。当前可交付：剪映（投放草稿）、CapCut（投放草稿）、FCPXML（Premiere / Resolve / Final Cut 导入）、OTIO（Resolve 导入）。文件导出不弹窗，写到本机 `editor-handoffs`。失败可见，不静默换端口。CapCut / 剪映草稿库都从该设备 `%LOCALAPPDATA%` 注册表识别，不写死盘符。
+输出编辑器是项目级选择，记在 `settings_json.outputEditor`。未选择时按本机检测给默认值：CapCut 优先，只检测到剪映时用剪映，都没有时仍为 CapCut；默认值不写回设置。当前可交付：剪映（投放草稿）、CapCut（投放草稿）、FCPXML（Premiere / Resolve / Final Cut 导入）、OTIO（Resolve 导入）。文件导出不弹窗，写到本机 `editor-handoffs`。失败可见，不静默换端口。CapCut / 剪映草稿库都从该设备 `%LOCALAPPDATA%` 注册表识别，不写死盘符。
 
 ## 剪映是编辑器链接器（2026-09-18）
 

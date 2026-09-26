@@ -31,7 +31,7 @@ export function EditorOutputPort({
   const editorLabel = (linker: EditorLinkerInfo) => t.backend.editorLabels[linker.id] ?? linker.label
   const options = linkers.length
     ? linkers
-    : [{ id: 'jianying', label: copy.jianying, summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' } satisfies EditorLinkerInfo]
+    : [{ id: 'capcut', label: 'CapCut', summary: '', implemented: true, available: true, deliveryKind: 'dropInDraft' } satisfies EditorLinkerInfo]
   const selected = options.find((linker) => linker.id === selectedId)
   const unavailable = selected !== undefined && selected.implemented && !selected.available
   return (

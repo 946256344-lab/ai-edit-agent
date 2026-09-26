@@ -367,13 +367,21 @@ fn read_settings(connection: &rusqlite::Connection, project_id: &str) -> serde_j
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
+/// 项目未选择输出编辑器时按本机检测结果给默认值：CapCut 优先（海外首发），
+/// 只装了剪映时用剪映，两者都没检测到时仍默认 CapCut。默认值不写回项目设置。
 fn read_output_editor(connection: &rusqlite::Connection, project_id: &str) -> EditorId {
     read_settings(connection, project_id)
         .get("outputEditor")
         .and_then(|value| value.as_str())
         .and_then(|raw| EditorId::parse(raw).ok())
         .filter(|id| id.implemented())
-        .unwrap_or(EditorId::Jianying)
+        .unwrap_or_else(|| {
+            if !capcut::draft_location_available() && draft_location_available() {
+                EditorId::Jianying
+            } else {
+                EditorId::CapCut
+            }
+        })
 }
 
 fn unique_export_stem(connection: &rusqlite::Connection, project_id: &str) -> String {

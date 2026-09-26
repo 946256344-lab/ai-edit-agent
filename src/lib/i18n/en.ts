@@ -316,7 +316,6 @@ export const en: typeof zhCN = {
     confirm: 'Confirm relocation',
   },
   output: {
-    jianying: 'Jianying',
     editorFallback: 'editor',
     outputTo: 'Output to',
     selectEditor: 'Choose output editor',
