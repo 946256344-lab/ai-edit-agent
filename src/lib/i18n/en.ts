@@ -396,6 +396,12 @@ export const en: typeof zhCN = {
     clearCache: 'Clear preview cache',
   },
   provider: {
+    jamendoTitle: 'Background music (Jamendo)',
+    jamendoHint: 'Create an app in the Jamendo developer portal, then enter its Client ID. It is stored only in Windows Credential Manager. Test search and preview after saving.',
+    jamendoSaved: 'Client ID saved. Jamendo search has not been verified yet.',
+    jamendoSaveFailed: 'Could not save the Jamendo Client ID. Please try again.',
+    saveJamendo: 'Save Jamendo Client ID',
+    openJamendoPortal: 'Open Jamendo developer portal',
     aria: 'Model provider settings',
     title: 'Connect the agent model',
     intro: 'The public Voycut app uses a server model after account sign-in. Projects and source media stay on this computer; the model service is called to understand requests and analyze footage. The connections below are for development builds.',

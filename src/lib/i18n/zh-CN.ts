@@ -390,6 +390,12 @@ export const zhCN = {
     clearCache: '清理预览缓存',
   },
   provider: {
+    jamendoTitle: '背景音乐（Jamendo）',
+    jamendoHint: '在 Jamendo 开发者平台创建应用后填写 Client ID。仅保存在 Windows 凭据库；保存后再用一条剪辑测试搜索和预览。',
+    jamendoSaved: 'Client ID 已保存。尚未验证 Jamendo 搜索是否可用。',
+    jamendoSaveFailed: '无法保存 Jamendo Client ID，请重试。',
+    saveJamendo: '保存 Jamendo Client ID',
+    openJamendoPortal: '打开 Jamendo 开发者平台',
     aria: '模型提供商设置',
     title: '连接 Agent 模型',
     intro: 'Voycut 公开版登录账号后使用服务端模型。项目与原始素材保存在本机，理解需求和分析画面时会调用模型服务。以下模型连接供开发版使用。',

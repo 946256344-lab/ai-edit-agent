@@ -11,15 +11,17 @@ import {
   getCustomApiStatus,
   getFishAudioStatus,
   getElevenLabsStatus,
+  getJamendoStatus,
   getExperimentalOpenAIOAuthStatus,
   importElevenLabsApiKeyFromEnvironment,
   importFishAudioApiKeyFromEnvironment,
   saveCustomApi,
   saveFishAudioApiKey,
   saveElevenLabsApiKey,
+  saveJamendoClientId,
   startExperimentalOpenAIOAuth,
 } from '../lib/local-store'
-import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus, FishAudioStatus } from '../lib/local-store'
+import type { CustomApiStatus, ElevenLabsStatus, ExperimentalOAuthStatus, FishAudioStatus, JamendoStatus } from '../lib/local-store'
 import { messages } from '../lib/i18n'
 
 const DISCONNECTED_OAUTH: ExperimentalOAuthStatus = {
@@ -62,6 +64,9 @@ export function useProviderController(desktopRuntime: boolean) {
   const [elevenLabsKey, setElevenLabsKey] = useState('')
   const [fishAudioStatus, setFishAudioStatus] = useState<FishAudioStatus>(DISCONNECTED_FISH)
   const [fishAudioKey, setFishAudioKey] = useState('')
+  const [jamendoStatus, setJamendoStatus] = useState<JamendoStatus>({ state: 'disconnected' })
+  const [jamendoClientId, setJamendoClientId] = useState('')
+  const [isSavingJamendo, setIsSavingJamendo] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isSavingVoice, setIsSavingVoice] = useState(false)
 
@@ -107,6 +112,11 @@ export function useProviderController(desktopRuntime: boolean) {
         ...DISCONNECTED_ELEVENLABS,
         lastErrorCode: 'status_unreadable',
       }))
+  }, [desktopRuntime])
+
+  useEffect(() => {
+    if (!desktopRuntime) return
+    void getJamendoStatus().then(setJamendoStatus).catch(() => setJamendoStatus({ state: 'failed' }))
   }, [desktopRuntime])
 
   async function connectOAuth() {
@@ -223,6 +233,16 @@ export function useProviderController(desktopRuntime: boolean) {
     setFishAudioStatus(await clearFishAudioApiKey().catch(() => ({ ...DISCONNECTED_FISH, lastErrorCode: 'clear_failed' })))
   }
 
+  async function saveJamendo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsSavingJamendo(true)
+    try {
+      const status = await saveJamendoClientId(jamendoClientId.trim()).catch(() => ({ state: 'failed' as const }))
+      setJamendoStatus(status)
+      if (status.state === 'connected') setJamendoClientId('')
+    } finally { setIsSavingJamendo(false) }
+  }
+
   return {
     model: {
       isOpen,
@@ -230,6 +250,8 @@ export function useProviderController(desktopRuntime: boolean) {
       customApiStatus,
       elevenLabsStatus,
       fishAudioStatus,
+      jamendoStatus,
+      isSavingJamendo,
       isSaving,
       isSavingVoice,
       // 正式版只走 Voycut 网关；开发版才按 OAuth / 自定义 API 状态显示。
@@ -240,7 +262,7 @@ export function useProviderController(desktopRuntime: boolean) {
           : oauthStatus.state === 'connected'
             ? messages().provider.labelOauth
             : messages().provider.labelNone,
-      form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey, fishAudioKey },
+      form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey, fishAudioKey, jamendoClientId },
     },
     actions: {
       open: () => setIsOpen(true),
@@ -257,6 +279,9 @@ export function useProviderController(desktopRuntime: boolean) {
       importFishAudioKey: () => void importFishKey(),
       clearFishAudioKey: () => void clearFishKey(),
       setFishAudioKey,
+      saveJamendo: (event: FormEvent<HTMLFormElement>) => void saveJamendo(event),
+      setJamendoClientId,
+      openJamendoPortal: () => void openUrl('https://devportal.jamendo.com/'),
       setBaseUrl,
       setModel,
       setCoarseVisualModel,

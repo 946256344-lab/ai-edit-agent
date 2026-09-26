@@ -33,7 +33,24 @@ pub struct JamendoTrack {
 
 #[derive(Deserialize)]
 struct JamendoResponse {
+    headers: JamendoHeaders,
     results: Vec<JamendoTrack>,
+}
+
+#[derive(Deserialize)]
+struct JamendoHeaders {
+    status: String,
+    code: i64,
+}
+
+fn checked_tracks(response: JamendoResponse) -> Result<Vec<JamendoTrack>, String> {
+    if response.headers.status != "success" {
+        return Err(format!(
+            "Jamendo rejected the music request (code {}). Check the Client ID and application status.",
+            response.headers.code
+        ));
+    }
+    Ok(response.results)
 }
 
 fn entry() -> Result<Entry, String> {
@@ -94,8 +111,7 @@ pub(crate) fn eligible_track(track_id: &str) -> Result<JamendoTrack, String> {
         .map_err(|_| "Jamendo music search is unavailable.".to_owned())?;
     let catalog: JamendoResponse = serde_json::from_reader(lookup.into_reader())
         .map_err(|_| "Jamendo returned an invalid music catalog response.".to_owned())?;
-    catalog
-        .results
+    checked_tracks(catalog)?
         .into_iter()
         .find(|track| track.id == track_id && allowed(track))
         .ok_or_else(|| {
@@ -134,7 +150,7 @@ pub(crate) fn search_tracks(query: &str) -> Result<Vec<JamendoTrack>, String> {
         .map_err(|_| "Jamendo music search is unavailable.".to_owned())?;
     let response: JamendoResponse = serde_json::from_reader(response.into_reader())
         .map_err(|_| "Jamendo returned an invalid music catalog response.".to_owned())?;
-    Ok(response.results.into_iter().filter(allowed).collect())
+    Ok(checked_tracks(response)?.into_iter().filter(allowed).collect())
 }
 
 pub(crate) fn download_track(
@@ -732,7 +748,16 @@ pub(crate) mod fish_audio {
 
 #[cfg(test)]
 mod tests {
-    use super::{allowed, attribution_for, classify_elevenlabs_http_error, JamendoTrack};
+    use super::{allowed, attribution_for, checked_tracks, classify_elevenlabs_http_error, JamendoResponse, JamendoTrack};
+
+    #[test]
+    fn suspended_jamendo_application_is_not_an_empty_search_result() {
+        let response: JamendoResponse = serde_json::from_str(
+            r#"{"headers":{"status":"failed","code":11,"error_message":"Application suspended"},"results":[]}"#,
+        ).unwrap();
+        let error = checked_tracks(response).err().unwrap();
+        assert!(error.contains("code 11"));
+    }
 
     fn track(license_ccurl: &str, audiodownload_allowed: bool) -> JamendoTrack {
         JamendoTrack {

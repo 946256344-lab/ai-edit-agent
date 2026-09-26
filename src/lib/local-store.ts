@@ -31,6 +31,7 @@ export type FellowCutAccountStatus = {
 
 export type ElevenLabsStatus = { keyStored: boolean; voicesReadable: boolean; ttsAuthorized: boolean | null; lastErrorCode: string | null; importable: boolean }
 export type FishAudioStatus = { keyStored: boolean; voicesReadable: boolean; lastErrorCode: string | null; importable: boolean }
+export type JamendoStatus = { state: 'connected' | 'disconnected' | 'failed' }
 
 export type StoredProject = { id: string; name: string; createdAt: number; updatedAt: number }
 
@@ -412,6 +413,8 @@ export async function getFellowCutAccountStatus() { requireDesktopRuntime(); ret
 export async function signOutFellowCut() { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('sign_out_fellowcut') }
 
 export async function getElevenLabsStatus() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('get_elevenlabs_status') }
+export async function getJamendoStatus() { requireDesktopRuntime(); return invoke<JamendoStatus>('get_jamendo_status') }
+export async function saveJamendoClientId(clientId: string) { requireDesktopRuntime(); return invoke<JamendoStatus>('save_jamendo_client_id', { clientId }) }
 export async function saveElevenLabsApiKey(apiKey: string) { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('save_elevenlabs_api_key', { apiKey }) }
 export async function clearElevenLabsApiKey() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('clear_elevenlabs_api_key') }
 export async function importElevenLabsApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('import_elevenlabs_api_key_from_environment') }

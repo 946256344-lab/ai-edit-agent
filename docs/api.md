@@ -300,6 +300,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `clear_custom_api` | 无 | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
 | `get_jamendo_status` | 无 | `JamendoStatus` | 只检查 Windows Credential Manager 中是否存在可读取的 Jamendo client ID，返回 `connected` 或 `disconnected`。 |
 | `save_jamendo_client_id` | `{ clientId }` | `JamendoStatus` | 将非空 Jamendo client ID 写入 Windows Credential Manager；失败时只返回 `failed`，不回传凭据。 |
+
+Provider 设置弹窗提供 Jamendo Client ID 输入框，保存后只显示凭据已存；是否可用仍需实际搜索验证。Jamendo API 即使返回 HTTP 200，搜索与单曲复查仍检查 JSON `headers.status`，失败时返回 API 错误码，不能误报为空曲库。
 | `get_elevenlabs_status` | 无 | `ElevenLabsStatus` | 返回密钥是否已存、音色列表是否可读、可空的 TTS 授权探测和安全错误码；不返回 API Key。 |
 | `save_elevenlabs_api_key` | `{ apiKey }` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
 | `clear_elevenlabs_api_key` | 无 | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |

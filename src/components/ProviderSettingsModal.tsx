@@ -142,6 +142,17 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.elevenLabsStatus.keyStored && (
           <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>{copy.clearEleven}</button>
         )}
+        <div className="provider-divider" />
+        <div className="provider-option chosen">
+          <span><strong>{copy.jamendoTitle}</strong><small>{copy.jamendoHint}</small></span>
+          <b>{model.jamendoStatus.state === 'connected' ? copy.connected : copy.notConfiguredBadge}</b>
+        </div>
+        <p className="oauth-status">{model.jamendoStatus.state === 'failed' ? copy.jamendoSaveFailed : model.jamendoStatus.state === 'connected' ? copy.jamendoSaved : copy.notConfigured}</p>
+        <form className="custom-api-form" onSubmit={actions.saveJamendo}>
+          <label><span>Jamendo Client ID</span><input type="password" value={model.form.jamendoClientId} onChange={(event) => actions.setJamendoClientId(event.target.value)} autoComplete="off" /></label>
+          <button className="primary-button modal-button" type="submit" disabled={model.isSavingJamendo || !model.form.jamendoClientId.trim()}>{model.isSavingJamendo ? t.common.saving : copy.saveJamendo}</button>
+        </form>
+        <button className="outline-button modal-button" onClick={actions.openJamendoPortal}>{copy.openJamendoPortal}</button>
         <button className="outline-button modal-button" onClick={() => { dialog.current?.close(); actions.close() }}>{t.common.close}</button>
       </section>
     </dialog>
