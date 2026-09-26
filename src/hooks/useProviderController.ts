@@ -232,11 +232,14 @@ export function useProviderController(desktopRuntime: boolean) {
       fishAudioStatus,
       isSaving,
       isSavingVoice,
-      providerLabel: customApiStatus.state === 'connected'
-        ? messages().provider.labelCustom
-        : oauthStatus.state === 'connected'
-          ? messages().provider.labelOauth
-          : messages().provider.labelNone,
+      // 正式版只走 Voycut 网关；开发版才按 OAuth / 自定义 API 状态显示。
+      providerLabel: !import.meta.env.DEV
+        ? messages().provider.labelGateway
+        : customApiStatus.state === 'connected'
+          ? messages().provider.labelCustom
+          : oauthStatus.state === 'connected'
+            ? messages().provider.labelOauth
+            : messages().provider.labelNone,
       form: { baseUrl, model, coarseVisualModel, apiKey, elevenLabsKey, fishAudioKey },
     },
     actions: {

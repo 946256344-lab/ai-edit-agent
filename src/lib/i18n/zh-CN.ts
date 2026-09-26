@@ -393,6 +393,8 @@ export const zhCN = {
     aria: '模型提供商设置',
     title: '连接 Agent 模型',
     intro: 'Voycut 公开版登录账号后使用服务端模型。项目与原始素材保存在本机，理解需求和分析画面时会调用模型服务。以下模型连接供开发版使用。',
+    releaseTitle: '模型与配音',
+    releaseIntro: '登录账号后 Voycut 使用自己的模型服务，这里无需连接。项目与原始素材保存在本机，理解需求和分析画面时会调用模型服务。下方配音服务为可选项，使用你自己的 API Key。',
     oauthHint: '实验性 OpenCode 兼容流。令牌只存储在 Windows 凭据库，可能随 OpenAI 服务变更失效。',
     connected: '已连接',
     experimental: '实验性',
@@ -442,6 +444,7 @@ export const zhCN = {
     labelCustom: '自定义 API 已连接',
     labelOauth: 'GPT OAuth 已连接',
     labelNone: '模型未连接',
+    labelGateway: 'Voycut 模型服务',
   },
   readiness: {
     progressPercent: (message: string, title: string, percent: number) => `${message}（${title} ${percent}%）`,

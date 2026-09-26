@@ -96,7 +96,7 @@
   - FFmpeg 8.1.2 full_build（**GPLv3**）：附许可证全文和对应源码的获取方式（链接或书面承诺）；H.264 / HEVC 编解码器的专利许可需要法务确认。
   - Python 3.12（PSF）、Tesseract 5.4.0（Apache-2.0）、pyJianYingDraft 0.3.0（Apache-2.0）、pycapcut 0.0.3（许可证`待确认`，包元数据里没有写）。
   - BGE-small-zh（MIT）、CLIP ViT-B/32、onnxruntime，以及 npm / Cargo 依赖（可以用 `license-checker`、`cargo about` 生成）。
-- [ ] **P0 隐藏实验性 OpenAI OAuth**。Release 版里网关优先，OAuth 和自定义 API 实际不会被用到，但设置页仍显示「登录 ChatGPT」（`src/components/ProviderSettingsModal.tsx`），而文档把它定位为「仅个人测试、非官方集成」。海外用户对这种按钮更敏感，容易被理解为冒用 OpenAI。Release 版应隐藏 OAuth 和自定义 API 区块。
+- [x] **P0 隐藏实验性 OpenAI OAuth**。09-26 已改：正式版只显示配音区块（`docs/changes/2026-09-26-hide-dev-model-access.md`）。原现状：Release 版里网关优先，OAuth 和自定义 API 实际不会被用到，但设置页仍显示「登录 ChatGPT」（`src/components/ProviderSettingsModal.tsx`），而文档把它定位为「仅个人测试、非官方集成」。海外用户对这种按钮更敏感，容易被理解为冒用 OpenAI。Release 版应隐藏 OAuth 和自定义 API 区块。
 - [ ] **P0 上游模型服务条款**：确认允许通过自己的网关向终端用户提供服务（转售或代理访问），并确认服务区域覆盖目标国家。
 - [ ] **P1 商标与兼容表述**：官网写「Exports projects compatible with CapCut and DaVinci Resolve」，不要写官方合作或官方集成，也不要未经许可使用对方的图标。CapCut 草稿格式依赖非官方 SDK，CapCut 升级后可能失效；CapCut 在部分地区也不可用，因此要把 FCPXML / OTIO 作为稳定的替代方案。
 - [ ] **P1 欧盟 AI 法案透明度义务**：该法第 50 条从 2026-08-02 起适用，要求合成音频的输出可被识别为 AI 生成。如果保留 AI 配音（D5），请法务确认是否需要在输出里加标识，以及怎么加。

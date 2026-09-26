@@ -399,6 +399,8 @@ export const en: typeof zhCN = {
     aria: 'Model provider settings',
     title: 'Connect the agent model',
     intro: 'The public Voycut app uses a server model after account sign-in. Projects and source media stay on this computer; the model service is called to understand requests and analyze footage. The connections below are for development builds.',
+    releaseTitle: 'Model and voiceover',
+    releaseIntro: 'After you sign in, Voycut uses its own model service; there is nothing to connect here. Projects and source media stay on this computer; requests and footage analysis are sent to the model service. The voiceover providers below are optional and use your own API key.',
     oauthHint: 'Experimental OpenCode-compatible flow. Tokens are stored only in Windows Credential Manager and may break if OpenAI changes its service.',
     connected: 'Connected',
     experimental: 'Experimental',
@@ -448,6 +450,7 @@ export const en: typeof zhCN = {
     labelCustom: 'Custom API connected',
     labelOauth: 'GPT OAuth connected',
     labelNone: 'No model connected',
+    labelGateway: 'Voycut model service',
   },
   readiness: {
     progressPercent: (message: string, title: string, percent: number) => `${message} (${title} ${percent}%)`,

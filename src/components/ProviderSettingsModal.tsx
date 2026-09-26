@@ -3,6 +3,9 @@ import { useLayoutEffect, useRef } from 'react'
 import type { ProviderController } from '../hooks/useProviderController'
 import { useI18n } from '../lib/i18n'
 
+// 正式版模型只走 Voycut 网关：实验性 OpenAI OAuth（非官方集成）与自定义 API 仅在开发构建显示。
+const showDevModelAccess = import.meta.env.DEV
+
 type ProviderSettingsModalProps = {
   controller: ProviderController
 }
@@ -24,9 +27,10 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
       <section className="provider-modal">
         <button className="close-button" onClick={() => { dialog.current?.close(); actions.close() }} aria-label={t.common.close}>×</button>
         <span className="eyebrow">MODEL ACCESS</span>
-        <h2>{copy.title}</h2>
-        <p>{copy.intro}</p>
+        <h2>{showDevModelAccess ? copy.title : copy.releaseTitle}</h2>
+        <p>{showDevModelAccess ? copy.intro : copy.releaseIntro}</p>
 
+        {showDevModelAccess && (<>
         <div className="provider-option chosen">
           <span>
             <strong>OpenAI OAuth</strong>
@@ -47,6 +51,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         )}
 
         <div className="provider-divider" />
+        </>)}
         <div className="provider-option chosen">
           <span>
             <strong>{copy.fishTitle}</strong>
@@ -62,6 +67,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.fishAudioStatus.importable && <button className="outline-button modal-button" onClick={actions.importFishAudioKey} disabled={model.isSavingVoice}>{copy.importFish}</button>}
         {model.fishAudioStatus.keyStored && <button className="outline-button modal-button" onClick={actions.clearFishAudioKey}>{copy.clearFish}</button>}
 
+        {showDevModelAccess && (<>
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
@@ -102,6 +108,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.customApiStatus.state === 'connected' && (
           <button className="outline-button modal-button" onClick={actions.disconnectCustomApi}>{copy.clearCustom}</button>
         )}
+        </>)}
 
         <div className="provider-divider" />
         <div className="provider-option chosen">
