@@ -414,6 +414,7 @@ pub(crate) fn phase2_rough_shot_selection(
     };
     let mut uncovered_beat_ids = Vec::new();
     let mut candidate_pools = Vec::new();
+    let shared_terms = scoring::shared_lexical_terms(&narrative.beats);
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
         match build_beat_pool(
@@ -424,6 +425,7 @@ pub(crate) fn phase2_rough_shot_selection(
             clip_embeddings.get(beat_index).map(Vec::as_slice),
             target_each,
             score_first_slots,
+            &shared_terms,
         ) {
             Some(pool) => candidate_pools.push(pool),
             None => uncovered_beat_ids.push(beat.id.clone()),
@@ -492,6 +494,7 @@ pub(crate) fn phase2_rough_shot_selection(
 
 /// 单拍召回：全库段按综合分排序，弱匹配时扩池，按名额与多样性规则取池。
 /// 返回 None 表示该拍没有可用候选。整条生成与局部重选共用，保证召回一致。
+/// `shared_terms` 是整条故事版各拍共用的通用查询词（见 `scoring::shared_lexical_terms`）。
 pub(crate) fn build_beat_pool(
     beat: &StoryboardBeat,
     sources: &[StoryboardSource],
@@ -500,6 +503,7 @@ pub(crate) fn build_beat_pool(
     beat_clip: Option<&[f32]>,
     target_each: i64,
     score_first_slots: usize,
+    shared_terms: &HashSet<String>,
 ) -> Option<BeatCandidatePool> {
     let ranked = scoring::rank_segment_candidates(
         sources.to_vec(),
@@ -509,6 +513,7 @@ pub(crate) fn build_beat_pool(
         usage_counts,
         beat_embedding,
         beat_clip,
+        shared_terms,
     );
     // 若最高分低于阈值且库内候选充足，静默扩展到 PHASE2_EXTENDED_POOL_SIZE。
     let best_score = ranked.first().map(|c| c.score.total).unwrap_or(0.0);
@@ -1051,7 +1056,7 @@ mod tests {
         apply_narration_phrase_duration_floor, candidates_within_diversity_limit,
         clamp_shots_to_chosen_windows, collect_phase3_issues, collect_phase4_issues,
         parse_beat_pick, phase2_rough_shot_selection, phase3_candidate_cards, phase3_pool_cards,
-        pick_segment_pool, resolve_overlaps_within_chosen_windows,
+        pick_segment_pool, pool_excluding_used, resolve_overlaps_within_chosen_windows,
         resolve_overlaps_within_chosen_windows_scoped, BeatCandidatePool, NarrativeStructure,
         RoughStoryboard, PHASE2_POOL_SIZE, PHASE3_MAX_ALTERNATES,
     };
@@ -1738,6 +1743,44 @@ mod tests {
                 .iter()
                 .any(|issue| issue.kind == "similar_used_segment"),
             "overlapping same asset across beats must be rejected; issues={issues:?}"
+        );
+    }
+
+    #[test]
+    fn phase3_pool_hides_candidates_already_used_by_earlier_beats() {
+        // 回归：上一拍已选的片段仍留在下一拍候选里，模型重复选中后两拍一起被打回、都换成更差的镜头。
+        let mut beat_one = beat();
+        beat_one.id = "beat-1".to_owned();
+        let mut beat_two = beat();
+        beat_two.id = "beat-2".to_owned();
+        let rough = RoughStoryboard {
+            speech_timing: Default::default(),
+            title: "title".to_owned(),
+            summary: "summary".to_owned(),
+            target_duration_ms: 8_000,
+            script_mode: "key_message".to_owned(),
+            shot_length_hint: String::new(),
+            beats: vec![beat_one, beat_two],
+            uncovered_beat_ids: Vec::new(),
+            shots: Vec::new(),
+            candidate_pools: vec![
+                candidate_pool("beat-1", &["shared", "alt-a"]),
+                candidate_pool("beat-2", &["alt-b", "shared", "alt-c"]),
+            ],
+        };
+        let chosen = vec![("beat-1".to_owned(), "shared".to_owned(), "-".to_owned())];
+        let (view, index_map) =
+            pool_excluding_used(&rough, &rough.candidate_pools[1], &chosen).expect("filtered");
+        let ids = view
+            .candidates
+            .iter()
+            .map(|candidate| candidate.asset_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["alt-b", "alt-c"]);
+        assert_eq!(
+            index_map,
+            vec![0, 2],
+            "picks must map back to the original pool"
         );
     }
 
@@ -2514,11 +2557,16 @@ pub(crate) fn phase3_select(
     let retry_beats = beats_named_in_repair(repair, rough);
     let previous = previous_beat_selections(repair, rough);
     let mut selections = Vec::new();
-    let mut chosen_so_far = Vec::new();
+    // 修复轮：未点名的拍原样保留，先全部计入已选，重选拍也不能撞上排在它后面的保留镜头。
+    let mut chosen_so_far = covered_beat_ids(rough)
+        .into_iter()
+        .filter(|beat_id| !retry_beats.contains(beat_id))
+        .filter_map(|beat_id| previous.get(&beat_id))
+        .flat_map(|kept| refs_from_selection(rough, kept))
+        .collect::<Vec<_>>();
     for beat_id in covered_beat_ids(rough) {
         if !retry_beats.contains(&beat_id) {
             if let Some(kept) = previous.get(&beat_id).cloned() {
-                chosen_so_far.extend(refs_from_selection(rough, &kept));
                 selections.push(kept);
                 continue;
             }
@@ -2548,6 +2596,11 @@ pub(crate) fn phase3_select(
             });
             continue;
         }
+        let filtered = pool_excluding_used(rough, pool, &chosen_so_far);
+        let (view, index_map) = match &filtered {
+            Some((view, index_map)) => (view, Some(index_map)),
+            None => (pool, None),
+        };
         let mut last_error = None;
         let mut picked = None;
         for attempt in 1..=3 {
@@ -2557,22 +2610,29 @@ pub(crate) fn phase3_select(
                 access,
                 brief,
                 rough,
-                pool,
+                view,
                 &chosen_so_far,
                 repair,
                 attempt,
                 None,
             ) {
-                Ok(selection) => {
+                Ok(mut selection) => {
                     if selection
                         .candidate_indexes
                         .iter()
-                        .any(|index| *index >= pool.candidates.len())
+                        .any(|index| *index >= view.candidates.len())
                     {
                         last_error = Some(format!(
                             "Phase 3 candidateIndex is outside beat '{beat_id}' candidate pool."
                         ));
                         continue;
+                    }
+                    if let Some(index_map) = index_map {
+                        selection.candidate_indexes = selection
+                            .candidate_indexes
+                            .iter()
+                            .map(|index| index_map[*index])
+                            .collect();
                     }
                     picked = Some(selection);
                     last_error = None;
@@ -2654,6 +2714,11 @@ pub(crate) fn phase3_select_beats(
     let mut chosen_so_far = context.to_vec();
     let mut selections = Vec::new();
     for pool in &rough.candidate_pools {
+        let filtered = pool_excluding_used(rough, pool, &chosen_so_far);
+        let (view, index_map) = match &filtered {
+            Some((view, index_map)) => (view, Some(index_map)),
+            None => (pool, None),
+        };
         let mut last_error = String::new();
         let mut picked = None;
         for attempt in 1..=3 {
@@ -2663,7 +2728,7 @@ pub(crate) fn phase3_select_beats(
                 access,
                 brief,
                 rough,
-                pool,
+                view,
                 &chosen_so_far,
                 None,
                 attempt,
@@ -2677,10 +2742,17 @@ pub(crate) fn phase3_select_beats(
                     if selection
                         .candidate_indexes
                         .iter()
-                        .any(|index| *index >= pool.candidates.len())
+                        .any(|index| *index >= view.candidates.len())
                     {
                         last_error = "candidateIndex was outside the pool".to_owned();
                         continue;
+                    }
+                    if let Some(index_map) = index_map {
+                        selection.candidate_indexes = selection
+                            .candidate_indexes
+                            .iter()
+                            .map(|index| index_map[*index])
+                            .collect();
                     }
                     let mut assets = HashSet::new();
                     if !selection
@@ -2825,6 +2897,80 @@ fn refs_from_selection(
             ))
         })
         .collect()
+}
+
+/// 已选镜头 (beatId, assetId, segmentId) 对应的池内候选；segmentId 为 "-" 表示整片候选。
+fn selected_pool_source<'a>(
+    rough: &'a RoughStoryboard,
+    (beat_id, asset_id, segment_id): &(String, String, String),
+) -> Option<&'a StoryboardSource> {
+    rough
+        .candidate_pools
+        .iter()
+        .find(|pool| &pool.beat_id == beat_id)?
+        .candidates
+        .iter()
+        .find(|candidate| {
+            &candidate.asset_id == asset_id
+                && candidate
+                    .segment
+                    .as_ref()
+                    .map_or(segment_id == "-", |segment| &segment.id == segment_id)
+        })
+}
+
+/// 进入 Phase 3 前剔除与已选镜头交叠或相似的候选、以及复用已到上限的素材，
+/// 让模型只在真正可选的候选里挑，不再靠提示词硬规则 + 事后打回。
+/// 返回过滤后的池与「新序号 → 原序号」映射；无需剔除或全被剔除时返回 None，
+/// 调用方沿用原池，由 `collect_phase3_issues` 兜底。
+fn pool_excluding_used(
+    rough: &RoughStoryboard,
+    pool: &BeatCandidatePool,
+    already_selected: &[(String, String, String)],
+) -> Option<(BeatCandidatePool, Vec<usize>)> {
+    let used = already_selected
+        .iter()
+        .filter_map(|selected| selected_pool_source(rough, selected))
+        .collect::<Vec<_>>();
+    // 局部重选时 candidate_pools 只含目标拍，按整条故事版的有镜拍数算上限。
+    let covered_beats = rough
+        .beats
+        .len()
+        .saturating_sub(rough.uncovered_beat_ids.len())
+        .max(covered_beat_ids(rough).len());
+    let max_uses = super::max_asset_uses_for_shot_count(covered_beats);
+    let mut uses: HashMap<&str, usize> = HashMap::new();
+    for (_, asset_id, _) in already_selected {
+        *uses.entry(asset_id.as_str()).or_default() += 1;
+    }
+    let kept = pool
+        .candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            uses.get(candidate.asset_id.as_str()).copied().unwrap_or(0) < max_uses
+                && !used
+                    .iter()
+                    .any(|selected| sources_are_similar(selected, candidate))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if kept.is_empty() || kept.len() == pool.candidates.len() {
+        return None;
+    }
+    let view = BeatCandidatePool {
+        beat_id: pool.beat_id.clone(),
+        beat_purpose: pool.beat_purpose.clone(),
+        candidates: kept
+            .iter()
+            .map(|index| pool.candidates[*index].clone())
+            .collect(),
+        scores: kept
+            .iter()
+            .filter_map(|index| pool.scores.get(*index).cloned())
+            .collect(),
+    };
+    Some((view, kept))
 }
 
 fn select_one_beat(
@@ -4001,7 +4147,8 @@ fn collect_phase3_issues(
                         ),
                         true,
                     )
-                    .for_shots(vec![left.order_index, right.order_index])
+                    // 只让后一个镜头重选，先选中的保持不动，避免两拍一起被打回后都换成更差的。
+                    .for_shots(vec![right.order_index])
                     .allowing(vec![
                         "replace one shot with a dissimilar candidateIndex from its beat pool",
                         "or mark the weaker beat uncovered=true when no dissimilar alternate remains",
@@ -4024,6 +4171,8 @@ fn collect_phase3_issues(
         for (asset_id, shot_indices) in asset_usage {
             let count = shot_indices.len();
             if count > max_allowed {
+                // 只点名超出上限的靠后镜头，前面 max_allowed 次使用保持不动。
+                let excess_shots = shot_indices[max_allowed..].to_vec();
                 let percentage = count * 100 / final_content.shots.len();
                 let excess = count - max_allowed;
                 issues.push(
@@ -4035,7 +4184,7 @@ fn collect_phase3_issues(
                         ),
                         true,
                     )
-                    .for_shots(shot_indices)
+                    .for_shots(excess_shots)
                     .allowing(vec![
                         format!(
                             "replace {excess} of these shots using candidateIndexes for different assets from their beat pools so '{asset_id}' is used at most {max_allowed} times"

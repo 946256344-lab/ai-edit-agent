@@ -147,6 +147,7 @@ pub(crate) fn reselect_shots(
         *frozen_uses.entry(shot.asset_id.as_str()).or_default() += 1;
     }
 
+    let shared_terms = super::scoring::shared_lexical_terms(&base.storyboard.beats);
     let mut new_pools = Vec::new();
     for (index, beat) in query_beats.iter().enumerate() {
         let current_assets = base
@@ -190,6 +191,7 @@ pub(crate) fn reselect_shots(
             clip_embeddings.get(index).map(Vec::as_slice),
             target_ms,
             score_first_slots,
+            &shared_terms,
         )
         .ok_or_else(|| {
             format!(

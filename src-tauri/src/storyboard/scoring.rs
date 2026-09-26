@@ -6,6 +6,7 @@
 use crate::models::{StoryboardBeat, StoryboardSource};
 use crate::storyboard::semantic::ocr_is_meaningful;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// 候选片段评分结果，用于排序。
 #[derive(Debug, Clone)]
@@ -45,11 +46,111 @@ impl CandidateScore {
 /// 避免整片假卡靠文字压过带真图向量的段。
 const MISSING_CLIP_TEXT_HINT_CAP: f64 = 5.0;
 
+/// 出现在多数拍查询里的通用词（factory、machinery…）区分不了拍，按这个权重计入词面命中率。
+const SHARED_TERM_WEIGHT: f64 = 0.25;
+
+/// CLIP 图文余弦原始值挤在约 0.17–0.33，直接 ×25 时候选之间只差 1–3 分。
+/// 同一拍全库差距小于这个值时不做相对换算，按原始值计分。
+const MIN_CLIP_SPREAD: f64 = 0.01;
+
+/// 词面查询里不计分的英文虚词和泛化描述词：它们几乎命中任何描述，只会让长描述占便宜。
+const LEXICAL_STOPWORDS: &[&str] = &[
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "with",
+    "by",
+    "from",
+    "as",
+    "is",
+    "are",
+    "be",
+    "being",
+    "into",
+    "onto",
+    "within",
+    "near",
+    "its",
+    "it",
+    "this",
+    "that",
+    "these",
+    "those",
+    "both",
+    "each",
+    "every",
+    "some",
+    "any",
+    "other",
+    "than",
+    "then",
+    "while",
+    "where",
+    "which",
+    "who",
+    "their",
+    "them",
+    "there",
+    "via",
+    "about",
+    "over",
+    "under",
+    "showing",
+    "shows",
+    "show",
+    "shot",
+    "shots",
+    "scene",
+    "scenes",
+    "footage",
+    "clip",
+    "image",
+    "frame",
+    "visible",
+    "suggesting",
+    "conveying",
+    "setting",
+    "environment",
+    "view",
+];
+
+/// 同一条故事版的评分上下文：各拍共用的通用查询词，以及本拍 CLIP 余弦的相对换算区间。
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ScoringContext {
+    pub(crate) shared_terms: HashSet<String>,
+    /// (全库中位数, 全库最高值)；None 时按原始余弦 ×25。
+    clip_range: Option<(f64, f64)>,
+}
+
+/// 找出出现在至少一半拍（且不少于 3 拍）查询里的词，评分时降权。
+pub(crate) fn shared_lexical_terms(beats: &[StoryboardBeat]) -> HashSet<String> {
+    let threshold = beats.len().div_ceil(2).max(3);
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for beat in beats {
+        for term in lexical_query_terms(beat, true) {
+            *counts.entry(term).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count >= threshold)
+        .map(|(term, _)| term)
+        .collect()
+}
+
 /// 为所有候选片段打分并排序（降序）。
 ///
 /// 评分维度：
-/// - 语义相关性（0-50分）：余弦与词面各最多 25；缺一侧时另一侧放大到 50
-/// - CLIP 图文（0-25分）：beat 文案与片段代表帧；缺模型/向量时为 0
+/// - 语义相关性（0-50分）：余弦与词面各最多 25；缺一侧时另一侧放大到 50；词面不计虚词，多数拍共用的词降权
+/// - CLIP 图文（0-25分）：beat 文案与片段代表帧，按本拍全库中位数到最高值相对换算；缺模型/向量时为 0
 /// - 有 CLIP 查询但候选没有片段图向量时，词面/语义各最多 5 分
 /// - 画面质量（0-10分）：来自 visual_quality_score
 /// - 时长匹配度（0-10分）：候选时长与目标时长的适配度
@@ -66,7 +167,12 @@ pub(crate) fn rank_segment_candidates(
     usage_counts: &std::collections::HashMap<String, i32>, // 素材在项目其他 timeline 的去重使用次数
     beat_embedding: Option<&[f32]>,
     beat_clip_embedding: Option<&[f32]>,
+    shared_terms: &HashSet<String>,
 ) -> Vec<ScoredCandidate> {
+    let context = ScoringContext {
+        shared_terms: shared_terms.clone(),
+        clip_range: beat_clip_embedding.and_then(|query| clip_similarity_range(&candidates, query)),
+    };
     let mut scored: Vec<_> = candidates
         .into_iter()
         .map(|candidate| {
@@ -78,6 +184,7 @@ pub(crate) fn rank_segment_candidates(
                 usage_counts,
                 beat_embedding,
                 beat_clip_embedding,
+                &context,
             );
             ScoredCandidate {
                 source: candidate,
@@ -112,13 +219,14 @@ fn calculate_candidate_score(
     usage_counts: &std::collections::HashMap<String, i32>,
     beat_embedding: Option<&[f32]>,
     beat_clip_embedding: Option<&[f32]>,
+    context: &ScoringContext,
 ) -> CandidateScore {
     let has_evidence = candidate_has_evidence(candidate);
     let (semantic, lexical, matched_keywords) =
-        semantic_match_parts(candidate, beat, beat_embedding);
+        semantic_match_parts(candidate, beat, beat_embedding, &context.shared_terms);
     let (semantic, lexical) =
         cap_text_without_clip(candidate, beat_clip_embedding, semantic, lexical);
-    let clip = clip_match_score(candidate, beat_clip_embedding);
+    let clip = clip_match_score(candidate, beat_clip_embedding, context.clip_range);
 
     let quality = candidate.visual_quality_score.unwrap_or(0.5) * 10.0;
 
@@ -172,12 +280,46 @@ fn cap_text_without_clip(
     }
 }
 
-fn clip_match_score(candidate: &StoryboardSource, beat_clip_embedding: Option<&[f32]>) -> f64 {
-    beat_clip_embedding
-        .zip(candidate.segment_clip_embedding.as_deref())
-        .and_then(|(query, image)| crate::storyboard::semantic::cosine_similarity(query, image))
-        .map(|similarity| similarity.max(0.0) * 25.0)
-        .unwrap_or(0.0)
+fn clip_similarity(candidate: &StoryboardSource, beat_clip_embedding: &[f32]) -> Option<f64> {
+    candidate
+        .segment_clip_embedding
+        .as_deref()
+        .and_then(|image| {
+            crate::storyboard::semantic::cosine_similarity(beat_clip_embedding, image)
+        })
+}
+
+/// 本拍全库 CLIP 余弦的中位数与最高值：中位数以下记 0，最高值记满分，拉开真正贴合画面的候选。
+fn clip_similarity_range(
+    candidates: &[StoryboardSource],
+    beat_clip_embedding: &[f32],
+) -> Option<(f64, f64)> {
+    let mut similarities = candidates
+        .iter()
+        .filter_map(|candidate| clip_similarity(candidate, beat_clip_embedding))
+        .collect::<Vec<_>>();
+    if similarities.len() < 2 {
+        return None;
+    }
+    similarities.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = similarities[similarities.len() / 2];
+    let max = similarities[similarities.len() - 1];
+    (max - median >= MIN_CLIP_SPREAD).then_some((median, max))
+}
+
+fn clip_match_score(
+    candidate: &StoryboardSource,
+    beat_clip_embedding: Option<&[f32]>,
+    clip_range: Option<(f64, f64)>,
+) -> f64 {
+    let Some(similarity) = beat_clip_embedding.and_then(|query| clip_similarity(candidate, query))
+    else {
+        return 0.0;
+    };
+    match clip_range {
+        Some((floor, ceiling)) => ((similarity - floor) / (ceiling - floor)).clamp(0.0, 1.0) * 25.0,
+        None => similarity.max(0.0) * 25.0,
+    }
 }
 
 /// 时长匹配：片段候选按片段跨度衡量，整素材候选沿用最长场景段/整片时长。
@@ -266,6 +408,7 @@ fn semantic_match_parts(
     candidate: &StoryboardSource,
     beat: &StoryboardBeat,
     beat_embedding: Option<&[f32]>,
+    shared_terms: &HashSet<String>,
 ) -> (f64, f64, Vec<String>) {
     // 片段候选优先用片段向量；片段向量缺失时回退素材级向量。
     let candidate_embedding = candidate
@@ -286,8 +429,16 @@ fn semantic_match_parts(
     let query = lexical_query_terms(beat, evidence_has_cjk);
     let matched_keywords = matched_lexical_terms(&query, &blob);
     let lexical_available = !query.is_empty();
+    let term_weight = |term: &String| {
+        if shared_terms.contains(term) {
+            SHARED_TERM_WEIGHT
+        } else {
+            1.0
+        }
+    };
     let hit_ratio = if lexical_available {
-        matched_keywords.len() as f64 / query.len() as f64
+        matched_keywords.iter().map(term_weight).sum::<f64>()
+            / query.iter().map(term_weight).sum::<f64>()
     } else {
         0.0
     };
@@ -333,15 +484,27 @@ fn lexical_query_terms(beat: &StoryboardBeat, evidence_has_cjk: bool) -> Vec<Str
             terms.push(term);
         }
     }
+    terms.retain(|term| !LEXICAL_STOPWORDS.contains(&term.as_str()));
     terms.sort();
     terms.dedup();
     terms
 }
 
+/// 英文词只匹配描述里以它开头的单词（worker 命中 workers），不再做子串匹配，
+/// 否则 at 会命中 operate、arm 会命中 farm；中文双字仍按子串。
 fn matched_lexical_terms(query: &[String], blob: &str) -> Vec<String> {
+    let blob_words = ascii_terms(blob);
     query
         .iter()
-        .filter(|term| blob.contains(term.as_str()))
+        .filter(|term| {
+            if term.is_ascii() {
+                blob_words
+                    .iter()
+                    .any(|word| word.starts_with(term.as_str()))
+            } else {
+                blob.contains(term.as_str())
+            }
+        })
         .cloned()
         .collect()
 }
@@ -478,15 +641,48 @@ mod tests {
     }
 
     #[test]
+    fn lexical_match_ignores_function_words_and_substrings() {
+        // 回归：at/in/or 等虚词按子串命中 operate、machine，长描述靠虚词拿分。
+        let beat = StoryboardBeat {
+            required_visual: "Robotic arm at the factory".to_owned(),
+            ..test_beat()
+        };
+        let query = lexical_query_terms(&beat, false);
+        assert!(!query.iter().any(|term| term == "at" || term == "the"));
+        let blob = "workers operate machines in a farm shed";
+        assert!(matched_lexical_terms(&query, blob).is_empty());
+        assert_eq!(
+            matched_lexical_terms(&query, "white robotic arms in a factory"),
+            vec!["arm", "factory", "robotic"]
+        );
+    }
+
+    #[test]
     fn higher_quality_scores_higher() {
         let high = make_source("high", "video", Some(10_000), 0.9);
         let low = make_source("low", "video", Some(10_000), 0.3);
 
         let usage = std::collections::HashMap::new();
-        let high_score =
-            calculate_candidate_score(&high, &test_beat(), 10_000, &[], &usage, None, None);
-        let low_score =
-            calculate_candidate_score(&low, &test_beat(), 10_000, &[], &usage, None, None);
+        let high_score = calculate_candidate_score(
+            &high,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
+        let low_score = calculate_candidate_score(
+            &low,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
 
         assert!(high_score.total > low_score.total, "高质量素材应得分更高");
     }
@@ -497,10 +693,26 @@ mod tests {
         let too_long = make_source("long", "video", Some(50_000), 0.5);
 
         let usage = std::collections::HashMap::new();
-        let perfect_score =
-            calculate_candidate_score(&perfect, &test_beat(), 5_000, &[], &usage, None, None);
-        let long_score =
-            calculate_candidate_score(&too_long, &test_beat(), 5_000, &[], &usage, None, None);
+        let perfect_score = calculate_candidate_score(
+            &perfect,
+            &test_beat(),
+            5_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
+        let long_score = calculate_candidate_score(
+            &too_long,
+            &test_beat(),
+            5_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
 
         assert_eq!(
             perfect_score.total, long_score.total,
@@ -514,10 +726,26 @@ mod tests {
         let prior = vec!["asset-1".to_owned()];
 
         let usage = std::collections::HashMap::new();
-        let penalized =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None, None);
-        let normal =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None, None);
+        let penalized = calculate_candidate_score(
+            &candidate,
+            &test_beat(),
+            10_000,
+            &prior,
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
+        let normal = calculate_candidate_score(
+            &candidate,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
 
         assert!(penalized.total < normal.total, "连续使用同一素材应被降权");
         assert!(
@@ -532,10 +760,26 @@ mod tests {
         let prior = vec!["asset-1".to_owned(), "asset-2".to_owned()];
 
         let usage = std::collections::HashMap::new();
-        let penalized =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &prior, &usage, None, None);
-        let normal =
-            calculate_candidate_score(&candidate, &test_beat(), 10_000, &[], &usage, None, None);
+        let penalized = calculate_candidate_score(
+            &candidate,
+            &test_beat(),
+            10_000,
+            &prior,
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
+        let normal = calculate_candidate_score(
+            &candidate,
+            &test_beat(),
+            10_000,
+            &[],
+            &usage,
+            None,
+            None,
+            &ScoringContext::default(),
+        );
 
         assert!(
             (normal.total - penalized.total - 15.0).abs() < 0.1,
@@ -594,6 +838,7 @@ mod tests {
             &std::collections::HashMap::new(),
             None,
             None,
+            &HashSet::new(),
         );
         assert_eq!(ranked[0].source.asset_id, "factory");
     }
@@ -654,6 +899,7 @@ mod tests {
             &std::collections::HashMap::new(),
             None,
             None,
+            &HashSet::new(),
         );
         assert_eq!(ranked[0].source.asset_id, "forklift");
         assert!(!ranked[0].score.matched_keywords.is_empty());
@@ -695,6 +941,7 @@ mod tests {
             &std::collections::HashMap::new(),
             None,
             None,
+            &HashSet::new(),
         );
         assert_eq!(ranked[0].source.asset_id, "evidenced");
         assert!(ranked[0].score.has_evidence);
@@ -727,6 +974,7 @@ mod tests {
             &std::collections::HashMap::new(),
             None,
             None,
+            &HashSet::new(),
         );
 
         assert_eq!(ranked[0].source.asset_id, "high");
@@ -748,6 +996,7 @@ mod tests {
             &usage,
             None,
             None,
+            &HashSet::new(),
         );
 
         assert_eq!(ranked[0].source.asset_id, "fresh");
@@ -782,6 +1031,7 @@ mod tests {
             &usage,
             None,
             Some(&beat_clip),
+            &ScoringContext::default(),
         );
         let other_score = calculate_candidate_score(
             &other,
@@ -791,6 +1041,7 @@ mod tests {
             &usage,
             None,
             Some(&beat_clip),
+            &ScoringContext::default(),
         );
         assert!(match_score.clip > other_score.clip);
         assert!(match_score.total > other_score.total);
@@ -843,6 +1094,7 @@ mod tests {
             &std::collections::HashMap::new(),
             None,
             Some(&beat_clip),
+            &HashSet::new(),
         );
         assert_eq!(ranked[0].source.asset_id, "segment");
         let whole_score = ranked
