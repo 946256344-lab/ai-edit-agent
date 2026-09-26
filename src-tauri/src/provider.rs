@@ -1148,6 +1148,16 @@ fn post_model_payload_with_custom_model(
                 Err(error) => Err(match error {
                     ureq::Error::Status(status, response) => {
                         let body = response.into_string().unwrap_or_default();
+                        if cfg!(debug_assertions) {
+                            // 只在开发构建记被拒原因（遮蔽凭据与地址、截断），便于定位 4xx；发布日志不含正文。
+                            let mut reason = body.chars().take(600).collect::<String>();
+                            for secret in [bearer.as_str(), config.base_url.as_str()] {
+                                if !secret.is_empty() {
+                                    reason = reason.replace(secret, "[REDACTED]");
+                                }
+                            }
+                            log::warn!("Model request rejected: HTTP {status}: {reason}");
+                        }
                         observe_wire_response(
                             observe_response,
                             status,
