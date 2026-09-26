@@ -2497,10 +2497,7 @@ mod tests {
 }
 
 /// Phase 3: 每个 beat 单独看图（池内每条一张网格），默认选 1 镜；池内候选均可选。
-///
-/// `prior_shots` 为上一版 storyboard 的镜头列表。beat id 不变且上次选中的
-/// assetId/segmentId 仍在新候选池里时，直接复用上次结果跳过模型调用（增量重跑）。
-/// 修复轮（repair != None）的受影响 beat 始终重跑，不受 prior_shots 保护。
+/// 修复轮只重跑修复包点名的 beat，其余沿用上一轮选择；局部改镜走 `reselect_shots`。
 ///
 /// 返回 `(候选, 校验问题)`：`Err` 仅表示传输/解析失败；语义问题进 `issues`。
 pub(crate) fn phase3_select(
@@ -2509,24 +2506,13 @@ pub(crate) fn phase3_select(
     brief: &str,
     rough: &RoughStoryboard,
     repair: Option<&RepairPacket>,
-    prior_shots: &[StoryboardShot],
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     log::info!(
-        "Phase 3: Selecting one shot per beat from {} pools (9 images each), prior_shots={}",
+        "Phase 3: Selecting one shot per beat from {} pools (9 images each)",
         rough.candidate_pools.len(),
-        prior_shots.len(),
     );
     let retry_beats = beats_named_in_repair(repair, rough);
-    // 增量重跑：把 prior_shots 预填成和 repair.previous_shots 相同格式的映射，
-    // 修复轮的受影响 beat 不受保护（retry_beats 里的仍然重跑）。
-    let mut previous = previous_beat_selections(repair, rough);
-    if repair.is_none() && !prior_shots.is_empty() {
-        previous.extend(prior_shots_to_selections(prior_shots, rough));
-        let reused = previous.len();
-        if reused > 0 {
-            log::info!("Phase 3 incremental: {reused} beats can reuse prior selections if still in pool");
-        }
-    }
+    let previous = previous_beat_selections(repair, rough);
     let mut selections = Vec::new();
     let mut chosen_so_far = Vec::new();
     for beat_id in covered_beat_ids(rough) {
@@ -2804,59 +2790,6 @@ fn previous_beat_selections(
             )
         })
         .collect()
-}
-
-/// 把上一版 storyboard 的 shots 转换成 beat → Phase3BeatSelection 映射，
-/// 仅保留在当前新候选池里仍能找到匹配 assetId/segmentId 的 beat。
-/// 找不到的 beat 不进映射，Phase 3 照常重跑。
-fn prior_shots_to_selections(
-    prior_shots: &[StoryboardShot],
-    rough: &RoughStoryboard,
-) -> HashMap<String, Phase3BeatSelection> {
-    let mut by_beat: HashMap<String, Vec<usize>> = HashMap::new();
-    for shot in prior_shots {
-        let Some(pool) = rough
-            .candidate_pools
-            .iter()
-            .find(|pool| pool.beat_id == shot.beat_id)
-        else {
-            // beat id 不在新候选池里，说明叙事结构变了，需要重跑。
-            continue;
-        };
-        let Some(index) = pool.candidates.iter().position(|candidate| {
-            candidate.asset_id == shot.asset_id
-                && candidate
-                    .segment
-                    .as_ref()
-                    .map(|segment| segment.start_ms == shot.source_start_ms)
-                    .unwrap_or(true)
-        }) else {
-            // 上次选中的素材/片段不在新候选池里（可能已移除或池发生变化），重跑。
-            continue;
-        };
-        by_beat.entry(shot.beat_id.clone()).or_default().push(index);
-    }
-    let result: HashMap<String, Phase3BeatSelection> = by_beat
-        .into_iter()
-        .map(|(beat_id, candidate_indexes)| {
-            (
-                beat_id.clone(),
-                Phase3BeatSelection {
-                    beat_id,
-                    uncovered: candidate_indexes.is_empty(),
-                    candidate_indexes,
-                    narration: None,
-                    match_level: None,
-                },
-            )
-        })
-        .collect();
-    log::info!(
-        "Phase 3 incremental reuse: {} of {} prior beats can be reused",
-        result.len(),
-        prior_shots.len(),
-    );
-    result
 }
 
 fn refs_from_selection(

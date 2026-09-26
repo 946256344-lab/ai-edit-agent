@@ -2838,16 +2838,6 @@ fn generate_storyboard_internal(
     let mut narrative = narrative;
     crate::execution_deadline::check()?;
     enforce_decided_script_mode(brief, required_script_mode, &mut narrative);
-    // 增量重跑：加载上一版 storyboard 的 shots，Phase 3 对 beat id 未变且素材仍在新候选池里的
-    // beat 直接复用上次结果，跳过该 beat 的模型调用。首次生成或加载失败时使用空列表。
-    let prior_shots: Vec<crate::models::StoryboardShot> = {
-        let conn = open_connection(&app)?;
-        storyboard_versions_for_task(&conn, &project_id, &editing_task_id)
-            .ok()
-            .and_then(|mut versions| versions.into_iter().next())
-            .map(|v| v.shots)
-            .unwrap_or_default()
-    };
     // 配音已在 Phase 1 前合成；这里只做语义/CLIP 编码。
     let (embeddings, clip_embeddings) = std::thread::scope(|scope| {
         let deadline = crate::execution_deadline::current();
@@ -2993,7 +2983,6 @@ fn generate_storyboard_internal(
         &access,
         brief,
         &mut rough,
-        &prior_shots,
         audio_first.as_ref(),
     )?;
     log::info!(
@@ -3052,7 +3041,6 @@ fn run_phase3_selection(
     access: &ModelAccess,
     brief: &str,
     rough: &mut phases::RoughStoryboard,
-    prior_shots: &[crate::models::StoryboardShot],
     audio_first: Option<&(i64, crate::voice_provider::AudioFirstPrepared)>,
 ) -> Result<StoryboardContent, String> {
     let mut repair: Option<RepairPacket> = None;
@@ -3063,7 +3051,7 @@ fn run_phase3_selection(
         crate::execution_deadline::check()?;
         let attempt = budget.semantic_attempt_number();
         log::info!("Phase 3 attempt {attempt}: select one shot per beat");
-        match phases::phase3_select(app, access, brief, rough, repair.as_ref(), prior_shots) {
+        match phases::phase3_select(app, access, brief, rough, repair.as_ref()) {
             Ok((mut candidate, mut issues)) => {
                 let alignment =
                     audio_first.map(|(duration, prepared)| (&prepared.alignment, *duration));

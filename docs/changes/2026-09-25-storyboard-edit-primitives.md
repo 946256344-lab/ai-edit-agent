@@ -75,4 +75,4 @@
 
 ## 顺带发现
 
-- Phase 3 增量重跑（`prior_shots`）实际从未生效：无修复包时 `beats_named_in_repair` 返回全部拍，复用分支永远走不到；有修复包时又不加载 `prior_shots`。已登记 `TASKS.md`，未在本任务修改。
+- Phase 3 增量重跑（`prior_shots`）实际从未生效：无修复包时 `beats_named_in_repair` 返回全部拍，复用分支永远走不到；有修复包时又不加载 `prior_shots`。已登记 `TASKS.md`，09-26 删除该路径。

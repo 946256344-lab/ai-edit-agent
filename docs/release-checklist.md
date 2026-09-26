@@ -2,6 +2,8 @@
 
 本文件是首发前后的检查清单，逐项勾选。事实依据写在每项「现状」里，基于 2026-09-26 的桌面仓库与本机 `../website` 仓库；状态变化时直接改本文件，并在 `TASKS.md` 更新总条目。
 
+2026-09-26 已把标为 `缺失` 的项逐条回到两个仓库的代码和配置里核实过。只能在控制台确认的项（Firebase Key 限制、发件域、Firestore 规则是否已部署、Vercel 套餐与执行时长、上游服务条款）标为 `待确认`。
+
 状态标记：`缺失` 未做；`部分` 做了但未验收或有缺口；`待确认` 需要查控制台或实测才知道；`已具备` 有实现且有验证记录。
 
 优先级：**P0** 不完成不能发；**P1** 发布前应完成，来不及要在已知限制里写明；**P2** 发布后第一周。
@@ -62,7 +64,7 @@
 
 ### 1.3 英文用户体验与编辑器交付
 
-- [ ] **P0 默认编辑器改为 CapCut**。现状：`缺失`。项目没有设置 `outputEditor` 时回落到剪映（`src-tauri/src/handoff/deliver.rs` `read_output_editor`），海外用户一般没装剪映。改为按界面语言或检测到的已安装编辑器选择默认值，并同步前端的默认选中项（`src/hooks/useArtifactWorkspaceController.ts` 的 `selectedId: 'jianying'`）。
+- [ ] **P0 默认编辑器改为 CapCut**。现状：`缺失`。项目没有设置 `outputEditor` 时回落到剪映（`src-tauri/src/handoff/deliver.rs` `read_output_editor`），海外用户一般没装剪映。改为按界面语言或检测到的已安装编辑器选择默认值。前端 `src/hooks/useArtifactWorkspaceController.ts` 里的 `selectedId: 'jianying'` 只是编辑器目录加载前的初始值，实际默认值来自后端 `list_editor_linkers`，但两处要一起改，避免加载时闪一下剪映。
 - [ ] **P0 CapCut 国际版真实交付**。现状：`部分`，CapCut 链接器已实现（`docs/changes/2026-09-18-capcut-linker.md`），但没有在真实 CapCut 中打开草稿的验收记录。要测当前版本的 CapCut 桌面版：草稿出现在首页、能打开、画面 / 字幕 / 时长正确；带配音时有配音轨。
 - [ ] **P0 FCPXML / OTIO 导入**：在 DaVinci Resolve 免费版中分别导入 FCPXML 和 OTIO，确认素材能重新链接、切点正确。
 - [ ] **P0 核对编辑器标签**。界面写着 FCPXML「可导入 Premiere」（`src-tauri/src/handoff/mod.rs` `label` / `summary`），但 Premiere Pro 通常只导入 FCP 7 XML，不直接导入 FCPXML。需要实测；不支持就把 Premiere 从标签里去掉。Premiere 在海外用户很多，这里写错会直接引来差评。
@@ -132,7 +134,7 @@
 
 - [ ] **P1 模型下载**：首次启动从 HuggingFace 下载 BGE / CLIP（`src-tauri/src/runtime_models.rs`）。测断网、慢网、下载中途关闭应用这几种情况；或者直接发布内置模型的完整包（`npm run tauri:build:full`）。
 - [ ] **P1 首次引导**（英文）：登录 → 新建项目 → 导入 → 第一次剪辑。要告诉用户需要安装 CapCut 或 Resolve、分析需要一段时间、试用还剩几天。
-- [ ] **P1 启动检查**（`get_release_readiness`）在干净机器上全部为 ok。剪映未安装时不应显示为问题；CapCut 未安装时提示清楚。
+- [ ] **P1 启动检查**（`get_release_readiness`）在干净机器上全部为 ok。现状：剪映和 CapCut 没装时都报 `warn`（`src-tauri/src/release_readiness.rs` 的 `jianying_checks` 与 CapCut 检查），海外用户会看到一条和自己无关的剪映警告。改为只对当前选中的编辑器报警告。
 - [ ] **P1 界面默认语言**：首次按系统语言选择，英文系统应直接进入英文界面，要在干净的英文 Windows 上确认。
 
 ### 2.5 安全细项
@@ -184,7 +186,7 @@
 
 - [ ] 每天看漏斗：注册 → 邮箱验证 → 创建试用 → 桌面登录 → 首个预览成功 → 交付到编辑器。
 - [ ] 每天看：单用户平均成本、错误码分布、平均每次剪辑耗时、各编辑器的交付占比。
-- [ ] 修复已知问题：Phase 3 增量重跑从未生效（`TASKS.md`）。Agent 健康摘要数量口径已于 09-26 对齐。
+- [x] 修复已知问题：Agent 健康摘要数量口径已对齐；Phase 3 增量重跑死路径已删除（均为 09-26）。
 - [ ] 网关每次请求都要额外调用 2 次 Google API（账号查询和权益读取），可以改成本地校验 ID token 并缓存权益，降低延迟。
 - [ ] 按反馈决定：MP4 导出、横屏输出、自动更新、崩溃上报、多语种向量模型的优先级。
 
