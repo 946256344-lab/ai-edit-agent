@@ -622,13 +622,13 @@ export const zhCN = {
     editorLabels: {
       jianying: '剪映',
       capcut: 'CapCut',
-      fcpxml: 'Premiere / Resolve / Final Cut',
+      fcpxml: 'DaVinci Resolve / Final Cut（FCPXML）',
       otio: 'DaVinci Resolve (OTIO)',
     } as Record<string, string>,
     editorSummaries: {
       jianying: '写入本机剪映草稿箱，可继续微调',
       capcut: '写入本机 CapCut 草稿箱，可继续微调',
-      fcpxml: '写出 FCPXML，可导入 Premiere、DaVinci Resolve 或 Final Cut',
+      fcpxml: '写出 FCPXML，可导入 DaVinci Resolve 或 Final Cut Pro（Premiere Pro 不能导入 FCPXML）',
       otio: '写出 OTIO，Resolve 可直接导入',
     } as Record<string, string>,
     deliveryPending: (name: string, editor: string) => `草稿「${name}」已写好，${editor}正在运行，退出后会自动完成注册。`,

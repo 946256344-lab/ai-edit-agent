@@ -65,7 +65,7 @@ impl EditorId {
         match self {
             Self::Jianying => "剪映",
             Self::CapCut => "CapCut",
-            Self::Fcpxml => "Premiere / Resolve / Final Cut",
+            Self::Fcpxml => "DaVinci Resolve / Final Cut（FCPXML）",
             Self::Otio => "DaVinci Resolve (OTIO)",
         }
     }
@@ -74,7 +74,7 @@ impl EditorId {
         match self {
             Self::Jianying => "写入本机剪映草稿箱，可继续微调",
             Self::CapCut => "写入本机 CapCut 草稿箱，可继续微调",
-            Self::Fcpxml => "写出 FCPXML，可导入 Premiere、DaVinci Resolve 或 Final Cut",
+            Self::Fcpxml => "写出 FCPXML，可导入 DaVinci Resolve 或 Final Cut Pro（Premiere Pro 不能导入 FCPXML）",
             Self::Otio => "写出 OTIO，Resolve 可直接导入",
         }
     }

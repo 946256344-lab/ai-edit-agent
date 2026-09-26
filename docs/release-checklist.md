@@ -67,7 +67,7 @@
 - [x] **P0 默认编辑器改为 CapCut**。09-26 已改：未选择时 CapCut 优先，只检测到剪映时用剪映（`docs/changes/2026-09-26-default-editor-capcut.md`），随 §1.4 主路径验收。原现状：项目没有设置 `outputEditor` 时回落到剪映（`src-tauri/src/handoff/deliver.rs` `read_output_editor`），海外用户一般没装剪映。改为按界面语言或检测到的已安装编辑器选择默认值。前端 `src/hooks/useArtifactWorkspaceController.ts` 里的 `selectedId: 'jianying'` 只是编辑器目录加载前的初始值，实际默认值来自后端 `list_editor_linkers`，但两处要一起改，避免加载时闪一下剪映。
 - [ ] **P0 CapCut 国际版真实交付**。现状：`部分`，CapCut 链接器已实现（`docs/changes/2026-09-18-capcut-linker.md`），但没有在真实 CapCut 中打开草稿的验收记录。要测当前版本的 CapCut 桌面版：草稿出现在首页、能打开、画面 / 字幕 / 时长正确；带配音时有配音轨。
 - [ ] **P0 FCPXML / OTIO 导入**：在 DaVinci Resolve 免费版中分别导入 FCPXML 和 OTIO，确认素材能重新链接、切点正确。
-- [ ] **P0 核对编辑器标签**。界面写着 FCPXML「可导入 Premiere」（`src-tauri/src/handoff/mod.rs` `label` / `summary`），但 Premiere Pro 通常只导入 FCP 7 XML，不直接导入 FCPXML。需要实测；不支持就把 Premiere 从标签里去掉。Premiere 在海外用户很多，这里写错会直接引来差评。
+- [x] **P0 核对编辑器标签**。09-26 已从 FCPXML 的名称和说明中去掉 Premiere（Premiere Pro 导入的是 FCP 7 XML，不是 FCPXML），说明里注明不支持。原现状：界面写着 FCPXML「可导入 Premiere」（`src-tauri/src/handoff/mod.rs` `label` / `summary`），但 Premiere Pro 通常只导入 FCP 7 XML，不直接导入 FCPXML。需要实测；不支持就把 Premiere 从标签里去掉。Premiere 在海外用户很多，这里写错会直接引来差评。
 - [x] **P0 网关错误文案英文化**。09-26 已改为稳定码并由前端按语言显示（`docs/changes/2026-09-26-gateway-error-codes.md`），随 §1.4 失败路径验收。原现状：桌面端的网关错误提示写死了中文，也没有稳定码前缀（`src-tauri/src/provider.rs` 网关分支）。英文界面会直接显示中文，比如「Voycut 使用资格不可用」。改成与 `provider_timeout` 一致的码前缀，交给前端按语言显示。
 - [ ] **P0 英文界面全面过一遍**：主路径上每个页面、弹窗、错误提示、Agent 回复和默认会话名都应是英文，不能漏出中文（`docs/changes/2026-09-25-ui-i18n.md`、`2026-09-25-backend-text-i18n.md`）。启动检查、交付结果、候选不可用原因也要看。
 

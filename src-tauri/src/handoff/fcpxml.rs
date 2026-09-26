@@ -1,4 +1,4 @@
-//! 将 HandoffPlan 写成可导入 Premiere / Resolve / Final Cut 的 FCPXML。
+//! 将 HandoffPlan 写成可导入 DaVinci Resolve / Final Cut Pro 的 FCPXML（Premiere Pro 只认 FCP 7 XML，不支持）。
 //! 只保证切点和源窗；变速用 timeMap，构图和字幕不承诺保真。
 
 use super::{media_file_url, posix_media_path, HandoffClip, HandoffPlan};

@@ -628,13 +628,13 @@ export const en: typeof zhCN = {
     editorLabels: {
       jianying: 'Jianying',
       capcut: 'CapCut',
-      fcpxml: 'Premiere / Resolve / Final Cut',
+      fcpxml: 'DaVinci Resolve / Final Cut (FCPXML)',
       otio: 'DaVinci Resolve (OTIO)',
     },
     editorSummaries: {
       jianying: 'Writes to the local Jianying draft box for further editing',
       capcut: 'Writes to the local CapCut draft box for further editing',
-      fcpxml: 'Writes FCPXML for Premiere, DaVinci Resolve or Final Cut',
+      fcpxml: 'Writes FCPXML for DaVinci Resolve or Final Cut Pro (Premiere Pro cannot import FCPXML)',
       otio: 'Writes OTIO that Resolve can import directly',
     },
     deliveryPending: (name: string, editor: string) => `Draft “${name}” is written. ${editor} is running; registration completes automatically after you quit it.`,
