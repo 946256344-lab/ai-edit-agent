@@ -1040,6 +1040,11 @@ fn post_model_payload_with_custom_model(
                 .post(&chat_endpoint(&config.base_url))
                 .set("Content-Type", "application/json")
                 .set("Authorization", &format!("Bearer {bearer}"));
+            if is_gateway {
+                // 没有自动更新时，网关靠版本号对问题版本返回「请升级」。
+                request_builder =
+                    request_builder.set("X-Voycut-Version", env!("CARGO_PKG_VERSION"));
+            }
             if let Some(timeout) = timeout {
                 request_builder = request_builder.timeout(timeout);
             }
