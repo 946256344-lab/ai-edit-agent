@@ -255,7 +255,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实硬切分段、运动能量可用窗与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 按硬切段各送中点 1 帧，任务最多 6 段，最后不足 6 段也立即送审；执行时按素材分组并发请求（每个请求一条素材、最多 4 张图），避免描述挂到别的素材上；模型自拟叙事功能短语和一句可见描述，Rust 只对上 `assetId+segmentId` 并软解析 JSON，对不上的单卡丢弃，回写时写入片段向量。瞬时失败（超时、网络、Provider 暂不可用）自动补跑，每条最多 3 次，用户跳过与不适用不补。不抬 `visualAnalysisVersion`。选片不再等待片段模型加深；第二次分析是选中镜头的 Phase 4 多帧精修。历史 `analyze_asset_segments_batch` 仅收尾已入队任务。单一 worker 共用熔断；粗识别任务 payload 含 `assetIds` 与 `segments`。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
+当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实硬切分段、运动能量可用窗与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 按硬切段各送中点 1 帧，任务最多 6 段，最后不足 6 段也立即送审；队列最多 16 个任务同时执行（同一素材的任务不并行），执行时按素材分组并发请求（每个请求一条素材、最多 4 张图），避免描述挂到别的素材上；模型自拟叙事功能短语和一句可见描述，Rust 只对上 `assetId+segmentId` 并软解析 JSON，对不上的单卡丢弃，回写时写入片段向量。瞬时失败（超时、网络、Provider 暂不可用）自动补跑，每条最多 3 次，用户跳过与不适用不补。不抬 `visualAnalysisVersion`。选片不再等待片段模型加深；第二次分析是选中镜头的 Phase 4 多帧精修。历史 `analyze_asset_segments_batch` 仅收尾已入队任务。单一 worker 共用熔断；粗识别任务 payload 含 `assetIds` 与 `segments`。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
 
 ### Agent 编程上下文架构
 

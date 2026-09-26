@@ -1,6 +1,6 @@
 //! 视觉分析批次队列：远端视觉模型请求、优先级排序、批次worker与恢复。
 //! 技术分析完成后自动排队；粗识别按硬切段各送 1 帧、最多 6 段一批，最后不足 6 段也送审。
-//! 瞬时失败自动补跑；storyboard brief 可对 pending 批次重新排序。
+//! 最多 16 个任务同时执行，同一素材的任务不并行；瞬时失败自动补跑；storyboard brief 可对 pending 批次重新排序。
 
 use crate::db::{now_millis, open_connection};
 use crate::models::{BatchAssetActionResult, TechnicalMetadata, VisualEvidence};
@@ -16,7 +16,10 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -26,7 +29,12 @@ use uuid::Uuid;
 const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const VISUAL_ANALYSIS_BATCH_SIZE: usize = 6;
 
-static VISUAL_ANALYSIS_WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 同时执行的画面分析任务上限，只为不让本机同时编码过多图片；请求本身不限速。
+const VISUAL_ANALYSIS_RUNNERS: usize = 16;
+
+static VISUAL_ANALYSIS_ACTIVE_RUNNERS: AtomicUsize = AtomicUsize::new(0);
+/// 正被执行中任务占用的素材。
+static VISUAL_ANALYSIS_IN_FLIGHT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static VISUAL_ANALYSIS_WAKE_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Deserialize)]
@@ -1225,123 +1233,184 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
     );
 }
 
+/// 启动画面分析队列：最多 `VISUAL_ANALYSIS_RUNNERS` 个任务同时执行，请求本身不限速，只在 429 时退避。
+/// 同一条素材的任务不会同时执行，避免两个任务同时改写这条素材的元数据而互相冲突。
 pub(crate) fn spawn_visual_analysis_worker(app: AppHandle) {
-    if VISUAL_ANALYSIS_WORKER_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        loop {
-            if visual_model_retry_after().is_some() {
-                break;
-            }
-            let task = (|| -> Result<Option<(String, String, Vec<String>, String)>, String> {
-                let connection = open_connection(&app)?;
-                let transaction = connection
-                    .unchecked_transaction()
-                    .map_err(|error| error.to_string())?;
-                let row = transaction.query_row(
-                    "SELECT id, tool_name, input_json FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued' ORDER BY COALESCE(json_extract(result_json, '$.priority'), 0) DESC, created_at ASC, id ASC LIMIT 1",
-                    [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
-                ).optional().map_err(|error| error.to_string())?;
-                let Some((task_id, tool_name, input_json)) = row else {
-                    return Ok(None);
-                };
-                let parsed = serde_json::from_str::<Value>(&input_json).ok();
-                let asset_ids = if tool_name == "analyze_asset_segments_batch" {
-                    parsed
-                        .as_ref()
-                        .and_then(parse_asset_ids)
-                        .filter(|ids| !ids.is_empty() && ids.len() <= VISUAL_ANALYSIS_BATCH_SIZE)
-                } else {
-                    parsed
-                        .as_ref()
-                        .and_then(parse_coarse_visual_specs)
-                        .map(|specs| {
-                            let mut ids = Vec::new();
-                            let mut seen = HashSet::new();
-                            for (asset_id, _) in specs {
-                                if seen.insert(asset_id.clone()) {
-                                    ids.push(asset_id);
-                                }
-                            }
-                            ids
-                        })
-                        .filter(|ids| !ids.is_empty())
-                };
-                let Some(asset_ids) = asset_ids else {
-                    update_visual_batch_task(
-                        &app,
-                        &task_id,
-                        "failed",
-                        0,
-                        0,
-                        0,
-                        0,
-                        Some("visual_task_input_invalid"),
-                    )?;
-                    return Ok(Some((task_id, tool_name, Vec::new(), input_json)));
-                };
-                let claimed = transaction.execute(
-                    "UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
-                    params![now_millis(), task_id],
-                ).map_err(|error| error.to_string())?;
-                transaction.commit().map_err(|error| error.to_string())?;
-                if claimed == 1 {
-                    Ok(Some((task_id, tool_name, asset_ids, input_json)))
-                } else {
-                    Ok(Some((task_id, tool_name, Vec::new(), input_json)))
-                }
-            })().inspect_err(|e| log::warn!("Visual analysis worker: task claim failed: {e}"));
-            match task {
-                Ok(Some((task_id, tool_name, asset_ids, input_json))) => {
-                    if tool_name == "analyze_asset_segments_batch" {
-                        if !asset_ids.is_empty() {
-                            super::segment_visual::run_segment_visual_analysis_batch(
-                                app.clone(),
-                                task_id,
-                                asset_ids,
-                            );
-                        }
-                    } else if !asset_ids.is_empty() {
-                        run_visual_analysis_batch(app.clone(), task_id, input_json);
-                    }
-                }
-                Ok(None) => {
-                    match super::retry::requeue_retryable_visual_failures(&app) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => continue,
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        VISUAL_ANALYSIS_WORKER_ACTIVE.store(false, Ordering::Release);
-        if let Some(retry_after) = visual_model_retry_after() {
-            schedule_visual_analysis_wake(app.clone(), retry_after);
+    loop {
+        let active = VISUAL_ANALYSIS_ACTIVE_RUNNERS.load(Ordering::Acquire);
+        if active >= VISUAL_ANALYSIS_RUNNERS {
             return;
         }
-        let has_pending = open_connection(&app)
-            .ok()
-            .and_then(|connection| {
-                connection
-                    .query_row(
-                        "SELECT COUNT(*) FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued'",
-                        [],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .ok()
-                    .map(|count| count > 0)
-            })
-            .unwrap_or(false);
-        if has_pending {
-            thread::sleep(Duration::from_millis(250));
-            spawn_visual_analysis_worker(app);
+        if VISUAL_ANALYSIS_ACTIVE_RUNNERS
+            .compare_exchange(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let runner_app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || run_visual_analysis_runner(runner_app));
         }
-    });
+    }
+}
+
+fn run_visual_analysis_runner(app: AppHandle) {
+    loop {
+        if visual_model_retry_after().is_some() {
+            break;
+        }
+        match claim_visual_analysis_task(&app) {
+            Ok(Some(task)) => {
+                let _claimed_assets = InFlightVisualAssets(task.asset_ids.clone());
+                if task.tool_name == "analyze_asset_segments_batch" {
+                    super::segment_visual::run_segment_visual_analysis_batch(
+                        app.clone(),
+                        task.task_id,
+                        task.asset_ids,
+                    );
+                } else {
+                    run_visual_analysis_batch(app.clone(), task.task_id, task.input_json);
+                }
+            }
+            Ok(None) => {
+                // 其余排队任务要么没有，要么素材正被其他执行中的任务占用，由它们做完后接着领取。
+                if VISUAL_ANALYSIS_ACTIVE_RUNNERS.load(Ordering::Acquire) > 1 {
+                    break;
+                }
+                match super::retry::requeue_retryable_visual_failures(&app) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+            Err(error) => {
+                log::warn!("Visual analysis worker: task claim failed: {error}");
+                break;
+            }
+        }
+    }
+    let was_last = VISUAL_ANALYSIS_ACTIVE_RUNNERS.fetch_sub(1, Ordering::AcqRel) == 1;
+    if let Some(retry_after) = visual_model_retry_after() {
+        schedule_visual_analysis_wake(app, retry_after);
+        return;
+    }
+    if !was_last {
+        return;
+    }
+    let has_pending = open_connection(&app)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+                .map(|count| count > 0)
+        })
+        .unwrap_or(false);
+    if has_pending {
+        thread::sleep(Duration::from_millis(250));
+        spawn_visual_analysis_worker(app);
+    }
+}
+
+struct ClaimedVisualTask {
+    task_id: String,
+    tool_name: String,
+    asset_ids: Vec<String>,
+    input_json: String,
+}
+
+/// 执行结束（含异常退出）时释放该任务占用的素材。
+struct InFlightVisualAssets(Vec<String>);
+
+impl Drop for InFlightVisualAssets {
+    fn drop(&mut self) {
+        let mut in_flight = VISUAL_ANALYSIS_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        in_flight.retain(|asset_id| !self.0.contains(asset_id));
+    }
+}
+
+fn visual_task_asset_ids(tool_name: &str, input_json: &str) -> Option<Vec<String>> {
+    let parsed = serde_json::from_str::<Value>(input_json).ok();
+    if tool_name == "analyze_asset_segments_batch" {
+        return parsed
+            .as_ref()
+            .and_then(parse_asset_ids)
+            .filter(|ids| !ids.is_empty() && ids.len() <= VISUAL_ANALYSIS_BATCH_SIZE);
+    }
+    parsed
+        .as_ref()
+        .and_then(parse_coarse_visual_specs)
+        .map(|specs| {
+            let mut ids = Vec::new();
+            let mut seen = HashSet::new();
+            for (asset_id, _) in specs {
+                if seen.insert(asset_id.clone()) {
+                    ids.push(asset_id);
+                }
+            }
+            ids
+        })
+        .filter(|ids| !ids.is_empty())
+}
+
+/// 按优先级领取第一个素材未被占用的排队任务。领取在进程内串行，
+/// 数据库侧仍以 `status = 'queued'` 条件更新防止重复领取。
+fn claim_visual_analysis_task(app: &AppHandle) -> Result<Option<ClaimedVisualTask>, String> {
+    let mut in_flight = VISUAL_ANALYSIS_IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let connection = open_connection(app)?;
+    let rows = connection
+        .prepare(
+            "SELECT id, tool_name, input_json FROM agent_tasks WHERE tool_name IN ('analyze_asset_visual_batch', 'analyze_asset_segments_batch') AND status = 'queued' ORDER BY COALESCE(json_extract(result_json, '$.priority'), 0) DESC, created_at ASC, id ASC LIMIT 200",
+        )
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for (task_id, tool_name, input_json) in rows {
+        let Some(asset_ids) = visual_task_asset_ids(&tool_name, &input_json) else {
+            update_visual_batch_task(
+                app,
+                &task_id,
+                "failed",
+                0,
+                0,
+                0,
+                0,
+                Some("visual_task_input_invalid"),
+            )?;
+            continue;
+        };
+        if asset_ids.iter().any(|asset_id| in_flight.contains(asset_id)) {
+            continue;
+        }
+        let claimed = connection
+            .execute(
+                "UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
+                params![now_millis(), task_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if claimed == 1 {
+            in_flight.extend(asset_ids.iter().cloned());
+            return Ok(Some(ClaimedVisualTask {
+                task_id,
+                tool_name,
+                asset_ids,
+                input_json,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 fn schedule_visual_analysis_wake(app: AppHandle, retry_after: Duration) {
