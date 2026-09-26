@@ -17,6 +17,8 @@ pub struct FellowCutAccountStatus {
     email: Option<String>,
     entitlement: Option<String>,
     trial_started_at: Option<String>,
+    /// 网站账号页（注册、验证邮箱、找回密码），由内置网关地址推出；未配置网关时为空。
+    account_page_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +136,7 @@ fn status_from_token(
             email: Some(user.email),
             entitlement: None,
             trial_started_at: None,
+            account_page_url: account_page_url(),
         });
     }
     let access = entitlement(agent, id_token, &user.local_id)?;
@@ -142,6 +145,7 @@ fn status_from_token(
         email: Some(user.email),
         entitlement: access.as_ref().map(|value| value.0.clone()),
         trial_started_at: access.and_then(|value| value.1),
+        account_page_url: account_page_url(),
     })
 }
 
@@ -174,6 +178,7 @@ fn get_status() -> Result<FellowCutAccountStatus, String> {
             email: None,
             entitlement: None,
             trial_started_at: None,
+            account_page_url: account_page_url(),
         });
     };
     let agent = http_agent();
@@ -202,6 +207,12 @@ pub(crate) fn fresh_id_token() -> Result<String, String> {
         save_refresh_token(&response.refresh_token)?;
     }
     Ok(response.id_token)
+}
+
+/// 网关与网站同域（`https://<站点>/api/model`），账号页固定在站点根下的 `account.html`。
+fn account_page_url() -> Option<String> {
+    let base_url = gateway_base_url().ok().flatten()?;
+    Some(format!("{}/account.html", base_url.strip_suffix("/api/model")?))
 }
 
 /// 正式构建必须内置公开网关地址；开发构建可用环境变量连接本地网关。
@@ -263,6 +274,7 @@ pub fn sign_out_fellowcut() -> Result<FellowCutAccountStatus, String> {
             email: None,
             entitlement: None,
             trial_started_at: None,
+            account_page_url: account_page_url(),
         }),
         Err(_) => Err("无法清除 Voycut 登录凭据。".to_owned()),
     }

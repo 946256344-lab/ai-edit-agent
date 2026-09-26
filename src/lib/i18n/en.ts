@@ -546,6 +546,7 @@ export const en: typeof zhCN = {
     email: 'Email',
     password: 'Password',
     websiteHint: 'Use the website to register, verify your email, or reset your password.',
+    openWebsite: 'Open account page',
     signingIn: 'Signing in…',
     signIn: 'Sign in',
     emailStatus: 'Email status',

@@ -1,10 +1,11 @@
 // FellowCut 账号弹窗状态：密码仅在本次登录输入中保留，凭据持久化交给 Rust。
 import { useEffect, useState } from 'react'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { getFellowCutAccountStatus, signInFellowCut, signOutFellowCut } from '../lib/local-store'
 import type { FellowCutAccountStatus } from '../lib/local-store'
 
 const SIGNED_OUT: FellowCutAccountStatus = {
-  state: 'signedOut', email: null, entitlement: null, trialStartedAt: null,
+  state: 'signedOut', email: null, entitlement: null, trialStartedAt: null, accountPageUrl: null,
 }
 
 export function useFellowCutAccountController(desktopRuntime: boolean) {
@@ -53,6 +54,8 @@ export function useFellowCutAccountController(desktopRuntime: boolean) {
       open: () => { setError(''); setIsOpen(true) },
       close: () => { if (!busy) { setPassword(''); setIsOpen(false) } },
       setEmail, setPassword, signIn, signOut, refresh,
+      // 注册、验证邮箱、找回密码与开通试用都在网站完成，交给系统浏览器打开。
+      openAccountPage: () => { if (status.accountPageUrl) void openUrl(status.accountPageUrl).catch(() => undefined) },
     },
   }
 }

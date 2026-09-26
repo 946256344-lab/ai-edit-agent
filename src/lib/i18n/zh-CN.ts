@@ -540,6 +540,7 @@ export const zhCN = {
     email: '邮箱',
     password: '密码',
     websiteHint: '注册、验证邮箱和找回密码请在网站完成。',
+    openWebsite: '打开网站账号页',
     signingIn: '登录中…',
     signIn: '登录',
     emailStatus: '邮箱状态',

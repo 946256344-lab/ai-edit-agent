@@ -26,6 +26,7 @@ export type FellowCutAccountStatus = {
   email: string | null
   entitlement: string | null
   trialStartedAt: string | null
+  accountPageUrl: string | null
 }
 
 export type ElevenLabsStatus = { keyStored: boolean; voicesReadable: boolean; ttsAuthorized: boolean | null; lastErrorCode: string | null; importable: boolean }
