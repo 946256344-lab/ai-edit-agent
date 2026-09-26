@@ -1,6 +1,6 @@
 //! 真实硬切分段：FFmpeg 低分辨率场景检测，CLIP 验切点真伪。
 //! 无硬切、CLIP 不可用或切点两侧仍相似时整条一段；禁止按秒均分。
-//! 硬切确定后由 motion 模块写帧差能量，只收缩可用窗。
+//! 硬切确定后由 motion 模块写帧差能量（只收缩可用窗），并在同一次解码里抽出段内样本帧。
 
 use crate::models::{KeyframeMetadata, SceneSegment};
 use crate::process::{
@@ -491,7 +491,6 @@ pub(crate) fn analyze_video_segments(
         ranges
     };
 
-    let samples_started = Instant::now();
     let plans = ranges
         .into_iter()
         .enumerate()
@@ -509,29 +508,74 @@ pub(crate) fn analyze_video_segments(
             (segment_id, start_ms, end_ms, requests)
         })
         .collect::<Vec<_>>();
-    let all_requests = plans
+    let mut segments = plans
         .iter()
-        .flat_map(|(_, _, _, requests)| requests.iter().cloned())
+        .map(|(segment_id, start_ms, end_ms, _)| SceneSegment {
+            id: segment_id.clone(),
+            start_ms: *start_ms,
+            end_ms: *end_ms,
+            scene_duration_ms: Some(end_ms - start_ms),
+            visual_quality_score: None,
+            frames: Vec::new(),
+            visual_evidence: None,
+            motion_score: None,
+            motion_profile: None,
+        })
         .collect::<Vec<_>>();
-    let sampled_frames = all_requests.len();
-    let mut extracted = extract_frames(source, &all_requests, SAMPLE_FRAME_WIDTH).into_iter();
-    let mut segments = Vec::with_capacity(plans.len());
+    let frame_requests = plans
+        .into_iter()
+        .map(|(_, _, _, requests)| requests)
+        .collect::<Vec<_>>();
+    let sampled_frames = frame_requests.iter().map(Vec::len).sum::<usize>();
+
+    // 运动曲线与样本帧同一次顺序解码；没抽齐的帧（极短段、超时）再按时间点逐帧补抽。
+    let decode_started = Instant::now();
+    let mut extracted = super::motion::attach_motion_profiles_with_frames(
+        source,
+        &mut segments,
+        &frame_requests,
+        SAMPLE_FRAME_WIDTH,
+    );
+    let decode_ms = decode_started.elapsed().as_millis();
+    let fallback_started = Instant::now();
+    let missing = frame_requests
+        .iter()
+        .zip(extracted.iter())
+        .flat_map(|(requests, done)| {
+            requests
+                .iter()
+                .zip(done.iter())
+                .filter(|(_, done)| !**done)
+                .map(|(request, _)| request.clone())
+        })
+        .collect::<Vec<_>>();
+    let fallback_frames = missing.len();
+    let mut refilled = extract_frames(source, &missing, SAMPLE_FRAME_WIDTH).into_iter();
+    for done in extracted.iter_mut().flatten() {
+        if !*done {
+            *done = refilled.next().unwrap_or(false);
+        }
+    }
+
     let mut midpoint_keyframes = Vec::new();
-    for (segment_id, start_ms, end_ms, requests) in plans {
-        let mut frames = Vec::with_capacity(requests.len());
+    for ((segment, requests), done) in segments
+        .iter_mut()
+        .zip(frame_requests.iter())
+        .zip(extracted.iter())
+    {
         let mut quality_scores = Vec::new();
-        for (time_ms, destination) in &requests {
-            if extracted.next().unwrap_or(false) {
-                if let Some(score) = frame_quality_score(&destination) {
+        for ((time_ms, destination), done) in requests.iter().zip(done.iter()) {
+            if *done {
+                if let Some(score) = frame_quality_score(destination) {
                     quality_scores.push(score);
                 }
-                frames.push(KeyframeMetadata {
+                segment.frames.push(KeyframeMetadata {
                     time_ms: *time_ms,
                     image_path: destination.to_string_lossy().into_owned(),
                 });
             }
         }
-        let visual_quality_score = if quality_scores.is_empty() {
+        segment.visual_quality_score = if quality_scores.is_empty() {
             None
         } else {
             quality_scores.sort_by(f64::total_cmp);
@@ -542,36 +586,22 @@ pub(crate) fn analyze_video_segments(
                 quality_scores[middle]
             })
         };
-        if let Some(mid_frame) = frames.get(frames.len() / 2).cloned() {
+        if let Some(mid_frame) = segment.frames.get(segment.frames.len() / 2).cloned() {
             midpoint_keyframes.push(mid_frame);
         }
-        segments.push(SceneSegment {
-            id: segment_id,
-            start_ms,
-            end_ms,
-            scene_duration_ms: Some(end_ms - start_ms),
-            visual_quality_score,
-            frames,
-            visual_evidence: None,
-            motion_score: None,
-            motion_profile: None,
-        });
     }
-
-    let samples_ms = samples_started.elapsed().as_millis();
-    let motion_started = Instant::now();
-    super::motion::attach_motion_profiles(source, &mut segments);
     log::info!(
-        "[PERF] segments file={} detect={}ms verify={}ms (cuts {}->{}) samples={}ms ({} frames, {} segments) motion={}ms",
+        "[PERF] segments file={} detect={}ms verify={}ms (cuts {}->{}) motion+samples={}ms ({} frames, {} segments) fallback={}ms ({} frames)",
         file_label(source),
         detect_ms,
         verify_ms,
         raw_cut_count,
         kept_cut_count,
-        samples_ms,
+        decode_ms,
         sampled_frames,
         segments.len(),
-        motion_started.elapsed().as_millis()
+        fallback_started.elapsed().as_millis(),
+        fallback_frames
     );
     midpoint_keyframes.truncate(MAX_KEYFRAMES_FOR_GRID);
     Ok((midpoint_keyframes, segments))

@@ -1,15 +1,19 @@
 //! 硬切片段内的运动能量：低分辨率帧差曲线，只收缩可用窗，不新增切点。
 //! 对比不够、样本不足或抽帧失败时保持原硬切范围。
+//! 同一次顺序解码里顺带按时间选出段内样本帧（整段识别与清晰度用），省去逐帧跳转解码；
+//! 没抽齐的帧由调用方逐帧补抽。
 
 use crate::models::{MotionEnergySample, MotionProfile, SceneSegment};
 use crate::process::{
     hidden_command, media_open_args, run_hidden_command_with_timeout, HiddenCommandError,
 };
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub(crate) const MOTION_ASSET_BUDGET: Duration = Duration::from_secs(45);
-const MOTION_SEGMENT_TIMEOUT: Duration = Duration::from_secs(20);
+/// 顺带抽样本帧后单段解码更重，预算比只算曲线时放宽；超时的段由调用方逐帧补抽样本帧。
+pub(crate) const MOTION_ASSET_BUDGET: Duration = Duration::from_secs(60);
+const MOTION_SEGMENT_TIMEOUT: Duration = Duration::from_secs(30);
 const MOTION_WIDTH: u32 = 160;
 const MOTION_HEIGHT: u32 = 90;
 const FRAME_BYTES: usize = (MOTION_WIDTH * MOTION_HEIGHT) as usize;
@@ -49,15 +53,45 @@ pub(crate) fn profile_is_uncertain(segment: &SceneSegment) -> bool {
 
 /// 在已有硬切片段上写入运动曲线；超时则后面的片段保持原范围。
 pub(crate) fn attach_motion_profiles(source: &Path, segments: &mut [SceneSegment]) {
+    attach_motion_profiles_with_frames(source, segments, &[], 0);
+}
+
+/// 写入运动曲线，并在同一次解码里抽出 `frame_requests[i]`（对应 `segments[i]`，源时间毫秒与目标路径）
+/// 的样本帧，按 `frame_width` 宽输出。返回每段各帧是否已写出；太短、超时或失败的段为 false。
+pub(crate) fn attach_motion_profiles_with_frames(
+    source: &Path,
+    segments: &mut [SceneSegment],
+    frame_requests: &[Vec<(i64, PathBuf)>],
+    frame_width: u32,
+) -> Vec<Vec<bool>> {
+    let mut extracted = frame_requests
+        .iter()
+        .map(|requests| vec![false; requests.len()])
+        .collect::<Vec<_>>();
     let deadline = Instant::now() + MOTION_ASSET_BUDGET;
-    for segment in segments.iter_mut() {
+    for (index, segment) in segments.iter_mut().enumerate() {
         if Instant::now() >= deadline {
             log::warn!("Motion energy budget exhausted; later segments keep hard-cut bounds.");
             break;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout = remaining.min(MOTION_SEGMENT_TIMEOUT);
-        match compute_profile(source, segment.start_ms, segment.end_ms, timeout) {
+        let requests = frame_requests.get(index).map(Vec::as_slice).unwrap_or(&[]);
+        let pass = decode_segment(
+            source,
+            segment.start_ms,
+            segment.end_ms,
+            timeout,
+            requests,
+            frame_width,
+        );
+        if let Some(done) = extracted.get_mut(index) {
+            *done = pass.frames;
+        }
+        match pass
+            .samples
+            .map(|samples| trim_from_energy(segment.start_ms, segment.end_ms, &samples))
+        {
             Some(profile) => {
                 segment.motion_score = mean_energy(&profile.energy);
                 segment.motion_profile = Some(profile);
@@ -72,6 +106,7 @@ pub(crate) fn attach_motion_profiles(source: &Path, segments: &mut [SceneSegment
             }
         }
     }
+    extracted
 }
 
 pub(crate) fn trim_from_energy(
@@ -165,27 +200,81 @@ pub(crate) fn trim_from_energy(
     }
 }
 
-fn compute_profile(
-    source: &Path,
-    start_ms: i64,
-    end_ms: i64,
-    timeout: Duration,
-) -> Option<MotionProfile> {
-    let samples = extract_energy_samples(source, start_ms, end_ms, timeout)?;
-    Some(trim_from_energy(start_ms, end_ms, &samples))
+struct SegmentPass {
+    samples: Option<Vec<MotionEnergySample>>,
+    frames: Vec<bool>,
 }
 
-fn extract_energy_samples(
+/// 选出每个目标时间点处（含）之后的第一帧；时间相对 `-ss` 定位后的段起点。
+fn frame_select_expression(start_ms: i64, frame_requests: &[(i64, PathBuf)]) -> String {
+    frame_requests
+        .iter()
+        .map(|(time_ms, _)| {
+            let seconds = ((*time_ms - start_ms).max(0) as f64) / 1000.0;
+            format!("gte(t\\,{seconds:.3})*not(gte(prev_pts*TB\\,{seconds:.3}))")
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// 样本帧先写到段专属的临时编号文件（从 1 起），数量对上才按顺序改名到目标路径；
+/// 极短段多个时间点落在同一帧或解码中断时数量对不上，全部丢弃交给逐帧补抽。
+fn staging_pattern(first_destination: &Path, start_ms: i64) -> PathBuf {
+    first_destination.with_file_name(format!("motion_pass_{start_ms}_%02d.jpg"))
+}
+
+fn staging_frame_path(first_destination: &Path, start_ms: i64, number: usize) -> PathBuf {
+    first_destination.with_file_name(format!("motion_pass_{start_ms}_{number:02}.jpg"))
+}
+
+fn clear_staged_frames(start_ms: i64, frame_requests: &[(i64, PathBuf)]) {
+    if let Some((_, first)) = frame_requests.first() {
+        for number in 1..=frame_requests.len() + 1 {
+            let _ = fs::remove_file(staging_frame_path(first, start_ms, number));
+        }
+    }
+}
+
+fn collect_staged_frames(start_ms: i64, frame_requests: &[(i64, PathBuf)]) -> Vec<bool> {
+    let mut frames = vec![false; frame_requests.len()];
+    let Some((_, first)) = frame_requests.first() else {
+        return frames;
+    };
+    let produced = (1..=frame_requests.len() + 1)
+        .take_while(|number| staging_frame_path(first, start_ms, *number).is_file())
+        .count();
+    if produced == frame_requests.len() {
+        for (index, (_, destination)) in frame_requests.iter().enumerate() {
+            let _ = fs::remove_file(destination);
+            frames[index] = fs::rename(staging_frame_path(first, start_ms, index + 1), destination)
+                .is_ok();
+        }
+    }
+    clear_staged_frames(start_ms, frame_requests);
+    frames
+}
+
+/// 单段一次顺序解码：一路缩成灰度小图算帧差，另一路按时间选出样本帧写 JPEG。
+fn decode_segment(
     source: &Path,
     start_ms: i64,
     end_ms: i64,
     timeout: Duration,
-) -> Option<Vec<MotionEnergySample>> {
+    frame_requests: &[(i64, PathBuf)],
+    frame_width: u32,
+) -> SegmentPass {
     let duration_ms = (end_ms - start_ms).max(0);
     if duration_ms < MIN_DURATION_MS {
-        return None;
+        return SegmentPass {
+            samples: None,
+            frames: vec![false; frame_requests.len()],
+        };
     }
     let fps = ((MAX_SAMPLES as f64) / (duration_ms as f64 / 1000.0)).clamp(1.5, 2.5);
+    let motion_filter = format!(
+        "fps={fps:.3},scale={MOTION_WIDTH}:{MOTION_HEIGHT}:flags=fast_bilinear,format=gray"
+    );
+    clear_staged_frames(start_ms, frame_requests);
     let mut command = hidden_command("ffmpeg");
     command.args(["-hide_banner", "-loglevel", "error"]);
     command.args(media_open_args());
@@ -198,20 +287,34 @@ fn extract_energy_samples(
         "-i",
     ]);
     command.arg(source);
-    command.args([
-        "-an",
-        "-vf",
-        &format!(
-            "fps={fps:.3},scale={MOTION_WIDTH}:{MOTION_HEIGHT}:flags=fast_bilinear,format=gray"
-        ),
-        "-pix_fmt",
-        "gray",
-        "-f",
-        "rawvideo",
-        "-",
-    ]);
-    let output = match run_hidden_command_with_timeout(&mut command, timeout) {
-        Ok(output) => output,
+    match frame_requests.first() {
+        None => {
+            command.args(["-an", "-vf", &motion_filter]);
+        }
+        Some(_) => {
+            let select = frame_select_expression(start_ms, frame_requests);
+            command.args([
+                "-filter_complex",
+                &format!(
+                    "[0:v]split=2[motion][frames];[motion]{motion_filter}[motion_out];\
+                     [frames]select='{select}',scale={frame_width}:-2[frames_out]"
+                ),
+                "-map",
+                "[motion_out]",
+            ]);
+        }
+    }
+    command.args(["-pix_fmt", "gray", "-f", "rawvideo", "-"]);
+    if let Some((_, first)) = frame_requests.first() {
+        // 连续输出时 JPEG 默认码率控制会让后面的帧越来越糊；固定为单帧抽取时的同等画质（q=7）。
+        command
+            .args(["-map", "[frames_out]", "-fps_mode", "passthrough", "-q:v", "7", "-y"])
+            .arg(staging_pattern(first, start_ms));
+    }
+    let result = run_hidden_command_with_timeout(&mut command, timeout);
+    let frames = collect_staged_frames(start_ms, frame_requests);
+    let samples = match result {
+        Ok(output) => energy_samples(&output.stdout, start_ms, end_ms),
         Err(HiddenCommandError::TimedOut) => {
             log::warn!(
                 "Motion energy ffmpeg timed out for {} [{}-{}].",
@@ -219,28 +322,30 @@ fn extract_energy_samples(
                 start_ms,
                 end_ms
             );
-            return None;
+            None
         }
         Err(HiddenCommandError::Failed) => {
             log::warn!(
                 "Motion energy ffmpeg failed to start for {}.",
                 source.display()
             );
-            return None;
+            None
         }
     };
-    if output.stdout.len() < FRAME_BYTES * 2 {
+    SegmentPass { samples, frames }
+}
+
+fn energy_samples(stdout: &[u8], start_ms: i64, end_ms: i64) -> Option<Vec<MotionEnergySample>> {
+    let duration_ms = (end_ms - start_ms).max(0);
+    if stdout.len() < FRAME_BYTES * 2 {
         return None;
     }
-    let frame_count = output.stdout.len() / FRAME_BYTES;
-    if frame_count < 2 {
-        return None;
-    }
+    let frame_count = stdout.len() / FRAME_BYTES;
     let interval_ms = (duration_ms as f64 / frame_count.max(1) as f64).max(1.0);
     let mut samples = Vec::with_capacity(frame_count.saturating_sub(1));
     for index in 1..frame_count {
-        let previous = &output.stdout[(index - 1) * FRAME_BYTES..index * FRAME_BYTES];
-        let current = &output.stdout[index * FRAME_BYTES..(index + 1) * FRAME_BYTES];
+        let previous = &stdout[(index - 1) * FRAME_BYTES..index * FRAME_BYTES];
+        let current = &stdout[index * FRAME_BYTES..(index + 1) * FRAME_BYTES];
         let time_ms = start_ms + ((index as f64) * interval_ms).round() as i64;
         samples.push(MotionEnergySample {
             time_ms: time_ms.min(end_ms.saturating_sub(1)).max(start_ms),
