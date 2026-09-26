@@ -139,7 +139,7 @@
 
 ### 2.5 安全细项
 
-- [ ] **P1** Release 版 CSP 仍包含 `http://localhost:5173` 和 `ws://localhost:5173`（`tauri.conf.json`），应只在开发配置里保留。
+- [x] **P1**（09-26 已改：本机开发服务器地址移到 `devCsp`，Release 版 `csp` 不再包含）原 Release 版 CSP 仍包含 `http://localhost:5173` 和 `ws://localhost:5173`（`tauri.conf.json`），应只在开发配置里保留。
 - [ ] **P1** 抽查日志里是否出现 ID token、刷新令牌、API Key、邮箱或本机完整路径。
 - [ ] **P2** 试用刷号：换个邮箱就能拿到新的 7 天试用。邀请制 Beta 期间可以接受；公开发布前加一次性邮箱黑名单或设备限制。
 
