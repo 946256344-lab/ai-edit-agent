@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "resources/directml/DirectML.dll",
+      "resources/directml/NOTICE.md",
+      "resources/directml/LICENSE.txt",
+      "resources/directml/ThirdPartyNotices.txt"
+    ]
+  }
+}

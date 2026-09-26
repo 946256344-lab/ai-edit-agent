@@ -28,6 +28,9 @@ pub(crate) const VISION_MODEL_SHA256: &str =
 pub(crate) const TEXT_MODEL_SHA256: &str =
     "4dbe762b11e36488304471e439cde89da053ad7acaddbf9e096745d142ec8d8b";
 const CLIP_BATCH_SIZE: usize = 8;
+/// 同一模型串行推理：DirectML 不支持并发执行，CPU 下并发也只会互相抢核。
+static VISION_INFERENCE: Mutex<()> = Mutex::new(());
+static TEXT_INFERENCE: Mutex<()> = Mutex::new(());
 const MAX_CLIP_TEXT_CHARS: usize = 500;
 
 enum VisionSlot {
@@ -92,15 +95,49 @@ fn hash_bytes(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn load_vision_from_directory(directory: &Path) -> Result<ImageEmbedding, String> {
+fn load_vision_from_directory(app: &AppHandle, directory: &Path) -> Result<ImageEmbedding, String> {
     let onnx_file = read_model_file(directory, "model.onnx")?;
     if hash_bytes(&onnx_file) != VISION_MODEL_SHA256 {
         return Err("clip_vision_model_integrity_failed".to_owned());
     }
     let preprocessor_file = read_model_file(directory, "preprocessor_config.json")?;
-    let model = UserDefinedImageEmbeddingModel::new(onnx_file, preprocessor_file);
-    ImageEmbedding::try_new_from_user_defined(model, ImageInitOptionsUserDefined::new())
-        .map_err(|_| "clip_vision_model_load_failed".to_owned())
+    crate::onnx_device::load_with_fallback(
+        app,
+        "clip-vision",
+        |providers| {
+            let model =
+                UserDefinedImageEmbeddingModel::new(onnx_file.clone(), preprocessor_file.clone());
+            ImageEmbedding::try_new_from_user_defined(
+                model,
+                ImageInitOptionsUserDefined::new().with_execution_providers(providers),
+            )
+            .map_err(|error| error.to_string())
+        },
+        |model| {
+            let probe = warm_up_image();
+            model.embed_bytes(&[probe.as_slice()], Some(1)).is_ok()
+        },
+    )
+    .map_err(|_| "clip_vision_model_load_failed".to_owned())
+}
+
+/// 试算用的小图：确认显卡会话真能推理，而不只是能建出来。
+fn warm_up_image() -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(32, 32, image::Rgb([128, 128, 128]));
+    let mut bytes = Vec::new();
+    let _ = image::DynamicImage::ImageRgb8(image).write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Jpeg,
+    );
+    bytes
+}
+
+fn embed_images(model: &ImageEmbedding, images: &[&[u8]]) -> Result<Vec<Vec<f32>>, String> {
+    crate::onnx_device::sequential_batches(&VISION_INFERENCE, images, CLIP_BATCH_SIZE, |chunk| {
+        model
+            .embed_bytes(chunk, Some(chunk.len()))
+            .map_err(|_| "clip_vision_inference_failed".to_owned())
+    })
 }
 
 /// 编码 JPEG/PNG 字节为 CLIP 图像向量；模型缺失或推理失败返回错误，由调用方决定是否切段。
@@ -111,9 +148,7 @@ pub(crate) fn encode_image_bytes(
     if images.is_empty() {
         return Ok(Vec::new());
     }
-    let embeddings = vision_model(app)?
-        .embed_bytes(images, Some(CLIP_BATCH_SIZE))
-        .map_err(|_| "clip_vision_inference_failed".to_owned())?;
+    let embeddings = embed_images(vision_model(app)?, images)?;
     if embeddings.len() != images.len()
         || embeddings
             .iter()
@@ -124,7 +159,7 @@ pub(crate) fn encode_image_bytes(
     Ok(embeddings)
 }
 
-fn load_text_from_directory(directory: &Path) -> Result<TextEmbedding, String> {
+fn load_text_from_directory(app: &AppHandle, directory: &Path) -> Result<TextEmbedding, String> {
     let onnx_file = read_model_file(directory, "model.onnx")?;
     if hash_bytes(&onnx_file) != TEXT_MODEL_SHA256 {
         return Err("clip_text_model_integrity_failed".to_owned());
@@ -135,11 +170,21 @@ fn load_text_from_directory(directory: &Path) -> Result<TextEmbedding, String> {
         special_tokens_map_file: read_model_file(directory, "special_tokens_map.json")?,
         tokenizer_config_file: read_model_file(directory, "tokenizer_config.json")?,
     };
-    let model =
-        UserDefinedEmbeddingModel::new(onnx_file, tokenizer_files).with_pooling(Pooling::Mean);
-    TextEmbedding::try_new_from_user_defined(
-        model,
-        InitOptionsUserDefined::new().with_max_length(77),
+    crate::onnx_device::load_with_fallback(
+        app,
+        "clip-text",
+        |providers| {
+            let model = UserDefinedEmbeddingModel::new(onnx_file.clone(), tokenizer_files.clone())
+                .with_pooling(Pooling::Mean);
+            TextEmbedding::try_new_from_user_defined(
+                model,
+                InitOptionsUserDefined::new()
+                    .with_max_length(77)
+                    .with_execution_providers(providers),
+            )
+            .map_err(|error| error.to_string())
+        },
+        |model| model.embed(vec!["warm up"], Some(1)).is_ok(),
     )
     .map_err(|_| "clip_text_model_load_failed".to_owned())
 }
@@ -159,7 +204,7 @@ fn vision_model(app: &AppHandle) -> Result<&'static ImageEmbedding, String> {
         VisionSlot::Untried => {}
     }
     match bundled_directory(app, VISION_RESOURCE_DIRECTORY, "model.onnx")
-        .and_then(|path| load_vision_from_directory(&path))
+        .and_then(|path| load_vision_from_directory(app, &path))
     {
         Ok(model) => {
             let leaked: &'static ImageEmbedding = Box::leak(Box::new(model));
@@ -188,7 +233,7 @@ fn text_model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
         TextSlot::Untried => {}
     }
     match bundled_directory(app, TEXT_RESOURCE_DIRECTORY, "model.onnx")
-        .and_then(|path| load_text_from_directory(&path))
+        .and_then(|path| load_text_from_directory(app, &path))
     {
         Ok(model) => {
             let leaked: &'static TextEmbedding = Box::leak(Box::new(model));
@@ -234,9 +279,13 @@ pub(crate) fn encode_beats(
             }
         })
         .collect::<Vec<_>>();
-    let embeddings = text_model(app)?
-        .embed(texts, Some(CLIP_BATCH_SIZE))
-        .map_err(|_| "clip_text_inference_failed".to_owned())?;
+    let model = text_model(app)?;
+    let embeddings =
+        crate::onnx_device::sequential_batches(&TEXT_INFERENCE, &texts, CLIP_BATCH_SIZE, |chunk| {
+            model
+                .embed(chunk.to_vec(), Some(chunk.len()))
+                .map_err(|_| "clip_text_inference_failed".to_owned())
+        })?;
     crate::execution_deadline::check()?;
     if embeddings
         .iter()
@@ -320,9 +369,7 @@ pub(crate) fn refresh_segment_clip_embeddings(
         .iter()
         .map(|(_, bytes, _)| bytes.as_slice())
         .collect::<Vec<_>>();
-    let embeddings = vision_model(app)?
-        .embed_bytes(&image_refs, Some(CLIP_BATCH_SIZE))
-        .map_err(|_| "clip_vision_inference_failed".to_owned())?;
+    let embeddings = embed_images(vision_model(app)?, &image_refs)?;
     crate::execution_deadline::check()?;
     if embeddings.len() != pending.len()
         || embeddings

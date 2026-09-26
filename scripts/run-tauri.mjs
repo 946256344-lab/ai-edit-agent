@@ -103,6 +103,33 @@ function ensureTesseractForBuild() {
   console.log('安装包：准备捆绑 Tesseract 与英文 OCR 数据')
 }
 
+// 本地选镜模型用显卡需要随包新版 DirectML.dll；开发版缺失时只提示并回退 CPU，安装包缺失则中止。
+function ensureDirectmlForRun() {
+  if (tauriArgs[0] !== 'build' && tauriArgs[0] !== 'dev') return
+  const dll = path.join(repoRoot, 'src-tauri', 'resources', 'directml', 'DirectML.dll')
+  if (!existsSync(dll)) {
+    const script = path.join(repoRoot, 'scripts', 'fetch-directml.ps1')
+    console.log('缺少随包 DirectML，正在运行 scripts/fetch-directml.ps1 …')
+    const result = spawnSync('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', script], {
+      stdio: 'inherit',
+      cwd: repoRoot,
+      env,
+    })
+    if (result.status !== 0 || !existsSync(dll)) {
+      if (tauriArgs[0] === 'build') {
+        console.error('无法准备 DirectML。请运行：npm run directml:fetch')
+        process.exit(1)
+      }
+      console.warn('DirectML 未就绪，本地选镜模型将使用 CPU。可稍后运行：npm run directml:fetch')
+      return
+    }
+  }
+  if (tauriArgs[0] === 'build') {
+    extraResourceConfigs.push(path.join(repoRoot, 'src-tauri', 'tauri.directml.conf.json'))
+    console.log('安装包：准备捆绑 DirectML')
+  }
+}
+
 // Release 版只读编译期的网关地址，缺失时所有模型调用都会失败，因此在构建前就拦下。
 function ensureGatewayForBuild() {
   if (tauriArgs[0] !== 'build' || tauriArgs.includes('--debug')) return
@@ -119,6 +146,7 @@ ensureGatewayForBuild()
 ensureFfmpegForBuild()
 ensurePythonForBuild()
 ensureTesseractForBuild()
+ensureDirectmlForRun()
 if (fullModelsFlag) {
   const requiredOnnx = [
     'src-tauri/resources/models/bge-small-zh-v1.5/onnx/model.onnx',

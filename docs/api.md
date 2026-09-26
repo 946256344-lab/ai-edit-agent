@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-26：本地选镜模型优先用显卡
+
+公开命令与 `RuntimeModelStatus` 不变。BGE/CLIP 推理先用随包 DirectML 在显卡上建会话并试算，失败回退 CPU，日志写明设备；同一模型推理串行。见 `docs/changes/2026-09-26-local-models-on-gpu.md`。
+
 ## 2026-09-26：generate_storyboard 返回实际落地的媒体
 
 公开 Tauri 命令不变。Native `generate_storyboard` 输出新增 `appliedMedia`（`voiceover` / `subtitles` / `bgm`，按时间线上启用且非空的轨道判断）和 `timelineVersionNumber`；`requestedMedia` 只回显要求。要求了却没落地的媒体列在 `mediaNotApplied`，`bgm` 附恢复方式（该工具从不加音乐）。英文逐词 alignment 字幕保留词间空格，只在空格处换行。见 `docs/changes/2026-09-26-english-subtitles-applied-media.md`。

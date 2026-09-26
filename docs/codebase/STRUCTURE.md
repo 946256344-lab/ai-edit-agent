@@ -98,7 +98,7 @@ src/main.tsx
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
 | `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
-| `db.rs`、`models.rs`、`audit.rs`、`process.rs` | 数据库、边界类型、审计、外部进程基础设施 |
+| `db.rs`、`models.rs`、`audit.rs`、`process.rs`、`onnx_device.rs` | 数据库、边界类型、审计、外部进程基础设施、本地 ONNX 推理设备（显卡优先、CPU 回退） |
 
 ## 5）命名与组织规则
 

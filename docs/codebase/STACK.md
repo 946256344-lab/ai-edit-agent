@@ -26,7 +26,7 @@ Node 的团队支持版本未在仓库中固定；不要把当前开发机版本
 | serde / serde_json | `1.0` | Tauri、SQLite JSON 和 Provider schema | `src-tauri/Cargo.toml` |
 | uuid | `1.18` | 项目、任务、版本、产物与审计 ID | `src-tauri/Cargo.toml` |
 
-系统运行时依赖：FFmpeg/FFprobe、embeddable Python 3.12（含 `pyJianYingDraft`/`pycapcut`）与 Tesseract 5.4.0/英文数据由安装包捆绑（见 `scripts/fetch-ffmpeg.ps1`、`scripts/fetch-python.ps1`、`scripts/fetch-tesseract.ps1`）；只有使用剪映交付时需要本机安装 Jianying Pro。
+系统运行时依赖：FFmpeg/FFprobe、embeddable Python 3.12（含 `pyJianYingDraft`/`pycapcut`）与 Tesseract 5.4.0/英文数据、本地模型显卡推理所需的 Microsoft DirectML 1.15.4 由安装包捆绑（见 `scripts/fetch-ffmpeg.ps1`、`scripts/fetch-python.ps1`、`scripts/fetch-tesseract.ps1`、`scripts/fetch-directml.ps1`）；只有使用剪映交付时需要本机安装 Jianying Pro。
 
 ## 3）开发工具链
 

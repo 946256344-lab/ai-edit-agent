@@ -38,7 +38,9 @@ UI「剪辑会话」就是剪辑任务（editing task），与 conversation 一�
 
 默认安装包不捆绑 BGE/CLIP 的 `model.onnx` 大文件。启动缺权重时后台下载到 `%APPDATA%/<app>/runtime-models/`，SHA-256 校验后加载；tokenizer/config 仍随包。下载不阻塞工作台；缺失时 BGE 降级词面、CLIP 加权为 0。
 
-下载策略：先 HuggingFace 官方，再国内镜像 `hf-mirror.com`（同路径同哈希，不是换模型）；单次尝试超时约 20 分钟，传输中断保留 `.partial` 并自动续传重试。发行方可选用完整包（`npm run models:fetch` 后 `npm run tauri:build:full`）把 ONNX 打进安装包，用户可跳过首次下载。FFmpeg/FFprobe、Python 与 Tesseract 的随包决策见以下各节。
+下载策略：先 HuggingFace 官方，再国内镜像 `hf-mirror.com`（同路径同哈希，不是换模型）；单次尝试超时约 20 分钟，传输中断保留 `.partial` 并自动续传重试。发行方可选用完整包（`npm run models:fetch` 后 `npm run tauri:build:full`）把 ONNX 打进安装包，用户可跳过首次下载。
+
+本地 BGE/CLIP 推理优先用显卡（2026-09-26）：安装包随带 Microsoft `DirectML.dll` 1.15.4（Windows 自带 1.8 过旧，ONNX Runtime 1.20 推理报错），构建设为延迟加载，运行时按完整路径载入；各模型先建显卡会话并试算，失败回退 CPU，日志写明设备。同一模型推理串行、每次只交一批（fastembed 默认并行跑同一会话，DirectML 会崩溃、CPU 下互相抢核）。FFmpeg/FFprobe、Python 与 Tesseract 的随包决策见以下各节。
 
 ## FFmpeg/FFprobe 随安装包（2026-09-20）
 

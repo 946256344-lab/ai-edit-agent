@@ -27,6 +27,7 @@
     "models:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-clip-models.ps1",
     "ffmpeg:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1",
     "ffmpeg:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-ffmpeg.ps1",
+    "directml:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-directml.ps1",
     "python:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-python.ps1",
     "python:verify": "powershell -ExecutionPolicy Bypass -File scripts/verify-packaged-python.ps1",
     "tesseract:fetch": "powershell -ExecutionPolicy Bypass -File scripts/fetch-tesseract.ps1",

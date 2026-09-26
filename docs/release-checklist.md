@@ -40,7 +40,7 @@
 
 - [ ] **P0 正式构建注入网关地址**。09-26：`scripts/run-tauri.mjs` 在正式构建前校验该变量，缺失或格式不对直接失败，构建步骤写进 `README.md`；仍待用正式域名构建并验收。Release 版只读编译期的 `FELLOWCUT_GATEWAY_BASE_URL`（必须是 HTTPS），缺失时所有模型调用都会失败（`src-tauri/src/fellowcut_account.rs` `gateway_base_url`）。现状：`待确认`，`scripts/run-tauri.mjs` 里没有这一项，要在构建环境里设置，并写进构建步骤。
   - 验收：用 Release 包登录后发一条消息，确认请求打到生产网关。
-- [ ] **P0 随包组件取齐并校验**：`npm run ffmpeg:fetch`、`python:fetch`、`tesseract:fetch`，按需 `models:fetch`；构建后运行 `ffmpeg:verify`、`python:verify`、`tesseract:verify`、`tauri:verify`。现状：流程在 09-20 / 09-23 验证过，之后有大量改动，需要重跑。
+- [ ] **P0 随包组件取齐并校验**：`npm run ffmpeg:fetch`、`python:fetch`、`tesseract:fetch`、`directml:fetch`，按需 `models:fetch`；构建后运行 `ffmpeg:verify`、`python:verify`、`tesseract:verify`、`tauri:verify`。现状：流程在 09-20 / 09-23 验证过，之后有大量改动，需要重跑。
 - [ ] **P0 版本号**：`tauri.conf.json` 当前为 `0.1.2`。确认首发版本号，打 git tag，保留安装包和对应提交，以便回滚。
 - [ ] **P0 干净机器全流程**：在英文版 Windows 10 22H2 与 Windows 11 虚拟机上（没装过 Python、FFmpeg、Tesseract 和开发工具），从安装走到第一个预览。
 - [ ] **P0 覆盖安装旧版**：从 0.1.1（旧名 Assembly Video Agent / FellowCut）升级，项目、凭据和语言偏好保留。现状：应用标识 `com.assembly.videoagent`、数据库和凭据键沿用旧值（`docs/changes/2026-09-25-rename-to-voycut.md`），但更名后的安装包还没验证过。只影响内部测试用户，可降为 P1。
@@ -95,6 +95,7 @@
 - [ ] **P0 第三方许可声明**，放在安装目录和应用「About」页。现状：`缺失`，没有汇总声明，应用里也没有入口。至少包括：
   - FFmpeg 8.1.2 full_build（**GPLv3**）：附许可证全文和对应源码的获取方式（链接或书面承诺）；H.264 / HEVC 编解码器的专利许可需要法务确认。
   - Python 3.12（PSF）、Tesseract 5.4.0（Apache-2.0）、pyJianYingDraft 0.3.0（Apache-2.0）、pycapcut 0.0.3（许可证`待确认`，包元数据里没有写）。
+  - Microsoft DirectML 1.15.4（随包 `LICENSE.txt`，允许随 Windows 应用分发）与 `ThirdPartyNotices.txt`。
   - BGE-small-zh（MIT）、CLIP ViT-B/32、onnxruntime，以及 npm / Cargo 依赖（可以用 `license-checker`、`cargo about` 生成）。
 - [x] **P0 隐藏实验性 OpenAI OAuth**。09-26 已改：正式版只显示配音区块（`docs/changes/2026-09-26-hide-dev-model-access.md`）。原现状：Release 版里网关优先，OAuth 和自定义 API 实际不会被用到，但设置页仍显示「登录 ChatGPT」（`src/components/ProviderSettingsModal.tsx`），而文档把它定位为「仅个人测试、非官方集成」。海外用户对这种按钮更敏感，容易被理解为冒用 OpenAI。Release 版应隐藏 OAuth 和自定义 API 区块。
 - [ ] **P0 上游模型服务条款**：确认允许通过自己的网关向终端用户提供服务（转售或代理访问），并确认服务区域覆盖目标国家。

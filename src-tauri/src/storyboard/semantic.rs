@@ -21,6 +21,8 @@ const MODEL_RESOURCE_DIRECTORY: &str = "resources/models/bge-small-zh-v1.5";
 pub(crate) const MODEL_SHA256: &str =
     "69a0b846f4f116b5e6aabf9546ea6754d02264f3211a13a1bd69b31b8040749a";
 const EMBEDDING_BATCH_SIZE: usize = 32;
+/// 同一模型串行推理：DirectML 不支持并发执行，CPU 下并发也只会互相抢核。
+static TEXT_INFERENCE: Mutex<()> = Mutex::new(());
 const MAX_EMBEDDING_TEXT_CHARS: usize = 4_000;
 
 enum ModelSlot {
@@ -57,7 +59,10 @@ fn read_model_file(directory: &Path, relative_path: &str) -> Result<Vec<u8>, Str
         .map_err(|_| "semantic_model_resource_unavailable".to_owned())
 }
 
-fn load_model_from_directory(directory: &Path) -> Result<TextEmbedding, String> {
+fn load_model_from_directory(
+    directory: &Path,
+    providers: Vec<ort::execution_providers::ExecutionProviderDispatch>,
+) -> Result<TextEmbedding, String> {
     let tokenizer_files = TokenizerFiles {
         tokenizer_file: read_model_file(directory, "tokenizer.json")?,
         config_file: read_model_file(directory, "config.json")?,
@@ -72,9 +77,11 @@ fn load_model_from_directory(directory: &Path) -> Result<TextEmbedding, String> 
         UserDefinedEmbeddingModel::new(onnx_file, tokenizer_files).with_pooling(Pooling::Cls);
     TextEmbedding::try_new_from_user_defined(
         model,
-        InitOptionsUserDefined::new().with_max_length(512),
+        InitOptionsUserDefined::new()
+            .with_max_length(512)
+            .with_execution_providers(providers),
     )
-    .map_err(|_| "semantic_model_load_failed".to_owned())
+    .map_err(|error| error.to_string())
 }
 
 fn model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
@@ -91,7 +98,22 @@ fn model(app: &AppHandle) -> Result<&'static TextEmbedding, String> {
         }
         ModelSlot::Untried => {}
     }
-    match bundled_model_directory(app).and_then(|path| load_model_from_directory(&path)) {
+    let loaded = bundled_model_directory(app).and_then(|path| {
+        crate::onnx_device::load_with_fallback(
+            app,
+            "bge-small-zh",
+            |providers| load_model_from_directory(&path, providers),
+            |model| model.embed(vec!["warm up"], Some(1)).is_ok(),
+        )
+        .map_err(|error| {
+            if error.starts_with("semantic_model_") {
+                error
+            } else {
+                "semantic_model_load_failed".to_owned()
+            }
+        })
+    });
+    match loaded {
         Ok(model) => {
             let leaked: &'static TextEmbedding = Box::leak(Box::new(model));
             *slot = ModelSlot::Ready(leaked);
@@ -109,9 +131,17 @@ fn encode_texts(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, St
     if texts.is_empty() {
         return Ok(Vec::new());
     }
-    let embeddings = model(app)?
-        .embed(texts, Some(EMBEDDING_BATCH_SIZE))
-        .map_err(|_| "semantic_model_inference_failed".to_owned())?;
+    let model = model(app)?;
+    let embeddings = crate::onnx_device::sequential_batches(
+        &TEXT_INFERENCE,
+        &texts,
+        EMBEDDING_BATCH_SIZE,
+        |chunk| {
+            model
+                .embed(chunk.to_vec(), Some(chunk.len()))
+                .map_err(|_| "semantic_model_inference_failed".to_owned())
+        },
+    )?;
     crate::execution_deadline::check()?;
     if embeddings
         .iter()
@@ -563,7 +593,11 @@ mod tests {
     #[test]
     fn bundled_model_recalls_vehicle_synonym_without_lexical_overlap() {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join(MODEL_RESOURCE_DIRECTORY);
-        let model = load_model_from_directory(&directory).expect("load bundled semantic model");
+        let model = load_model_from_directory(
+            &directory,
+            vec![ort::execution_providers::CPUExecutionProvider::default().build()],
+        )
+        .expect("load bundled semantic model");
         let embeddings = model
             .embed(
                 vec!["汽车驶过城市街道", "城市道路上的车辆", "厨房里有人切菜"],

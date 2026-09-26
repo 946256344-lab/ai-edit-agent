@@ -36,6 +36,8 @@ mod models;
 mod music_provider;
 /// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;
+/// 本地 ONNX 推理设备：DirectML 显卡优先、CPU 回退，同一模型串行推理。
+mod onnx_device;
 /// 出站 HTTP（配音等）：环境代理与传输失败分类。
 mod outbound_http;
 /// FFmpeg preview 渲染、文字/音乐合成与质量检查。

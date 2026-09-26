@@ -36,4 +36,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 fastembed = { version = "4.9.1", default-features = false }
 tiktoken-rs = "=0.11.0"
 # fastembed 关闭联网功能；这里只让构建期取得并随桌面程序复制 ONNX Runtime。
-ort = { version = "=2.0.0-rc.9", default-features = false, features = ["copy-dylibs", "download-binaries"] }
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["copy-dylibs", "download-binaries", "directml"] }
+
+# 开发版也优化依赖库：图片解码缩放、fastembed 预处理在未优化时慢约 6 倍，开发版测出的耗时会严重失真。
+# 只影响依赖，本项目代码仍按 dev 配置编译，调试不受影响。
+[profile.dev.package."*"]
+opt-level = 3

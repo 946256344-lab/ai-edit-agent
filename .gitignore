@@ -24,6 +24,10 @@ src-tauri/resources/ffmpeg/ffprobe.exe
 src-tauri/resources/ffmpeg/LICENSE
 src-tauri/resources/ffmpeg/.cache/
 
+# Microsoft DirectML redistributable for GPU inference; fetch via scripts/fetch-directml.ps1
+src-tauri/resources/directml/**
+!src-tauri/resources/directml/NOTICE.md
+
 # Embeddable CPython + draft SDKs; fetch via scripts/fetch-python.ps1
 src-tauri/resources/python/**
 !src-tauri/resources/python/NOTICE.md
