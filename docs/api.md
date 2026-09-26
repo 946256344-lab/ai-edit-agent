@@ -271,11 +271,11 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_candidate_score_first_slots` | `{ projectId }` | `number` | 读取项目每拍 9 条候选中按综合分优先选入的名额，默认 5。 |
 | `set_candidate_score_first_slots` | `{ projectId, scoreFirstSlots }` | `number` | 保存项目候选名额；设置界面提供 3～9 条。其余名额轮流从 CLIP 画面、语义、关键词分项高分候选中选入，仍遵守同素材和相似画面限制；下次生成生效。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
-| `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按版本号倒序。 |
+| `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按创建先后倒序。`versionNumber` 是会话内版本号，每个剪辑任务从 1 开始，局部编辑派生版本同样在任务内累加；schema v20 之前的旧版本保留原项目内编号。 |
 | `get_storyboard_version` | `{ projectId, editingTaskId, storyboardVersionId }` | `StoryboardVersion` | 读取指定故事版；必须属于当前项目和剪辑任务。 |
 | `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
 | `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
-| `list_timeline_versions` | `{ projectId, editingTaskId, storyboardVersionId }` | `TimelineVersion[]` | 返回同一项目、剪辑任务与 storyboard 内的时间线版本，按版本号倒序。 |
+| `list_timeline_versions` | `{ projectId, editingTaskId, storyboardVersionId }` | `TimelineVersion[]` | 返回同一项目、剪辑任务与 storyboard 内的时间线版本，按创建先后倒序。`versionNumber` 按 storyboard 所属剪辑任务编号，每个任务从 1 开始，规则同故事版。 |
 | `list_agent_tasks` | `{ projectId, editingTaskId, conversationId? }` | `AgentTask[]` | 返回作用域内的持久化 Agent 调用，按更新时间倒序。 |
 | `list_agent_run_steps` | `{ projectId, editingTaskId, agentTaskId }` | `AgentRunStep[]` | 仅在项目、剪辑任务和调用三重作用域匹配时返回步骤；不包含参数、模型原文、对话或媒体证据。 |
 | `list_agent_diagnostics` | `{ projectId, editingTaskId, agentTaskId }` | `AgentDiagnostic[]` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
@@ -394,7 +394,7 @@ Agent 请求统一经 `agentloop.rs` 的封闭、有界 NativeToolLoop 处理；
 
 NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开放。它的 strict schema 仅接受 nullable `timelineVersionId`；project、conversation、本机路径和 FFmpeg 参数不属于模型契约。Rust 在执行前重新校验参数，并从当前项目作用域选择时间线。成功的 `function_call_output` 只返回产物类型、时间线版本和质量检查计数；失败只返回安全错误码及恢复建议。无论成功或失败，loop 都再次调用模型，最终消息采用模型对真实结果的自然语言总结，同时任务终态仍持有后端验证的 preview 产物引用。
 
-每轮开始，`agentloop/snapshot.rs` 从 SQLite 重建固定顺序、最多 1200 字符的状态块：任务 brief/最近 Agent 终态时间（终态为 `needs_clarification` 时附 `暂停于=工具名(错误码)`，只放行小写字母、数字、下划线），素材 kind、技术/视觉分析与源健康计数，最新 storyboard 的版本/镜头/uncovered/待确认状态，其最新 timeline 的版本和 clips/text/music/voiceover 计数，磁盘真实 preview，Jianying 创建/注册状态，以及模型、ElevenLabs、Jamendo 是否配置。身份只用版本号，不返回 UUID；路径、文件名、用户备注、OCR/视觉证据正文、会话原文、Base URL、模型名和凭据值禁止进入快照。brief 只允许不会伪装字段分隔符的保守字符集；含本地引用、ASCII 字母、点号、分隔符或内部标识时整体隐藏，超长安全文本才截断。非观察写工具返回 `ok`/`queued`/`needs_confirmation` 后，下一次 Provider 请求前原位刷新唯一快照。初始构建或刷新失败均封闭终止；完整 payload 超过 40K token 时自主压缩到 30K 内，60K 硬上限不得移除快照、当前用户消息或最近工具调用/结果对。完整 storyboard/时间线和素材候选细节仍通过观察工具读取。
+每轮开始，`agentloop/snapshot.rs` 从 SQLite 重建固定顺序、最多 1200 字符的状态块：任务 brief/最近 Agent 终态时间（终态为 `needs_clarification` 时附 `暂停于=工具名(错误码)`，只放行小写字母、数字、下划线），素材 kind、技术/视觉分析与源健康计数，最新 storyboard 的版本/镜头/uncovered/待确认状态，其最新 timeline 的版本和 clips/text/music/voiceover 计数，磁盘真实 preview，Jianying 创建/注册状态，以及模型、ElevenLabs、Jamendo 是否配置。身份只用会话内版本号，不返回 UUID；路径、文件名、用户备注、OCR/视觉证据正文、会话原文、Base URL、模型名和凭据值禁止进入快照。brief 只允许不会伪装字段分隔符的保守字符集；含本地引用、ASCII 字母、点号、分隔符或内部标识时整体隐藏，超长安全文本才截断。非观察写工具返回 `ok`/`queued`/`needs_confirmation` 后，下一次 Provider 请求前原位刷新唯一快照。初始构建或刷新失败均封闭终止；完整 payload 超过 40K token 时自主压缩到 30K 内，60K 硬上限不得移除快照、当前用户消息或最近工具调用/结果对。完整 storyboard/时间线和素材候选细节仍通过观察工具读取。
 
 | 工具 | 当前契约 | 实现状态 |
 | --- | --- | --- |

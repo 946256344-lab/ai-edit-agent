@@ -13,7 +13,16 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 19;
+pub(crate) const SCHEMA_VERSION: i64 = 20;
+
+/// 新故事版 / 时间线版本的两个编号。`version_number` 列受建表时的
+/// `UNIQUE(project_id, version_number)` 约束，只作项目内递增序号（唯一与排序）；
+/// 界面与 Agent 看到的是 `task_version_number`，按会话（剪辑任务）从 1 开始。
+/// 迁移前的旧行该列为空，读取时回退到 `version_number`，历史版本号保持原样。
+pub(crate) struct NextVersionNumbers {
+    pub(crate) sequence: i64,
+    pub(crate) number: i64,
+}
 
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
@@ -380,6 +389,26 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         if column_count == 0 {
             connection
                 .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT"), [])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    // 会话内版本号只加列不回填：旧行保持原项目序号，见 `NextVersionNumbers`。
+    for table in ["storyboard_versions", "timeline_versions"] {
+        let column_count: i64 = connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'task_version_number'"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if column_count == 0 {
+            connection
+                .execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN task_version_number INTEGER"),
+                    [],
+                )
                 .map_err(|error| error.to_string())?;
         }
     }

@@ -274,7 +274,7 @@ fn scoped_storyboard(
     if let Some(storyboard_id) = opened_storyboard_id.filter(|id| !id.is_empty()) {
         let opened = connection
             .query_row(
-                "SELECT id, version_number, content_json FROM storyboard_versions WHERE id = ?1 AND project_id = ?2 AND editing_task_id = ?3",
+                "SELECT id, COALESCE(task_version_number, version_number), content_json FROM storyboard_versions WHERE id = ?1 AND project_id = ?2 AND editing_task_id = ?3",
                 params![storyboard_id, project_id, editing_task_id],
                 |row| {
                     let content: String = row.get(2)?;
@@ -305,7 +305,7 @@ fn latest_storyboard(
 ) -> Result<StoryboardSummary, String> {
     connection
         .query_row(
-            "SELECT id, version_number, content_json FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
+            "SELECT id, COALESCE(task_version_number, version_number), content_json FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
             params![project_id, editing_task_id],
             |row| {
                 let content: String = row.get(2)?;
@@ -332,7 +332,7 @@ fn latest_timeline(
 ) -> Result<TimelineSummary, String> {
     connection
         .query_row(
-            "SELECT id, version_number, status, content_json FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
+            "SELECT id, COALESCE(task_version_number, version_number), status, content_json FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC, created_at DESC LIMIT 1",
             params![project_id, storyboard_id],
             |row| {
                 let content: String = row.get(3)?;

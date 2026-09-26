@@ -1786,6 +1786,75 @@ mod tests {
     }
 
     #[test]
+    fn each_editing_task_numbers_storyboards_and_timelines_from_one() {
+        let connection = Connection::open_in_memory().expect("open test database");
+        crate::db::migrate(&connection).expect("create current schema");
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES ('project-1', 'P', 1, 1);
+                 INSERT INTO editing_tasks (id, project_id, title, created_at, updated_at) VALUES
+                   ('task-a', 'project-1', 'A', 1, 1), ('task-b', 'project-1', 'B', 1, 1);",
+            )
+            .expect("insert project and tasks");
+        let create = |task_id: &str| {
+            let storyboard = super::insert_storyboard_version(
+                &connection,
+                "project-1".to_owned(),
+                task_id,
+                "brief",
+                content("direct"),
+                &[],
+                None,
+                Default::default(),
+            )
+            .expect("insert storyboard");
+            let base = crate::models::TimelineVersion {
+                id: String::new(),
+                project_id: "project-1".to_owned(),
+                storyboard_version_id: storyboard.id.clone(),
+                version_number: 0,
+                clips: Vec::new(),
+                text_tracks: Vec::new(),
+                music_tracks: Vec::new(),
+                voiceover_tracks: Vec::new(),
+                overlay_clips: Vec::new(),
+                quality_report: None,
+                created_at: 0,
+            };
+            let timeline = crate::timeline::insert_timeline_version_with_log(
+                &connection,
+                "project-1",
+                task_id,
+                "conversation",
+                "agent-task",
+                &base,
+                "test",
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("insert timeline");
+            (storyboard, timeline)
+        };
+
+        create("task-a");
+        let (storyboard_a2, timeline_a2) = create("task-a");
+        let (storyboard_b1, timeline_b1) = create("task-b");
+
+        assert_eq!(storyboard_a2.version_number, 2);
+        assert_eq!(timeline_a2.version_number, 2);
+        assert_eq!(storyboard_b1.version_number, 1);
+        assert_eq!(timeline_b1.version_number, 1);
+        let reloaded_storyboard =
+            super::load_storyboard_version(&connection, &storyboard_b1.id).expect("reload");
+        let reloaded_timeline =
+            crate::timeline::load_timeline_version(&connection, &timeline_b1.id).expect("reload");
+        assert_eq!(reloaded_storyboard.version_number, 1);
+        assert_eq!(reloaded_timeline.version_number, 1);
+    }
+
+    #[test]
     fn storyboard_can_honestly_leave_a_beat_uncovered() {
         assert!(validate_storyboard(&content("contextual"), &[source()], "brief").is_ok());
     }
@@ -3486,6 +3555,29 @@ fn persist_storyboard_version(
     Ok(version)
 }
 
+/// 故事版版本号按会话编号：会话内第一版是 v1，派生版本（重选镜头、精修切点）同样按所属会话累加。
+pub(crate) fn next_storyboard_version_numbers(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+) -> Result<crate::db::NextVersionNumbers, String> {
+    connection
+        .query_row(
+            "SELECT
+               (SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1),
+               (SELECT COALESCE(MAX(COALESCE(task_version_number, version_number)), 0) + 1
+                  FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2)",
+            params![project_id, editing_task_id],
+            |row| {
+                Ok(crate::db::NextVersionNumbers {
+                    sequence: row.get(0)?,
+                    number: row.get(1)?,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 /// 在调用方事务内写入 storyboard 版本、候选池、媒体选项与派生关系；局部编辑与新时间线同事务提交。
 pub(crate) fn insert_storyboard_version(
     connection: &Connection,
@@ -3497,15 +3589,12 @@ pub(crate) fn insert_storyboard_version(
     media_options: Option<crate::media_options::MediaOptions>,
     derivation: StoryboardDerivation,
 ) -> Result<StoryboardVersion, String> {
-    let version_number = connection.query_row(
-        "SELECT COALESCE(MAX(version_number), 0) + 1 FROM storyboard_versions WHERE project_id = ?1",
-        params![project_id], |row| row.get::<_, i64>(0),
-    ).map_err(|error| error.to_string())?;
+    let numbers = next_storyboard_version_numbers(connection, &project_id, editing_task_id)?;
     let version = StoryboardVersion {
         id: Uuid::new_v4().to_string(),
         project_id,
         editing_task_id: editing_task_id.to_owned(),
-        version_number,
+        version_number: numbers.number,
         brief: brief.to_owned(),
         title: content.title,
         summary: content.summary,
@@ -3518,8 +3607,8 @@ pub(crate) fn insert_storyboard_version(
         derivation,
     };
     connection.execute(
-        "INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
-        params![version.id, version.project_id, version.editing_task_id, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
+        "INSERT INTO storyboard_versions (id, project_id, editing_task_id, version_number, task_version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7)",
+        params![version.id, version.project_id, version.editing_task_id, numbers.sequence, version.version_number, serde_json::to_string(&StoryboardContent { brief: version.brief.clone(), title: version.title.clone(), summary: version.summary.clone(), target_duration_ms: content.target_duration_ms, script_mode: content.script_mode.clone(), beats: version.beats.clone(), uncovered_beat_ids: version.uncovered_beat_ids.clone(), shots: version.shots.clone() }).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
     crate::shot_replacement::store_pools(connection, &version.id, pools)?;
     if let Some(options) = media_options {
@@ -3596,7 +3685,7 @@ fn storyboard_versions_for_task(
 ) -> Result<Vec<StoryboardVersion>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, version_number, content_json, created_at FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC",
+            "SELECT id, COALESCE(task_version_number, version_number), content_json, created_at FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -3810,13 +3899,12 @@ fn finalize_audio_first_timeline(
         vt = vec![voiceover];
     }
     // Use shared timeline helper to insert version; we synthesize content_json and status directly
-    let version_number: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(version_number),0)+1 FROM timeline_versions WHERE project_id=?1",
-            params![storyboard.project_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let numbers = crate::timeline::next_timeline_version_numbers(
+        connection,
+        &storyboard.project_id,
+        &storyboard.id,
+    )?;
+    let version_number = numbers.number;
     let new_id = uuid::Uuid::new_v4().to_string();
     let created_at = crate::db::now_millis();
     let content = TimelineContent {
@@ -3828,7 +3916,7 @@ fn finalize_audio_first_timeline(
         quality_report: None,
     };
     let content_json = serde_json::to_string(&content).map_err(|e| e.to_string())?;
-    connection.execute("INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1,?2,?3,?4,'draft',?5,?6)", params![new_id, storyboard.project_id, storyboard.id, version_number, content_json, created_at]).map_err(|e| e.to_string())?;
+    connection.execute("INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, task_version_number, status, content_json, created_at) VALUES (?1,?2,?3,?4,?5,'draft',?6,?7)", params![new_id, storyboard.project_id, storyboard.id, numbers.sequence, version_number, content_json, created_at]).map_err(|e| e.to_string())?;
     // Log operation
     let conversation_id: Option<String> = connection.query_row("SELECT id FROM conversations WHERE project_id=?1 AND editing_task_id=?2 ORDER BY updated_at DESC LIMIT 1", params![storyboard.project_id, editing_task_id], |r| r.get(0)).ok();
     let before = serde_json::Value::Null;
@@ -3949,7 +4037,7 @@ pub(crate) fn load_storyboard_version(
     storyboard_version_id: &str,
 ) -> Result<StoryboardVersion, String> {
     connection.query_row(
-        "SELECT id, project_id, editing_task_id, version_number, content_json, created_at FROM storyboard_versions WHERE id = ?1",
+        "SELECT id, project_id, editing_task_id, COALESCE(task_version_number, version_number), content_json, created_at FROM storyboard_versions WHERE id = ?1",
         params![storyboard_version_id],
         |row| {
             let json = row.get::<_, String>(4)?;

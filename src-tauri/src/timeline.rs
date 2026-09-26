@@ -216,15 +216,12 @@ pub(crate) fn create_timeline_draft_with_options(
         &storyboard_version_id,
         text_tracks,
     );
-    let version_number = connection.query_row(
-        "SELECT COALESCE(MAX(version_number), 0) + 1 FROM timeline_versions WHERE project_id = ?1",
-        params![project_id], |row| row.get::<_, i64>(0),
-    ).map_err(|error| error.to_string())?;
+    let numbers = next_timeline_version_numbers(&connection, &project_id, &storyboard_version_id)?;
     let version = TimelineVersion {
         id: Uuid::new_v4().to_string(),
         project_id,
         storyboard_version_id,
-        version_number,
+        version_number: numbers.number,
         clips,
         text_tracks,
         music_tracks: Vec::new(),
@@ -234,8 +231,8 @@ pub(crate) fn create_timeline_draft_with_options(
         created_at: now_millis(),
     };
     connection.execute(
-        "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
-        params![version.id, version.project_id, version.storyboard_version_id, version.version_number, serde_json::to_string(&version.to_content()).map_err(|error| error.to_string())?, version.created_at],
+        "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, task_version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7)",
+        params![version.id, version.project_id, version.storyboard_version_id, numbers.sequence, version.version_number, serde_json::to_string(&version.to_content()).map_err(|error| error.to_string())?, version.created_at],
     ).map_err(|error| error.to_string())?;
     Ok(version)
 }
@@ -296,6 +293,33 @@ fn recompute_timeline_positions(clips: &mut [TimelineClip]) {
     }
 }
 
+/// 时间线版本号按所属故事版的会话编号：timeline_versions 没有 editing_task_id，
+/// 经 storyboard_version_id 关联到剪辑任务；编号规则见 `crate::db::NextVersionNumbers`。
+pub(crate) fn next_timeline_version_numbers(
+    connection: &Connection,
+    project_id: &str,
+    storyboard_version_id: &str,
+) -> Result<crate::db::NextVersionNumbers, String> {
+    connection
+        .query_row(
+            "SELECT
+               (SELECT COALESCE(MAX(version_number), 0) + 1 FROM timeline_versions WHERE project_id = ?1),
+               (SELECT COALESCE(MAX(COALESCE(timeline.task_version_number, timeline.version_number)), 0) + 1
+                  FROM timeline_versions timeline
+                  JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id
+                 WHERE timeline.project_id = ?1
+                   AND storyboard.editing_task_id = (SELECT editing_task_id FROM storyboard_versions WHERE id = ?2))",
+            params![project_id, storyboard_version_id],
+            |row| {
+                Ok(crate::db::NextVersionNumbers {
+                    sequence: row.get(0)?,
+                    number: row.get(1)?,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) fn insert_timeline_version_with_log(
     connection: &Connection,
     project_id: &str,
@@ -309,18 +333,13 @@ pub(crate) fn insert_timeline_version_with_log(
     music_tracks: Vec<MusicTrack>,
     voiceover_tracks: Vec<crate::models::VoiceoverTrack>,
 ) -> Result<TimelineVersion, String> {
-    let version_number = connection
-        .query_row(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM timeline_versions WHERE project_id = ?1",
-            params![project_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|error| error.to_string())?;
+    let numbers =
+        next_timeline_version_numbers(connection, project_id, &timeline.storyboard_version_id)?;
     let version = TimelineVersion {
         id: Uuid::new_v4().to_string(),
         project_id: project_id.to_owned(),
         storyboard_version_id: timeline.storyboard_version_id.clone(),
-        version_number,
+        version_number: numbers.number,
         clips,
         text_tracks,
         music_tracks,
@@ -333,8 +352,8 @@ pub(crate) fn insert_timeline_version_with_log(
         serde_json::to_string(&version.to_content()).map_err(|error| error.to_string())?;
     connection
         .execute(
-            "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
-            params![version.id, version.project_id, version.storyboard_version_id, version.version_number, content_json, version.created_at],
+            "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, task_version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7)",
+            params![version.id, version.project_id, version.storyboard_version_id, numbers.sequence, version.version_number, content_json, version.created_at],
         )
         .map_err(|error| error.to_string())?;
     connection
@@ -1484,7 +1503,7 @@ pub(crate) fn load_timeline_version(
     timeline_version_id: &str,
 ) -> Result<TimelineVersion, String> {
     connection.query_row(
-        "SELECT id, project_id, storyboard_version_id, version_number, content_json, created_at FROM timeline_versions WHERE id = ?1",
+        "SELECT id, project_id, storyboard_version_id, COALESCE(task_version_number, version_number), content_json, created_at FROM timeline_versions WHERE id = ?1",
         params![timeline_version_id],
         |row| {
             let content: TimelineContent = serde_json::from_str(&row.get::<_, String>(4)?)
@@ -1503,7 +1522,7 @@ pub(crate) fn timeline_candidates_for_storyboard(
 ) -> Result<Vec<TimelineVersion>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, project_id, storyboard_version_id, version_number, content_json, created_at FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC",
+            "SELECT id, project_id, storyboard_version_id, COALESCE(task_version_number, version_number), content_json, created_at FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1536,7 +1555,7 @@ pub(crate) fn timeline_candidates_for_editing_task(
 ) -> Result<Vec<TimelineVersion>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT timeline.id, timeline.project_id, timeline.storyboard_version_id, timeline.version_number, timeline.content_json, timeline.created_at FROM timeline_versions timeline JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id WHERE timeline.project_id = ?1 AND storyboard.editing_task_id = ?2 ORDER BY timeline.created_at DESC, timeline.version_number DESC",
+            "SELECT timeline.id, timeline.project_id, timeline.storyboard_version_id, COALESCE(timeline.task_version_number, timeline.version_number), timeline.content_json, timeline.created_at FROM timeline_versions timeline JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id WHERE timeline.project_id = ?1 AND storyboard.editing_task_id = ?2 ORDER BY timeline.created_at DESC, timeline.version_number DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -1590,7 +1609,7 @@ pub fn get_latest_timeline(
 ) -> Result<Option<LatestTimeline>, String> {
     let connection = open_connection(&app)?;
     let latest = connection.query_row(
-        "SELECT id, project_id, storyboard_version_id, version_number, content_json, created_at, status FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC LIMIT 1",
+        "SELECT id, project_id, storyboard_version_id, COALESCE(task_version_number, version_number), content_json, created_at, status FROM timeline_versions WHERE project_id = ?1 AND storyboard_version_id = ?2 ORDER BY version_number DESC LIMIT 1",
         params![project_id, storyboard_version_id],
         |row| {
             let content: TimelineContent = serde_json::from_str(&row.get::<_, String>(4)?)

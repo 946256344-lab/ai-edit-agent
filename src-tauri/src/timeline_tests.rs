@@ -429,6 +429,7 @@ fn editing_task_candidates_include_only_its_timelines() {
             INSERT INTO timeline_versions VALUES ('timeline-a', 'project-1', 'storyboard-a', 1, '{\"clips\":[]}', 1);
             INSERT INTO timeline_versions VALUES ('timeline-b', 'project-1', 'storyboard-b', 1, '{\"clips\":[]}', 2);
             INSERT INTO timeline_versions VALUES ('timeline-other', 'project-2', 'storyboard-other', 1, '{\"clips\":[]}', 3);
+            ALTER TABLE timeline_versions ADD COLUMN task_version_number INTEGER;
             ",
         )
         .expect("create scoped timeline test data");
@@ -489,7 +490,9 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
             CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
-            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
+            CREATE TABLE storyboard_versions (id TEXT, project_id TEXT, editing_task_id TEXT);
+            INSERT INTO storyboard_versions VALUES ('storyboard-1', 'project-1', 'task-1');
+            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER, task_version_number INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
         )
@@ -507,7 +510,7 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
         .expect("insert replacement asset");
     connection
         .execute(
-            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1)",
+            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1, NULL)",
             [],
         )
         .expect("insert existing version");
@@ -571,7 +574,9 @@ fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() 
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
             CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
-            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
+            CREATE TABLE storyboard_versions (id TEXT, project_id TEXT, editing_task_id TEXT);
+            INSERT INTO storyboard_versions VALUES ('storyboard-1', 'project-1', 'task-1');
+            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER, task_version_number INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
         )
@@ -589,7 +594,7 @@ fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() 
         .expect("insert asset");
     connection
         .execute(
-            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1)",
+            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1, NULL)",
             [],
         )
         .expect("insert existing version");
@@ -667,7 +672,9 @@ fn changing_clip_duration_shifts_following_shots_and_stays_in_source_range() {
             "
             CREATE TABLE assets (id TEXT, project_id TEXT, kind TEXT, analysis_status TEXT, metadata_json TEXT);
             CREATE VIEW project_asset_access AS SELECT project_id, id AS asset_id FROM assets;
-            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
+            CREATE TABLE storyboard_versions (id TEXT, project_id TEXT, editing_task_id TEXT);
+            INSERT INTO storyboard_versions VALUES ('storyboard-1', 'project-1', 'task-1');
+            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER, task_version_number INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
         )
@@ -685,7 +692,7 @@ fn changing_clip_duration_shifts_following_shots_and_stays_in_source_range() {
         .expect("insert asset");
     connection
         .execute(
-            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1)",
+            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1, NULL)",
             [],
         )
         .expect("insert existing version");
@@ -811,14 +818,16 @@ fn reordering_clips_requires_a_full_permutation() {
     connection
         .execute_batch(
             "
-            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER);
+            CREATE TABLE storyboard_versions (id TEXT, project_id TEXT, editing_task_id TEXT);
+            INSERT INTO storyboard_versions VALUES ('storyboard-1', 'project-1', 'task-1');
+            CREATE TABLE timeline_versions (id TEXT, project_id TEXT, storyboard_version_id TEXT, version_number INTEGER, status TEXT, content_json TEXT, created_at INTEGER, task_version_number INTEGER);
             CREATE TABLE operation_logs (id TEXT, project_id TEXT, editing_task_id TEXT, conversation_id TEXT, agent_task_id TEXT, actor TEXT, operation_type TEXT, entity_type TEXT, entity_id TEXT, before_json TEXT, after_json TEXT, created_at INTEGER);
             ",
         )
         .expect("create test tables");
     connection
         .execute(
-            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1)",
+            "INSERT INTO timeline_versions VALUES ('existing', 'project-1', 'storyboard-1', 1, 'draft', '{}', 1, NULL)",
             [],
         )
         .expect("insert existing version");

@@ -703,7 +703,7 @@ fn refresh_task_candidate(
         .map_err(|error| error.to_string())?;
     let storyboard = connection
         .query_row(
-            "SELECT id, version_number FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC LIMIT 1",
+            "SELECT id, COALESCE(task_version_number, version_number) FROM storyboard_versions WHERE project_id = ?1 AND editing_task_id = ?2 ORDER BY version_number DESC LIMIT 1",
             params![project_id, editing_task_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
@@ -711,7 +711,7 @@ fn refresh_task_candidate(
         .map_err(|error| error.to_string())?;
     let timeline = connection
         .query_row(
-            "SELECT timeline.id, timeline.version_number, timeline.status FROM timeline_versions timeline JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id WHERE timeline.project_id = ?1 AND storyboard.editing_task_id = ?2 ORDER BY timeline.version_number DESC LIMIT 1",
+            "SELECT timeline.id, COALESCE(timeline.task_version_number, timeline.version_number), timeline.status FROM timeline_versions timeline JOIN storyboard_versions storyboard ON storyboard.id = timeline.storyboard_version_id WHERE timeline.project_id = ?1 AND storyboard.editing_task_id = ?2 ORDER BY timeline.version_number DESC LIMIT 1",
             params![project_id, editing_task_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)),
         )

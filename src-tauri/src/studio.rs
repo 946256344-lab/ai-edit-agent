@@ -632,13 +632,12 @@ fn commit_studio_edits_inner(
         return Err("没有可应用的改动".to_owned());
     }
 
-    let version_number: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM timeline_versions WHERE project_id = ?1",
-            params![payload.project_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let numbers = crate::timeline::next_timeline_version_numbers(
+        &connection,
+        &payload.project_id,
+        &base.storyboard_version_id,
+    )?;
+    let version_number = numbers.number;
     let new_id = Uuid::new_v4().to_string();
     let created_at = now_millis();
     let new_version = TimelineVersion {
@@ -678,8 +677,8 @@ fn commit_studio_edits_inner(
         .unchecked_transaction()
         .map_err(|e| e.to_string())?;
     transaction.execute(
-        "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6)",
-        params![new_id, payload.project_id, new_version.storyboard_version_id, version_number, content_json, created_at],
+        "INSERT INTO timeline_versions (id, project_id, storyboard_version_id, version_number, task_version_number, status, content_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7)",
+        params![new_id, payload.project_id, new_version.storyboard_version_id, numbers.sequence, version_number, content_json, created_at],
     ).map_err(|e| e.to_string())?;
     transaction.execute(
         "INSERT INTO operation_logs (id, project_id, editing_task_id, conversation_id, agent_task_id, actor, operation_type, entity_type, entity_id, before_json, after_json, created_at) VALUES (?1, ?2, ?3, ?4, NULL, 'user', 'studio_commit', 'timeline_version', ?5, ?6, ?7, ?8)",
