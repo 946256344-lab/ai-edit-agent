@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] 进行中（2026-09-26）：10 月 1 日首发准备，已定海外优先。待拍板：发布形态、试用额度与付费、上游模型成本、配音、交付物口径。P0 阻断项：正式构建注入网关地址、网站仓库提交与生产部署、网关额度与上游错误透传、经网关的 413 实测、默认编辑器改 CapCut 并实测 CapCut 与 Resolve 交付、网关错误文案英文化、英文界面主路径验收、代码签名、英文 Terms/Privacy 与删除渠道、第三方许可、隐藏实验性 OAuth。逐项见 docs/release-checklist.md。
 - [x] 已合并（2026-09-26）：FellowCut 账号与模型网关分支并入 Voycut 主线。对外界面使用 Voycut；`sign_in_fellowcut`、`FELLOWCUT_GATEWAY_BASE_URL`、凭据名等既有内部标识保持不变。网站仍为独立仓库，需单独跟进更名及正式网关发布。
 
 - [ ] implemented_unverified（2026-09-26，claude/product-naming-voycut-3663a1）：故事版版本下拉移到预览面板标题行右侧；标题下只留时长与镜头数（去掉时间线版本号）；预览状态不再显示「预览已就绪」等平稳状态。tsc、lint、i18n 通过；待桌面确认。见 docs/changes/2026-09-26-cut-heading-meta-row.md。
