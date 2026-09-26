@@ -129,6 +129,7 @@ fn run_scene_detect(
         command.args(["-skip_frame", "nokey"]);
     }
     command
+        .args(["-threads", &super::analysis::analysis_ffmpeg_threads()])
         .arg("-i")
         .arg(source)
         .args(["-vf", &filter, "-an", "-f", "null", "-"]);
@@ -276,7 +277,7 @@ fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
     command
         .args(["-y", "-hide_banner", "-loglevel", "error"])
         .args(media_open_args())
-        .args(["-ss", &format!("{time_seconds:.3}"), "-i"])
+        .args(["-threads", "1", "-ss", &format!("{time_seconds:.3}"), "-i"])
         .arg(source)
         .args(["-frames:v", "1", "-vf", "scale=320:-2"])
         .arg(destination);
@@ -309,9 +310,10 @@ fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
         for (time_ms, destination) in chunk {
             let _ = fs::remove_file(destination);
             let time_seconds = ((*time_ms).max(0) as f64) / 1000.0;
+            // 每个输入只解几帧，单线程足够；按全核开线程会让 12 个解码器同时抢满 CPU 和内存。
             command
                 .args(media_open_args())
-                .args(["-ss", &format!("{time_seconds:.3}"), "-i"])
+                .args(["-threads", "1", "-ss", &format!("{time_seconds:.3}"), "-i"])
                 .arg(source);
         }
         for (input, (_, destination)) in chunk.iter().enumerate() {

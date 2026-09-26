@@ -189,6 +189,7 @@ fn extract_energy_samples(
     let mut command = hidden_command("ffmpeg");
     command.args(["-hide_banner", "-loglevel", "error"]);
     command.args(media_open_args());
+    command.args(["-threads", &super::analysis::analysis_ffmpeg_threads()]);
     command.args([
         "-ss",
         &format!("{:.3}", start_ms as f64 / 1000.0),

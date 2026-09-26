@@ -24,15 +24,24 @@ use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 pub(crate) const MAX_INITIAL_OCR_FRAMES: usize = 2;
-/// 技术分析同时跑的素材数：本机逻辑核数的一半，限制在 2–8 条（原先固定 2 条，16 线程机器大部分时间闲着）。
+fn logical_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+}
+
+/// 技术分析同时跑的素材数：本机逻辑核数的 1/4，限制在 2–8 条。
+/// 实测 16 线程机器跑 8 条时每个 FFmpeg 都按全核开解码线程，CPU 打满，单条慢 3 倍并出现超时失败。
 pub(crate) fn max_technical_analysis_workers() -> usize {
     static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *WORKERS.get_or_init(|| {
-        std::thread::available_parallelism()
-            .map(|count| count.get() / 2)
-            .unwrap_or(2)
-            .clamp(2, 8)
-    })
+    *WORKERS.get_or_init(|| (logical_cores() / 4).clamp(2, 8))
+}
+
+/// 技术分析里每个 FFmpeg 的解码线程数：核数平分给同时跑的素材，合计不超过本机核数。
+pub(crate) fn analysis_ffmpeg_threads() -> String {
+    (logical_cores() / max_technical_analysis_workers())
+        .max(1)
+        .to_string()
 }
 
 /// 每次从队列领取的任务数：每个执行线程两条。
@@ -243,6 +252,7 @@ fn generate_thumbnail(
     let mut command = hidden_command("ffmpeg");
     command.args(["-y", "-hide_banner", "-loglevel", "error"]);
     command.args(media_open_args());
+    command.args(["-threads", &analysis_ffmpeg_threads()]);
     if kind == "video" {
         command.args(["-ss", "0.5"]);
     }
