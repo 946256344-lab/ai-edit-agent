@@ -1,7 +1,7 @@
 //! Storyboard 直连 Provider 本机轨迹（与 Native full-trace 分离）。
 //!
 //! - `STORYBOARD_PROVIDER_TRACE=1`（debug）：写入 `storyboard-provider-trace.jsonl`
-//! - debug 构建默认：写入 `storyboard-pool-trace.jsonl`（每拍 P2 九条 + P3 所选）
+//! - debug 构建默认：写入 `storyboard-pool-trace.jsonl`（每拍 P2 九条 + P3 所选 + Phase 4 返回）
 
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -42,6 +42,14 @@ pub(crate) fn append_storyboard_trace(
     direction: &str,
     body: &Value,
 ) {
+    // Phase 4 返回很小但决定入出点，debug 下默认记进选片轨迹，便于核对模型给的区间。
+    if direction == "response" && phase.starts_with("Phase 4") {
+        append_pool_trace(
+            phase,
+            beat_id.unwrap_or("-"),
+            &json!({ "attempt": attempt, "response": redact_trace_body(body) }),
+        );
+    }
     if !storyboard_trace_enabled() {
         return;
     }

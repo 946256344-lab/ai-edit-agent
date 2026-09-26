@@ -548,3 +548,11 @@ fn ass_text_tracks_use_the_local_libass_filter() {
     );
     fs::remove_dir_all(directory).expect("remove text preview test directory");
 }
+
+#[test]
+fn preview_shorter_than_timeline_is_a_failure() {
+    // 回归：1ms 源窗的镜头几乎不出帧，预览只剩 14.8s（时间线 23.8s）却仍标记为完成。
+    assert!(verify_preview_duration(Some(14_800), 23_786).is_err());
+    assert!(verify_preview_duration(None, 23_786).is_err());
+    assert!(verify_preview_duration(Some(23_700), 23_786).is_ok());
+}

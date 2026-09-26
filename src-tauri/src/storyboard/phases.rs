@@ -2244,9 +2244,13 @@ mod tests {
         let mut pick_map = HashMap::new();
         pick_map.insert(1, (window, false));
         clamp_shots_to_chosen_windows(&mut content, &pick_map);
-        assert!(content.shots[0].source_end_ms > content.shots[0].source_start_ms);
         assert!(content.shots[0].source_end_ms <= 1_000);
         assert!(content.shots[0].source_start_ms >= 0);
+        // 回归：窗外区间曾被夹成 [999-1000]，1ms 放慢成定格。
+        assert_eq!(
+            content.shots[0].source_end_ms - content.shots[0].source_start_ms,
+            1_000
+        );
     }
 
     #[test]
@@ -3476,6 +3480,24 @@ pub(crate) fn clamp_shots_to_chosen_windows_scoped(
         let win_start = window.start_ms.min(window.end_ms);
         let win_end = window.end_ms.max(window.start_ms);
         if win_end <= win_start {
+            continue;
+        }
+        // 模型给的区间大半落在锁定窗外（读错时间基准或帧标签）时，夹到窗边只剩 1ms、放慢成定格；
+        // 改取窗中央一段，长度按口播时长、不超过窗长。
+        let requested_start = shot.source_start_ms;
+        let requested_end = shot.source_end_ms.max(requested_start);
+        let overlap = (requested_end.min(win_end) - requested_start.max(win_start)).max(0);
+        let requested_span = (requested_end - requested_start).max(1);
+        if overlap * 2 < requested_span {
+            let len = shot.duration_ms.max(1).min(win_end - win_start);
+            let start = win_start + (win_end - win_start - len) / 2;
+            log::warn!(
+                "Shot {} range [{requested_start}-{requested_end}] fell outside locked window [{win_start}-{win_end}]; using centered [{start}-{}]",
+                shot.order_index,
+                start + len
+            );
+            shot.source_start_ms = start;
+            shot.source_end_ms = start + len;
             continue;
         }
         // 保证 clamp 的 min <= max：终点上限至少比起点多 1ms。

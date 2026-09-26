@@ -527,9 +527,10 @@ impl Default for TextStyle {
             font_size: 0.055,
             bold: true,
             color: "#FFFFFF".to_owned(),
-            stroke_color: None,
-            stroke_width: 0.0,
-            shadow: false,
+            // 与字幕预设 classic_stroke 一致：白字黑描边，浅色画面上也能读。
+            stroke_color: Some("#000000".to_owned()),
+            stroke_width: 6.0,
+            shadow: true,
             background_color: None,
             alignment: "center".to_owned(),
             letter_spacing: 0,

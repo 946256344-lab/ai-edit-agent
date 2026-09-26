@@ -257,8 +257,10 @@ fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack]) -> Result<(), String
             let font_size = (cue.style.font_size * 960.0).round().max(12.0) as i64;
             let outline = cue.style.stroke_width.max(0.0);
             let shadow = if cue.style.shadow { 2 } else { 0 };
+            // 列序必须与下方 Format 行一致（…Angle,BorderStyle,Alignment,MarginL,MarginR,MarginV,Outline,Shadow,Encoding）。
+            // 旧写法错一列，描边和阴影落进边距，预览字幕从未画出描边。
             styles.push_str(&format!(
-                "Style: {style_name},{},{font_size},{},{},{},&H00000000,{},0,0,0,100,100,0,0,{alignment},0,0,{outline:.1},{shadow},0,0,0,1\n",
+                "Style: {style_name},{},{font_size},{},{},{},&H00000000,{},0,0,0,100,100,0,0,1,{alignment},0,0,0,{outline:.1},{shadow},1\n",
                 ass_font_name(&cue.style.font_key),
                 ass_color(&cue.style.color),
                 ass_color(&cue.style.color),
@@ -363,6 +365,40 @@ fn cached_timeline_clip(
         fs::rename(pending, &destination).map_err(|error| error.to_string())?;
     }
     Ok(destination)
+}
+
+/// 成片比时间线短超过这个值就判预览失败（例如某镜只有 1ms 源窗，放慢后几乎不出帧）。
+const PREVIEW_DURATION_TOLERANCE_MS: i64 = 500;
+
+fn rendered_duration_ms(path: &Path) -> Option<i64> {
+    let output = hidden_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    let seconds = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    Some((seconds * 1000.0).round() as i64)
+}
+
+/// 渲染出的预览必须覆盖整条时间线，否则如实报错，不标记为可审阅。
+fn verify_preview_duration(rendered_ms: Option<i64>, expected_ms: i64) -> Result<(), String> {
+    match rendered_ms {
+        Some(actual) if actual + PREVIEW_DURATION_TOLERANCE_MS < expected_ms => Err(format!(
+            "The rendered preview is {actual}ms but the timeline is {expected_ms}ms; some shots did not render."
+        )),
+        None => Err("Could not read the rendered preview duration.".to_owned()),
+        _ => Ok(()),
+    }
 }
 
 fn inspect_preview_quality(
@@ -623,6 +659,10 @@ pub(crate) fn render_preview_inner(
                 .map_err(|_| "Could not finalize the mixed preview.".to_owned())?;
         }
     }
+    verify_preview_duration(
+        rendered_duration_ms(&preview_path),
+        timeline.visual_duration_ms(),
+    )?;
     let quality_report = inspect_preview_quality(
         &preview_path,
         &timeline.clips,

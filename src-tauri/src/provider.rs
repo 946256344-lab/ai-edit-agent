@@ -16,6 +16,10 @@ static VISUAL_CIRCUIT: OnceLock<Mutex<VisualCircuitState>> = OnceLock::new();
 static INTERACTIVE_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
 const VISUAL_CIRCUIT_FAILURE_THRESHOLD: usize = 3;
 const VISUAL_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(60);
+/// 429 限流：按 Retry-After（缺省指数退避 2/4/8/16 秒）最多重试这么多次，
+/// 等待不超过本次调用剩余的截止时间；仍被限流才把 `:HTTP 429` 交给调用方。
+const RATE_LIMIT_RETRIES: u32 = 4;
+const RATE_LIMIT_MAX_WAIT: Duration = Duration::from_secs(30);
 
 /// Provider 协议无关的单轮模型结果。`output` 保留协议返回的所有项目，
 /// 使上层未来可以消费原生工具调用而不丢失同一响应中的其他 message。
@@ -82,12 +86,13 @@ const GATEWAY_UPGRADE_REQUIRED: &str = "provider_gateway_upgrade_required";
 /// 重试也不会成功的模型失败：网关登录、资格、版本与请求体过大，以及除 408/429 外的 HTTP 4xx。
 /// 调用方遇到时应立即结束本步，不再按传输或语义预算重发，避免空耗时间和上游额度。
 /// 错误可能被上层加了前缀，因此按子串识别网关码。
+/// 429 已在发送层按 Retry-After 退避重试过，到这里仍限流就不再原地重试，
+/// 让生成如实失败，而不是把某一拍留空、做出缺镜的成片。
 pub(crate) fn is_final_model_failure(error: &str) -> bool {
     if error.contains("provider_gateway_") {
         return true;
     }
-    provider_http_status(error)
-        .is_some_and(|status| (400..500).contains(&status) && status != 408 && status != 429)
+    provider_http_status(error).is_some_and(|status| (400..500).contains(&status) && status != 408)
 }
 
 pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailureClass {
@@ -152,6 +157,27 @@ fn existing_failure_code(error: &str) -> Option<&str> {
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'))
     .then_some(code)
+}
+
+/// 本次 429 之后应等待多久；超出截止时间或重试次数用完时返回 None。
+fn rate_limit_wait(
+    attempt: u32,
+    retry_after: Option<&str>,
+    deadline: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    if attempt >= RATE_LIMIT_RETRIES {
+        return None;
+    }
+    let wait = retry_after
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(2u64 << attempt))
+        .min(RATE_LIMIT_MAX_WAIT);
+    match deadline {
+        Some(deadline) if now + wait >= deadline => None,
+        _ => Some(wait),
+    }
 }
 
 fn provider_http_status(error: &str) -> Option<u16> {
@@ -1060,7 +1086,31 @@ fn post_model_payload_with_custom_model(
             if let Some(timeout) = timeout {
                 request_builder = request_builder.timeout(timeout);
             }
-            match request_builder.send_string(&request.to_string()) {
+            let request_body = request.to_string();
+            let mut rate_limited_attempts = 0;
+            let sent = loop {
+                match request_builder.clone().send_string(&request_body) {
+                    Err(ureq::Error::Status(429, response)) => {
+                        let wait = rate_limit_wait(
+                            rate_limited_attempts,
+                            response.header("retry-after"),
+                            crate::execution_deadline::current(),
+                            Instant::now(),
+                        );
+                        let Some(wait) = wait else {
+                            break Err(ureq::Error::Status(429, response));
+                        };
+                        rate_limited_attempts += 1;
+                        log::warn!(
+                            "Model request rate limited (HTTP 429); retry {rate_limited_attempts}/{RATE_LIMIT_RETRIES} in {}ms",
+                            wait.as_millis()
+                        );
+                        std::thread::sleep(wait);
+                    }
+                    other => break other,
+                }
+            };
+            match sent {
                 Ok(response) => {
                     let status = response.status();
                     let body = response.into_string().map_err(|error| {
@@ -1575,16 +1625,41 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_waits_before_retrying_within_the_deadline() {
+        // 回归：429 曾被立即重试，同一拍 3 次在 2 秒内打完后被留空。
+        let now = Instant::now();
+        assert_eq!(
+            rate_limit_wait(0, Some("3"), None, now),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            rate_limit_wait(1, None, None, now),
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(
+            rate_limit_wait(0, Some("600"), None, now),
+            Some(RATE_LIMIT_MAX_WAIT)
+        );
+        assert_eq!(
+            rate_limit_wait(0, None, Some(now + Duration::from_secs(1)), now),
+            None,
+            "must not sleep past the call deadline"
+        );
+        assert_eq!(rate_limit_wait(RATE_LIMIT_RETRIES, None, None, now), None);
+    }
+
+    #[test]
     fn rejected_requests_and_gateway_denials_are_final() {
         for error in [
             "Voycut model service unavailable:HTTP 400",
             "Phase 3 beat 'b1': provider_gateway_entitlement: Voycut access is not active for this account.",
             "provider_gateway_upgrade_required: This Voycut version is no longer supported by the model service.",
+            // 发送层已按 Retry-After 退避重试，仍限流就如实失败。
+            "Voycut model service unavailable:HTTP 429",
         ] {
             assert!(is_final_model_failure(error), "{error}");
         }
         for error in [
-            "Voycut model service unavailable:HTTP 429",
             "Voycut model service unavailable:HTTP 502",
             "Voycut model service connection failed (network error).",
         ] {

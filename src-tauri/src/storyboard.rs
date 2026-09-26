@@ -981,15 +981,33 @@ fn phase5_should_retry_phase4(error: &str) -> bool {
     true
 }
 
-/// 从口播文本生成简短字幕：取第一句，最多 40 个字符。
-/// 模型漏写 onScreenText 时作为兜底，保证成片有可见字幕。
+/// 从口播文本生成简短字幕：取第一句；中文最多 40 字，拉丁文字最多 80 字符且只在空格处截断
+/// （换行交给字幕渲染），不把单词拦腰切断。模型漏写 onScreenText 时作为兜底。
 fn subtitle_text_from_narration(narration: &str) -> String {
+    const CJK_MAX_CHARS: usize = 40;
+    const LATIN_MAX_CHARS: usize = 80;
     let first_sentence = narration
         .split(|character: char| character == '。' || character == '！' || character == '？')
         .map(str::trim)
         .find(|part| !part.is_empty())
         .unwrap_or(narration.trim());
-    first_sentence.chars().take(40).collect()
+    let has_cjk = first_sentence
+        .chars()
+        .any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch));
+    if has_cjk {
+        return first_sentence.chars().take(CJK_MAX_CHARS).collect();
+    }
+    if first_sentence.chars().count() <= LATIN_MAX_CHARS {
+        return first_sentence.to_owned();
+    }
+    let clipped = first_sentence
+        .chars()
+        .take(LATIN_MAX_CHARS + 1)
+        .collect::<String>();
+    match clipped.rfind(char::is_whitespace) {
+        Some(space) => clipped[..space].trim_end().to_owned(),
+        None => clipped.chars().take(LATIN_MAX_CHARS).collect(),
+    }
 }
 
 fn normalize_storyboard_candidate(
@@ -1429,8 +1447,8 @@ mod tests {
         key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
         phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
         spoken_duration_conflicts, storyboard_completion_gaps, storyboard_sources,
-        storyboard_usage_counts, validate_storyboard, StoryboardCompletionGap,
-        MAX_STORYBOARD_SHOTS,
+        storyboard_usage_counts, subtitle_text_from_narration, validate_storyboard,
+        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -2105,6 +2123,26 @@ mod tests {
                 .collect(),
         };
         assert!(key_message_marker_issue("帮我做个工厂宣传片", &mut narrative).is_none());
+    }
+
+    #[test]
+    fn english_subtitle_fallback_keeps_whole_words() {
+        // 回归：无配音时字幕按 40 字符硬截，出现 "without paus"、"work in t"。
+        let text =
+            subtitle_text_from_narration("Every day, precision meets power on the factory floor.");
+        assert_eq!(
+            text,
+            "Every day, precision meets power on the factory floor."
+        );
+        let long = subtitle_text_from_narration(&"automation ".repeat(12));
+        assert!(long.chars().count() <= 80);
+        assert!(long.ends_with("automation"));
+        assert_eq!(
+            subtitle_text_from_narration(&"工厂".repeat(30))
+                .chars()
+                .count(),
+            40
+        );
     }
 
     #[test]
