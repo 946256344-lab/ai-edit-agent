@@ -7,6 +7,7 @@ use crate::audit::{
     begin_agent_run_step, finish_agent_run_step, record_agent_diagnostic,
     record_agent_timing_diagnostic, AgentTimingMetric,
 };
+use crate::agent::UiLocale;
 use crate::models::{AgentEditResult, StoryboardVersion, TimelineVersion};
 use crate::provider::{
     chat_completions_request, classify_model_request_failure, model_turn_from_chat_completions,
@@ -273,6 +274,7 @@ pub(crate) fn run_native_tool_loop(
         loop_result,
         state.last_outcome.take(),
         &receipt,
+        crate::agent::task_ui_locale(connection, agent_task_id),
     )?;
     Ok(AgentLoopResult {
         result,
@@ -311,6 +313,7 @@ fn finish_native_result(
     loop_result: Result<String, String>,
     last_outcome: Option<AgentEditResult>,
     receipt: &NativeRunReceipt,
+    locale: UiLocale,
 ) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
     match loop_result {
         Ok(message) => {
@@ -335,15 +338,18 @@ fn finish_native_result(
             &error,
             last_outcome,
             receipt,
+            locale,
         )),
     }
 }
 
+/// 回合中断时的系统回复按任务界面语言给出，不含传输细节。
 fn interrupted_native_result(
     agent_task_id: &str,
     error: &str,
     last_outcome: Option<AgentEditResult>,
     receipt: &NativeRunReceipt,
+    locale: UiLocale,
 ) -> (AgentEditResult, AgentLoopTerminalStatus) {
     if error == "native_tool_loop_cancelled" {
         let mut result = last_outcome.unwrap_or_else(|| AgentEditResult {
@@ -355,23 +361,40 @@ fn interrupted_native_result(
             jianying_draft: None,
         });
         result.message = if receipt.successful_tool_call {
-            "已停止本轮处理；此前由工具确认的部分结果已保留。".to_owned()
+            locale.pick(
+                "已停止本轮处理；此前由工具确认的部分结果已保留。",
+                "Stopped this run; partial results already confirmed by tools were kept.",
+            )
         } else {
-            "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。".to_owned()
-        };
+            locale.pick(
+                "已停止本轮处理；没有修改现有 storyboard、时间线或 preview。",
+                "Stopped this run; the existing storyboard, timeline and preview were not changed.",
+            )
+        }
+        .to_owned();
         return (result, AgentLoopTerminalStatus::Cancelled);
     }
     let bounded_reason = match error {
-        "native_tool_loop_deadline_exceeded" => Some("本轮达到总超时"),
-        "native_tool_loop_max_steps" => Some("本轮达到步骤上限"),
+        "native_tool_loop_deadline_exceeded" => {
+            Some(locale.pick("本轮达到总超时", "This run hit its time limit"))
+        }
+        "native_tool_loop_max_steps" => {
+            Some(locale.pick("本轮达到步骤上限", "This run hit its step limit"))
+        }
         _ => None,
     };
     let Some(reason) = bounded_reason else {
         if let Some(mut outcome) = last_outcome {
             outcome.message = if outcome.preview.is_some() {
-                "预览已由工具生成并验证，但模型未能完成结果说明；预览已保留。".to_owned()
+                locale
+                    .pick(
+                        "预览已由工具生成并验证，但模型未能完成结果说明；预览已保留。",
+                        "The preview was generated and verified, but the model could not finish its summary; the preview was kept.",
+                    )
+                    .to_owned()
             } else {
-                native_model_reply_unavailable_result(agent_task_id, receipt).message
+                native_model_reply_unavailable_result(agent_task_id, receipt, error, locale)
+                    .message
             };
             let status = if receipt.needs_confirmation {
                 AgentLoopTerminalStatus::NeedsClarification
@@ -381,14 +404,19 @@ fn interrupted_native_result(
             return (outcome, status);
         }
         return (
-            native_model_reply_unavailable_result(agent_task_id, receipt),
+            native_model_reply_unavailable_result(agent_task_id, receipt, error, locale),
             AgentLoopTerminalStatus::Failed,
         );
     };
-    let message = if receipt.successful_tool_call {
-        format!("{reason}；已由工具确认的部分结果已保留，未完成步骤没有标记为成功。")
-    } else {
-        format!("{reason}，没有工具确认任何完成结果。")
+    let message = match (locale, receipt.successful_tool_call) {
+        (UiLocale::ZhCn, true) => {
+            format!("{reason}；已由工具确认的部分结果已保留，未完成步骤没有标记为成功。")
+        }
+        (UiLocale::ZhCn, false) => format!("{reason}，没有工具确认任何完成结果。"),
+        (UiLocale::En, true) => format!(
+            "{reason}; partial results confirmed by tools were kept, and unfinished steps were not marked as done."
+        ),
+        (UiLocale::En, false) => format!("{reason}, and no tool confirmed any finished result."),
     };
     let mut result = last_outcome.unwrap_or_else(|| AgentEditResult {
         agent_task_id: agent_task_id.to_owned(),
@@ -412,21 +440,52 @@ fn interrupted_native_result(
 /// Provider 在工具返回后的总结请求失败时，保留真实失败终态并给 UI 一个诚实、
 /// 不含传输细节的恢复消息。不能把此类 Native 回合抛回 Legacy 的固定“受限操作”
 /// 文案，因为它可能已完成只读观察，而未发生任何本地写入。
+/// Voycut 网关的登录、资格与请求体过大原因按稳定码补在前面，让用户知道该做什么。
 fn native_model_reply_unavailable_result(
     agent_task_id: &str,
     receipt: &NativeRunReceipt,
+    error: &str,
+    locale: UiLocale,
 ) -> AgentEditResult {
     let observed_via_tool = receipt.tool_called && receipt.successful_observation_this_turn;
-    let message = if observed_via_tool {
-        "项目数据已读取，但模型未能生成最终回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。"
+    let outcome = if observed_via_tool {
+        locale.pick(
+            "项目数据已读取，但模型未能生成最终回复。请检查模型连接后重试；本轮没有创建或修改 storyboard、时间线或 preview。",
+            "Project data was read, but the model could not produce a final reply. Check the model connection and retry; no storyboard, timeline or preview was created or changed.",
+        )
     } else if receipt.tool_called {
-        "模型未能根据本轮工具结果生成最终回复。请检查模型连接后重试；本轮没有确认新的本地写入。"
+        locale.pick(
+            "模型未能根据本轮工具结果生成最终回复。请检查模型连接后重试；本轮没有确认新的本地写入。",
+            "The model could not produce a final reply from this run's tool results. Check the model connection and retry; no new local change was confirmed.",
+        )
     } else {
-        "模型连接失败，未能开始本轮处理。请重试；本轮没有创建或修改 storyboard、时间线或 preview。"
+        locale.pick(
+            "模型连接失败，未能开始本轮处理。请重试；本轮没有创建或修改 storyboard、时间线或 preview。",
+            "The model connection failed, so this run could not start. Please retry; no storyboard, timeline or preview was created or changed.",
+        )
+    };
+    let gateway_reason = match classify_model_request_failure(error).code.as_str() {
+        "provider_gateway_auth" => Some(locale.pick(
+            "未登录 Voycut 或登录已失效，请在账号菜单重新登录。",
+            "You are not signed in to Voycut, or your sign-in has expired. Sign in again from the account menu.",
+        )),
+        "provider_gateway_entitlement" => Some(locale.pick(
+            "Voycut 使用资格不可用，试用可能已到期，请在账号页查看。",
+            "Your Voycut access is not active; the trial may have ended. Check the account page.",
+        )),
+        "provider_gateway_payload_too_large" => Some(locale.pick(
+            "本次画面分析数据过大，模型服务无法接收。",
+            "This visual analysis request is too large for the model service.",
+        )),
+        _ => None,
+    };
+    let message = match gateway_reason {
+        Some(reason) => format!("{reason} {outcome}"),
+        None => outcome.to_owned(),
     };
     AgentEditResult {
         agent_task_id: agent_task_id.to_owned(),
-        message: message.to_owned(),
+        message,
         storyboard: None,
         timeline: None,
         preview: None,
@@ -2277,7 +2336,7 @@ mod tests {
             |_body, _step| {},
         );
         assert_eq!(result, Ok("Storyboard 已生成。".to_owned()));
-        let (_result, status) = finish_native_result("task-1", result, None, &receipt)
+        let (_result, status) = finish_native_result("task-1", result, None, &receipt, UiLocale::ZhCn)
             .expect("natural-language claim ends the run");
         assert_eq!(status, AgentLoopTerminalStatus::Completed);
     }
@@ -2626,7 +2685,7 @@ mod tests {
         assert!(receipt
             .successful_write_tools
             .contains("replace_text_tracks"));
-        let (_, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+        let (_, status) = finish_native_result("task-1", Ok(message), None, &receipt, UiLocale::ZhCn)
             .expect("finish preview invalidation result");
         assert_eq!(status, AgentLoopTerminalStatus::Completed);
     }
@@ -2698,7 +2757,7 @@ mod tests {
             |_body, _step| {},
         )
         .expect("natural language ends the composite loop");
-        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt, UiLocale::ZhCn)
             .expect("receipt determines the truthful terminal status");
         assert_eq!(status, AgentLoopTerminalStatus::Completed);
     }
@@ -2747,7 +2806,7 @@ mod tests {
             |_body, _step| {},
         );
         let (_result, status) =
-            finish_native_result("task-1", message, None, &receipt).expect("recovered receipt");
+            finish_native_result("task-1", message, None, &receipt, UiLocale::ZhCn).expect("recovered receipt");
         assert_eq!(status, AgentLoopTerminalStatus::Completed);
         assert_eq!(attempts, 2);
         assert!(receipt.failed_tools.is_empty());
@@ -2828,6 +2887,7 @@ mod tests {
             Err("native_tool_loop_max_steps".to_owned()),
             Some(outcome),
             &receipt,
+            UiLocale::ZhCn,
         )
         .expect("partial receipt result");
         assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
@@ -3030,7 +3090,7 @@ mod tests {
             |_body, _step| {},
         )
         .expect("natural language ends the native loop");
-        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt)
+        let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt, UiLocale::ZhCn)
             .expect("natural-language preview claim ends the run");
         assert_eq!(status, AgentLoopTerminalStatus::Completed);
         assert!(receipt.successful_write_tools.is_empty());
@@ -3808,6 +3868,7 @@ mod tests {
             Ok("Storyboard 已生成。".to_owned()),
             None,
             &receipt,
+            UiLocale::ZhCn,
         )
         .expect("safe failed terminal result");
         assert_eq!(status, AgentLoopTerminalStatus::Failed);
@@ -3827,6 +3888,7 @@ mod tests {
             Err("custom provider transport detail must not reach the UI".to_owned()),
             None,
             &receipt,
+            UiLocale::ZhCn,
         )
         .expect("native failure is persisted without falling back to Legacy text");
         assert_eq!(status, AgentLoopTerminalStatus::Failed);
@@ -3850,6 +3912,7 @@ mod tests {
             Err("自定义 API 不可用（https://sensitive.example/v1，模型 private-model）:网络错误 Connection reset".to_owned()),
             None,
             &receipt,
+            UiLocale::ZhCn,
         )
         .expect("first-step provider failure stays a native failed result");
         assert_eq!(status, AgentLoopTerminalStatus::Failed);
@@ -3858,6 +3921,21 @@ mod tests {
         assert!(!result.message.contains("sensitive"));
         assert!(!result.message.contains("private-model"));
         assert!(result.storyboard.is_none());
+    }
+
+    #[test]
+    fn english_task_gets_english_gateway_failure_reason() {
+        let (result, status) = finish_native_result(
+            "task-1",
+            Err("provider_gateway_entitlement: Voycut access is not active for this account.".to_owned()),
+            None,
+            &NativeRunReceipt::default(),
+            UiLocale::En,
+        )
+        .expect("gateway failure stays a native failed result");
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert!(result.message.starts_with("Your Voycut access is not active"));
+        assert!(!result.message.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch)));
     }
 
     #[test]
@@ -3904,6 +3982,7 @@ mod tests {
             Err("native_tool_loop_response_unparseable".to_owned()),
             Some(outcome),
             &NativeRunReceipt::default(),
+            UiLocale::ZhCn,
         )
         .expect("partial preview result");
         assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
