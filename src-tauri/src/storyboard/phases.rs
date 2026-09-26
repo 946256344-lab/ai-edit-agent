@@ -2555,12 +2555,11 @@ pub(crate) fn phase3_select(
     repair: Option<&RepairPacket>,
 ) -> Result<(StoryboardContent, Vec<StoryboardIssue>), String> {
     log::info!(
-        "Phase 3: Selecting one shot per beat from {} pools (9 images each)",
+        "Phase 3: selecting one shot per beat from {} pools, beats sent concurrently",
         rough.candidate_pools.len(),
     );
     let retry_beats = beats_named_in_repair(repair, rough);
     let previous = previous_beat_selections(repair, rough);
-    let mut selections = Vec::new();
     // 修复轮：未点名的拍原样保留，先全部计入已选，重选拍也不能撞上排在它后面的保留镜头。
     let mut chosen_so_far = covered_beat_ids(rough)
         .into_iter()
@@ -2568,102 +2567,54 @@ pub(crate) fn phase3_select(
         .filter_map(|beat_id| previous.get(&beat_id))
         .flat_map(|kept| refs_from_selection(rough, kept))
         .collect::<Vec<_>>();
+    let mut slots = Vec::new();
+    let mut pending = Vec::new();
     for beat_id in covered_beat_ids(rough) {
         if !retry_beats.contains(&beat_id) {
             if let Some(kept) = previous.get(&beat_id).cloned() {
-                selections.push(kept);
+                slots.push(Some(kept));
                 continue;
             }
         }
-        let Some(pool) = rough
+        match rough
             .candidate_pools
             .iter()
             .find(|pool| pool.beat_id == beat_id)
-        else {
-            selections.push(Phase3BeatSelection {
-                beat_id: beat_id.clone(),
-                candidate_indexes: Vec::new(),
-                uncovered: true,
-                narration: None,
-                match_level: None,
-            });
-            continue;
-        };
-        if pool.candidates.is_empty() {
-            log::info!("Phase 3 beat '{beat_id}': empty pool, uncovered");
-            selections.push(Phase3BeatSelection {
-                beat_id: beat_id.clone(),
-                candidate_indexes: Vec::new(),
-                uncovered: true,
-                narration: None,
-                match_level: None,
-            });
-            continue;
-        }
-        let filtered = pool_excluding_used(rough, pool, &chosen_so_far);
-        let (view, index_map) = match &filtered {
-            Some((view, index_map)) => (view, Some(index_map)),
-            None => (pool, None),
-        };
-        let mut last_error = None;
-        let mut picked = None;
-        for attempt in 1..=3 {
-            crate::execution_deadline::check()?;
-            match select_one_beat(
-                app,
-                access,
-                brief,
-                rough,
-                view,
-                &chosen_so_far,
-                repair,
-                attempt,
-                None,
-            ) {
-                Ok(mut selection) => {
-                    if selection
-                        .candidate_indexes
-                        .iter()
-                        .any(|index| *index >= view.candidates.len())
-                    {
-                        last_error = Some(format!(
-                            "Phase 3 candidateIndex is outside beat '{beat_id}' candidate pool."
-                        ));
-                        continue;
-                    }
-                    if let Some(index_map) = index_map {
-                        selection.candidate_indexes = selection
-                            .candidate_indexes
-                            .iter()
-                            .map(|index| index_map[*index])
-                            .collect();
-                    }
-                    picked = Some(selection);
-                    last_error = None;
-                    break;
+        {
+            Some(pool) if !pool.candidates.is_empty() => {
+                pending.push((slots.len(), pool));
+                slots.push(None);
+            }
+            found => {
+                if found.is_some() {
+                    log::info!("Phase 3 beat '{beat_id}': empty pool, uncovered");
                 }
-                Err(error) => {
-                    log::warn!("Phase 3 beat '{beat_id}' attempt {attempt} failed: {error}");
-                    if crate::provider::is_final_model_failure(&error) {
-                        return Err(error);
-                    }
-                    last_error = Some(error);
-                }
+                slots.push(Some(uncovered_selection(&beat_id)));
             }
         }
-        let selection = picked.unwrap_or_else(|| Phase3BeatSelection {
-            beat_id: beat_id.clone(),
-            candidate_indexes: Vec::new(),
-            uncovered: true,
-            narration: None,
-            match_level: None,
-        });
-        if last_error.is_some() {
-            log::warn!("Phase 3 beat '{beat_id}' exhausted local retries; leaving uncovered");
-        }
-        chosen_so_far.extend(refs_from_selection(rough, &selection));
-        selections.push(selection);
     }
+    // 各拍同时发请求，上下文只含修复轮保留的镜头；返回后按拍序分配，
+    // 撞上前面已定镜头的拍剔除已用候选后再同时补发，直到没有撞车。
+    while !pending.is_empty() {
+        let pools = pending.iter().map(|(_, pool)| *pool).collect::<Vec<_>>();
+        let picks =
+            select_beats_concurrently(app, access, brief, rough, &pools, &chosen_so_far, repair)?;
+        let mut collided = Vec::new();
+        for ((slot, pool), selection) in pending.into_iter().zip(picks) {
+            if selection_collides(rough, pool, &selection, &chosen_so_far) {
+                log::info!(
+                    "Phase 3 beat '{}' collides with an earlier beat's pick; reselecting",
+                    pool.beat_id
+                );
+                collided.push((slot, pool));
+                continue;
+            }
+            chosen_so_far.extend(refs_from_selection(rough, &selection));
+            slots[slot] = Some(selection);
+        }
+        pending = collided;
+    }
+    let selections = slots.into_iter().flatten().collect::<Vec<_>>();
     let payload = json!({ "selections": selections });
     let text = payload.to_string();
     let mut selected = assemble_phase3_selection(brief, rough, &text)?;
@@ -2796,6 +2747,141 @@ pub(crate) fn phase3_select_beats(
     assemble_phase3_selection(brief, rough, &payload)
 }
 
+fn uncovered_selection(beat_id: &str) -> Phase3BeatSelection {
+    Phase3BeatSelection {
+        beat_id: beat_id.to_owned(),
+        candidate_indexes: Vec::new(),
+        uncovered: true,
+        narration: None,
+        match_level: None,
+    }
+}
+
+/// 多拍同时选镜，结果按输入顺序返回；工作线程继承本次生成的截止时间。
+/// 任一拍遇到终态失败（鉴权、限流退避后仍失败等）整轮失败。
+fn select_beats_concurrently(
+    app: &AppHandle,
+    access: &ModelAccess,
+    brief: &str,
+    rough: &RoughStoryboard,
+    pools: &[&BeatCandidatePool],
+    already_selected: &[(String, String, String)],
+    repair: Option<&RepairPacket>,
+) -> Result<Vec<Phase3BeatSelection>, String> {
+    let deadline = crate::execution_deadline::current();
+    std::thread::scope(|scope| {
+        let workers = pools
+            .iter()
+            .map(|pool| {
+                scope.spawn(move || {
+                    let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
+                    select_beat_with_retries(app, access, brief, rough, pool, already_selected, repair)
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker.join().unwrap_or_else(|_| {
+                    Err("Phase 3 beat worker stopped unexpectedly.".to_owned())
+                })
+            })
+            .collect()
+    })
+}
+
+/// 单拍选镜：先剔除已用候选，格式不合格时最多重试 3 次，仍失败则该拍留空。
+fn select_beat_with_retries(
+    app: &AppHandle,
+    access: &ModelAccess,
+    brief: &str,
+    rough: &RoughStoryboard,
+    pool: &BeatCandidatePool,
+    already_selected: &[(String, String, String)],
+    repair: Option<&RepairPacket>,
+) -> Result<Phase3BeatSelection, String> {
+    let beat_id = &pool.beat_id;
+    let started = std::time::Instant::now();
+    let filtered = pool_excluding_used(rough, pool, already_selected);
+    let (view, index_map) = match &filtered {
+        Some((view, index_map)) => (view, Some(index_map)),
+        None => (pool, None),
+    };
+    let mut last_error = None;
+    let mut picked = None;
+    for attempt in 1..=3 {
+        crate::execution_deadline::check()?;
+        match select_one_beat(
+            app,
+            access,
+            brief,
+            rough,
+            view,
+            already_selected,
+            repair,
+            attempt,
+            None,
+        ) {
+            Ok(mut selection) => {
+                if selection
+                    .candidate_indexes
+                    .iter()
+                    .any(|index| *index >= view.candidates.len())
+                {
+                    last_error = Some(format!(
+                        "Phase 3 candidateIndex is outside beat '{beat_id}' candidate pool."
+                    ));
+                    continue;
+                }
+                if let Some(index_map) = index_map {
+                    selection.candidate_indexes = selection
+                        .candidate_indexes
+                        .iter()
+                        .map(|index| index_map[*index])
+                        .collect();
+                }
+                picked = Some(selection);
+                last_error = None;
+                break;
+            }
+            Err(error) => {
+                log::warn!("Phase 3 beat '{beat_id}' attempt {attempt} failed: {error}");
+                if crate::provider::is_final_model_failure(&error) {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+    log::info!(
+        "Phase 3 beat '{beat_id}' answered in {}ms",
+        started.elapsed().as_millis()
+    );
+    if last_error.is_some() {
+        log::warn!("Phase 3 beat '{beat_id}' exhausted local retries; leaving uncovered");
+    }
+    Ok(picked.unwrap_or_else(|| uncovered_selection(beat_id)))
+}
+
+/// 选中的候选已被前面拍占用（交叠、相似或素材复用到上限）即算撞车。
+/// 池里已无可用候选时不算撞车，沿用原结果交给 `collect_phase3_issues` 兜底，保证补发轮必然收敛。
+fn selection_collides(
+    rough: &RoughStoryboard,
+    pool: &BeatCandidatePool,
+    selection: &Phase3BeatSelection,
+    already_selected: &[(String, String, String)],
+) -> bool {
+    if selection.uncovered || selection.candidate_indexes.is_empty() {
+        return false;
+    }
+    let available = available_candidate_indexes(rough, pool, already_selected);
+    !available.is_empty()
+        && selection
+            .candidate_indexes
+            .iter()
+            .any(|index| !available.contains(index))
+}
+
 fn beats_named_in_repair(
     repair: Option<&RepairPacket>,
     rough: &RoughStoryboard,
@@ -2923,15 +3009,12 @@ fn selected_pool_source<'a>(
         })
 }
 
-/// 进入 Phase 3 前剔除与已选镜头交叠或相似的候选、以及复用已到上限的素材，
-/// 让模型只在真正可选的候选里挑，不再靠提示词硬规则 + 事后打回。
-/// 返回过滤后的池与「新序号 → 原序号」映射；无需剔除或全被剔除时返回 None，
-/// 调用方沿用原池，由 `collect_phase3_issues` 兜底。
-fn pool_excluding_used(
+/// 池内仍可选的候选序号：剔除与已选镜头交叠或相似的候选，以及复用已到上限的素材。
+fn available_candidate_indexes(
     rough: &RoughStoryboard,
     pool: &BeatCandidatePool,
     already_selected: &[(String, String, String)],
-) -> Option<(BeatCandidatePool, Vec<usize>)> {
+) -> Vec<usize> {
     let used = already_selected
         .iter()
         .filter_map(|selected| selected_pool_source(rough, selected))
@@ -2947,7 +3030,7 @@ fn pool_excluding_used(
     for (_, asset_id, _) in already_selected {
         *uses.entry(asset_id.as_str()).or_default() += 1;
     }
-    let kept = pool
+    pool
         .candidates
         .iter()
         .enumerate()
@@ -2958,7 +3041,19 @@ fn pool_excluding_used(
                     .any(|selected| sources_are_similar(selected, candidate))
         })
         .map(|(index, _)| index)
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// 进入 Phase 3 前剔除与已选镜头交叠或相似的候选、以及复用已到上限的素材，
+/// 让模型只在真正可选的候选里挑，不再靠提示词硬规则 + 事后打回。
+/// 返回过滤后的池与「新序号 → 原序号」映射；无需剔除或全被剔除时返回 None，
+/// 调用方沿用原池，由 `collect_phase3_issues` 兜底。
+fn pool_excluding_used(
+    rough: &RoughStoryboard,
+    pool: &BeatCandidatePool,
+    already_selected: &[(String, String, String)],
+) -> Option<(BeatCandidatePool, Vec<usize>)> {
+    let kept = available_candidate_indexes(rough, pool, already_selected);
     if kept.is_empty() || kept.len() == pool.candidates.len() {
         return None;
     }
