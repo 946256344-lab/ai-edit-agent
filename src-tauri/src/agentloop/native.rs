@@ -860,7 +860,15 @@ do not call render_preview or the linker again unless that specific function's o
 \n\
 AFTER A WRITE FUNCTION FAILS: If the failure is retryable, call another allowed function to recover before answering; \
 do not claim the artifact exists. If another function returns a structured failure, explain it to the user or \
-adjust with another allowed function — do not silently ignore it.\
+adjust with another allowed function — do not silently ignore it.\n\
+\n\
+ACROSS TURNS: Earlier turns keep only their text; their function arguments and outputs are not repeated. \
+The state snapshot is authoritative. If it shows 暂停于=generate_storyboard(storyboard_needs_user_decision), \
+the user's message answers that pause: call generate_storyboard again as they chose. \
+brief=null reuses the saved approved script and its cached voiceover; to keep the spoken length pass requestedDurationMs=null; \
+to reach the named duration pass the rewritten script as brief with requestedDurationMs. \
+Never report a storyboard, voiceover, preview, or editor draft as created unless a function in this turn returned it \
+or the snapshot shows it.\
 ".to_owned();
     prompt.push_str("\n\nAvailable tool directory:\n");
     prompt.push_str(tool_directory);

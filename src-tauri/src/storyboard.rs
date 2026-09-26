@@ -2610,16 +2610,38 @@ pub(crate) fn generate_storyboard_for_agent(
     media_options: Option<crate::media_options::MediaOptions>,
     requested_duration_ms: Option<i64>,
 ) -> Result<StoryboardVersion, String> {
-    generate_storyboard_internal(
-        app,
+    let result = generate_storyboard_internal(
+        app.clone(),
         project_id,
-        editing_task_id,
-        brief,
+        editing_task_id.clone(),
+        brief.clone(),
         voice_id.as_deref(),
         false,
         media_options,
         requested_duration_ms,
-    )
+    );
+    // 暂停等用户决定时，下一轮对话历史只有文字、看不到本轮工具参数；
+    // 把已确认（多已配音）的稿子存为任务 brief，下一轮 brief=null 即可按原稿续跑并复用配音缓存。
+    if let Err(error) = &result {
+        if error.starts_with("storyboard_needs_user_decision") {
+            if let Err(persist_error) = open_connection(&app)
+                .and_then(|connection| persist_task_brief(&connection, &editing_task_id, brief.trim()))
+            {
+                log::warn!("Paused storyboard brief could not be saved: {persist_error}");
+            }
+        }
+    }
+    result
+}
+
+fn persist_task_brief(connection: &Connection, editing_task_id: &str, brief: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
+            params![brief, now_millis(), editing_task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn generate_storyboard_internal(
@@ -3050,12 +3072,7 @@ fn generate_storyboard_internal(
         let _ =
             finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
     }
-    connection
-        .execute(
-            "UPDATE editing_tasks SET brief = ?1, title = CASE WHEN title IN ('新的剪辑任务', '新的剪辑会话', 'New edit session') THEN substr(?1, 1, 28) ELSE title END, updated_at = ?2 WHERE id = ?3",
-            params![brief, now_millis(), editing_task_id],
-        )
-        .map_err(|error| error.to_string())?;
+    persist_task_brief(&connection, &editing_task_id, brief)?;
     log::info!("Completed AI storyboard generation.");
     Ok(version)
 }

@@ -104,12 +104,30 @@ fn build_state_snapshot_with_capabilities(
         .ok_or_else(|| "State snapshot scope is invalid.".to_owned())?;
     let terminal_task = connection
         .query_row(
-            "SELECT status, updated_at FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2 AND status NOT IN ('queued', 'running') ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            "SELECT id, status, updated_at FROM agent_tasks WHERE project_id = ?1 AND editing_task_id = ?2 AND status NOT IN ('queued', 'running') ORDER BY updated_at DESC, created_at DESC LIMIT 1",
             params![project_id, editing_task_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .optional()
         .map_err(|_| "State snapshot Agent task status could not be read.".to_owned())?;
+    // 上一轮暂停等用户决定时，本轮历史只有文字；写明暂停在哪个工具，让模型把用户回答当作那次决定续跑。
+    let paused_step = match &terminal_task {
+        Some((task_id, status, _)) if status == "needs_clarification" => connection
+            .query_row(
+                "SELECT tool_name, error_code FROM agent_run_steps WHERE project_id = ?1 AND editing_task_id = ?2 AND agent_task_id = ?3 AND status = 'failed' AND error_code IS NOT NULL ORDER BY step_number DESC LIMIT 1",
+                params![project_id, editing_task_id, task_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|_| "State snapshot paused step could not be read.".to_owned())?,
+        _ => None,
+    };
 
     let kind_counts = grouped_counts(
         connection,
@@ -157,9 +175,12 @@ fn build_state_snapshot_with_capabilities(
 
     let total_assets: i64 = kind_counts.values.values().sum();
     let safe_brief = safe_brief(&brief);
-    let terminal = terminal_task
-        .map(|(status, updated_at)| format!("{}@{}", safe_task_status(&status), updated_at))
+    let mut terminal = terminal_task
+        .map(|(_, status, updated_at)| format!("{}@{}", safe_task_status(&status), updated_at))
         .unwrap_or_else(|| "无".to_owned());
+    if let Some((tool, code)) = paused_step {
+        terminal.push_str(&format!("; 暂停于={}({})", safe_code(&tool), safe_code(&code)));
+    }
     let storyboard_text = if storyboard.id.is_empty() {
         "无".to_owned()
     } else {
@@ -463,6 +484,20 @@ fn safe_task_status(status: &str) -> &'static str {
     }
 }
 
+/// 工具名与错误码是内部标识；只放行小写字母、数字和下划线，其余一律隐藏。
+fn safe_code(value: &str) -> &str {
+    if !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_')
+    {
+        value
+    } else {
+        "other"
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value {
         "是"
@@ -697,6 +732,43 @@ mod tests {
         assert!(snapshot.contains("storyboard: v2, shots=1, uncovered=0"));
         assert!(!snapshot.contains("shots=3"));
         assert!(!snapshot.contains("storyboard-old"));
+        drop(connection);
+        fs::remove_dir_all(root).expect("remove snapshot fixture directory");
+    }
+
+    #[test]
+    fn snapshot_names_the_tool_a_paused_run_stopped_on() {
+        let (connection, root) = fixture_connection();
+        seed_scope(&connection, "已确认的旁白稿");
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO conversations (id, project_id, editing_task_id, title, status, created_at, updated_at)
+                VALUES ('conversation-1', 'project-1', 'task-1', 'Conversation', 'ready', 1, 1);
+                INSERT INTO agent_tasks (id, project_id, editing_task_id, conversation_id, tool_name, status, input_json, result_json, created_at, updated_at)
+                VALUES ('paused-task', 'project-1', 'task-1', 'conversation-1', 'agent_loop', 'needs_clarification', '{}', '{}', 2, 2);
+                INSERT INTO agent_run_steps (id, project_id, editing_task_id, agent_task_id, step_number, tool_name, status, error_code, created_at, updated_at)
+                VALUES ('step-1', 'project-1', 'task-1', 'paused-task', 1, 'generate_storyboard', 'failed', 'storyboard_needs_user_decision', 2, 2);
+                "#,
+            )
+            .expect("seed paused run");
+        let snapshot = build_state_snapshot_with_capabilities(
+            &connection,
+            "project-1",
+            "task-1",
+            None,
+            SnapshotCapabilities {
+                model: true,
+                voiceover: true,
+                jamendo: false,
+            },
+            Some(root.clone()),
+        )
+        .expect("build paused snapshot");
+        assert!(snapshot.contains(
+            "最近终态=needs_clarification@2; 暂停于=generate_storyboard(storyboard_needs_user_decision)"
+        ));
+        assert!(!snapshot.contains("paused-task"));
         drop(connection);
         fs::remove_dir_all(root).expect("remove snapshot fixture directory");
     }
