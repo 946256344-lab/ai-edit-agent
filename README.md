@@ -36,7 +36,7 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 桌面环境依赖
 
-开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools。正式安装包构建会自动拉取并捆绑 FFmpeg/FFprobe、embeddable Python 3.12 与 `pyJianYingDraft`/`pycapcut`，以及 Tesseract 5.4.0 与英文 `eng` 数据；开发机也可分别运行 `npm run ffmpeg:fetch`、`npm run python:fetch`、`npm run tesseract:fetch`。安装包捆绑 ONNX Runtime 与模型小配置，**默认不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载（官方 + 国内镜像、断点续传）到本机数据目录并校验。需要离线开箱可用时，先 `npm run models:fetch`，再 `npm run tauri:build:full` 打完整包。验证正式运行时：先 `npm run tauri:build -- -b nsis`，再运行 `npm run ffmpeg:verify`、`npm run python:verify`、`npm run tesseract:verify`；Release 应用 IPC 验证使用 `node scripts/verify-release-python-app.mjs`。
+开发环境需要 Node.js、Rust/Cargo、Visual Studio 2022 C++ Build Tools。正式安装包构建前必须设置环境变量 `FELLOWCUT_GATEWAY_BASE_URL=https://<站点>/api/model`（编译进二进制，缺失或格式不对时 `npm run tauri:build` 直接失败；`--debug` 构建不检查）。正式安装包构建会自动拉取并捆绑 FFmpeg/FFprobe、embeddable Python 3.12 与 `pyJianYingDraft`/`pycapcut`，以及 Tesseract 5.4.0 与英文 `eng` 数据；开发机也可分别运行 `npm run ffmpeg:fetch`、`npm run python:fetch`、`npm run tesseract:fetch`。安装包捆绑 ONNX Runtime 与模型小配置，**默认不捆绑** BGE/CLIP 的 `model.onnx` 大文件：首次启动后由应用后台下载（官方 + 国内镜像、断点续传）到本机数据目录并校验。需要离线开箱可用时，先 `npm run models:fetch`，再 `npm run tauri:build:full` 打完整包。验证正式运行时：先 `npm run tauri:build -- -b nsis`，再运行 `npm run ffmpeg:verify`、`npm run python:verify`、`npm run tesseract:verify`；Release 应用 IPC 验证使用 `node scripts/verify-release-python-app.mjs`。
 
 剪映适配器优先调用随包 `python.exe`，不要把 `py -3` 传给 embeddable 解释器。更新 Jianying 的首页草稿注册表时，Jianying Pro 必须保持关闭。
 

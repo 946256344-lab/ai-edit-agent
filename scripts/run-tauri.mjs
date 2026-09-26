@@ -103,6 +103,19 @@ function ensureTesseractForBuild() {
   console.log('安装包：准备捆绑 Tesseract 与英文 OCR 数据')
 }
 
+// Release 版只读编译期的网关地址，缺失时所有模型调用都会失败，因此在构建前就拦下。
+function ensureGatewayForBuild() {
+  if (tauriArgs[0] !== 'build' || tauriArgs.includes('--debug')) return
+  const gateway = env.FELLOWCUT_GATEWAY_BASE_URL ?? ''
+  if (!/^https:\/\/[^/?#@\s]+\/api\/model\/?$/.test(gateway)) {
+    console.error('正式构建需要设置 FELLOWCUT_GATEWAY_BASE_URL，形如 https://<站点>/api/model。')
+    console.error(gateway ? `当前值无效：${gateway}` : '当前未设置。')
+    process.exit(1)
+  }
+  console.log(`安装包：模型网关 ${gateway}`)
+}
+
+ensureGatewayForBuild()
 ensureFfmpegForBuild()
 ensurePythonForBuild()
 ensureTesseractForBuild()

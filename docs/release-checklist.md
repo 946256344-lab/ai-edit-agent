@@ -38,7 +38,7 @@
 
 ### 1.1 构建与安装包
 
-- [ ] **P0 正式构建注入网关地址**。Release 版只读编译期的 `FELLOWCUT_GATEWAY_BASE_URL`（必须是 HTTPS），缺失时所有模型调用都会失败（`src-tauri/src/fellowcut_account.rs` `gateway_base_url`）。现状：`待确认`，`scripts/run-tauri.mjs` 里没有这一项，要在构建环境里设置，并写进构建步骤。
+- [ ] **P0 正式构建注入网关地址**。09-26：`scripts/run-tauri.mjs` 在正式构建前校验该变量，缺失或格式不对直接失败，构建步骤写进 `README.md`；仍待用正式域名构建并验收。Release 版只读编译期的 `FELLOWCUT_GATEWAY_BASE_URL`（必须是 HTTPS），缺失时所有模型调用都会失败（`src-tauri/src/fellowcut_account.rs` `gateway_base_url`）。现状：`待确认`，`scripts/run-tauri.mjs` 里没有这一项，要在构建环境里设置，并写进构建步骤。
   - 验收：用 Release 包登录后发一条消息，确认请求打到生产网关。
 - [ ] **P0 随包组件取齐并校验**：`npm run ffmpeg:fetch`、`python:fetch`、`tesseract:fetch`，按需 `models:fetch`；构建后运行 `ffmpeg:verify`、`python:verify`、`tesseract:verify`、`tauri:verify`。现状：流程在 09-20 / 09-23 验证过，之后有大量改动，需要重跑。
 - [ ] **P0 版本号**：`tauri.conf.json` 当前为 `0.1.2`。确认首发版本号，打 git tag，保留安装包和对应提交，以便回滚。
