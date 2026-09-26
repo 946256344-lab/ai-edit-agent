@@ -113,22 +113,22 @@ fn build_state_snapshot_with_capabilities(
 
     let kind_counts = grouped_counts(
         connection,
-        "SELECT kind, COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY kind",
+        "SELECT kind, COUNT(*) FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY kind",
         project_id,
     )?;
     let technical_counts = grouped_counts(
         connection,
-        "SELECT analysis_status, COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY analysis_status",
+        "SELECT analysis_status, COUNT(*) FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY analysis_status",
         project_id,
     )?;
     let visual_counts = grouped_counts(
         connection,
-        "SELECT coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued'), COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND kind IN ('video', 'image') AND analysis_status = 'ready' GROUP BY coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued')",
+        "SELECT coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued'), COUNT(*) FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND kind IN ('video', 'image') AND analysis_status = 'ready' GROUP BY coalesce(json_extract(metadata_json, '$.visualAnalysisStatus'), 'queued')",
         project_id,
     )?;
     let health_counts = grouped_counts(
         connection,
-        "SELECT coalesce(health.status, 'unchecked'), COUNT(*) FROM assets LEFT JOIN asset_source_health health ON health.asset_id = assets.id WHERE assets.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY coalesce(health.status, 'unchecked')",
+        "SELECT coalesce(health.status, 'unchecked'), COUNT(*) FROM assets LEFT JOIN asset_source_health health ON health.asset_id = assets.id WHERE coalesce(json_extract(assets.metadata_json, '$.libraryRemoved'), 0) = 0 AND assets.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) GROUP BY coalesce(health.status, 'unchecked')",
         project_id,
     )?;
 
@@ -547,6 +547,15 @@ mod tests {
             "INSERT INTO asset_source_health (asset_id, project_id, status, checked_at, updated_at) VALUES (?1, 'project-1', 'online', 1, 1)",
             params![secret_uuid],
         ).expect("seed asset health");
+        // 已从素材库移除的素材不计入快照，口径与素材库列表一致。
+        connection.execute(
+            "INSERT INTO assets (id, project_id, kind, display_name, source_reference, analysis_status, metadata_json, created_at, updated_at) VALUES ('removed-asset', 'project-1', 'video', 'removed.mp4', 'D:/removed.mp4', 'ready', ?1, 1, 1)",
+            params![json!({"visualAnalysisStatus":"ready","libraryRemoved":true}).to_string()],
+        ).expect("seed removed asset");
+        connection.execute(
+            "INSERT INTO asset_source_health (asset_id, project_id, status, checked_at, updated_at) VALUES ('removed-asset', 'project-1', 'missing', 1, 1)",
+            [],
+        ).expect("seed removed asset health");
 
         let snapshot = build_state_snapshot_with_capabilities(
             &connection,
@@ -578,7 +587,11 @@ mod tests {
         assert!(snapshot.contains("total=1"));
         assert!(snapshot.contains("technical(ready=1"));
         assert!(snapshot.contains("visual(ready=1"));
-        assert!(snapshot.contains("源健康: online=1"));
+        assert!(snapshot.contains("源健康: online=1,missing=0"));
+        let health = crate::assets::get_asset_health_summary_for_agent(&connection, "project-1")
+            .expect("read agent health summary");
+        assert_eq!(health["total"], 1);
+        assert_eq!(health["missing"], 0);
         assert!(snapshot.contains("brief=\"[含本地引用或内部标识，已隐藏]\""));
         drop(connection);
         fs::remove_dir_all(root).expect("remove snapshot fixture directory");

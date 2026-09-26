@@ -9,6 +9,14 @@ use std::{fs, path::Path, thread};
 use tauri::AppHandle;
 use uuid::Uuid;
 
+/// 与素材库列表同一口径：项目可访问且未从素材库移除的素材 ID 子查询（参数 ?1 为项目 ID）。
+/// 已移除素材只保留历史引用，不计入健康扫描与摘要，避免模型把它们当作当前素材。
+macro_rules! visible_project_assets {
+    () => {
+        "(SELECT access.asset_id FROM project_asset_access access JOIN assets visible ON visible.id = access.asset_id WHERE access.project_id = ?1 AND coalesce(json_extract(visible.metadata_json, '$.libraryRemoved'), 0) = 0)"
+    };
+}
+
 pub(crate) fn modified_millis(metadata: &fs::Metadata) -> Option<i64> {
     metadata
         .modified()
@@ -64,7 +72,7 @@ fn run_asset_health_scan(
     let timestamp = now_millis();
     if connection.execute("UPDATE agent_tasks SET status = 'running', updated_at = ?1 WHERE id = ?2 AND tool_name = 'scan_asset_health' AND status = 'queued'", params![timestamp, task_id]).map_err(|error| error.to_string())? == 0 { return Ok(()); }
     let rows = {
-        let mut statement = connection.prepare("SELECT a.id, a.source_reference, h.baseline_size, h.baseline_modified_ms FROM assets a LEFT JOIN asset_source_health h ON h.asset_id = a.id WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) ORDER BY a.created_at, a.id").map_err(|error| error.to_string())?;
+        let mut statement = connection.prepare(concat!("SELECT a.id, a.source_reference, h.baseline_size, h.baseline_modified_ms FROM assets a LEFT JOIN asset_source_health h ON h.asset_id = a.id WHERE a.id IN ", visible_project_assets!(), " ORDER BY a.created_at, a.id")).map_err(|error| error.to_string())?;
         let rows = statement
             .query_map(params![project_id], |row| {
                 Ok((
@@ -156,42 +164,42 @@ pub fn get_asset_health_scan_summary(
     let connection = open_connection(&app)?;
     let total: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
+            concat!("SELECT COUNT(*) FROM assets WHERE id IN ", visible_project_assets!()),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unchecked: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets a WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
+            concat!("SELECT COUNT(*) FROM assets a WHERE a.id IN ", visible_project_assets!(), " AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let online: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'online'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'online'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let missing: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'missing'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'missing'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let changed: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'changed'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'changed'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unreadable: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'unreadable'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'unreadable'"),
             params![project_id],
             |row| row.get(0),
         )
@@ -237,42 +245,42 @@ pub(crate) fn get_asset_health_summary_for_agent(
 ) -> Result<Value, String> {
     let total: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets WHERE id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
+            concat!("SELECT COUNT(*) FROM assets WHERE id IN ", visible_project_assets!()),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unchecked: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM assets a WHERE a.id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)",
+            concat!("SELECT COUNT(*) FROM assets a WHERE a.id IN ", visible_project_assets!(), " AND NOT EXISTS (SELECT 1 FROM asset_source_health h WHERE h.asset_id = a.id)"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let online: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'online'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'online'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let missing: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'missing'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'missing'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let changed: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'changed'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'changed'"),
             params![project_id],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let unreadable: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND status = 'unreadable'",
+            concat!("SELECT COUNT(*) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND status = 'unreadable'"),
             params![project_id],
             |row| row.get(0),
         )
@@ -280,7 +288,7 @@ pub(crate) fn get_asset_health_summary_for_agent(
     let failure_count = missing + changed + unreadable;
     let last_checked_at: Option<i64> = connection
         .query_row(
-            "SELECT MAX(checked_at) FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1)",
+            concat!("SELECT MAX(checked_at) FROM asset_source_health WHERE asset_id IN ", visible_project_assets!()),
             params![project_id],
             |row| row.get(0),
         )
@@ -295,7 +303,7 @@ pub(crate) fn get_asset_health_summary_for_agent(
     let reason_counts: Vec<Value> = {
         let mut statement = connection
             .prepare(
-                "SELECT reason_code, COUNT(*) as count FROM asset_source_health WHERE asset_id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?1) AND reason_code IS NOT NULL GROUP BY reason_code",
+                concat!("SELECT reason_code, COUNT(*) as count FROM asset_source_health WHERE asset_id IN ", visible_project_assets!(), " AND reason_code IS NOT NULL GROUP BY reason_code"),
             )
             .map_err(|error| error.to_string())?;
         let rows = statement
