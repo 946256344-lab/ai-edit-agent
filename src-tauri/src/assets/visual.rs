@@ -1020,7 +1020,7 @@ struct VisualRequestUnit {
     image: Vec<u8>,
 }
 
-/// 整段多帧拼成 3×2 网格，每格标编号与源时间；拼不出或只有一帧时退回单帧。
+/// 整段多帧拼成「中间帧大图 + 其余帧小图」，每帧标编号与源时间；拼不出或只有一帧时退回单帧。
 fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
     if unit.frames.len() >= 2 {
         let labeled = unit
@@ -1036,9 +1036,11 @@ fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
             .collect::<Vec<_>>();
         let output = Path::new(&unit.frames[0].1)
             .with_file_name(format!("visual_grid_{}.jpg", unit.segment_id));
-        if let Some(grid) =
-            crate::storyboard::multimodal::compose_labeled_frame_grid(&labeled, &output, 3)
-        {
+        if let Some(grid) = crate::storyboard::multimodal::compose_feature_frame_sheet(
+            &labeled,
+            labeled.len() / 2,
+            &output,
+        ) {
             if let Ok(bytes) = fs::read(grid) {
                 return Some((bytes, unit.frames.iter().map(|(time, _)| *time).collect()));
             }
@@ -1048,14 +1050,14 @@ fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
     Some((bytes, unit.time_ms.into_iter().collect()))
 }
 
-const VISUAL_SEGMENT_PROMPT: &str = "The image shows ONE shot from a video. When it is a grid, its cells are frames sampled across the shot in time order, left to right then top to bottom, and each cell is labeled with its frame number and source time in seconds. Describe the shot as a whole and how it changes over time. \
+const VISUAL_SEGMENT_PROMPT: &str = "The image shows ONE shot from a video. When it holds several frames, they are sampled across the shot: the large frame is the middle of the shot and the small frames are the other moments. Every frame is tagged in its top-left corner with its frame number (numbers follow time order) and source time in seconds. Use the large frame for detail and the small frames for how the shot changes. Describe the shot as a whole and how it changes over time. \
 Return JSON {assets:[{assetId,segmentId,caption,narrativeRole,scene,subjects,actions,products,shotType,cameraMotion,changes,subjectPositions,focus,qualityNotes,onScreenText,textLanguages,brandLogos,crowd,exhibition,bestRange}]}. \
 caption: one sentence of what stays visible across the frames. narrativeRole: in your own words, the story job this shot could do in an edited video. scene: a short place phrase. subjects, actions, products: short visible words. \
 shotType: wide | medium | close-up | detail. cameraMotion: static | pan | tilt | handheld | zoom | tracking. \
 changes: list of {startSec,endSec,description} for what changes over time: an action starting or ending, people or objects entering or leaving, camera moves, focus changes. Use the labeled source times. Empty list if nothing changes or there is only one frame. \
-subjectPositions: one {timeSec,position} per frame for the main subject; position is left | center-left | center | center-right | right of the full frame width. \
+subjectPositions: one {timeSec,position} for the main subject in the large frame; position is left | center-left | center | center-right | right of that frame's full width. \
 focus: sharp | shallow_depth_of_field (subject sharp, background blurred on purpose) | out_of_focus (the intended subject itself is blurred) | motion_blur. qualityNotes: only other problems such as shaky, too dark, overexposed, low resolution. \
-onScreenText: short examples of words, signs, screens or captions that appear in the footage itself, empty if none. The black number-and-seconds tags in the top-left corner of each cell are added by us, not part of the footage: never report them as text. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
+onScreenText: short examples of words, signs, screens or captions that appear in the footage itself, empty if none. The black number-and-seconds tags in the top-left corner of each frame are added by us, not part of the footage: never report them as text. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
 bestRange: {startSec,endSec,reason} for the most usable continuous part of the shot for an edit. \
 Match assetId and segmentId to the supplied label. Empty fields are allowed. Do not infer facts that are not visible.";
 

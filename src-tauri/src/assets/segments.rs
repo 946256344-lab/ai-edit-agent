@@ -30,8 +30,12 @@ const FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 /// 一次 FFmpeg 最多抽的帧数：每帧一个快速定位的输入，过多会拉长命令行和单进程内存。
 const FRAMES_PER_FFMPEG: usize = 12;
 const MAX_KEYFRAMES_FOR_GRID: usize = 8;
-/// 每段抽样帧数：清晰度评分与整段画面识别共用。
-pub(crate) const SEGMENT_SAMPLE_FRAMES: usize = 6;
+/// 切点核实帧与清晰度评分用的宽度。
+const QUALITY_FRAME_WIDTH: u32 = 320;
+/// 段内样本帧宽度：整段识别要放大其中一帧看细节，按大图尺寸抽。
+const SAMPLE_FRAME_WIDTH: u32 = 960;
+/// 每段抽样帧数：清晰度评分与整段画面识别共用（识别图为 1 帧大图 + 4 帧小图）。
+pub(crate) const SEGMENT_SAMPLE_FRAMES: usize = 5;
 const CUT_PROBE_OFFSET_MS: i64 = 250;
 /// 与 Phase 2 去似同一阈值：切点两侧仍像同一画面则丢掉该切。
 const CUT_VERIFY_SIMILAR_COSINE: f64 = 0.92;
@@ -264,14 +268,18 @@ fn normalize_laplacian_variance(variance: f64) -> f64 {
     (variance / (variance + 500.0)).clamp(0.0, 1.0)
 }
 
+/// 清晰度按 320 宽校准（`normalize_laplacian_variance`），更大的样本帧先缩到 320 宽再算。
 fn frame_quality_score(path: &Path) -> Option<f64> {
-    image::open(path)
-        .ok()
-        .and_then(|frame| laplacian_variance(&frame.to_luma8()))
-        .map(normalize_laplacian_variance)
+    let frame = image::open(path).ok()?;
+    let frame = if frame.width() > QUALITY_FRAME_WIDTH {
+        frame.resize(QUALITY_FRAME_WIDTH, u32::MAX, image::imageops::FilterType::Triangle)
+    } else {
+        frame
+    };
+    laplacian_variance(&frame.to_luma8()).map(normalize_laplacian_variance)
 }
 
-fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
+fn extract_frame(source: &Path, time_ms: i64, destination: &Path, width: u32) -> bool {
     let time_seconds = (time_ms.max(0) as f64) / 1000.0;
     let mut command = hidden_command("ffmpeg");
     command
@@ -279,7 +287,7 @@ fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
         .args(media_open_args())
         .args(["-threads", "1", "-ss", &format!("{time_seconds:.3}"), "-i"])
         .arg(source)
-        .args(["-frames:v", "1", "-vf", "scale=320:-2"])
+        .args(["-frames:v", "1", "-vf", &format!("scale={width}:-2")])
         .arg(destination);
     match run_hidden_command_with_timeout(&mut command, FRAME_FFMPEG_TIMEOUT) {
         Ok(_) => destination.is_file(),
@@ -302,7 +310,7 @@ fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
 
 /// 同一条素材的多帧用一次 FFmpeg 抽完（每个时间点一个 `-ss` 快速定位的输入，各输出一帧），
 /// 不再每帧启动一次进程。整批失败或个别缺帧时逐帧补抽，结果与逐帧抽取一致。
-fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
+fn extract_frames(source: &Path, requests: &[(i64, PathBuf)], width: u32) -> Vec<bool> {
     let mut extracted = vec![false; requests.len()];
     for (chunk_index, chunk) in requests.chunks(FRAMES_PER_FFMPEG).enumerate() {
         let mut command = hidden_command("ffmpeg");
@@ -319,7 +327,7 @@ fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
         for (input, (_, destination)) in chunk.iter().enumerate() {
             command
                 .args(["-map", &format!("{input}:v:0")])
-                .args(["-frames:v", "1", "-vf", "scale=320:-2"])
+                .args(["-frames:v", "1", "-vf", &format!("scale={width}:-2")])
                 .arg(destination);
         }
         let timeout = FRAME_FFMPEG_TIMEOUT + Duration::from_secs(5 * chunk.len() as u64);
@@ -340,14 +348,14 @@ fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
     }
     for ((time_ms, destination), done) in requests.iter().zip(extracted.iter_mut()) {
         if !*done {
-            *done = extract_frame(source, *time_ms, destination);
+            *done = extract_frame(source, *time_ms, destination, width);
         }
     }
     extracted
 }
 
-/// 每段固定取 6 帧：把段均分 6 份取各份中点，避开切点两侧的过渡帧；极短段去重后可少于 6 帧。
-/// 这 6 帧既算清晰度，也拼成网格做整段画面识别。
+/// 每段固定取 5 帧：把段均分 5 份取各份中点，避开切点两侧的过渡帧；极短段去重后可少于 5 帧。
+/// 这 5 帧既算清晰度，也拼成「中间帧大图 + 其余 4 帧小图」做整段画面识别。
 fn sample_times_for_segment(start_ms: i64, end_ms: i64) -> Vec<i64> {
     let duration = (end_ms - start_ms).max(0);
     if duration == 0 {
@@ -392,7 +400,7 @@ fn verify_hard_cuts(
             ]
         })
         .collect::<Vec<_>>();
-    let extracted_frames = extract_frames(source, &requests);
+    let extracted_frames = extract_frames(source, &requests, QUALITY_FRAME_WIDTH);
     let mut pairs: Vec<(i64, Vec<u8>, Vec<u8>)> = Vec::new();
     for (index, (cut, _, _)) in probes.iter().enumerate() {
         let (_, before_path) = &requests[index * 2];
@@ -499,7 +507,7 @@ pub(crate) fn analyze_video_segments(
         .flat_map(|(_, _, _, requests)| requests.iter().cloned())
         .collect::<Vec<_>>();
     let sampled_frames = all_requests.len();
-    let mut extracted = extract_frames(source, &all_requests).into_iter();
+    let mut extracted = extract_frames(source, &all_requests, SAMPLE_FRAME_WIDTH).into_iter();
     let mut segments = Vec::with_capacity(plans.len());
     let mut midpoint_keyframes = Vec::new();
     for (segment_id, start_ms, end_ms, requests) in plans {
@@ -599,15 +607,15 @@ mod tests {
     }
 
     #[test]
-    fn sample_times_take_six_centered_frames_per_segment() {
+    fn sample_times_take_five_centered_frames_per_segment() {
         assert_eq!(
             sample_times_for_segment(0, 6_000),
-            vec![500, 1_500, 2_500, 3_500, 4_500, 5_500]
+            vec![600, 1_800, 3_000, 4_200, 5_400]
         );
         let long = sample_times_for_segment(10_000, 130_000);
         assert_eq!(long.len(), SEGMENT_SAMPLE_FRAMES);
-        assert_eq!(long.first(), Some(&20_000));
-        assert_eq!(long.last(), Some(&120_000));
+        assert_eq!(long.first(), Some(&22_000));
+        assert_eq!(long.last(), Some(&118_000));
         assert_eq!(sample_times_for_segment(0, 3), vec![0, 1, 2]);
     }
 

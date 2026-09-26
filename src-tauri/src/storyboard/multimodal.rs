@@ -182,36 +182,71 @@ pub(crate) fn compose_timed_frame_grid(
     output_path.is_file().then(|| output_path.to_path_buf())
 }
 
-/// 拼网格并在每格左上角标出文字（如「3 12.4s」），供模型按编号和源时间引用帧。
-/// 只画数字、小数点、空格、`s` 和 `#`，用内置 3×5 点阵，不引入字体依赖。
-pub(crate) fn compose_labeled_frame_grid(
+/// 整段识别用图：`feature` 那帧放大在左，其余帧（最多 4 帧）按时间顺序放在右侧，每帧左上角标「编号 时间」。
+/// 横拍：大图 960×540 + 右侧一列 4 张 320×180，画布 1280×720；竖拍：大图 405×720 + 右侧 2×2 张 180×320。
+/// 各帧按原比例缩放进格子、不足处留黑，非 16:9 素材也不变形。角标只画数字、小数点、空格和 `s`，不引入字体依赖。
+pub(crate) fn compose_feature_frame_sheet(
     frames: &[(PathBuf, String)],
+    feature: usize,
     output_path: &Path,
-    columns: u32,
 ) -> Option<PathBuf> {
-    if frames.is_empty() || columns == 0 {
-        return None;
-    }
-    const CELL_W: u32 = 320;
-    const CELL_H: u32 = 180;
-    let columns = columns.min(frames.len() as u32);
-    let rows = (frames.len() as u32).div_ceil(columns);
-    let mut grid: RgbImage =
-        ImageBuffer::from_pixel(columns * CELL_W, rows * CELL_H, Rgb([0, 0, 0]));
-    for (index, (path, label)) in frames.iter().enumerate() {
+    let feature_frame = frames.get(feature)?;
+    let big = image::open(&feature_frame.0).ok()?.to_rgb8();
+    let portrait = big.height() > big.width();
+    let (big_w, big_h, small_w, small_h, small_cols) = if portrait {
+        (405, 720, 180, 320, 2)
+    } else {
+        (960, 540, 320, 180, 1)
+    };
+    let others = frames
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != feature)
+        .take(4)
+        .collect::<Vec<_>>();
+    let small_rows = (others.len() as u32).div_ceil(small_cols).max(1);
+    let width = big_w + if others.is_empty() { 0 } else { small_w * small_cols };
+    let height = big_h.max(small_h * small_rows);
+    let mut sheet: RgbImage = ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0]));
+    let mut big_cell = fit_into_box(&big, big_w, big_h);
+    draw_cell_label(&mut big_cell, &feature_frame.1);
+    image::imageops::replace(&mut sheet, &big_cell, 0, ((height - big_h) / 2).into());
+    for (position, (_, (path, label))) in others.iter().enumerate() {
         let img = image::open(path).ok()?.to_rgb8();
-        let mut cell =
-            image::imageops::resize(&img, CELL_W, CELL_H, image::imageops::FilterType::Triangle);
+        let mut cell = fit_into_box(&img, small_w, small_h);
         draw_cell_label(&mut cell, label);
-        let col = (index as u32) % columns;
-        let row = (index as u32) / columns;
-        image::imageops::replace(&mut grid, &cell, (col * CELL_W).into(), (row * CELL_H).into());
+        let column = position as u32 % small_cols;
+        let row = position as u32 / small_cols;
+        image::imageops::replace(
+            &mut sheet,
+            &cell,
+            (big_w + column * small_w).into(),
+            (row * small_h).into(),
+        );
     }
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).ok()?;
     }
-    grid.save(output_path).ok()?;
+    sheet.save(output_path).ok()?;
     output_path.is_file().then(|| output_path.to_path_buf())
+}
+
+/// 按原比例缩放进 `width`×`height` 的黑底格子并居中。
+fn fit_into_box(img: &RgbImage, width: u32, height: u32) -> RgbImage {
+    let scale = (width as f64 / img.width().max(1) as f64)
+        .min(height as f64 / img.height().max(1) as f64);
+    let resized_w = ((img.width() as f64 * scale).round() as u32).clamp(1, width);
+    let resized_h = ((img.height() as f64 * scale).round() as u32).clamp(1, height);
+    let resized =
+        image::imageops::resize(img, resized_w, resized_h, image::imageops::FilterType::Triangle);
+    let mut cell: RgbImage = ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0]));
+    image::imageops::replace(
+        &mut cell,
+        &resized,
+        ((width - resized_w) / 2).into(),
+        ((height - resized_h) / 2).into(),
+    );
+    cell
 }
 
 fn glyph(character: char) -> Option<[u8; 5]> {
@@ -229,7 +264,6 @@ fn glyph(character: char) -> Option<[u8; 5]> {
         '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
         '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
         's' => [0b000, 0b111, 0b100, 0b011, 0b111],
-        '#' => [0b101, 0b111, 0b101, 0b111, 0b101],
         ' ' => [0; 5],
         _ => return None,
     })
