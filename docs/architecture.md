@@ -150,7 +150,7 @@ Project (项目)
 
 **每个会话完全独立，包括产物和版本号。** UI「剪辑会话」就是 editing task；新建会话时路由事务同时创建剪辑任务和它的 conversation，两者一一对应。storyboard、timeline、preview 与编辑器交付都只属于所在任务；产物的查询和创建按 `(project_id, editing_task_id)` 限定（时间线没有任务列，经 `storyboard_version_id` 关联到任务），不读取同项目其他会话的产物，也不依赖 `conversation_id`。版本号也按会话编号：每个会话的第一版故事版和时间线都是 v1；`reselect_shots` / `refine_shot_ranges` 的派生版本、工作台保存和各类改轨工具生成的新时间线，都在所属会话内累加。`version_number` 列受建表时 `UNIQUE(project_id, version_number)` 约束，只作项目内序号用于唯一和排序；界面与 Agent 看到的是 schema v20 追加的 `task_version_number`。旧版本该列为空时回退到原序号，不回填、不改历史编号，旧会话之后的新版本从该会话已有的最大号往后接。
 
-项目级只共享三样东西，都不算会话产物：素材；预览中间文件 `previews/cache/<project_id>`，按源文件、区间和画面参数的哈希复用，成片预览仍写在 `previews/<timeline_id>/`；选镜打分里的「新鲜度」，参考同项目各任务最新时间线用过的素材次数，只影响候选排序。编辑器草稿名为「项目名-随机后缀」，与时间线一一对应，不跨会话复用。`delete_editing_session` 在明确确认后级联删除该任务下的全部 conversation、消息、Agent 审计、storyboard/timeline 与本地 preview，不删除项目素材。
+项目级只共享三样东西，都不算会话产物：素材；预览中间文件 `previews/cache/<project_id>`，按源文件、区间和画面参数的哈希复用，成片预览仍写在 `previews/<timeline_id>/`；选镜打分里的「新鲜度」，参考同项目各任务最新时间线用过的素材次数，只影响候选排序。这是有意保留的项目级规则，见 `docs/decisions.md`。编辑器草稿名为「项目名-随机后缀」，与时间线一一对应，不跨会话复用。`delete_editing_session` 在明确确认后级联删除该任务下的全部 conversation、消息、Agent 审计、storyboard/timeline 与本地 preview，不删除项目素材。
 
 **会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。Task Resolver 只把当前激活剪辑任务的快照交给路由模型，不得读取或提示同一项目内其他任务的 title、brief 或 `active_subgoal`；语言不能切换到其他已有任务，用户在 UI 中激活另一任务后，后续消息按 `continue_current` 归属。
 
