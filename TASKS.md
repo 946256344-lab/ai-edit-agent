@@ -2,6 +2,8 @@
 
 ## 当前任务窗口
 
+- [x] 已合并（2026-09-26）：FellowCut 账号与模型网关分支并入 Voycut 主线。对外界面使用 Voycut；`sign_in_fellowcut`、`FELLOWCUT_GATEWAY_BASE_URL`、凭据名等既有内部标识保持不变。网站仍为独立仓库，需单独跟进更名及正式网关发布。
+
 - [ ] implemented_unverified（2026-09-26，claude/product-naming-voycut-3663a1）：故事版版本下拉移到预览面板标题行右侧；标题下只留时长与镜头数（去掉时间线版本号）；预览状态不再显示「预览已就绪」等平稳状态。tsc、lint、i18n 通过；待桌面确认。见 docs/changes/2026-09-26-cut-heading-meta-row.md。
 - [ ] implemented_unverified（2026-09-25，claude/p2-p3-quota-allocation-939155）：Phase 3 网格上限跟候选池走。弱匹配扩池到 12 条时，后 3 条过去只有文字卡；现在池内每条都附网格，上限等于 Phase 2 最大池，提示词写实际附图数。cargo check 通过；待真实弱匹配回合验收。见 docs/changes/2026-09-25-phase3-grid-follows-pool.md。
 - [ ] implemented_unverified（2026-09-26，claude/send-error-real-cause）：发送失败显示真实原因。任务归属的模型请求失败带稳定码前缀（`provider_timeout` 等），前端 `describeSendError` 按码给出超时、连不上、凭据被拒、限流、服务端错误等具体提示，兜底附脱敏原因摘录，不再只说「无法准备当前剪辑任务」。cargo check、lint、tsc、i18n 通过；待桌面实测。见 docs/changes/2026-09-26-send-error-real-cause.md。
@@ -12,8 +14,14 @@
 - [ ] implemented_unverified（2026-09-25，claude/product-naming-voycut-3663a1）：界面改为 Voycut 品牌风格。靛紫主色与品牌渐变、冷灰画布上的白色面板、主操作改靛紫、选中态淡紫底或紫色光晕、侧栏与助手头像用 `BrandMark` 占位标志、素材库入口显示素材数。tsc、lint、i18n、文档同步通过，开发版截图核对主要页面与两种窗口尺寸；待正式图标与真实回合（处理中、镜头替换）验收。见 docs/changes/2026-09-25-voycut-visual-style.md。
 - [ ] implemented_unverified（2026-09-25，claude/keen-driscoll-de8c99）：故事版切换显示派生版来源。`StoryboardVersion` 加可选 `derivedFromVersionId` / `changedBeatIds`，下拉项显示「v5（改自 v4，第 3 拍）」；缺字段按普通版本显示。选择器移入 `StoryboardVersionPicker` 组件。lint、tsc（本次文件）、i18n、文档同步检查通过；后端 `reselect_shots` / `refine_shot_ranges` 落地后待真实派生版验收。见 docs/changes/2026-09-25-derived-storyboard-version-label.md。
 - [ ] implemented_unverified（2026-09-25，claude/laughing-stonebraker-eeb90a）：替换镜头「重新推荐」的 Phase 2 召回补齐语义/CLIP 向量、素材使用次数与按当前时间线的每拍时长，并为池内素材补 CLIP 图像向量；编码失败降级不挡推荐。cargo check 通过；待真实桌面验收排序效果。见 docs/changes/2026-09-25-shot-replacement-recall-signals.md。
+- [ ] 部分已验证（2026-09-25，codex/fellowcut-auth-trial）：桌面模型请求接入 FellowCut 网关；公开构建无网关时失败封闭。合入最新 master 后真实 Tauri 开发版经受保护的 Vercel 预览网关得到 HTTP 200 与模型回复；修复工具白名单遗漏后，只读请求显示「完成」。本机已分析素材生成 3 镜头、约 8 秒粗剪预览，换镜保存为第 2 版并重新生成可播放 MP4；最终模型说明请求失败使粗剪回合仍标「部分完成」。素材导入、图像批量请求、剪映交付及正式安装包仍待验收。见 `docs/changes/2026-09-25-fellowcut-model-gateway.md`。
+
+- [ ] 待对齐（2026-09-25）：素材库显示 95 条可见素材，Agent 健康摘要统计 102 条可访问资产，其中 7 条已标记从素材库移除；健康摘要需沿用素材库的过滤口径，避免模型把历史移除素材计入当前项目。
+
+- [ ] 部分已验证（2026-09-25，codex/fellowcut-auth-trial）：桌面端接入 FellowCut 邮箱密码登录与 Firestore 试用资格只读显示。真实开发版打开了旧本机项目和剪辑会话；用户提供截图显示测试账号已登录、邮箱已验证、试用中，有效期为 2026-10-02 17:31:35。关闭后重新启动，顶栏恢复显示同一测试账号及旧项目；退出登录和安装包仍待验收。模型额度与付费控制留待服务端网关实施。
+
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：前端精修浅色改版。按确认设计稿改为苹果白与系统字体，样式收进 `src/index.css` 设计变量与 `src/styles/`，删掉 `App.css` 旧深色规则；会话改单色竖屏图标，处理进度默认收成一行，预览改浅色底与按镜头分段的进度条、6 格镜头条。开发版截图核对对话、预览、素材库、设置弹窗与三种窗口尺寸；处理中动效与镜头替换面板待真实回合验收。见 docs/changes/2026-09-25-refined-light-ui.md。
-- [ ] 待修（2026-09-25）：`npm run harness:check` 在 master 上已失败：`src/App.tsx` 有 15 个 `useState`，超过预算 14（14ad3d7 新增 `pendingUserMessage`）。需把发送相关状态移入 controller，不应提高预算。
+- [x] 已修复（2026-09-25，codex/fellowcut-auth-trial）：合并新版界面时将临时用户消息状态移入 controller，恢复 `App.tsx` 的架构预算；未提高预算。
 - [ ] implemented_unverified（2026-09-25，claude/frontend-ui-ux-optimization-1c61c6）：助手消息按 Markdown 渲染（`react-markdown` + `remark-gfm`），保留单个换行；不执行原始 HTML、不加载远程图片，外部链接交给系统浏览器。仿真回复渲染与链接不跳转已核对；真实桌面点链接待验收。见 docs/changes/2026-09-25-message-markdown.md。
 - [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第二步。启动检查、模型下载、交付结果、编辑器名称、连接状态、候选不可用原因随界面语言显示；Rust 给 `messageKey`/`messageParams`，中文原文作回落。发送时带 `uiLocale`，Agent 回复与系统兜底文案跟随界面语言，成片语言不变。修复英文默认会话名不被首条消息改名。cargo check、新回归测试、tsc、lint、harness 通过；待真实桌面验收。见 docs/changes/2026-09-25-backend-text-i18n.md。
 - [ ] implemented_unverified（2026-09-25，claude/bilingual-chinese-english-c8ed75）：中英双语第一步。前端文案收进 `src/lib/i18n` 类型化词典（英文漏键即编译失败），侧栏切换语言，偏好存本机，首次按系统语言；时间与排序跟随语言；`harness:check` 拦截组件里新写死的中文。tsc、lint、harness 通过，浏览器模拟 IPC 下中英切换与主要页面已看过；待真实桌面验收。见 docs/changes/2026-09-25-ui-i18n.md。

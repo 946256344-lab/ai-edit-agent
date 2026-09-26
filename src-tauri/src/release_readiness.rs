@@ -161,6 +161,25 @@ fn media_runtime_checks() -> Vec<ReleaseReadinessCheck> {
 }
 
 fn provider_check() -> ReleaseReadinessCheck {
+    match crate::fellowcut_account::gateway_base_url() {
+        Ok(Some(_)) => {
+            return check(
+                "provider",
+                "AI 模型",
+                "ok",
+                "Voycut 模型服务已配置；使用资格在请求时校验。",
+            );
+        }
+        Err(_) => {
+            return check(
+                "provider",
+                "AI 模型",
+                "warn",
+                "Voycut 模型服务地址无效或未配置。",
+            );
+        }
+        Ok(None) => {}
+    }
     let custom = get_custom_api_status();
     if custom.state == "connected" {
         return check("provider", "AI 模型", "ok", "自定义 API 已连接。")

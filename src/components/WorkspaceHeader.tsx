@@ -6,6 +6,7 @@ export type WorkspaceHeaderModel = {
   projectName: string
   sessionTitle: string
   storeReady: boolean
+  accountLabel: string
   view: WorkspaceView
 }
 type WindowControls = {
@@ -14,8 +15,8 @@ type WindowControls = {
   toggleMaximize: () => Promise<void>
   close: () => Promise<void>
 }
-export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { windowControls: WindowControls } }) {
-  const { windowControls } = actions
+export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderModel; actions: { openAccount: () => void; windowControls: WindowControls } }) {
+  const { openAccount, windowControls } = actions
   const { t } = useI18n()
   const copy = t.header
   const current = model.view === 'assets' ? t.sidebar.library : model.sessionTitle
@@ -23,6 +24,7 @@ export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderMode
     <header className="topbar" data-tauri-drag-region>
       <div className="crumbs" data-tauri-drag-region title={`${model.projectName} / ${current}`}>{model.projectName}<span data-tauri-drag-region>/</span><strong data-tauri-drag-region>{current}</strong></div>
       <span data-tauri-drag-region className={`saved ${model.storeReady ? 'is-ready' : ''}`}>{model.storeReady ? t.common.localWorkspace : t.common.localDisconnected}</span>
+      <button type="button" className="topbar-account" onClick={openAccount}>{model.accountLabel}</button>
       <div className="window-controls" role="group" aria-label={copy.windowActions}>
         <button type="button" aria-label={copy.minimize} title={copy.minimize} onClick={windowControls.minimize}><WorkspaceIcon name="minimize" /></button>
         <button type="button" aria-label={windowControls.maximized ? copy.restore : copy.maximize} title={windowControls.maximized ? copy.restore : copy.maximize} onClick={windowControls.toggleMaximize}><WorkspaceIcon name={windowControls.maximized ? 'restore' : 'maximize'} /></button>

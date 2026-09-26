@@ -1,5 +1,5 @@
 //! 模型 Provider 选择、请求调度、HTTP 传输和安全响应解析边界。
-//! `ModelAccess` 统一决定自定义 API 与实验性 OAuth 的选择及失败封闭规则。
+//! `ModelAccess` 统一决定 FellowCut 网关、自定义 API 与实验性 OAuth 的选择及失败封闭规则。
 
 use crate::custom_api::{chat_endpoint, CustomApiConfig};
 use crate::oauth::AuthorizedOAuth;
@@ -236,14 +236,23 @@ fn http_agent() -> &'static ureq::Agent {
     HTTP_AGENT.get_or_init(|| ureq::AgentBuilder::new().build())
 }
 
-/// 当前模型访问入口:实验性 OAuth Responses 流程，或用户配置的 OpenAI 兼容 API。
+/// 当前模型访问入口：FellowCut 网关、实验性 OAuth 或用户配置的 OpenAI 兼容 API。
 pub(crate) enum ModelAccess {
+    Gateway(CustomApiConfig),
     OAuth(AuthorizedOAuth),
     Custom(CustomApiConfig),
 }
 
 impl ModelAccess {
     pub(crate) fn resolve() -> Result<Self, String> {
+        if let Some(base_url) = crate::fellowcut_account::gateway_base_url()? {
+            return Ok(ModelAccess::Gateway(CustomApiConfig {
+                base_url,
+                model: "fellowcut-default".to_owned(),
+                coarse_visual_model: String::new(),
+                api_key: String::new(),
+            }));
+        }
         // 不降级:自定义 API 配了就只用自定义，OAuth 配了就只用 OAuth，都没配就拒绝。
         let custom_result = crate::custom_api::custom_config();
         let oauth_result = crate::oauth::experimental_access();
@@ -285,7 +294,7 @@ impl ModelAccess {
 
     pub(crate) fn custom_config(&self) -> Option<&CustomApiConfig> {
         match self {
-            ModelAccess::Custom(config) => Some(config),
+            ModelAccess::Gateway(config) | ModelAccess::Custom(config) => Some(config),
             _ => None,
         }
     }
@@ -991,7 +1000,13 @@ fn post_model_payload_with_custom_model(
         ModelAccess::OAuth(access) => {
             post_responses_json_with_wire_observer(access, payload, timeout, observe_response)
         }
-        ModelAccess::Custom(config) => {
+        ModelAccess::Gateway(config) | ModelAccess::Custom(config) => {
+            let is_gateway = matches!(access, ModelAccess::Gateway(_));
+            let bearer = if is_gateway {
+                crate::fellowcut_account::fresh_id_token()?
+            } else {
+                config.api_key.clone()
+            };
             let request = custom_model.map_or_else(
                 || chat_completions_request(config, payload),
                 |model| chat_completions_request_with_model(payload, model),
@@ -999,7 +1014,7 @@ fn post_model_payload_with_custom_model(
             let mut request_builder = http_agent()
                 .post(&chat_endpoint(&config.base_url))
                 .set("Content-Type", "application/json")
-                .set("Authorization", &format!("Bearer {}", config.api_key));
+                .set("Authorization", &format!("Bearer {bearer}"));
             if let Some(timeout) = timeout {
                 request_builder = request_builder.timeout(timeout);
             }
@@ -1007,25 +1022,33 @@ fn post_model_payload_with_custom_model(
                 Ok(response) => {
                     let status = response.status();
                     let body = response.into_string().map_err(|error| {
-                        format!(
-                            "自定义 API 读取响应失败（{}，模型 {}）:{}",
-                            config.base_url,
-                            custom_model.unwrap_or(&config.model),
-                            error
-                        )
+                        if is_gateway {
+                            "Voycut 模型服务响应无法读取。".to_owned()
+                        } else {
+                            format!(
+                                "自定义 API 读取响应失败（{}，模型 {}）:{}",
+                                config.base_url,
+                                custom_model.unwrap_or(&config.model),
+                                error
+                            )
+                        }
                     })?;
                     if body.trim().is_empty() {
-                        return Err(format!(
-                            "自定义 API 返回空响应体（{}，模型 {}）:HTTP {status}",
-                            config.base_url,
-                            custom_model.unwrap_or(&config.model)
-                        ));
+                        return Err(if is_gateway {
+                            "Voycut 模型服务返回了空响应。".to_owned()
+                        } else {
+                            format!(
+                                "自定义 API 返回空响应体（{}，模型 {}）:HTTP {status}",
+                                config.base_url,
+                                custom_model.unwrap_or(&config.model)
+                            )
+                        });
                     }
                     observe_wire_response(
                         observe_response,
                         status,
                         &body,
-                        &[config.api_key.as_str(), config.base_url.as_str()],
+                        &[bearer.as_str(), config.base_url.as_str()],
                     );
                     Ok(body)
                 }
@@ -1036,20 +1059,35 @@ fn post_model_payload_with_custom_model(
                             observe_response,
                             status,
                             &body,
-                            &[config.api_key.as_str(), config.base_url.as_str()],
+                            &[bearer.as_str(), config.base_url.as_str()],
                         );
-                        format!(
-                            "自定义 API 不可用（{}，模型 {}）:HTTP {status}",
-                            config.base_url,
-                            custom_model.unwrap_or(&config.model)
-                        )
+                        if is_gateway {
+                            match status {
+                                401 => "Voycut 登录已失效，请重新登录。".to_owned(),
+                                403 => "Voycut 使用资格不可用，请在账号页检查试用状态。".to_owned(),
+                                413 => "本次画面分析数据过大，模型服务无法接收。".to_owned(),
+                                _ => format!("Voycut 模型服务暂时不可用：HTTP {status}"),
+                            }
+                        } else {
+                            format!(
+                                "自定义 API 不可用（{}，模型 {}）:HTTP {status}",
+                                config.base_url,
+                                custom_model.unwrap_or(&config.model)
+                            )
+                        }
                     }
-                    ureq::Error::Transport(transport) => format!(
-                        "自定义 API 不可用（{}，模型 {}）:网络错误 {}",
-                        config.base_url,
-                        custom_model.unwrap_or(&config.model),
-                        transport
-                    ),
+                    ureq::Error::Transport(transport) => {
+                        if is_gateway {
+                            "无法连接 Voycut 模型服务，请检查网络后重试。".to_owned()
+                        } else {
+                            format!(
+                                "自定义 API 不可用（{}，模型 {}）:网络错误 {}",
+                                config.base_url,
+                                custom_model.unwrap_or(&config.model),
+                                transport
+                            )
+                        }
+                    }
                 }),
             }
         }

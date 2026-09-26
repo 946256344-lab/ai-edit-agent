@@ -4,6 +4,16 @@
 
 新增 Native 工具 `reselect_shots` 与 `refine_shot_ranges`，只改指定 beat / 镜头，其余镜头、配音、字幕、音乐原样保留，拍时长取当前时间线。两者都写派生 storyboard 版本（`derivedFromVersionId`、`changedBeatIds`）加新时间线并渲染预览，不新建剪映草稿。`StoryboardVersion` 的这两个字段对整条生成的版本为 `null` / `[]`。见 `docs/changes/2026-09-25-storyboard-edit-primitives.md`。
 
+## 2026-09-25：Voycut 桌面账号展示
+
+新增 `sign_in_fellowcut(email, password)`、`get_fellowcut_account_status()`、`sign_out_fellowcut()`。返回 `{ state, email, entitlement, trialStartedAt }`；`state` 为 `signedOut`、`unverified` 或 `verified`。账号使用网站同一个 Firebase Authentication 项目；已验证账号只读 Firestore `entitlements/{uid}`，缺失时返回空资格。桌面不创建或续期试用。刷新令牌只存 Windows 凭据库 `AssemblyVideoAgent/fellowcut-firebase-refresh-token`，密码与 ID token 不持久化。公开构建的模型请求通过内置 `FELLOWCUT_GATEWAY_BASE_URL` 指向账号网关，每次刷新 ID token 并由服务端复核资格；这些旧内部标识保留以兼容已登录用户。见 `docs/changes/2026-09-25-fellowcut-desktop-account.md`、`docs/changes/2026-09-25-fellowcut-model-gateway.md`。
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `sign_in_fellowcut` | email, password | FellowCutAccountStatus |
+| `get_fellowcut_account_status` | 无 | FellowCutAccountStatus |
+| `sign_out_fellowcut` | 无 | FellowCutAccountStatus |
+
 ## 2026-09-18：CapCut 投放链接器
 
 `deliver_to_editor` 可选 CapCut。草稿库从该设备 `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\root_meta_info.json` 读取 `draft_root_path`，不写死盘符。未打开过 CapCut 则拒绝。见 `docs/changes/2026-09-18-capcut-linker.md`。

@@ -17,6 +17,9 @@ import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
+import { FellowCutAccountModal } from './components/FellowCutAccountModal'
+import { useFellowCutAccountController } from './hooks/useFellowCutAccountController'
+import { usePendingUserMessageController } from './hooks/usePendingUserMessageController'
 import { useComposerMediaController } from './hooks/useComposerMediaController'
 import { useProjectCreationController } from './hooks/useProjectCreationController'
 import { ProjectCreationModal } from './components/ProjectCreationModal'
@@ -75,8 +78,7 @@ function App() {
   const [editingSessions, setEditingSessions] = useState<EditingSessionView[]>([])
   const [activeEditingSessionId, setActiveEditingSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
-  // 发送后、任务归属模型返回并落库前先显示的用户消息；落库后由真实消息替换。
-  const [pendingUserMessage, setPendingUserMessage] = useState<ConversationMessage | null>(null)
+  const [pendingUserMessage, setPendingUserMessage] = usePendingUserMessageController()
   const [activeView, setActiveView] = useState<WorkspaceView>('chat')
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -93,6 +95,7 @@ function App() {
   const activeProject = projects.find((project) => project.id === activeProjectId)
   const activeEditingSession = editingSessions.find((session) => session.id === activeEditingSessionId)
   const provider = useProviderController(desktopRuntime)
+  const fellowcutAccount = useFellowCutAccountController(desktopRuntime)
   const artifactWorkspace = useArtifactWorkspaceController({
     desktopRuntime,
     projectId: activeProjectId,
@@ -594,9 +597,10 @@ function App() {
             projectName: activeProject?.name ?? t.app.newProject,
             sessionTitle: activeEditingSession?.title ?? t.app.startEditing,
             storeReady: storeState === 'ready',
+            accountLabel: fellowcutAccount.model.status.email ?? t.header.signIn,
             view: activeView,
           }}
-          actions={{ windowControls }}
+          actions={{ windowControls, openAccount: fellowcutAccount.actions.open }}
         />
 
         <div className="workspace-canvas">
@@ -678,6 +682,7 @@ function App() {
       />
       <AssetAnalysisModal controller={assetWorkspace.analysis} />
       <ProviderSettingsModal controller={provider} />
+      <FellowCutAccountModal controller={fellowcutAccount} />
       <ProjectCreationModal controller={projectCreation} />
     </main>
   )

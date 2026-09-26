@@ -1842,6 +1842,10 @@ mod tests {
             requests[0]["tools"].as_array().map(Vec::len),
             Some(NATIVE_TOOL_NAMES.len())
         );
+        // 所有暴露给模型的工具都必须在执行白名单内，避免合法调用被记为 tool_not_allowed。
+        let allowlist: std::collections::HashSet<&str> =
+            NATIVE_TOOL_NAMES.iter().copied().collect();
+        assert_eq!(tool_names(&requests[0]), allowlist);
         assert!(tool_names(&requests[0]).contains("get_edit_status"));
     }
 

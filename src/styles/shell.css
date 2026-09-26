@@ -122,6 +122,8 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .saved { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; color: var(--text-2); font-size: var(--text-xs); white-space: nowrap; }
 .saved::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 .saved.is-ready::before { background: var(--ok); }
+.topbar-account { flex: 0 1 auto; max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--accent); font-size: var(--text-xs); cursor: pointer; }
+.topbar-account:hover { background: var(--accent-wash); }
 .window-controls { display: flex; align-self: stretch; flex-shrink: 0; }
 .window-controls button { display: grid; place-items: center; width: 46px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-2); }
 .window-controls button:hover { background: var(--fill-strong); color: var(--text); }
