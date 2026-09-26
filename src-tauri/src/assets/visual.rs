@@ -317,6 +317,20 @@ fn normalized_choice(value: Option<&str>, allowed: &[&str]) -> Option<String> {
         .map(|choice| (*choice).to_owned())
 }
 
+/// 网格角标形如「3 12.4s」：编号 + 空格 + 秒数。
+fn is_frame_tag(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let (Some(number), Some(seconds), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let Some(value) = seconds.strip_suffix(['s', 'S']) else {
+        return false;
+    };
+    number.chars().all(|character| character.is_ascii_digit())
+        && !value.is_empty()
+        && value.chars().all(|character| character.is_ascii_digit() || character == '.')
+}
+
 fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::ShotDetail {
     use crate::models::{BestRange, ShotChange, ShotDetail, SubjectPosition};
     let changes = value_items(&item.changes)
@@ -360,6 +374,19 @@ fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::Sho
                 .unwrap_or_default(),
         })
     });
+    // 模型偶尔把我们加在格子角上的「编号 时间」标注当成画面文字；滤掉后若没有真实文字，语言也一并清空。
+    let raw_text = value_texts(&item.on_screen_text, 12);
+    let on_screen_text = raw_text
+        .iter()
+        .filter(|text| !is_frame_tag(text))
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>();
+    let text_languages = if on_screen_text.is_empty() {
+        Vec::new()
+    } else {
+        value_texts(&item.text_languages, 5)
+    };
     let exhibition = match &item.exhibition {
         Value::Bool(flag) => Some(*flag),
         Value::String(text) => match text.trim().to_lowercase().as_str() {
@@ -377,8 +404,8 @@ fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::Sho
             &["sharp", "shallow-depth-of-field", "out-of-focus", "motion-blur"],
         )
         .map(|focus| focus.replace('-', "_")),
-        on_screen_text: value_texts(&item.on_screen_text, 5),
-        text_languages: value_texts(&item.text_languages, 5),
+        on_screen_text,
+        text_languages,
         brand_logos: value_texts(&item.brand_logos, 5),
         crowd: normalized_choice(item.crowd.as_str(), &["none", "few", "crowd"]),
         exhibition,
@@ -1028,7 +1055,7 @@ shotType: wide | medium | close-up | detail. cameraMotion: static | pan | tilt |
 changes: list of {startSec,endSec,description} for what changes over time: an action starting or ending, people or objects entering or leaving, camera moves, focus changes. Use the labeled source times. Empty list if nothing changes or there is only one frame. \
 subjectPositions: one {timeSec,position} per frame for the main subject; position is left | center-left | center | center-right | right of the full frame width. \
 focus: sharp | shallow_depth_of_field (subject sharp, background blurred on purpose) | out_of_focus (the intended subject itself is blurred) | motion_blur. qualityNotes: only other problems such as shaky, too dark, overexposed, low resolution. \
-onScreenText: short examples of visible words, signs, screens or captions, empty if none. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
+onScreenText: short examples of words, signs, screens or captions that appear in the footage itself, empty if none. The black number-and-seconds tags in the top-left corner of each cell are added by us, not part of the footage: never report them as text. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
 bestRange: {startSec,endSec,reason} for the most usable continuous part of the shot for an edit. \
 Match assetId and segmentId to the supplied label. Empty fields are allowed. Do not infer facts that are not visible.";
 
@@ -2073,7 +2100,7 @@ mod tests {
             ],
             "subjectPositions": [{"timeSec": 0.5, "position": "Center Right"}, {"timeSec": 1, "position": "top"}],
             "focus": "Shallow depth of field",
-            "onScreenText": "EXIT",
+            "onScreenText": ["1 0.8s", "EXIT", "2 2.3s"],
             "crowd": "Crowd",
             "exhibition": "yes",
             "bestRange": {"startSec": 0.4, "endSec": 1.2, "reason": "动作完整"},
@@ -2092,6 +2119,14 @@ mod tests {
         );
         assert_eq!(bind_coarse_visual_key(&bad, &expected), None);
         let card = coarse_visual_card(&good, "s001", Some(400), Some((0, 2_000)));
+        let tags_only = serde_json::from_value::<VisualBatchAsset>(serde_json::json!({
+            "assetId": "asset-1",
+            "onScreenText": ["1 0.8s", "2 2.3s"],
+            "textLanguages": ["English"]
+        }))
+        .expect("tag-only card");
+        let tag_detail = shot_detail(&tags_only, (0, 9_000));
+        assert!(tag_detail.on_screen_text.is_empty() && tag_detail.text_languages.is_empty());
         assert_eq!(card.shot_type.as_deref(), Some("close-up"));
         let detail = card.detail.clone().expect("whole-shot detail");
         assert_eq!(detail.changes.len(), 1);

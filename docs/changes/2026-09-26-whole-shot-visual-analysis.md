@@ -25,6 +25,12 @@
 
 旧素材需重新识别（技术分析重抽 6 帧，再整段识别）才有新字段；未重识别的沿用旧描述。Phase 4 暂不使用新字段，下一步再接。
 
+## 追加：角标被当成画面文字（同日）
+
+重新识别后抽查：18.mp4 的 `onScreenText` 是「1 0.8s」「2 2.3s」……，`textLanguages` 因此成了 English。提示词写明格子角标是我们加的，不是画面文字；Rust 再滤掉「编号 秒数」形式的条目，滤空后语言一并清空。
+
+同次抽查另见：主体横向位置不可靠（18.mp4 人在画面右侧却 6 帧都标 center）；25.mp4 整画面虚化仍判 out_of_focus。暂不处理。
+
 ## 同步文档
 
 `docs/api.md`、`docs/architecture.md`、`docs/decisions.md`、`TASKS.md`。
