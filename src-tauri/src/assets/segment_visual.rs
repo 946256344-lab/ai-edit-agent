@@ -18,7 +18,8 @@ use super::segments::CURRENT_ANALYSIS_VERSION;
 use super::visual::{spawn_visual_analysis_worker, VISUAL_ANALYSIS_BATCH_SIZE};
 
 pub(crate) const CURRENT_SEGMENT_VISUAL_VERSION: u32 = 2;
-pub(crate) const SEGMENT_VISUAL_FRAME_BATCH: usize = 12;
+/// 单请求帧数跟随上游图片上限；每个请求只放同一条素材的帧。
+pub(crate) const SEGMENT_VISUAL_FRAME_BATCH: usize = crate::provider::MAX_IMAGES_PER_REQUEST;
 const SEGMENT_VISUAL_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) const DEFAULT_ENSURE_BUDGET: Duration = Duration::from_secs(150);
 
@@ -276,6 +277,22 @@ pub(crate) fn ensure_segment_visual_evidence(
     })
 }
 
+/// 按素材分组、每组最多 SEGMENT_VISUAL_FRAME_BATCH 帧，保持原有顺序；不同素材不进同一请求。
+fn segment_frame_groups(
+    frames: &[(String, String, i64, Vec<u8>)],
+) -> Vec<Vec<(String, String, i64, Vec<u8>)>> {
+    let mut groups: Vec<Vec<(String, String, i64, Vec<u8>)>> = Vec::new();
+    for frame in frames {
+        match groups.last_mut() {
+            Some(group) if group[0].0 == frame.0 && group.len() < SEGMENT_VISUAL_FRAME_BATCH => {
+                group.push(frame.clone());
+            }
+            _ => groups.push(vec![frame.clone()]),
+        }
+    }
+    groups
+}
+
 fn segment_visual_model_content(
     frames: &[(String, String, i64, Vec<u8>)],
 ) -> Vec<serde_json::Value> {
@@ -406,35 +423,60 @@ pub(crate) fn run_segment_visual_analysis_batch(
     };
 
     let mut evidence_by_asset: HashMap<String, HashMap<String, VisualEvidence>> = HashMap::new();
-    for chunk in frames.chunks(SEGMENT_VISUAL_FRAME_BATCH) {
-        let content = segment_visual_model_content(chunk);
-        let request = json!({
-            "model": "gpt-5.4",
-            "store": false,
-            "stream": true,
-            "input": [{ "role": "user", "content": content }],
-            "text": { "format": { "type": "json_object" } }
-        });
-        let response_body =
-            match post_visual_model_payload(&access, &request, Some(SEGMENT_VISUAL_TIMEOUT)) {
-                Ok(body) => body,
-                Err(error) if error == "visual_provider_circuit_open" => {
-                    let _ = update_segment_batch_task(
-                        &app,
-                        &task_id,
-                        "queued",
-                        requested,
-                        0,
-                        0,
-                        Some("visual_provider_cooldown"),
-                    );
-                    return;
-                }
-                Err(error) => {
-                    log::warn!("Segment visual model request failed: {error}");
-                    continue;
-                }
-            };
+    // 同一素材的帧成组（每组最多 SEGMENT_VISUAL_FRAME_BATCH 张），各组同时发出。
+    let chunks = segment_frame_groups(&frames);
+    let requests = chunks
+        .iter()
+        .map(|chunk| {
+            json!({
+                "model": "gpt-5.4",
+                "store": false,
+                "stream": true,
+                "input": [{ "role": "user", "content": segment_visual_model_content(chunk) }],
+                "text": { "format": { "type": "json_object" } }
+            })
+        })
+        .collect::<Vec<_>>();
+    let responses = std::thread::scope(|scope| {
+        let workers = requests
+            .iter()
+            .map(|request| {
+                let access = &access;
+                scope.spawn(move || {
+                    post_visual_model_payload(access, request, Some(SEGMENT_VISUAL_TIMEOUT))
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|_| Err("segment visual worker stopped".to_owned()))
+            })
+            .collect::<Vec<_>>()
+    });
+    for (chunk, response) in chunks.iter().zip(responses) {
+        let group_asset = chunk.first().map(|frame| frame.0.as_str()).unwrap_or("");
+        let response_body = match response {
+            Ok(body) => body,
+            Err(error) if error == "visual_provider_circuit_open" => {
+                let _ = update_segment_batch_task(
+                    &app,
+                    &task_id,
+                    "queued",
+                    requested,
+                    0,
+                    0,
+                    Some("visual_provider_cooldown"),
+                );
+                return;
+            }
+            Err(error) => {
+                log::warn!("Segment visual model request failed: {error}");
+                continue;
+            }
+        };
         complete_visual_model_request(true);
         let Some(text) = model_response_json_text(&access, &response_body) else {
             log::warn!("Segment visual response did not contain JSON text.");
@@ -452,6 +494,10 @@ pub(crate) fn run_segment_visual_analysis_batch(
             }
         };
         for asset in parsed.assets {
+            // 本组只含一条素材，写错 assetId 的结果不采用。
+            if asset.asset_id != group_asset {
+                continue;
+            }
             let entry = evidence_by_asset.entry(asset.asset_id).or_default();
             for item in asset.segments {
                 entry.insert(

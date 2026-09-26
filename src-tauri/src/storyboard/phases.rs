@@ -3066,7 +3066,7 @@ fn select_one_beat(
         Beat timing plan: {}\n\
         Candidate pool for this beat: {candidate_cards_json}\n\
         {feedback_context}{low_match_note}{user_note_line}\n\n\
-        Keyframe grids are attached below for {} of this beat's {} candidates. Each image is this candidate's own time window, not a stand-in for the whole file.\n\
+        Keyframe grids are attached below for {} of this beat's {} candidates; several candidates may share one image as labeled bands stacked top to bottom. Each grid is that candidate's own time window, not a stand-in for the whole file.\n\
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
         If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
@@ -3231,23 +3231,69 @@ fn phase3_keyframe_image_blocks_for_pool(
     app: &AppHandle,
     pool: &BeatCandidatePool,
 ) -> (Vec<Value>, HashSet<usize>) {
-    use crate::storyboard::multimodal::{ensure_phase3_candidate_grid, read_input_image};
+    use crate::storyboard::multimodal::{
+        ensure_phase3_candidate_grid, read_input_image, stack_images_vertically,
+    };
 
     let mut blocks = Vec::new();
     let mut attached = HashSet::new();
     let considered = pool.candidates.len().min(PHASE2_EXTENDED_POOL_SIZE);
-    for (index, candidate) in pool.candidates.iter().take(considered).enumerate() {
-        let Some(grid_path) = ensure_phase3_candidate_grid(Some(app), candidate) else {
+    let grids = pool
+        .candidates
+        .iter()
+        .take(considered)
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            ensure_phase3_candidate_grid(Some(app), candidate).map(|path| (index, path))
+        })
+        .collect::<Vec<_>>();
+    // 单请求最多 MAX_IMAGES_PER_REQUEST 张图：候选网格按段上下拼接，9 条拼成 3 张、12 条拼成 4 张。
+    let per_image = grids
+        .len()
+        .div_ceil(crate::provider::MAX_IMAGES_PER_REQUEST)
+        .max(1);
+    for (image_number, chunk) in grids.chunks(per_image).enumerate() {
+        let describe = |index: usize| {
+            format!(
+                "candidateIndex={index} assetId={}",
+                pool.candidates[index].asset_id
+            )
+        };
+        let (image_path, caption) = if chunk.len() == 1 {
+            (
+                chunk[0].1.clone(),
+                format!("Keyframe grid (2x2) for {}", describe(chunk[0].0)),
+            )
+        } else {
+            let paths = chunk
+                .iter()
+                .map(|(_, path)| path.clone())
+                .collect::<Vec<_>>();
+            let Some(stacked) = phase3_stack_path(app, &paths)
+                .and_then(|output| stack_images_vertically(&paths, &output))
+            else {
+                continue;
+            };
+            let bands = chunk
+                .iter()
+                .enumerate()
+                .map(|(band, (index, _))| format!("band {} = {}", band + 1, describe(*index)))
+                .collect::<Vec<_>>()
+                .join("; ");
+            (
+                stacked,
+                format!(
+                    "Image {}: {} candidates stacked top to bottom, separated by gray bars; each band is that candidate's own 2x2 keyframe grid. {bands}",
+                    image_number + 1,
+                    chunk.len()
+                ),
+            )
+        };
+        let Some(image) = read_input_image(&image_path) else {
             continue;
         };
-        let Some(image) = read_input_image(&grid_path) else {
-            continue;
-        };
-        attached.insert(index);
-        blocks.push(json!({
-            "type": "input_text",
-            "text": format!("Keyframe grid (2x2) for candidateIndex={index} assetId={}", candidate.asset_id)
-        }));
+        attached.extend(chunk.iter().map(|(index, _)| *index));
+        blocks.push(json!({ "type": "input_text", "text": caption }));
         blocks.push(image);
     }
     log::info!(
@@ -3257,6 +3303,21 @@ fn phase3_keyframe_image_blocks_for_pool(
         considered
     );
     (blocks, attached)
+}
+
+/// 拼接图按所含网格路径取名缓存，同一组候选重复选片时不重拼。
+fn phase3_stack_path(app: &AppHandle, paths: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    use tauri::Manager;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    paths.hash(&mut hasher);
+    let directory = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("derived")
+        .join("phase3_stacks");
+    Some(directory.join(format!("{:016x}.jpg", hasher.finish())))
 }
 
 #[derive(Debug, Deserialize)]

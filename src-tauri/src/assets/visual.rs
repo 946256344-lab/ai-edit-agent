@@ -812,9 +812,35 @@ pub(crate) fn prioritize_pending_visual_batches(
     Ok(highest_running.or_else(|| ranked.first().map(|r| r.task_id.clone())))
 }
 
-fn visual_model_content(
-    frames: &[(String, String, Option<i64>, Option<i64>, Vec<u8>)],
-) -> Vec<Value> {
+type VisualFrame = (String, String, Option<i64>, Option<i64>, Vec<u8>);
+
+/// 按素材分组、每组最多 MAX_IMAGES_PER_REQUEST 张，保持原有顺序。
+fn frames_by_asset(frames: Vec<&VisualFrame>) -> Vec<Vec<VisualFrame>> {
+    let mut order = Vec::<String>::new();
+    let mut by_asset = HashMap::<String, Vec<VisualFrame>>::new();
+    for frame in frames {
+        if !by_asset.contains_key(&frame.0) {
+            order.push(frame.0.clone());
+        }
+        by_asset
+            .entry(frame.0.clone())
+            .or_default()
+            .push(frame.clone());
+    }
+    order
+        .into_iter()
+        .flat_map(|asset_id| {
+            by_asset
+                .remove(&asset_id)
+                .unwrap_or_default()
+                .chunks(crate::provider::MAX_IMAGES_PER_REQUEST)
+                .map(<[VisualFrame]>::to_vec)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn visual_model_content(frames: &[VisualFrame]) -> Vec<Value> {
     let mut content = vec![
         serde_json::json!({ "type": "input_text", "text": "Look at each frame and say what this shot is. Return JSON {assets:[{assetId,segmentId,timeMs,narrativeRole,caption,subjects,scene,actions,products,qualityNotes}]}. narrativeRole: in your own words, the story job this shot could do in an edited video; invent the phrasing. caption: one short sentence of only what is visible. subjects, actions, products: short visible words. scene: a short place phrase. qualityNotes: only if the frame is hard to use. Match assetId and segmentId to a supplied label. Extra fields are ignored. Empty fields are allowed. Do not infer facts not visible." }),
     ];
@@ -1031,7 +1057,6 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
     if !super::controls::task_running(&app, &task_id) {
         return;
     }
-    let content = visual_model_content(&frames);
     let access = match ModelAccess::resolve() {
         Ok(access) => access,
         Err(error) => {
@@ -1046,79 +1071,106 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             return;
         }
     };
-    let request = serde_json::json!({ "model": "gpt-5.4", "store": false, "stream": true, "input": [{ "role": "user", "content": content }], "text": { "format": { "type": "json_object" } } });
+    // 每个请求只放同一条素材的片段（最多 MAX_IMAGES_PER_REQUEST 张），各组同时发出：
+    // 描述无法再挂到别的素材上，也满足上游单请求图片数上限。
+    let groups = frames_by_asset(frames.iter().collect());
+    let requests = groups
+        .iter()
+        .map(|group| {
+            serde_json::json!({ "model": "gpt-5.4", "store": false, "stream": true, "input": [{ "role": "user", "content": visual_model_content(group) }], "text": { "format": { "type": "json_object" } } })
+        })
+        .collect::<Vec<_>>();
+    let responses = std::thread::scope(|scope| {
+        let workers = requests
+            .iter()
+            .map(|request| {
+                let access = &access;
+                scope.spawn(move || {
+                    post_visual_model_payload(access, request, Some(VISUAL_ANALYSIS_TIMEOUT))
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|_| Err("visual request worker stopped".to_owned()))
+            })
+            .collect::<Vec<_>>()
+    });
+    if responses
+        .iter()
+        .any(|response| matches!(response, Err(error) if error == "visual_provider_circuit_open"))
+        && responses.iter().all(Result::is_err)
+    {
+        let _ = update_visual_metadata(
+            &app,
+            Some(&task_id),
+            &asset_ids,
+            "queued",
+            &HashMap::new(),
+            Some("visual_provider_cooldown"),
+        );
+        let _ = update_visual_batch_task(
+            &app,
+            &task_id,
+            "queued",
+            requested_count,
+            0,
+            0,
+            0,
+            Some("visual_provider_cooldown"),
+        );
+        return;
+    }
     let mut failure_note = "visual_response_invalid".to_owned();
-    let response_body =
-        match post_visual_model_payload(&access, &request, Some(VISUAL_ANALYSIS_TIMEOUT)) {
+    let mut cards_by_asset: HashMap<String, Vec<VisualEvidence>> = HashMap::new();
+    let mut matched = HashSet::new();
+    for (group, response) in groups.iter().zip(responses) {
+        let body = match response {
             Ok(body) => body,
-            Err(error) if error == "visual_provider_circuit_open" => {
-                let _ = update_visual_metadata(
-                    &app,
-                    Some(&task_id),
-                    &asset_ids,
-                    "queued",
-                    &HashMap::new(),
-                    Some("visual_provider_cooldown"),
-                );
-                let _ = update_visual_batch_task(
-                    &app,
-                    &task_id,
-                    "queued",
-                    requested_count,
-                    0,
-                    0,
-                    0,
-                    Some("visual_provider_cooldown"),
-                );
-                return;
-            }
             Err(error) => {
                 log::warn!("Visual model request failed: {error}");
                 failure_note = crate::provider::classify_model_request_failure(&error).code;
-                String::new()
+                continue;
             }
         };
-    let response = (!response_body.is_empty())
-        .then_some(response_body)
-        .and_then(|body| model_response_json_text(&access, &body))
-        .and_then(|text| serde_json::from_str::<VisualBatchResponse>(&text).ok());
-    let Some(response) = response else {
-        complete_visual_model_request(false);
-        if !super::controls::task_running(&app, &task_id) {
-            return;
-        }
-        fail_or_retry_visual_batch(&app, &task_id, &asset_ids, requested_count, &failure_note);
-        return;
-    };
-    let mut cards_by_asset: HashMap<String, Vec<VisualEvidence>> = HashMap::new();
-    let mut matched = HashSet::new();
-    for value in response.assets {
-        let Ok(item) = serde_json::from_value::<VisualBatchAsset>(value) else {
+        let Some(parsed) = model_response_json_text(&access, &body)
+            .and_then(|text| serde_json::from_str::<VisualBatchResponse>(&text).ok())
+        else {
             continue;
         };
-        let Some((key, time_ms)) = bind_coarse_visual_key(&item, &expected) else {
-            continue;
-        };
-        if !matched.insert(key.clone()) {
-            continue;
+        // 只认本组素材的片段，模型写错 assetId 的结果直接丢弃。
+        let group_expected = group
+            .iter()
+            .filter_map(|(asset_id, segment_id, _, _, _)| {
+                let key = unit_key(asset_id, segment_id);
+                expected.get(&key).map(|time_ms| (key, *time_ms))
+            })
+            .collect::<HashMap<_, _>>();
+        for value in parsed.assets {
+            let Ok(item) = serde_json::from_value::<VisualBatchAsset>(value) else {
+                continue;
+            };
+            let Some((key, time_ms)) = bind_coarse_visual_key(&item, &group_expected) else {
+                continue;
+            };
+            if !matched.insert(key.clone()) {
+                continue;
+            }
+            cards_by_asset
+                .entry(item.asset_id.clone())
+                .or_default()
+                .push(coarse_visual_card(&item, unit_key_segment(&key), time_ms));
         }
-        cards_by_asset
-            .entry(item.asset_id.clone())
-            .or_default()
-            .push(coarse_visual_card(&item, unit_key_segment(&key), time_ms));
     }
     if cards_by_asset.is_empty() {
         complete_visual_model_request(false);
         if !super::controls::task_running(&app, &task_id) {
             return;
         }
-        fail_or_retry_visual_batch(
-            &app,
-            &task_id,
-            &asset_ids,
-            requested_count,
-            "visual_response_invalid",
-        );
+        fail_or_retry_visual_batch(&app, &task_id, &asset_ids, requested_count, &failure_note);
         return;
     }
     complete_visual_model_request(true);
@@ -1664,6 +1716,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn visual_requests_never_mix_assets() {
+        // 回归：6 张图混批时模型把描述挂错素材（86.mp4 拿到煤场描述、9 与 91 互换）。
+        let frame = |asset: &str, segment: &str| {
+            (
+                asset.to_owned(),
+                segment.to_owned(),
+                Some(0),
+                Some(1_000),
+                Vec::new(),
+            )
+        };
+        let frames = vec![
+            frame("a", "s001"),
+            frame("b", "s001"),
+            frame("b", "s002"),
+            frame("a", "s002"),
+            frame("b", "s003"),
+            frame("b", "s004"),
+            frame("b", "s005"),
+        ];
+        let groups = frames_by_asset(frames.iter().collect());
+        for group in &groups {
+            assert!(group.iter().all(|item| item.0 == group[0].0));
+            assert!(group.len() <= crate::provider::MAX_IMAGES_PER_REQUEST);
+        }
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), frames.len());
     }
 
     #[test]

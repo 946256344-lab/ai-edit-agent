@@ -66,7 +66,7 @@ Phase 3 只返回每个 beat 内的候选序号，由 Rust 取得真实素材、
 
 ## Phase 4 精修拆批（2026-09-07，Pass A/长窗收窄 2026-09-08，局部修复 2026-09-10）
 
-Pass A 按素材贪心拆批，每批最多约 40 张窗中点帧；Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 10 镜一批调用模型，避免单次上百张图触发网关断连。同镜窗内多帧优先一次 FFmpeg（`-ss` 窗首 + `select` 命中各目标时刻，文件名仍带真实 `time_ms`），批量失败再按帧回退。批结果必须完整覆盖本批 `orderIndex` 后才合并；Pass B/C 改为只返回本批修改，不再要求整份 Storyboard JSON。过短导入头窗（&lt;1.2s）向前并入后窗。Pass B 后若窗内帧间距 &gt;1.5s，Pass C 围绕精修子区间再加密收窄（uncertain 仍整窗加密）。重试从失败批次或受影响镜头继续，成功结果留在当次内存状态。Phase 3 每一拍为池内每条候选附带网格（弱匹配扩池到 12 条时也全附；按该条时间窗现拼，缺文件则现抽），卡片含可见描述并标 `keyframeGridAttached`。
+Pass A 按素材贪心拆批，每批最多 4 张窗中点帧；Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 4 镜一批调用模型、各批并发（Agnes Token Plan 单请求最多 4 张图）。同镜窗内多帧优先一次 FFmpeg（`-ss` 窗首 + `select` 命中各目标时刻，文件名仍带真实 `time_ms`），批量失败再按帧回退。批结果必须完整覆盖本批 `orderIndex` 后才合并；Pass B/C 改为只返回本批修改，不再要求整份 Storyboard JSON。过短导入头窗（&lt;1.2s）向前并入后窗。Pass B 后若窗内帧间距 &gt;1.5s，Pass C 围绕精修子区间再加密收窄（uncertain 仍整窗加密）。重试从失败批次或受影响镜头继续，成功结果留在当次内存状态。Phase 3 每一拍为池内每条候选附带网格（弱匹配扩池到 12 条时也全附；按该条时间窗现拼，缺文件则现抽），卡片含可见描述并标 `keyframeGridAttached`。
 
 ## 配音出站代理（2026-09-07）
 
@@ -255,7 +255,7 @@ Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`m
 
 ### 视觉分析
 
-当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实硬切分段、运动能量可用窗与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 按硬切段各送中点 1 帧、最多 6 段一批，最后不足 6 段也立即送审；模型自拟叙事功能短语和一句可见描述，Rust 只对上 `assetId+segmentId` 并软解析 JSON，对不上的单卡丢弃，回写时写入片段向量。瞬时失败（超时、网络、Provider 暂不可用）自动补跑，每条最多 3 次，用户跳过与不适用不补。不抬 `visualAnalysisVersion`。选片不再等待片段模型加深；第二次分析是选中镜头的 Phase 4 多帧精修。历史 `analyze_asset_segments_batch` 仅收尾已入队任务。单一 worker 共用熔断；粗识别任务 payload 含 `assetIds` 与 `segments`。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
+当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实硬切分段、运动能量可用窗与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 按硬切段各送中点 1 帧，任务最多 6 段，最后不足 6 段也立即送审；执行时按素材分组并发请求（每个请求一条素材、最多 4 张图），避免描述挂到别的素材上；模型自拟叙事功能短语和一句可见描述，Rust 只对上 `assetId+segmentId` 并软解析 JSON，对不上的单卡丢弃，回写时写入片段向量。瞬时失败（超时、网络、Provider 暂不可用）自动补跑，每条最多 3 次，用户跳过与不适用不补。不抬 `visualAnalysisVersion`。选片不再等待片段模型加深；第二次分析是选中镜头的 Phase 4 多帧精修。历史 `analyze_asset_segments_batch` 仅收尾已入队任务。单一 worker 共用熔断；粗识别任务 payload 含 `assetIds` 与 `segments`。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
 
 ### Agent 编程上下文架构
 

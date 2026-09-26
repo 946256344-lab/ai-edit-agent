@@ -19,12 +19,12 @@ const PHASE4_BATCH_FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(90);
 /// 单素材最多保留多少个内容候选窗（每窗 1 张代表帧给选段）。
 const PHASE4_MAX_WINDOWS_PER_ASSET: usize = 12;
 /// Pass A 单次请求最多附带多少张窗中点帧，避免与 Pass B 同类的网关断连。
-pub(crate) const PHASE4_PASS_A_MAX_IMAGES: usize = 40;
+pub(crate) const PHASE4_PASS_A_MAX_IMAGES: usize = crate::provider::MAX_IMAGES_PER_REQUEST;
 /// 段内精修默认抽帧数 / 不确定时加密码。
 pub(crate) const PHASE4_REFINE_FRAMES: usize = 6;
 pub(crate) const PHASE4_UNCERTAIN_FRAMES: usize = 10;
 /// Pass B/C 每批最多精修多少镜；每镜仍抽满上列帧数，再拼成一张网格，避免单次 100+ 图断连。
-pub(crate) const PHASE4_REFINE_SHOTS_PER_BATCH: usize = 10;
+pub(crate) const PHASE4_REFINE_SHOTS_PER_BATCH: usize = crate::provider::MAX_IMAGES_PER_REQUEST;
 /// Pass B 窗内帧间距超过该值时，Pass C 围绕精修子区间再加密收窄。
 pub(crate) const PHASE4_MAX_FRAME_SPACING_MS: i64 = 1_500;
 
@@ -179,6 +179,42 @@ pub(crate) fn compose_timed_frame_grid(
         std::fs::create_dir_all(parent).ok()?;
     }
     grid.save(output_path).ok()?;
+    output_path.is_file().then(|| output_path.to_path_buf())
+}
+
+/// 把几张候选网格上下拼成一张：单个请求的图片数有上限时，候选数不减、每格清晰度不变。
+/// 各段统一缩放到同一宽度，中间用灰色分隔条隔开，调用方在文字里写明每段是哪个候选。
+pub(crate) fn stack_images_vertically(paths: &[PathBuf], output_path: &Path) -> Option<PathBuf> {
+    const WIDTH: u32 = 640;
+    const GAP: u32 = 12;
+    if paths.is_empty() {
+        return None;
+    }
+    let bands = paths
+        .iter()
+        .map(|path| {
+            let img = image::open(path).ok()?.to_rgb8();
+            let height = ((img.height() as u64 * WIDTH as u64) / img.width().max(1) as u64).max(1);
+            Some(image::imageops::resize(
+                &img,
+                WIDTH,
+                height as u32,
+                image::imageops::FilterType::Triangle,
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let height =
+        bands.iter().map(|band| band.height()).sum::<u32>() + GAP * (bands.len() as u32 - 1);
+    let mut canvas: RgbImage = ImageBuffer::from_pixel(WIDTH, height, Rgb([128, 128, 128]));
+    let mut top = 0_u32;
+    for band in &bands {
+        image::imageops::replace(&mut canvas, band, 0, top.into());
+        top += band.height() + GAP;
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    canvas.save(output_path).ok()?;
     output_path.is_file().then(|| output_path.to_path_buf())
 }
 
@@ -807,6 +843,12 @@ mod tests {
         let composed = image::open(&grid).unwrap();
         assert_eq!(composed.width(), 960);
         assert_eq!(composed.height(), 360);
+        // 回归：Phase 3 候选网格上下拼接，3 条 16:9 网格拼成一张图（640 宽、两条 12px 分隔）。
+        let stacked =
+            stack_images_vertically(&paths[..3], &directory.join("stack.jpg")).expect("stack");
+        let stacked = image::open(&stacked).unwrap();
+        assert_eq!(stacked.width(), 640);
+        assert_eq!(stacked.height(), 640 * 3 + 12 * 2);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

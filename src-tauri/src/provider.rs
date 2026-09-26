@@ -19,6 +19,10 @@ const VISUAL_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(60);
 /// 429 限流：按 Retry-After（缺省指数退避 2/4/8/16 秒）最多重试这么多次，
 /// 等待不超过本次调用剩余的截止时间；仍被限流才把 `:HTTP 429` 交给调用方。
 const RATE_LIMIT_RETRIES: u32 = 4;
+/// 单个请求最多携带的图片数：Agnes Token Plan 对超过 4 张直接返回 400。
+/// 需要更多图时由调用方拼图或拆成多个并发请求。
+pub(crate) const MAX_IMAGES_PER_REQUEST: usize = 4;
+const TOO_MANY_IMAGES: &str = "provider_request_too_many_images";
 const RATE_LIMIT_MAX_WAIT: Duration = Duration::from_secs(30);
 
 /// Provider 协议无关的单轮模型结果。`output` 保留协议返回的所有项目，
@@ -89,7 +93,7 @@ const GATEWAY_UPGRADE_REQUIRED: &str = "provider_gateway_upgrade_required";
 /// 429 已在发送层按 Retry-After 退避重试过，到这里仍限流就不再原地重试，
 /// 让生成如实失败，而不是把某一拍留空、做出缺镜的成片。
 pub(crate) fn is_final_model_failure(error: &str) -> bool {
-    if error.contains("provider_gateway_") {
+    if error.contains("provider_gateway_") || error.contains(TOO_MANY_IMAGES) {
         return true;
     }
     provider_http_status(error).is_some_and(|status| (400..500).contains(&status) && status != 408)
@@ -1027,6 +1031,60 @@ pub(crate) fn post_model_payload_with_wire_observer(
     post_model_payload_with_custom_model(access, payload, timeout, None, observe_response)
 }
 
+/// 同一步里彼此独立的多个模型请求同时发出，结果按输入顺序返回。
+/// 每个工作线程继承调用方的截止时间；429 退避在各自线程里照常进行。
+pub(crate) fn post_model_payloads_concurrently(
+    access: &ModelAccess,
+    payloads: &[Value],
+    timeout: Option<Duration>,
+) -> Vec<Result<String, String>> {
+    if payloads.len() <= 1 {
+        return payloads
+            .iter()
+            .map(|payload| post_model_payload(access, payload, timeout))
+            .collect();
+    }
+    let deadline = crate::execution_deadline::current();
+    std::thread::scope(|scope| {
+        let workers = payloads
+            .iter()
+            .map(|payload| {
+                scope.spawn(move || {
+                    let _deadline = crate::execution_deadline::DeadlineScope::enter(deadline);
+                    post_model_payload(access, payload, timeout)
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker.join().unwrap_or_else(|_| {
+                    Err("Model request worker stopped unexpectedly.".to_owned())
+                })
+            })
+            .collect()
+    })
+}
+
+/// 统计请求里的图片块（Responses 的 input_image 与 Chat 的 image_url）。
+fn count_request_images(value: &Value) -> usize {
+    match value {
+        Value::Object(map) => {
+            let own = matches!(
+                map.get("type").and_then(Value::as_str),
+                Some("input_image" | "image_url")
+            ) as usize;
+            own + map
+                .iter()
+                .filter(|(key, _)| key.as_str() != "type")
+                .map(|(_, child)| count_request_images(child))
+                .sum::<usize>()
+        }
+        Value::Array(items) => items.iter().map(count_request_images).sum(),
+        _ => 0,
+    }
+}
+
 /// Coarse visual analysis may use a separately configured custom model. OAuth
 /// keeps its existing request model because no alternate has been verified.
 pub(crate) fn post_visual_model_payload(
@@ -1057,6 +1115,13 @@ fn post_model_payload_with_custom_model(
     custom_model: Option<&str>,
     observe_response: &mut dyn FnMut(u16, &str),
 ) -> Result<String, String> {
+    let images = count_request_images(payload);
+    if images > MAX_IMAGES_PER_REQUEST {
+        // 本地先拦：上游会整单 400，调用方应拼图或拆成并发请求。
+        return Err(format!(
+            "{TOO_MANY_IMAGES}: request carries {images} images; the model accepts at most {MAX_IMAGES_PER_REQUEST}."
+        ));
+    }
     match access {
         ModelAccess::OAuth(access) => {
             post_responses_json_with_wire_observer(access, payload, timeout, observe_response)
@@ -1632,6 +1697,24 @@ mod tests {
     #[test]
     fn model_requests_share_one_process_wide_http_agent() {
         assert!(std::ptr::eq(http_agent(), http_agent()));
+    }
+
+    #[test]
+    fn requests_over_the_image_limit_are_counted_and_final() {
+        // 回归：Phase 3 一次带 9 张网格图，Token Plan 返回 400「Image count 9 exceeds limit 4」。
+        let image = json!({"type": "input_image", "image_url": "data:image/jpeg;base64,AA=="});
+        let payload = json!({"input": [{"role": "user", "content": [
+            {"type": "input_text", "text": "pick"}, image.clone(), image.clone(),
+            image.clone(), image.clone(), image
+        ]}]});
+        assert_eq!(count_request_images(&payload), 5);
+        let chat = json!({"messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="}}
+        ]}]});
+        assert_eq!(count_request_images(&chat), 1);
+        assert!(is_final_model_failure(&format!(
+            "{TOO_MANY_IMAGES}: request carries 9 images"
+        )));
     }
 
     #[test]

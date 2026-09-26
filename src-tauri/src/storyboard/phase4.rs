@@ -3,7 +3,7 @@
 //! 不替代 `RepairPacket`（那只是提示快照），不落库、不跨运行恢复。
 
 use crate::models::{StoryboardContent, StoryboardShot, StoryboardSource};
-use crate::provider::ModelAccess;
+use crate::provider::{post_model_payloads_concurrently, ModelAccess};
 use crate::storyboard::multimodal::{
     build_phase4_windows_from_keyframes, compose_timed_frame_grid, densify_times_in_range,
     extract_frames_at_times, read_input_image, Phase4ContentWindow, PHASE4_MAX_FRAME_SPACING_MS,
@@ -1530,6 +1530,7 @@ fn run_pending_pass_b(
     }
     let mut batch_error = None;
     let batch_count = batches.len();
+    let mut prepared = Vec::new();
     for (batch_index, batch) in batches.iter().enumerate() {
         crate::execution_deadline::check()?;
         let draft_json = session
@@ -1682,7 +1683,16 @@ fn run_pending_pass_b(
             "request",
             &pass_b_request,
         );
-        match post_model_payload(access, &pass_b_request, Some(STORYBOARD_TIMEOUT)) {
+        prepared.push((batch, pass_b_request));
+    }
+    // 各批只改自己的镜头、彼此独立：同时发出，再按原顺序合并，合并逻辑不变。
+    let requests = prepared
+        .iter()
+        .map(|(_, request)| request.clone())
+        .collect::<Vec<_>>();
+    let responses = post_model_payloads_concurrently(access, &requests, Some(STORYBOARD_TIMEOUT));
+    for ((batch, _), response) in prepared.into_iter().zip(responses) {
+        match response {
             Ok(pass_b_body) => {
                 crate::storyboard::provider_trace::append_storyboard_trace(
                     "Phase 4b",
@@ -1732,6 +1742,7 @@ fn run_pending_pass_c(
     }
     let mut batch_error = None;
     let batch_count = batches.len();
+    let mut prepared = Vec::new();
     for (batch_index, batch) in batches.iter().enumerate() {
         crate::execution_deadline::check()?;
         let batch_orders = batch.iter().map(|(order, _)| *order).collect::<Vec<_>>();
@@ -1900,7 +1911,15 @@ fn run_pending_pass_c(
             "request",
             &pass_c_request,
         );
-        match post_model_payload(access, &pass_c_request, Some(STORYBOARD_TIMEOUT)) {
+        prepared.push((batch_orders, pass_c_request));
+    }
+    let requests = prepared
+        .iter()
+        .map(|(_, request)| request.clone())
+        .collect::<Vec<_>>();
+    let responses = post_model_payloads_concurrently(access, &requests, Some(STORYBOARD_TIMEOUT));
+    for ((batch_orders, _), response) in prepared.into_iter().zip(responses) {
+        match response {
             Ok(pass_c_body) => {
                 crate::storyboard::provider_trace::append_storyboard_trace(
                     "Phase 4c",
@@ -2144,10 +2163,13 @@ mod tests {
 
     #[test]
     fn failed_third_pass_b_batch_does_not_rerun_first_two() {
-        let (mut session, selected) = session_ready_for_pass_b(25);
+        // 按批大小构造三批：前两批满批成功，第三批只有 1 镜且失败。
+        let per_batch = PHASE4_REFINE_SHOTS_PER_BATCH as i64;
+        let total = per_batch * 2 + 1;
+        let (mut session, selected) = session_ready_for_pass_b(total);
         let first =
             run_pending_scripted_batches(&mut session, Phase4Pass::B, &selected, |orders| {
-                if *orders.last().unwrap_or(&0) <= 20 {
+                if *orders.last().unwrap_or(&0) <= per_batch * 2 {
                     Ok(ok_patches(&selected, orders))
                 } else {
                     Err("batch 3 timed out".to_owned())
@@ -2162,8 +2184,8 @@ mod tests {
                 .count(),
             3
         );
-        assert!(session.pass_b_done.contains(&1) && session.pass_b_done.contains(&20));
-        assert!(session.pass_b_pending.contains(&21));
+        assert!(session.pass_b_done.contains(&1) && session.pass_b_done.contains(&(per_batch * 2)));
+        assert!(session.pass_b_pending.contains(&total));
         let crop_before = session.content.as_ref().unwrap().shots[0].crop_focus;
         let retry =
             run_pending_scripted_batches(&mut session, Phase4Pass::B, &selected, |orders| {
@@ -2177,10 +2199,13 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(pass_b_calls.len(), 4);
-        assert_eq!(pass_b_calls[0].orders, (1..=10).collect::<Vec<_>>());
-        assert_eq!(pass_b_calls[1].orders, (11..=20).collect::<Vec<_>>());
-        assert_eq!(pass_b_calls[2].orders, (21..=25).collect::<Vec<_>>());
-        assert_eq!(pass_b_calls[3].orders, (21..=25).collect::<Vec<_>>());
+        assert_eq!(pass_b_calls[0].orders, (1..=per_batch).collect::<Vec<_>>());
+        assert_eq!(
+            pass_b_calls[1].orders,
+            (per_batch + 1..=per_batch * 2).collect::<Vec<_>>()
+        );
+        assert_eq!(pass_b_calls[2].orders, vec![total]);
+        assert_eq!(pass_b_calls[3].orders, vec![total]);
         assert_eq!(
             session.content.as_ref().unwrap().shots[0].crop_focus,
             crop_before
@@ -2354,11 +2379,13 @@ mod tests {
 
     #[test]
     fn retry_budget_is_not_multiplied_by_batch_count() {
-        let (mut session, selected) = session_ready_for_pass_b(25);
+        let per_batch = PHASE4_REFINE_SHOTS_PER_BATCH as i64;
+        let total = per_batch * 2 + 1;
+        let (mut session, selected) = session_ready_for_pass_b(total);
         let mut budget = StepRetryBudget::new("Phase 4");
         let first =
             run_pending_scripted_batches(&mut session, Phase4Pass::B, &selected, |orders| {
-                if *orders.last().unwrap_or(&0) <= 20 {
+                if *orders.last().unwrap_or(&0) <= per_batch * 2 {
                     Ok(ok_patches(&selected, orders))
                 } else {
                     Err("timeout".to_owned())
@@ -2381,7 +2408,7 @@ mod tests {
             4
         );
         assert_eq!(budget.semantic_used(), 1);
-        assert!(budget.semantic_used() < 25);
+        assert!((budget.semantic_used() as i64) < total);
     }
 
     #[test]
