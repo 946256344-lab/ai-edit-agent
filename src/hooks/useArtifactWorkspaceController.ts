@@ -120,6 +120,12 @@ function deliveryMessage(delivery: EditorDeliveryResult) {
   return delivery.message
 }
 
+/** 所选编辑器已实现但本机未找到草稿库时为真。 */
+function selectedLinkerMissing(catalog: EditorLinkerCatalog) {
+  const selected = catalog.linkers.find((linker) => linker.id === catalog.selectedId)
+  return selected !== undefined && selected.implemented && !selected.available
+}
+
 export function deliverActionLabel(editorId: string, busy: boolean) {
   const copy = messages().output
   if (busy) return copy.delivering
@@ -151,6 +157,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     selectedId: 'jianying',
     linkers: [],
   })
+  const [editorRecheck, setEditorRecheck] = useState<'idle' | 'checking' | 'stillMissing'>('idle')
   const [storyboardVersions, setStoryboardVersions] = useState<StoryboardVersion[]>([])
   const activeTimelineRef = useRef<string | null>(null)
   const snapshotSessionRef = useRef<string | null>(null)
@@ -214,6 +221,43 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       active = false
     }
   }, [options.desktopRuntime, options.projectId])
+
+  // 从剪映/CapCut 切回本窗口时静默重测：草稿库注册表常在新建草稿几秒后才写盘。
+  useEffect(() => {
+    if (!options.desktopRuntime || !options.projectId) return
+    const projectId = options.projectId
+    const activeProjectRef = options.activeProjectRef
+    const onFocus = () => {
+      void listEditorLinkers(projectId)
+        .then((catalog) => {
+          if (activeProjectRef.current !== projectId) return
+          setEditorCatalog(catalog)
+          if (!selectedLinkerMissing(catalog)) setEditorRecheck('idle')
+        })
+        .catch(() => {})
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [options.desktopRuntime, options.projectId, options.activeProjectRef])
+
+  /** 手动重测草稿库位置：只读，不写项目设置；报告检测中与仍未找到。 */
+  async function recheckEditors() {
+    const projectId = options.projectId
+    if (!projectId) return
+    setEditorRecheck('checking')
+    try {
+      const catalog = await listEditorLinkers(projectId)
+      if (options.activeProjectRef.current !== projectId) {
+        setEditorRecheck('idle')
+        return
+      }
+      setEditorCatalog(catalog)
+      setEditorRecheck(selectedLinkerMissing(catalog) ? 'stillMissing' : 'idle')
+    } catch (error) {
+      console.warn('Editor linker recheck failed', error)
+      setEditorRecheck('stillMissing')
+    }
+  }
 
   function applyPreview(nextPreview: PreviewResult | null) {
     if (nextPreview) setPreviewNonce((nonce) => nonce + 1)
@@ -444,6 +488,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
     try {
       const catalog = await setOutputEditor(options.projectId, editorId)
       setEditorCatalog(catalog)
+      setEditorRecheck('idle')
     } catch (error) {
       const selected = editorCatalog.linkers.find((linker) => linker.id === editorId)
       setDeliveryNoticeTone('error')
@@ -490,6 +535,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       deliveryNoticeTone,
       editorCatalog,
       selectedEditorId: editorCatalog.selectedId,
+      editorRecheck,
       deliverLabel: deliverActionLabel(editorCatalog.selectedId, isDelivering),
       busy: {
         creatingTimeline: isCreatingTimeline,
@@ -503,6 +549,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       renderPreview: () => void createPreview(),
       deliverToEditor: (override?: TimelineVersion) => void deliverSelectedEditor(override),
       setOutputEditor: (editorId: string) => void chooseOutputEditor(editorId),
+      recheckEditors: () => void recheckEditors(),
     },
   }
 }

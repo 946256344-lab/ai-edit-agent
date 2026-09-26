@@ -620,7 +620,9 @@ function App() {
             deliverLabel={artifactWorkspace.model.deliverLabel}
             disabled={!artifactWorkspace.timeline || isSending || artifactWorkspace.model.busy.renderingPreview || shotReplacement.model.phase === 'saving' || shotReplacement.model.phase === 'rendering'}
             busy={artifactWorkspace.model.busy.delivering}
+            recheck={artifactWorkspace.model.editorRecheck}
             onSelect={(editorId) => artifactWorkspace.actions.setOutputEditor(editorId)}
+            onRecheck={artifactWorkspace.actions.recheckEditors}
             onDeliver={() => shotReplacement.actions.requestAction((timeline) => artifactWorkspace.actions.deliverToEditor(timeline))}
           />
         </header>}

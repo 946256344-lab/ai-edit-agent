@@ -8,7 +8,10 @@ type EditorOutputPortProps = {
   deliverLabel: string
   disabled: boolean
   busy: boolean
+  /** 重新检测进行中；检测完仍未找到时给出明确提示，避免点击后看似无反应。 */
+  recheck: 'idle' | 'checking' | 'stillMissing'
   onSelect: (editorId: string) => void
+  onRecheck: () => void
   onDeliver: () => void
 }
 
@@ -18,7 +21,9 @@ export function EditorOutputPort({
   deliverLabel,
   disabled,
   busy,
+  recheck,
   onSelect,
+  onRecheck,
   onDeliver,
 }: EditorOutputPortProps) {
   const { t } = useI18n()
@@ -59,11 +64,13 @@ export function EditorOutputPort({
           {copy.unavailableBefore(editorLabel(selected!))}
           <button
             className="deliver-recheck-button"
-            onClick={() => onSelect(selectedId)}
+            disabled={recheck === 'checking'}
+            onClick={onRecheck}
           >
-            {copy.recheck}
+            {recheck === 'checking' ? copy.rechecking : copy.recheck}
           </button>
           {copy.unavailableAfter}
+          {recheck === 'stillMissing' && <> {copy.stillMissing(editorLabel(selected!))}</>}
         </p>
       )}
     </div>

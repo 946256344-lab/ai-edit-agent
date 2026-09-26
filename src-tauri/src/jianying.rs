@@ -65,6 +65,11 @@ fn find_jianying_draft_location() -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn find_lveditor_draft_location(product_dir: &str) -> Option<(PathBuf, PathBuf)> {
+    locate_lveditor_draft(product_dir).ok()
+}
+
+/// 与 `find_lveditor_draft_location` 同一规则，失败时带回卡在哪一步，供检测日志使用。
+fn locate_lveditor_draft(product_dir: &str) -> Result<(PathBuf, PathBuf), String> {
     let registry_path = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|directory| {
@@ -74,21 +79,36 @@ pub(crate) fn find_lveditor_draft_location(product_dir: &str) -> Option<(PathBuf
                 .join("Projects")
                 .join("com.lveditor.draft")
                 .join("root_meta_info.json")
-        })?;
-    let registry: serde_json::Value =
-        serde_json::from_slice(&fs::read(&registry_path).ok()?).ok()?;
-    let draft_root = registry
-        .get("all_draft_store")?
-        .as_array()?
+        })
+        .ok_or_else(|| "LOCALAPPDATA is not set".to_owned())?;
+    let bytes = fs::read(&registry_path)
+        .map_err(|error| format!("read {}: {error}", registry_path.display()))?;
+    let registry: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("parse {}: {error}", registry_path.display()))?;
+    let roots: Vec<PathBuf> = registry
+        .get("all_draft_store")
+        .and_then(|store| store.as_array())
+        .ok_or_else(|| "registry has no all_draft_store array".to_owned())?
         .iter()
         .filter_map(|draft| draft.get("draft_root_path")?.as_str())
         .map(PathBuf::from)
-        .find(|path| path.is_dir())?;
-    Some((draft_root, registry_path))
+        .collect();
+    let draft_root = roots
+        .iter()
+        .find(|path| path.is_dir())
+        .cloned()
+        .ok_or_else(|| format!("no existing draft_root_path among {} entries", roots.len()))?;
+    Ok((draft_root, registry_path))
 }
 
 pub(crate) fn draft_location_available() -> bool {
-    find_jianying_draft_location().is_some()
+    match locate_lveditor_draft("JianyingPro") {
+        Ok(_) => true,
+        Err(reason) => {
+            log::warn!("Jianying draft location not found: {reason}");
+            false
+        }
+    }
 }
 
 pub(crate) fn adapter_script_available(app: &AppHandle) -> bool {
