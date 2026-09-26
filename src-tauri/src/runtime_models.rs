@@ -347,6 +347,9 @@ fn artifact_ready_on_disk(app: &AppHandle, id: ArtifactId) -> bool {
     // 权重合计约 700 MB：同一进程内按路径+大小+修改时间记住已校验通过的文件，
     // 避免启动与每次状态快照重复整文件哈希；文件被替换后元数据变化即重新校验。
     let fingerprint = (metadata.len(), metadata.modified().ok());
+    // 串行化整文件哈希：启动后台检查与状态查询并发时，后到者等首个结果进缓存，不重复读 700 MB。
+    // 持有期间不得再取 state_lock，否则与持 state_lock 调用本函数的路径互锁。
+    let _hashing = hashing_lock().lock();
     let verified = verified_artifacts();
     if verified
         .lock()
@@ -365,6 +368,11 @@ fn artifact_ready_on_disk(app: &AppHandle, id: ArtifactId) -> bool {
 }
 
 type ArtifactFingerprint = (u64, Option<SystemTime>);
+
+fn hashing_lock() -> &'static Mutex<()> {
+    static HASHING: Mutex<()> = Mutex::new(());
+    &HASHING
+}
 
 fn verified_artifacts() -> &'static Mutex<HashMap<PathBuf, ArtifactFingerprint>> {
     static VERIFIED: OnceLock<Mutex<HashMap<PathBuf, ArtifactFingerprint>>> = OnceLock::new();
@@ -543,12 +551,15 @@ pub fn start_runtime_model_download(app: AppHandle) -> Result<RuntimeModelStatus
     Ok(status)
 }
 
-/// 启动时若缺权重则自动开下，不阻塞调用方。
+/// 启动时若缺权重则自动开下，不阻塞调用方：冷启动整文件哈希约 10 秒，放到后台线程。
 pub(crate) fn maybe_start_runtime_model_download(app: &AppHandle) {
-    if ARTIFACTS.iter().all(|id| artifact_ready_on_disk(app, *id)) {
-        return;
-    }
-    let _ = start_runtime_model_download(app.clone());
+    let app = app.clone();
+    thread::spawn(move || {
+        if ARTIFACTS.iter().all(|id| artifact_ready_on_disk(&app, *id)) {
+            return;
+        }
+        let _ = start_runtime_model_download(app);
+    });
 }
 
 fn run_download_worker(app: AppHandle) {

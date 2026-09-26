@@ -166,12 +166,30 @@ fn recover_missing_agent_completion_messages(connection: &Connection) -> Result<
     Ok(missing.len())
 }
 
+/// 启动恢复按进程只跑一次：开发态 StrictMode 双调用、webview 重载都会再次调用本命令，
+/// 重跑会把仍在运行的 Agent 任务改判为中断；首次失败不记完成，下次调用可重试。
+static STARTUP_RECOVERY_DONE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
 #[tauri::command(async)]
 pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
+    let mut recovered = STARTUP_RECOVERY_DONE
+        .lock()
+        .map_err(|_| "startup_recovery_unavailable".to_owned())?;
+    if !*recovered {
+        run_startup_recovery(&app)?;
+        *recovered = true;
+    }
+    Ok(StoreStatus {
+        database_ready: true,
+        schema_version: crate::db::SCHEMA_VERSION,
+    })
+}
+
+fn run_startup_recovery(app: &AppHandle) -> Result<(), String> {
     let start = std::time::Instant::now();
     log::info!("[PERF] initialize_local_store: starting");
 
-    let connection = open_connection(&app)?;
+    let connection = open_connection(app)?;
     log::info!(
         "[PERF] initialize_local_store: open_connection took {:?}",
         start.elapsed()
@@ -230,7 +248,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
 
     let step_start = std::time::Instant::now();
     let known_projects = {
-        let connection = open_connection(&app)?;
+        let connection = open_connection(app)?;
         let mut statement = connection
             .prepare("SELECT id FROM projects")
             .map_err(|error| error.to_string())?;
@@ -241,7 +259,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
             .map_err(|error| error.to_string())?;
         ids
     };
-    if let Ok(freed) = crate::preview_cache::remove_orphan_project_caches(&app, &known_projects) {
+    if let Ok(freed) = crate::preview_cache::remove_orphan_project_caches(app, &known_projects) {
         if freed > 0 {
             log::info!("[PERF] initialize_local_store: removed orphan preview cache bytes={freed}");
         }
@@ -252,22 +270,22 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
     );
 
     let step_start = std::time::Instant::now();
-    resume_incomplete_analysis(&app)?;
+    resume_incomplete_analysis(app)?;
     log::info!(
         "[PERF] initialize_local_store: resume_incomplete_analysis took {:?}",
         step_start.elapsed()
     );
 
     let step_start = std::time::Instant::now();
-    resume_pending_jianying_registrations(&app)?;
-    resume_pending_capcut_registrations(&app)?;
+    resume_pending_jianying_registrations(app)?;
+    resume_pending_capcut_registrations(app)?;
     log::info!(
         "[PERF] initialize_local_store: resume_pending_jianying_registrations took {:?}",
         step_start.elapsed()
     );
 
     let step_start = std::time::Instant::now();
-    crate::runtime_models::maybe_start_runtime_model_download(&app);
+    crate::runtime_models::maybe_start_runtime_model_download(app);
     log::info!(
         "[PERF] initialize_local_store: runtime_model_download kickoff took {:?}",
         step_start.elapsed()
@@ -277,10 +295,7 @@ pub fn initialize_local_store(app: AppHandle) -> Result<StoreStatus, String> {
         "[PERF] initialize_local_store: total time {:?}",
         start.elapsed()
     );
-    Ok(StoreStatus {
-        database_ready: true,
-        schema_version: crate::db::SCHEMA_VERSION,
-    })
+    Ok(())
 }
 
 #[tauri::command(async)]
