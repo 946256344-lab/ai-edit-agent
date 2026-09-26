@@ -9,7 +9,7 @@ use crate::process::{
 use crate::storyboard::semantic::cosine_similarity;
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
@@ -27,6 +27,8 @@ const FULL_FRAME_MAX_MS: i64 = 60_000;
 const KEYFRAME_PASS_BUDGET: Duration = Duration::from_secs(20);
 const FULL_DECODE_MIN_REMAINING: Duration = Duration::from_secs(15);
 const FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
+/// 一次 FFmpeg 最多抽的帧数：每帧一个快速定位的输入，过多会拉长命令行和单进程内存。
+const FRAMES_PER_FFMPEG: usize = 12;
 const MAX_KEYFRAMES_FOR_GRID: usize = 8;
 const MAX_SAMPLE_FRAMES: usize = 8;
 const SAMPLE_INTERVAL_MS: i64 = 4_000;
@@ -297,6 +299,51 @@ fn extract_frame(source: &Path, time_ms: i64, destination: &Path) -> bool {
     }
 }
 
+/// 同一条素材的多帧用一次 FFmpeg 抽完（每个时间点一个 `-ss` 快速定位的输入，各输出一帧），
+/// 不再每帧启动一次进程。整批失败或个别缺帧时逐帧补抽，结果与逐帧抽取一致。
+fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
+    let mut extracted = vec![false; requests.len()];
+    for (chunk_index, chunk) in requests.chunks(FRAMES_PER_FFMPEG).enumerate() {
+        let mut command = hidden_command("ffmpeg");
+        command.args(["-y", "-hide_banner", "-loglevel", "error"]);
+        for (time_ms, destination) in chunk {
+            let _ = fs::remove_file(destination);
+            let time_seconds = ((*time_ms).max(0) as f64) / 1000.0;
+            command
+                .args(media_open_args())
+                .args(["-ss", &format!("{time_seconds:.3}"), "-i"])
+                .arg(source);
+        }
+        for (input, (_, destination)) in chunk.iter().enumerate() {
+            command
+                .args(["-map", &format!("{input}:v:0")])
+                .args(["-frames:v", "1", "-vf", "scale=320:-2"])
+                .arg(destination);
+        }
+        let timeout = FRAME_FFMPEG_TIMEOUT + Duration::from_secs(5 * chunk.len() as u64);
+        if let Err(error) = run_hidden_command_with_timeout(&mut command, timeout) {
+            log::warn!(
+                "Batched frame extraction ({} frames) {} for {}; retrying one by one.",
+                chunk.len(),
+                match error {
+                    HiddenCommandError::TimedOut => "timed out",
+                    HiddenCommandError::Failed => "could not start",
+                },
+                file_label(source)
+            );
+        }
+        for (offset, (_, destination)) in chunk.iter().enumerate() {
+            extracted[chunk_index * FRAMES_PER_FFMPEG + offset] = destination.is_file();
+        }
+    }
+    for ((time_ms, destination), done) in requests.iter().zip(extracted.iter_mut()) {
+        if !*done {
+            *done = extract_frame(source, *time_ms, destination);
+        }
+    }
+    extracted
+}
+
 fn sample_times_for_segment(start_ms: i64, end_ms: i64) -> Vec<i64> {
     let duration = (end_ms - start_ms).max(0);
     if duration == 0 {
@@ -358,21 +405,33 @@ fn verify_hard_cuts(
         return Vec::new();
     };
     let extract_started = Instant::now();
+    let probes = cuts
+        .iter()
+        .filter_map(|cut| {
+            let before_ms = (*cut - CUT_PROBE_OFFSET_MS).max(0);
+            let after_ms = (*cut + CUT_PROBE_OFFSET_MS).min(duration_ms.saturating_sub(1));
+            (after_ms > before_ms).then_some((*cut, before_ms, after_ms))
+        })
+        .collect::<Vec<_>>();
+    let requests = probes
+        .iter()
+        .flat_map(|(cut, before_ms, after_ms)| {
+            [
+                (*before_ms, derived_dir.join(format!("cut_before_{cut}.jpg"))),
+                (*after_ms, derived_dir.join(format!("cut_after_{cut}.jpg"))),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let extracted_frames = extract_frames(source, &requests);
     let mut pairs: Vec<(i64, Vec<u8>, Vec<u8>)> = Vec::new();
-    for cut in &cuts {
-        let before_ms = (*cut - CUT_PROBE_OFFSET_MS).max(0);
-        let after_ms = (*cut + CUT_PROBE_OFFSET_MS).min(duration_ms.saturating_sub(1));
-        if after_ms <= before_ms {
-            continue;
-        }
-        let before_path = derived_dir.join(format!("cut_before_{cut}.jpg"));
-        let after_path = derived_dir.join(format!("cut_after_{cut}.jpg"));
-        let extracted = extract_frame(source, before_ms, &before_path)
-            && extract_frame(source, after_ms, &after_path);
-        let before_bytes = extracted.then(|| fs::read(&before_path).ok()).flatten();
-        let after_bytes = extracted.then(|| fs::read(&after_path).ok()).flatten();
-        let _ = fs::remove_file(&before_path);
-        let _ = fs::remove_file(&after_path);
+    for (index, (cut, _, _)) in probes.iter().enumerate() {
+        let (_, before_path) = &requests[index * 2];
+        let (_, after_path) = &requests[index * 2 + 1];
+        let extracted = extracted_frames[index * 2] && extracted_frames[index * 2 + 1];
+        let before_bytes = extracted.then(|| fs::read(before_path).ok()).flatten();
+        let after_bytes = extracted.then(|| fs::read(after_path).ok()).flatten();
+        let _ = fs::remove_file(before_path);
+        let _ = fs::remove_file(after_path);
         match (before_bytes, after_bytes) {
             (Some(before), Some(after)) if !before.is_empty() && !after.is_empty() => {
                 pairs.push((*cut, before, after));
@@ -448,19 +507,36 @@ pub(crate) fn analyze_video_segments(
     };
 
     let samples_started = Instant::now();
-    let mut sampled_frames = 0usize;
-    let mut segments = Vec::with_capacity(ranges.len());
+    let plans = ranges
+        .into_iter()
+        .enumerate()
+        .map(|(index, (start_ms, end_ms))| {
+            let segment_id = format!("s{:03}", index + 1);
+            let requests = sample_times_for_segment(start_ms, end_ms)
+                .into_iter()
+                .enumerate()
+                .map(|(frame_index, time_ms)| {
+                    let destination =
+                        derived_dir.join(format!("seg_{segment_id}_{:02}.jpg", frame_index + 1));
+                    (time_ms, destination)
+                })
+                .collect::<Vec<_>>();
+            (segment_id, start_ms, end_ms, requests)
+        })
+        .collect::<Vec<_>>();
+    let all_requests = plans
+        .iter()
+        .flat_map(|(_, _, _, requests)| requests.iter().cloned())
+        .collect::<Vec<_>>();
+    let sampled_frames = all_requests.len();
+    let mut extracted = extract_frames(source, &all_requests).into_iter();
+    let mut segments = Vec::with_capacity(plans.len());
     let mut midpoint_keyframes = Vec::new();
-    for (index, (start_ms, end_ms)) in ranges.into_iter().enumerate() {
-        let segment_id = format!("s{:03}", index + 1);
-        let sample_times = sample_times_for_segment(start_ms, end_ms);
-        let mut frames = Vec::with_capacity(sample_times.len());
+    for (segment_id, start_ms, end_ms, requests) in plans {
+        let mut frames = Vec::with_capacity(requests.len());
         let mut quality_scores = Vec::new();
-        for (frame_index, time_ms) in sample_times.iter().enumerate() {
-            let destination =
-                derived_dir.join(format!("seg_{segment_id}_{:02}.jpg", frame_index + 1));
-            sampled_frames += 1;
-            if extract_frame(source, *time_ms, &destination) {
+        for (time_ms, destination) in &requests {
+            if extracted.next().unwrap_or(false) {
                 if let Some(score) = frame_quality_score(&destination) {
                     quality_scores.push(score);
                 }

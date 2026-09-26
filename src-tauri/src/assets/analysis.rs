@@ -24,9 +24,21 @@ use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 pub(crate) const MAX_INITIAL_OCR_FRAMES: usize = 2;
-pub(crate) const MAX_TECHNICAL_ANALYSIS_WORKERS: usize = 2;
-pub(crate) const STARTUP_ANALYSIS_BATCH: usize = 4;
-pub(crate) const DRAIN_ANALYSIS_BATCH: usize = 4;
+/// 技术分析同时跑的素材数：本机逻辑核数的一半，限制在 2–8 条（原先固定 2 条，16 线程机器大部分时间闲着）。
+pub(crate) fn max_technical_analysis_workers() -> usize {
+    static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *WORKERS.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(|count| count.get() / 2)
+            .unwrap_or(2)
+            .clamp(2, 8)
+    })
+}
+
+/// 每次从队列领取的任务数：每个执行线程两条。
+pub(crate) fn analysis_claim_batch() -> usize {
+    max_technical_analysis_workers() * 2
+}
 const FFPROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const THUMBNAIL_FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
 const TESSERACT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -51,7 +63,7 @@ pub(crate) fn release_all_technical_analysis_workers() {
 fn reserve_technical_analysis_worker() -> Option<TechnicalAnalysisWorkerSlot> {
     let mut count = ANALYSIS_WORKER_COUNT.load(Ordering::Acquire);
     loop {
-        if count >= MAX_TECHNICAL_ANALYSIS_WORKERS {
+        if count >= max_technical_analysis_workers() {
             return None;
         }
         match ANALYSIS_WORKER_COUNT.compare_exchange_weak(
@@ -646,7 +658,7 @@ pub(crate) fn spawn_technical_analysis_tasks(app: AppHandle, tasks: Vec<(String,
     if claimed_tasks.is_empty() {
         return;
     }
-    let slots = (0..claimed_tasks.len().min(MAX_TECHNICAL_ANALYSIS_WORKERS))
+    let slots = (0..claimed_tasks.len().min(max_technical_analysis_workers()))
         .filter_map(|_| reserve_technical_analysis_worker())
         .collect::<Vec<_>>();
     if slots.is_empty() {
@@ -880,8 +892,8 @@ pub(crate) fn resume_incomplete_analysis(app: &AppHandle) -> Result<(), String> 
             created_orphan_tasks += 1;
         }
         log::info!("[PERF] resume_incomplete_analysis: created {} orphan tasks, total tasks before truncate: {}", created_orphan_tasks, tasks.len());
-        tasks.truncate(STARTUP_ANALYSIS_BATCH);
-        log::info!("[PERF] resume_incomplete_analysis: will spawn {} analysis tasks (STARTUP_ANALYSIS_BATCH={})", tasks.len(), STARTUP_ANALYSIS_BATCH);
+        tasks.truncate(analysis_claim_batch());
+        log::info!("[PERF] resume_incomplete_analysis: will spawn {} analysis tasks (claim batch={})", tasks.len(), analysis_claim_batch());
         spawn_technical_analysis_tasks(app.clone(), tasks);
         // 技术队列排空后，顺带补跑旧格式分段。
         let _ = enqueue_and_spawn_segment_reanalysis(app, None);
@@ -1336,7 +1348,7 @@ pub fn retry_asset_analysis_batch(
 }
 
 pub(crate) fn drain_pending_analysis(app: &AppHandle, project_id: &str) -> Result<(), String> {
-    if ANALYSIS_WORKER_COUNT.load(Ordering::Acquire) >= MAX_TECHNICAL_ANALYSIS_WORKERS {
+    if ANALYSIS_WORKER_COUNT.load(Ordering::Acquire) >= max_technical_analysis_workers() {
         return Ok(());
     }
     let connection = open_connection(app)?;
@@ -1352,7 +1364,7 @@ pub(crate) fn drain_pending_analysis(app: &AppHandle, project_id: &str) -> Resul
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![project_id, DRAIN_ANALYSIS_BATCH as i64], |row| {
+        .query_map(params![project_id, analysis_claim_batch() as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|error| error.to_string())?
@@ -1396,7 +1408,7 @@ pub(crate) fn enqueue_and_spawn_segment_reanalysis(
     app: &AppHandle,
     preferred_project_id: Option<&str>,
 ) -> Result<(), String> {
-    if ANALYSIS_WORKER_COUNT.load(Ordering::Acquire) >= MAX_TECHNICAL_ANALYSIS_WORKERS {
+    if ANALYSIS_WORKER_COUNT.load(Ordering::Acquire) >= max_technical_analysis_workers() {
         return Ok(());
     }
     let connection = open_connection(app)?;
@@ -1421,7 +1433,7 @@ pub(crate) fn enqueue_and_spawn_segment_reanalysis(
             )
             .map_err(|error| error.to_string())?;
         let rows = statement
-            .query_map(params![DRAIN_ANALYSIS_BATCH as i64], |row| {
+            .query_map(params![analysis_claim_batch() as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|error| error.to_string())?
@@ -1455,11 +1467,11 @@ pub(crate) fn enqueue_and_spawn_segment_reanalysis(
         candidates.extend(select_segment_reanalysis_candidates(
             &connection,
             Some(project_id),
-            DRAIN_ANALYSIS_BATCH,
+            analysis_claim_batch(),
         )?);
     }
-    if candidates.len() < DRAIN_ANALYSIS_BATCH {
-        let remaining = DRAIN_ANALYSIS_BATCH - candidates.len();
+    if candidates.len() < analysis_claim_batch() {
+        let remaining = analysis_claim_batch() - candidates.len();
         let extra = select_segment_reanalysis_candidates(&connection, None, remaining)?;
         for (asset_id, project_id) in extra {
             if !candidates.iter().any(|(id, _)| id == &asset_id) {
@@ -1586,7 +1598,7 @@ fn spawn_segment_reanalysis_tasks(app: AppHandle, tasks: Vec<(String, String)>) 
     if claimed_tasks.is_empty() {
         return;
     }
-    let slots = (0..claimed_tasks.len().min(MAX_TECHNICAL_ANALYSIS_WORKERS))
+    let slots = (0..claimed_tasks.len().min(max_technical_analysis_workers()))
         .filter_map(|_| reserve_technical_analysis_worker())
         .collect::<Vec<_>>();
     if slots.is_empty() {
@@ -1836,15 +1848,15 @@ mod tests {
     #[test]
     fn technical_worker_slots_are_bounded_and_released() {
         release_all_technical_analysis_workers();
-        let first = reserve_technical_analysis_worker();
-        let second = reserve_technical_analysis_worker();
-        assert!(first.is_some());
-        assert!(second.is_some());
+        let mut slots = (0..max_technical_analysis_workers())
+            .map(|_| reserve_technical_analysis_worker())
+            .collect::<Vec<_>>();
+        assert!(slots.iter().all(Option::is_some));
         assert!(reserve_technical_analysis_worker().is_none());
 
-        drop(first);
+        drop(slots.pop());
         assert!(reserve_technical_analysis_worker().is_some());
-        drop(second);
+        drop(slots);
         release_all_technical_analysis_workers();
     }
 

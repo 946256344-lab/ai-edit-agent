@@ -33,7 +33,7 @@ pub(crate) use health::get_asset_health_summary_for_agent;
 // ---- 内部辅助：从子模块引用 ----
 use analysis::{
     asset_kind, collect_media_files, enqueue_technical_analysis, spawn_technical_analysis_tasks,
-    DRAIN_ANALYSIS_BATCH,
+    analysis_claim_batch,
 };
 use health::modified_millis;
 
@@ -375,7 +375,7 @@ pub fn confirm_asset_relink(
             "The selected folder no longer contains the verified source matches.".to_owned(),
         );
     }
-    tasks.truncate(DRAIN_ANALYSIS_BATCH);
+    tasks.truncate(analysis_claim_batch());
     spawn_technical_analysis_tasks(app.clone(), tasks);
     Ok(AssetRelinkResult { relinked_count })
 }
