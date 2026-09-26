@@ -691,6 +691,10 @@ export const en: typeof zhCN = {
       providerServerError: (status: number) => `The AI model service had an internal error (HTTP ${status}). Retry later or switch to another model service.`,
       providerRejected: (status: number, detail: string) => `The AI model service rejected this request (HTTP ${status}). Check the custom API model name and address. Cause: ${detail}`,
       providerEmpty: 'The AI model service returned an empty response. Retry later or check the model name.',
+      // Voycut gateway reasons (provider_gateway_* codes).
+      gatewayAuth: 'You are not signed in to Voycut, or your sign-in has expired. Sign in again from the account menu; if you are already signed in, check your network.',
+      gatewayEntitlement: 'Your Voycut access is not active; the trial may have ended. Check your trial status on the account page.',
+      gatewayPayloadTooLarge: 'This visual analysis request is too large for the model service. Process fewer clips or shots at once and try again.',
       withCause: (summary: string, detail: string) => `${summary} Cause: ${detail}`,
       agentMessage: 'This run did not complete and existing results were not changed. Please retry, or tell me which media and clips to keep.',
     },

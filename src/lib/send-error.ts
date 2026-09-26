@@ -11,6 +11,7 @@ type ProviderFailure =
   | { kind: 'network' }
   | { kind: 'http'; status: number }
   | { kind: 'empty' }
+  | { kind: 'gateway'; reason: 'auth' | 'entitlement' | 'payloadTooLarge' }
 
 export function describeSendError(rawError: string, hasContext: boolean): string {
   const errorCopy = messages().app.errors
@@ -30,6 +31,10 @@ export function describeSendError(rawError: string, hasContext: boolean): string
       case 'timeout': return errorCopy.providerTimeout(detail)
       case 'network': return errorCopy.providerNetwork(detail)
       case 'empty': return errorCopy.providerEmpty
+      case 'gateway':
+        if (failure.reason === 'auth') return errorCopy.gatewayAuth
+        if (failure.reason === 'entitlement') return errorCopy.gatewayEntitlement
+        return errorCopy.gatewayPayloadTooLarge
       case 'http':
         if (failure.status === 401 || failure.status === 403) return errorCopy.providerAuth(failure.status)
         if (failure.status === 429) return errorCopy.providerRateLimited
@@ -42,11 +47,14 @@ export function describeSendError(rawError: string, hasContext: boolean): string
   return detail ? errorCopy.withCause(summary, detail) : summary
 }
 
-// 与 src-tauri/src/provider.rs 的 classify_model_request_failure 码一一对应；provider_unknown 走兜底摘录。
+// 与 src-tauri/src/provider.rs 的 classify_model_request_failure 及网关 GATEWAY_* 码一一对应；provider_unknown 走兜底摘录。
 function failureFromCode(code: string): ProviderFailure | null {
   if (code === 'provider_timeout') return { kind: 'timeout' }
   if (code === 'provider_network') return { kind: 'network' }
   if (code === 'provider_empty_response') return { kind: 'empty' }
+  if (code === 'provider_gateway_auth') return { kind: 'gateway', reason: 'auth' }
+  if (code === 'provider_gateway_entitlement') return { kind: 'gateway', reason: 'entitlement' }
+  if (code === 'provider_gateway_payload_too_large') return { kind: 'gateway', reason: 'payloadTooLarge' }
   const http = /^provider_http_(\d{3})$/.exec(code)
   return http ? { kind: 'http', status: Number(http[1]) } : null
 }

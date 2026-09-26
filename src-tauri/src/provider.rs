@@ -73,7 +73,17 @@ pub(crate) struct ModelRequestFailureClass {
     pub(crate) code: String,
 }
 
+/// Voycut 网关的稳定失败码，前端按码显示当前界面语言的原因。
+const GATEWAY_AUTH: &str = "provider_gateway_auth";
+const GATEWAY_ENTITLEMENT: &str = "provider_gateway_entitlement";
+const GATEWAY_PAYLOAD_TOO_LARGE: &str = "provider_gateway_payload_too_large";
+
 pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailureClass {
+    if let Some(code) = existing_failure_code(error) {
+        return ModelRequestFailureClass {
+            code: code.to_owned(),
+        };
+    }
     if let Some(status) = provider_http_status(error) {
         return ModelRequestFailureClass {
             code: format!("provider_http_{status}"),
@@ -116,7 +126,20 @@ pub(crate) fn classify_model_request_failure(error: &str) -> ModelRequestFailure
 /// 同步返回给前端的 Provider 失败加上 `{code}: ` 前缀，前端按稳定码给出具体原因，
 /// 不必匹配随系统语言变化的传输文案。原文保留在码之后，由前端脱敏后摘录。
 pub(crate) fn with_model_failure_code(error: String) -> String {
+    if existing_failure_code(&error).is_some() {
+        return error;
+    }
     format!("{}: {error}", classify_model_request_failure(&error).code)
+}
+
+/// 网关分支直接产出带码错误（`provider_gateway_*: ...`），分类时原样沿用，不再二次加码。
+fn existing_failure_code(error: &str) -> Option<&str> {
+    let (code, _) = error.split_once(": ")?;
+    (code.starts_with("provider_")
+        && code
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'))
+    .then_some(code)
 }
 
 fn provider_http_status(error: &str) -> Option<u16> {
@@ -1003,7 +1026,9 @@ fn post_model_payload_with_custom_model(
         ModelAccess::Gateway(config) | ModelAccess::Custom(config) => {
             let is_gateway = matches!(access, ModelAccess::Gateway(_));
             let bearer = if is_gateway {
-                crate::fellowcut_account::fresh_id_token()?
+                // 未登录与令牌刷新失败都归为需要重新登录；原因文案由前端按码翻译。
+                crate::fellowcut_account::fresh_id_token()
+                    .map_err(|_| format!("{GATEWAY_AUTH}: Voycut sign-in is missing or expired."))?
             } else {
                 config.api_key.clone()
             };
@@ -1023,7 +1048,8 @@ fn post_model_payload_with_custom_model(
                     let status = response.status();
                     let body = response.into_string().map_err(|error| {
                         if is_gateway {
-                            "Voycut 模型服务响应无法读取。".to_owned()
+                            "Voycut model service response could not be read (network error)."
+                                .to_owned()
                         } else {
                             format!(
                                 "自定义 API 读取响应失败（{}，模型 {}）:{}",
@@ -1035,7 +1061,7 @@ fn post_model_payload_with_custom_model(
                     })?;
                     if body.trim().is_empty() {
                         return Err(if is_gateway {
-                            "Voycut 模型服务返回了空响应。".to_owned()
+                            "Voycut model service response was empty.".to_owned()
                         } else {
                             format!(
                                 "自定义 API 返回空响应体（{}，模型 {}）:HTTP {status}",
@@ -1062,11 +1088,16 @@ fn post_model_payload_with_custom_model(
                             &[bearer.as_str(), config.base_url.as_str()],
                         );
                         if is_gateway {
+                            // 网关专属原因带稳定码；其余状态沿用 `:HTTP {status}` 通用分类。
                             match status {
-                                401 => "Voycut 登录已失效，请重新登录。".to_owned(),
-                                403 => "Voycut 使用资格不可用，请在账号页检查试用状态。".to_owned(),
-                                413 => "本次画面分析数据过大，模型服务无法接收。".to_owned(),
-                                _ => format!("Voycut 模型服务暂时不可用：HTTP {status}"),
+                                401 => format!("{GATEWAY_AUTH}: Voycut sign-in expired."),
+                                403 => format!(
+                                    "{GATEWAY_ENTITLEMENT}: Voycut access is not active for this account."
+                                ),
+                                413 => format!(
+                                    "{GATEWAY_PAYLOAD_TOO_LARGE}: Visual analysis payload exceeded the model service limit."
+                                ),
+                                _ => format!("Voycut model service unavailable:HTTP {status}"),
                             }
                         } else {
                             format!(
@@ -1078,7 +1109,7 @@ fn post_model_payload_with_custom_model(
                     }
                     ureq::Error::Transport(transport) => {
                         if is_gateway {
-                            "无法连接 Voycut 模型服务，请检查网络后重试。".to_owned()
+                            "Voycut model service connection failed (network error).".to_owned()
                         } else {
                             format!(
                                 "自定义 API 不可用（{}，模型 {}）:网络错误 {}",

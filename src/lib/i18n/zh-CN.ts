@@ -685,6 +685,10 @@ export const zhCN = {
       providerServerError: (status: number) => `AI 模型服务内部出错（HTTP ${status}）。请稍后重试，或换一个模型服务。`,
       providerRejected: (status: number, detail: string) => `AI 模型服务拒绝了这次请求（HTTP ${status}）。请检查自定义 API 的模型名与地址。原因：${detail}`,
       providerEmpty: 'AI 模型服务返回了空响应。请稍后重试，或检查模型名是否正确。',
+      // Voycut 网关专属原因（provider_gateway_* 码）。
+      gatewayAuth: '未登录 Voycut 或登录已失效。请在账号菜单重新登录；已登录时请检查网络。',
+      gatewayEntitlement: 'Voycut 使用资格不可用，试用可能已到期。请在账号页查看试用状态。',
+      gatewayPayloadTooLarge: '本次画面分析数据过大，模型服务无法接收。请减少一次处理的素材或镜头后重试。',
       withCause: (summary: string, detail: string) => `${summary}原因：${detail}`,
       agentMessage: '这次操作没有完成，已有结果没有被修改。请重试，或补充你希望保留的素材和片段。',
     },
