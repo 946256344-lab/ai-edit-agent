@@ -182,6 +182,95 @@ pub(crate) fn compose_timed_frame_grid(
     output_path.is_file().then(|| output_path.to_path_buf())
 }
 
+/// 拼网格并在每格左上角标出文字（如「3 12.4s」），供模型按编号和源时间引用帧。
+/// 只画数字、小数点、空格、`s` 和 `#`，用内置 3×5 点阵，不引入字体依赖。
+pub(crate) fn compose_labeled_frame_grid(
+    frames: &[(PathBuf, String)],
+    output_path: &Path,
+    columns: u32,
+) -> Option<PathBuf> {
+    if frames.is_empty() || columns == 0 {
+        return None;
+    }
+    const CELL_W: u32 = 320;
+    const CELL_H: u32 = 180;
+    let columns = columns.min(frames.len() as u32);
+    let rows = (frames.len() as u32).div_ceil(columns);
+    let mut grid: RgbImage =
+        ImageBuffer::from_pixel(columns * CELL_W, rows * CELL_H, Rgb([0, 0, 0]));
+    for (index, (path, label)) in frames.iter().enumerate() {
+        let img = image::open(path).ok()?.to_rgb8();
+        let mut cell =
+            image::imageops::resize(&img, CELL_W, CELL_H, image::imageops::FilterType::Triangle);
+        draw_cell_label(&mut cell, label);
+        let col = (index as u32) % columns;
+        let row = (index as u32) / columns;
+        image::imageops::replace(&mut grid, &cell, (col * CELL_W).into(), (row * CELL_H).into());
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    grid.save(output_path).ok()?;
+    output_path.is_file().then(|| output_path.to_path_buf())
+}
+
+fn glyph(character: char) -> Option<[u8; 5]> {
+    // 每行 3 位，高位在左。
+    Some(match character {
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
+        's' => [0b000, 0b111, 0b100, 0b011, 0b111],
+        '#' => [0b101, 0b111, 0b101, 0b111, 0b101],
+        ' ' => [0; 5],
+        _ => return None,
+    })
+}
+
+/// 左上角黑底白字，每个点放大为 4×4 像素。
+fn draw_cell_label(cell: &mut RgbImage, label: &str) {
+    const SCALE: u32 = 4;
+    const PAD: u32 = 4;
+    let glyphs = label.chars().filter_map(glyph).collect::<Vec<_>>();
+    if glyphs.is_empty() {
+        return;
+    }
+    let width = (glyphs.len() as u32 * 4 * SCALE + PAD * 2).min(cell.width());
+    let height = (5 * SCALE + PAD * 2).min(cell.height());
+    for y in 0..height {
+        for x in 0..width {
+            cell.put_pixel(x, y, Rgb([0, 0, 0]));
+        }
+    }
+    for (position, rows) in glyphs.iter().enumerate() {
+        let left = PAD + position as u32 * 4 * SCALE;
+        for (row, bits) in rows.iter().enumerate() {
+            for column in 0..3u32 {
+                if bits & (0b100 >> column) == 0 {
+                    continue;
+                }
+                for dy in 0..SCALE {
+                    for dx in 0..SCALE {
+                        let x = left + column * SCALE + dx;
+                        let y = PAD + row as u32 * SCALE + dy;
+                        if x < cell.width() && y < cell.height() {
+                            cell.put_pixel(x, y, Rgb([255, 255, 255]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 把几张候选网格上下拼成一张：单个请求的图片数有上限时，候选数不减、每格清晰度不变。
 /// 各段统一缩放到同一宽度，中间用灰色分隔条隔开，调用方在文字里写明每段是哪个候选。
 pub(crate) fn stack_images_vertically(paths: &[PathBuf], output_path: &Path) -> Option<PathBuf> {

@@ -30,8 +30,8 @@ const FRAME_FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
 /// 一次 FFmpeg 最多抽的帧数：每帧一个快速定位的输入，过多会拉长命令行和单进程内存。
 const FRAMES_PER_FFMPEG: usize = 12;
 const MAX_KEYFRAMES_FOR_GRID: usize = 8;
-const MAX_SAMPLE_FRAMES: usize = 8;
-const SAMPLE_INTERVAL_MS: i64 = 4_000;
+/// 每段抽样帧数：清晰度评分与整段画面识别共用。
+pub(crate) const SEGMENT_SAMPLE_FRAMES: usize = 6;
 const CUT_PROBE_OFFSET_MS: i64 = 250;
 /// 与 Phase 2 去似同一阈值：切点两侧仍像同一画面则丢掉该切。
 const CUT_VERIFY_SIMILAR_COSINE: f64 = 0.92;
@@ -346,50 +346,18 @@ fn extract_frames(source: &Path, requests: &[(i64, PathBuf)]) -> Vec<bool> {
     extracted
 }
 
+/// 每段固定取 6 帧：把段均分 6 份取各份中点，避开切点两侧的过渡帧；极短段去重后可少于 6 帧。
+/// 这 6 帧既算清晰度，也拼成网格做整段画面识别。
 fn sample_times_for_segment(start_ms: i64, end_ms: i64) -> Vec<i64> {
     let duration = (end_ms - start_ms).max(0);
     if duration == 0 {
         return Vec::new();
     }
-    let pad = (duration / 8).clamp(1, 250);
-    let first = start_ms + pad;
-    let last = (end_ms - pad).max(first);
-    let mid = start_ms + duration / 2;
-    if duration <= 6_000 {
-        if first == last {
-            return vec![mid];
-        }
-        let mut times = vec![first, mid, last];
-        times.sort_unstable();
-        times.dedup();
-        return times;
-    }
-    let mut times = vec![first];
-    let mut cursor = first.saturating_add(SAMPLE_INTERVAL_MS);
-    while cursor + 500 < last {
-        times.push(cursor);
-        cursor = cursor.saturating_add(SAMPLE_INTERVAL_MS);
-    }
-    times.push(last);
-    times.sort_unstable();
+    let mut times = (0..SEGMENT_SAMPLE_FRAMES as i64)
+        .map(|index| start_ms + duration * (2 * index + 1) / (2 * SEGMENT_SAMPLE_FRAMES as i64))
+        .collect::<Vec<_>>();
     times.dedup();
-    if times.len() <= MAX_SAMPLE_FRAMES {
-        return times;
-    }
-    let last_index = times.len() - 1;
-    let mut kept = vec![times[0]];
-    let inner = MAX_SAMPLE_FRAMES - 2;
-    for index in 1..=inner {
-        let sample_index = index * last_index / (inner + 1);
-        let value = times[sample_index];
-        if kept.last().copied() != Some(value) {
-            kept.push(value);
-        }
-    }
-    if kept.last().copied() != Some(times[last_index]) {
-        kept.push(times[last_index]);
-    }
-    kept
+    times
 }
 
 fn verify_hard_cuts(
@@ -631,20 +599,16 @@ mod tests {
     }
 
     #[test]
-    fn sample_times_add_head_mid_tail_for_medium_segments() {
-        assert_eq!(sample_times_for_segment(0, 4_000), vec![250, 2_000, 3_750]);
-        let long = sample_times_for_segment(0, 8_000);
-        assert_eq!(*long.first().unwrap(), 250);
-        assert_eq!(*long.last().unwrap(), 7_750);
-        assert!(long.len() >= 3);
-    }
-
-    #[test]
-    fn sample_times_cap_long_segments() {
-        let times = sample_times_for_segment(0, 120_000);
-        assert!(times.len() <= MAX_SAMPLE_FRAMES);
-        assert_eq!(*times.first().unwrap(), 250);
-        assert_eq!(*times.last().unwrap(), 119_750);
+    fn sample_times_take_six_centered_frames_per_segment() {
+        assert_eq!(
+            sample_times_for_segment(0, 6_000),
+            vec![500, 1_500, 2_500, 3_500, 4_500, 5_500]
+        );
+        let long = sample_times_for_segment(10_000, 130_000);
+        assert_eq!(long.len(), SEGMENT_SAMPLE_FRAMES);
+        assert_eq!(long.first(), Some(&20_000));
+        assert_eq!(long.last(), Some(&120_000));
+        assert_eq!(sample_times_for_segment(0, 3), vec![0, 1, 2]);
     }
 
     #[test]

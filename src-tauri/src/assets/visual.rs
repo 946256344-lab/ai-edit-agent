@@ -26,7 +26,8 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
-const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
+/// 整段 6 帧识别的输出比单帧长得多。
+const VISUAL_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const VISUAL_ANALYSIS_BATCH_SIZE: usize = 6;
 
 /// 同时执行的画面分析任务上限，只为不让本机同时编码过多图片；请求本身不限速。
@@ -95,6 +96,35 @@ struct VisualBatchAsset {
         deserialize_with = "crate::assets::segment_visual::string_or_joined"
     )]
     caption: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
+    shot_type: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::assets::segment_visual::string_or_joined"
+    )]
+    camera_motion: Option<String>,
+    // 以下为整段识别字段，模型写法不稳定，按 Value 收下再宽松解析。
+    #[serde(default)]
+    changes: Value,
+    #[serde(default)]
+    subject_positions: Value,
+    #[serde(default)]
+    focus: Value,
+    #[serde(default)]
+    on_screen_text: Value,
+    #[serde(default)]
+    text_languages: Value,
+    #[serde(default)]
+    brand_logos: Value,
+    #[serde(default)]
+    crowd: Value,
+    #[serde(default)]
+    exhibition: Value,
+    #[serde(default)]
+    best_range: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,9 +133,13 @@ pub(crate) struct CoarseVisualUnit {
     pub segment_id: String,
     pub time_ms: Option<i64>,
     pub image_path: String,
+    /// 该段全部抽样帧（源时间毫秒, 路径），拼成网格整段识别；图片与无段素材为空。
+    pub frames: Vec<(i64, String)>,
+    /// 该段源范围，用于把模型给出的时间夹回段内。
+    pub range_ms: Option<(i64, i64)>,
 }
 
-/// 粗识别发送单位：有硬切段则每段中点 1 帧；否则退回整条代表帧。
+/// 粗识别发送单位：有硬切段则每段一个单元（带该段全部抽样帧）；否则退回整条代表帧。
 pub(crate) fn collect_visual_units(
     asset_id: &str,
     kind: &str,
@@ -125,6 +159,12 @@ pub(crate) fn collect_visual_units(
                 segment_id: segment.id.clone(),
                 time_ms: Some(frame.time_ms),
                 image_path: frame.image_path.clone(),
+                frames: segment
+                    .frames
+                    .iter()
+                    .map(|frame| (frame.time_ms, frame.image_path.clone()))
+                    .collect(),
+                range_ms: Some((segment.start_ms, segment.end_ms)),
             });
         }
         if !units.is_empty() {
@@ -137,6 +177,8 @@ pub(crate) fn collect_visual_units(
             segment_id: String::new(),
             time_ms,
             image_path,
+            frames: Vec::new(),
+            range_ms: None,
         })
         .into_iter()
         .collect()
@@ -157,15 +199,6 @@ fn nonempty_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(|text| text.chars().take(800).collect())
-}
-
-fn source_position_hint(time_ms: Option<i64>, duration_ms: Option<i64>) -> Option<String> {
-    let time = time_ms?;
-    let duration = duration_ms.filter(|value| *value > 0)?;
-    let percent = ((time as f64 / duration as f64) * 100.0)
-        .clamp(0.0, 100.0)
-        .round() as i64;
-    Some(format!("about {percent}% of the source"))
 }
 
 fn bind_coarse_visual_key(
@@ -195,6 +228,7 @@ fn coarse_visual_card(
     item: &VisualBatchAsset,
     segment_id: &str,
     time_ms: Option<i64>,
+    range_ms: Option<(i64, i64)>,
 ) -> VisualEvidence {
     VisualEvidence {
         time_ms,
@@ -219,11 +253,136 @@ fn coarse_visual_card(
             .iter()
             .filter_map(|value| nonempty_text(Some(value)))
             .collect(),
-        shot_type: None,
-        camera_motion: None,
+        shot_type: normalized_choice(
+            item.shot_type.as_deref(),
+            &["wide", "medium", "close-up", "detail"],
+        ),
+        camera_motion: normalized_choice(
+            item.camera_motion.as_deref(),
+            &["static", "pan", "tilt", "handheld", "zoom", "tracking"],
+        ),
         segment_id: nonempty_text(Some(segment_id)),
         narrative_role: nonempty_text(item.narrative_role.as_deref()),
         caption: nonempty_text(item.caption.as_deref()),
+        detail: range_ms.map(|range| shot_detail(item, range)),
+    }
+}
+
+/// 模型按「秒」给时间（可能是数字、"12.4"、"12.4s"），转成源毫秒并夹在本段内。
+fn seconds_to_ms(value: &Value, (start, end): (i64, i64)) -> Option<i64> {
+    let seconds = match value {
+        Value::Number(number) => number.as_f64()?,
+        Value::String(text) => text.trim().trim_end_matches(['s', 'S']).trim().parse().ok()?,
+        _ => return None,
+    };
+    if !seconds.is_finite() {
+        return None;
+    }
+    Some(((seconds * 1000.0).round() as i64).clamp(start, end))
+}
+
+fn value_items(value: &Value) -> Vec<&Value> {
+    match value {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => Vec::new(),
+        other => vec![other],
+    }
+}
+
+fn value_texts(value: &Value, limit: usize) -> Vec<String> {
+    value_items(value)
+        .into_iter()
+        .filter_map(|item| match item {
+            Value::String(text) => nonempty_text(Some(text)),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+        .map(|text| text.chars().take(200).collect())
+        .take(limit)
+        .collect()
+}
+
+/// 把自由写法收成固定取值：小写、空格和下划线视作连字符，匹配不上就丢弃。
+fn normalized_choice(value: Option<&str>, allowed: &[&str]) -> Option<String> {
+    let normalized = value?
+        .trim()
+        .to_lowercase()
+        .replace(['_', ' '], "-")
+        .replace("centre", "center")
+        .replace("middle", "center")
+        .replace("closeup", "close-up");
+    allowed
+        .iter()
+        .find(|choice| **choice == normalized)
+        .map(|choice| (*choice).to_owned())
+}
+
+fn shot_detail(item: &VisualBatchAsset, range: (i64, i64)) -> crate::models::ShotDetail {
+    use crate::models::{BestRange, ShotChange, ShotDetail, SubjectPosition};
+    let changes = value_items(&item.changes)
+        .into_iter()
+        .filter_map(|change| {
+            let description = nonempty_text(change.get("description").and_then(Value::as_str))?;
+            let start_ms = seconds_to_ms(change.get("startSec")?, range)?;
+            let end_ms = seconds_to_ms(change.get("endSec")?, range)?;
+            (end_ms >= start_ms).then_some(ShotChange {
+                start_ms,
+                end_ms,
+                description: description.chars().take(300).collect(),
+            })
+        })
+        .take(8)
+        .collect();
+    let subject_positions = value_items(&item.subject_positions)
+        .into_iter()
+        .filter_map(|entry| {
+            Some(SubjectPosition {
+                time_ms: seconds_to_ms(entry.get("timeSec")?, range)?,
+                position: normalized_choice(
+                    entry.get("position").and_then(Value::as_str),
+                    &["left", "center-left", "center", "center-right", "right"],
+                )?,
+            })
+        })
+        .take(crate::assets::segments::SEGMENT_SAMPLE_FRAMES)
+        .collect();
+    let best_range = item.best_range.as_object().and_then(|best| {
+        let start_ms = seconds_to_ms(best.get("startSec")?, range)?;
+        let end_ms = seconds_to_ms(best.get("endSec")?, range)?;
+        (end_ms > start_ms).then(|| BestRange {
+            start_ms,
+            end_ms,
+            reason: best
+                .get("reason")
+                .and_then(Value::as_str)
+                .and_then(|reason| nonempty_text(Some(reason)))
+                .map(|reason| reason.chars().take(300).collect())
+                .unwrap_or_default(),
+        })
+    });
+    let exhibition = match &item.exhibition {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) => match text.trim().to_lowercase().as_str() {
+            "true" | "yes" => Some(true),
+            "false" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    };
+    ShotDetail {
+        changes,
+        subject_positions,
+        focus: normalized_choice(
+            item.focus.as_str(),
+            &["sharp", "shallow-depth-of-field", "out-of-focus", "motion-blur"],
+        )
+        .map(|focus| focus.replace('-', "_")),
+        on_screen_text: value_texts(&item.on_screen_text, 5),
+        text_languages: value_texts(&item.text_languages, 5),
+        brand_logos: value_texts(&item.brand_logos, 5),
+        crowd: normalized_choice(item.crowd.as_str(), &["none", "few", "crowd"]),
+        exhibition,
+        best_range,
     }
 }
 
@@ -825,48 +984,77 @@ pub(crate) fn prioritize_pending_visual_batches(
     Ok(highest_running.or_else(|| ranked.first().map(|r| r.task_id.clone())))
 }
 
-type VisualFrame = (String, String, Option<i64>, Option<i64>, Vec<u8>);
-
-/// 按素材分组、每组最多 MAX_IMAGES_PER_REQUEST 张，保持原有顺序。
-fn frames_by_asset(frames: Vec<&VisualFrame>) -> Vec<Vec<VisualFrame>> {
-    let mut order = Vec::<String>::new();
-    let mut by_asset = HashMap::<String, Vec<VisualFrame>>::new();
-    for frame in frames {
-        if !by_asset.contains_key(&frame.0) {
-            order.push(frame.0.clone());
-        }
-        by_asset
-            .entry(frame.0.clone())
-            .or_default()
-            .push(frame.clone());
-    }
-    order
-        .into_iter()
-        .flat_map(|asset_id| {
-            by_asset
-                .remove(&asset_id)
-                .unwrap_or_default()
-                .chunks(crate::provider::MAX_IMAGES_PER_REQUEST)
-                .map(<[VisualFrame]>::to_vec)
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// 一个识别请求：一段（或一张图片）配一张图。
+struct VisualRequestUnit {
+    asset_id: String,
+    segment_id: String,
+    frame_times_ms: Vec<i64>,
+    range_ms: Option<(i64, i64)>,
+    image: Vec<u8>,
 }
 
-fn visual_model_content(frames: &[VisualFrame]) -> Vec<Value> {
-    let mut content = vec![
-        serde_json::json!({ "type": "input_text", "text": "Look at each frame and say what this shot is. Return JSON {assets:[{assetId,segmentId,timeMs,narrativeRole,caption,subjects,scene,actions,products,qualityNotes}]}. narrativeRole: in your own words, the story job this shot could do in an edited video; invent the phrasing. caption: one short sentence of only what is visible. subjects, actions, products: short visible words. scene: a short place phrase. qualityNotes: only if the frame is hard to use. Match assetId and segmentId to a supplied label. Extra fields are ignored. Empty fields are allowed. Do not infer facts not visible." }),
-    ];
-    for (asset_id, segment_id, time_ms, duration_ms, image) in frames {
-        let mut label = format!(
-            "assetId={asset_id}; segmentId={segment_id}; sourceTimeMs={}",
-            time_ms.map_or_else(|| "image".to_owned(), |value| value.to_string())
-        );
-        if let Some(position) = source_position_hint(*time_ms, *duration_ms) {
-            label.push_str(&format!("; sourcePosition={position} (hint only)"));
+/// 整段多帧拼成 3×2 网格，每格标编号与源时间；拼不出或只有一帧时退回单帧。
+fn visual_unit_image(unit: &CoarseVisualUnit) -> Option<(Vec<u8>, Vec<i64>)> {
+    if unit.frames.len() >= 2 {
+        let labeled = unit
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(index, (time_ms, path))| {
+                (
+                    std::path::PathBuf::from(path),
+                    format!("{} {:.1}s", index + 1, *time_ms as f64 / 1000.0),
+                )
+            })
+            .collect::<Vec<_>>();
+        let output = Path::new(&unit.frames[0].1)
+            .with_file_name(format!("visual_grid_{}.jpg", unit.segment_id));
+        if let Some(grid) =
+            crate::storyboard::multimodal::compose_labeled_frame_grid(&labeled, &output, 3)
+        {
+            if let Ok(bytes) = fs::read(grid) {
+                return Some((bytes, unit.frames.iter().map(|(time, _)| *time).collect()));
+            }
+        }
+    }
+    let bytes = fs::read(&unit.image_path).ok()?;
+    Some((bytes, unit.time_ms.into_iter().collect()))
+}
+
+const VISUAL_SEGMENT_PROMPT: &str = "The image shows ONE shot from a video. When it is a grid, its cells are frames sampled across the shot in time order, left to right then top to bottom, and each cell is labeled with its frame number and source time in seconds. Describe the shot as a whole and how it changes over time. \
+Return JSON {assets:[{assetId,segmentId,caption,narrativeRole,scene,subjects,actions,products,shotType,cameraMotion,changes,subjectPositions,focus,qualityNotes,onScreenText,textLanguages,brandLogos,crowd,exhibition,bestRange}]}. \
+caption: one sentence of what stays visible across the frames. narrativeRole: in your own words, the story job this shot could do in an edited video. scene: a short place phrase. subjects, actions, products: short visible words. \
+shotType: wide | medium | close-up | detail. cameraMotion: static | pan | tilt | handheld | zoom | tracking. \
+changes: list of {startSec,endSec,description} for what changes over time: an action starting or ending, people or objects entering or leaving, camera moves, focus changes. Use the labeled source times. Empty list if nothing changes or there is only one frame. \
+subjectPositions: one {timeSec,position} per frame for the main subject; position is left | center-left | center | center-right | right of the full frame width. \
+focus: sharp | shallow_depth_of_field (subject sharp, background blurred on purpose) | out_of_focus (the intended subject itself is blurred) | motion_blur. qualityNotes: only other problems such as shaky, too dark, overexposed, low resolution. \
+onScreenText: short examples of visible words, signs, screens or captions, empty if none. textLanguages: languages of that text. brandLogos: visible brand names or logos. crowd: none | few | crowd. exhibition: true if the place is a trade show, exhibition booth or showroom. \
+bestRange: {startSec,endSec,reason} for the most usable continuous part of the shot for an edit. \
+Match assetId and segmentId to the supplied label. Empty fields are allowed. Do not infer facts that are not visible.";
+
+fn visual_model_content(units: &[&VisualRequestUnit]) -> Vec<Value> {
+    let mut content = vec![serde_json::json!({ "type": "input_text", "text": VISUAL_SEGMENT_PROMPT })];
+    for unit in units {
+        let mut label = format!("assetId={}; segmentId={}", unit.asset_id, unit.segment_id);
+        if let Some((start, end)) = unit.range_ms {
+            label.push_str(&format!(
+                "; shotSourceSec={:.1}-{:.1}",
+                start as f64 / 1000.0,
+                end as f64 / 1000.0
+            ));
+        }
+        if !unit.frame_times_ms.is_empty() {
+            let times = unit
+                .frame_times_ms
+                .iter()
+                .enumerate()
+                .map(|(index, time)| format!("{}={:.1}s", index + 1, *time as f64 / 1000.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            label.push_str(&format!("; frameTimes: {times}"));
         }
         content.push(serde_json::json!({ "type": "input_text", "text": label }));
-        content.push(serde_json::json!({ "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(image)) }));
+        content.push(serde_json::json!({ "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(&unit.image)) }));
     }
     content
 }
@@ -1039,7 +1227,7 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             continue;
         };
         expected.insert(unit_key(asset_id, &unit.segment_id), unit.time_ms);
-        let Ok(image) = fs::read(&unit.image_path) else {
+        let Some((image, frame_times_ms)) = visual_unit_image(&unit) else {
             fail_or_retry_visual_batch(
                 &app,
                 &task_id,
@@ -1049,13 +1237,13 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             );
             return;
         };
-        frames.push((
-            unit.asset_id,
-            unit.segment_id,
-            unit.time_ms,
-            metadata.duration_ms,
+        frames.push(VisualRequestUnit {
+            asset_id: unit.asset_id,
+            segment_id: unit.segment_id,
+            frame_times_ms,
+            range_ms: unit.range_ms,
             image,
-        ));
+        });
     }
     if frames.is_empty() {
         fail_or_retry_visual_batch(
@@ -1084,9 +1272,8 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             return;
         }
     };
-    // 每个请求只放同一条素材的片段（最多 MAX_IMAGES_PER_REQUEST 张），各组同时发出：
-    // 描述无法再挂到别的素材上，也满足上游单请求图片数上限。
-    let groups = frames_by_asset(frames.iter().collect());
+    // 每段一个请求、一张图，各段同时发出：描述不会挂到别的段或素材上，也满足单请求图片数上限。
+    let groups = frames.iter().map(|unit| vec![unit]).collect::<Vec<_>>();
     let requests = groups
         .iter()
         .map(|group| {
@@ -1157,8 +1344,8 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         // 只认本组素材的片段，模型写错 assetId 的结果直接丢弃。
         let group_expected = group
             .iter()
-            .filter_map(|(asset_id, segment_id, _, _, _)| {
-                let key = unit_key(asset_id, segment_id);
+            .filter_map(|unit| {
+                let key = unit_key(&unit.asset_id, &unit.segment_id);
                 expected.get(&key).map(|time_ms| (key, *time_ms))
             })
             .collect::<HashMap<_, _>>();
@@ -1175,7 +1362,15 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             cards_by_asset
                 .entry(item.asset_id.clone())
                 .or_default()
-                .push(coarse_visual_card(&item, unit_key_segment(&key), time_ms));
+                .push(coarse_visual_card(
+                    &item,
+                    unit_key_segment(&key),
+                    time_ms,
+                    group
+                        .iter()
+                        .find(|unit| unit_key(&unit.asset_id, &unit.segment_id) == key)
+                        .and_then(|unit| unit.range_ms),
+                ));
         }
     }
     if cards_by_asset.is_empty() {
@@ -1198,8 +1393,8 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
         let resolved_segment = if segment_id.is_empty() {
             frames
                 .iter()
-                .find(|(id, _, _, _, _)| id == asset_id)
-                .map(|(_, segment_id, _, _, _)| segment_id.as_str())
+                .find(|unit| unit.asset_id == *asset_id)
+                .map(|unit| unit.segment_id.as_str())
                 .unwrap_or("")
         } else {
             segment_id.as_str()
@@ -1708,22 +1903,23 @@ mod tests {
     #[test]
     fn visual_provider_payload_contains_no_local_path_hints() {
         let local_path = r"D:\private\客户项目\coffee-launch.mp4";
-        let content = visual_model_content(&[(
-            "asset-1".to_owned(),
-            "s001".to_owned(),
-            Some(1200),
-            Some(10_000),
-            vec![1, 2, 3],
-        )]);
+        let unit = VisualRequestUnit {
+            asset_id: "asset-1".to_owned(),
+            segment_id: "s001".to_owned(),
+            frame_times_ms: vec![1_200, 4_800],
+            range_ms: Some((0, 10_000)),
+            image: vec![1, 2, 3],
+        };
+        let content = visual_model_content(&[&unit]);
         let payload = serde_json::to_string(&content).expect("visual content should serialize");
 
         assert!(!payload.contains(local_path));
         assert!(!payload.contains("coffee-launch.mp4"));
         assert!(payload.contains("asset-1"));
         assert!(payload.contains("segmentId=s001"));
-        assert!(payload.contains("sourceTimeMs=1200"));
+        assert!(payload.contains("shotSourceSec=0.0-10.0"));
+        assert!(payload.contains("frameTimes: 1=1.2s, 2=4.8s"));
         assert!(payload.contains("narrativeRole"));
-        assert!(payload.contains("sourcePosition=about 12% of the source"));
         assert!(!payload.contains("establishing"));
     }
 
@@ -1764,7 +1960,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_visual_units_sends_one_midpoint_per_hard_cut_segment() {
+    fn collect_visual_units_sends_each_segment_with_all_its_frames() {
         let metadata = TechnicalMetadata {
             scene_segments: vec![
                 segment_with_frames("s001", &[100, 400, 800]),
@@ -1781,45 +1977,26 @@ mod tests {
                     segment_id: "s001".to_owned(),
                     time_ms: Some(400),
                     image_path: "s001-400.jpg".to_owned(),
+                    frames: vec![
+                        (100, "s001-100.jpg".to_owned()),
+                        (400, "s001-400.jpg".to_owned()),
+                        (800, "s001-800.jpg".to_owned()),
+                    ],
+                    range_ms: Some((100, 1_800)),
                 },
                 CoarseVisualUnit {
                     asset_id: "asset-1".to_owned(),
                     segment_id: "s002".to_owned(),
                     time_ms: Some(2600),
                     image_path: "s002-2600.jpg".to_owned(),
+                    frames: vec![
+                        (2000, "s002-2000.jpg".to_owned()),
+                        (2600, "s002-2600.jpg".to_owned()),
+                    ],
+                    range_ms: Some((2_000, 3_600)),
                 },
             ]
         );
-    }
-
-    #[test]
-    fn visual_requests_never_mix_assets() {
-        // 回归：6 张图混批时模型把描述挂错素材（86.mp4 拿到煤场描述、9 与 91 互换）。
-        let frame = |asset: &str, segment: &str| {
-            (
-                asset.to_owned(),
-                segment.to_owned(),
-                Some(0),
-                Some(1_000),
-                Vec::new(),
-            )
-        };
-        let frames = vec![
-            frame("a", "s001"),
-            frame("b", "s001"),
-            frame("b", "s002"),
-            frame("a", "s002"),
-            frame("b", "s003"),
-            frame("b", "s004"),
-            frame("b", "s005"),
-        ];
-        let groups = frames_by_asset(frames.iter().collect());
-        for group in &groups {
-            assert!(group.iter().all(|item| item.0 == group[0].0));
-            assert!(group.len() <= crate::provider::MAX_IMAGES_PER_REQUEST);
-        }
-        assert_eq!(groups.len(), 3);
-        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), frames.len());
     }
 
     #[test]
@@ -1830,6 +2007,8 @@ mod tests {
                 segment_id: format!("s{index:03}"),
                 time_ms: Some(index as i64 * 1000),
                 image_path: format!("s{index:03}.jpg"),
+                frames: Vec::new(),
+                range_ms: None,
             })
             .collect();
         let batches: Vec<_> = units.chunks(VISUAL_ANALYSIS_BATCH_SIZE).collect();
@@ -1887,6 +2066,17 @@ mod tests {
             "timeMs": 999,
             "narrativeRole": "车间开场",
             "caption": "工人站在产线旁",
+            "shotType": "Close Up",
+            "changes": [
+                {"startSec": "0.5s", "endSec": 99, "description": "工人走出画面"},
+                {"startSec": 1, "description": "缺结束时间"}
+            ],
+            "subjectPositions": [{"timeSec": 0.5, "position": "Center Right"}, {"timeSec": 1, "position": "top"}],
+            "focus": "Shallow depth of field",
+            "onScreenText": "EXIT",
+            "crowd": "Crowd",
+            "exhibition": "yes",
+            "bestRange": {"startSec": 0.4, "endSec": 1.2, "reason": "动作完整"},
             "unknownField": "ignored"
         }))
         .expect("matching card");
@@ -1901,7 +2091,19 @@ mod tests {
             Some((unit_key("asset-1", "s001"), Some(400)))
         );
         assert_eq!(bind_coarse_visual_key(&bad, &expected), None);
-        let card = coarse_visual_card(&good, "s001", Some(400));
+        let card = coarse_visual_card(&good, "s001", Some(400), Some((0, 2_000)));
+        assert_eq!(card.shot_type.as_deref(), Some("close-up"));
+        let detail = card.detail.clone().expect("whole-shot detail");
+        assert_eq!(detail.changes.len(), 1);
+        assert_eq!((detail.changes[0].start_ms, detail.changes[0].end_ms), (500, 2_000));
+        assert_eq!(detail.subject_positions.len(), 1);
+        assert_eq!(detail.subject_positions[0].position, "center-right");
+        assert_eq!(detail.focus.as_deref(), Some("shallow_depth_of_field"));
+        assert_eq!(detail.on_screen_text, vec!["EXIT".to_owned()]);
+        assert_eq!(detail.crowd.as_deref(), Some("crowd"));
+        assert_eq!(detail.exhibition, Some(true));
+        let best = detail.best_range.expect("best range");
+        assert_eq!((best.start_ms, best.end_ms), (400, 1_200));
         assert_eq!(card.narrative_role.as_deref(), Some("车间开场"));
         assert_eq!(card.caption.as_deref(), Some("工人站在产线旁"));
         assert_eq!(card.time_ms, Some(400));

@@ -952,6 +952,26 @@ fn compact_candidate_card(
         card["retrievalScore"] = json!(score.retrieval_score_pct());
         card["matchedKeywords"] = json!(score.matched_keywords);
     }
+    // 导入时整段识别的信息：随时间的变化、焦点、最佳区间与敏感内容，均为未经核实的标签，以网格为准。
+    if let Some(detail) = candidate_visual_evidence(source).and_then(|evidence| evidence.detail.as_ref()) {
+        card["changes"] = json!(detail
+            .changes
+            .iter()
+            .map(|change| format!("{}-{}ms: {}", change.start_ms, change.end_ms, change.description))
+            .collect::<Vec<_>>());
+        card["focus"] = json!(detail.focus);
+        card["bestRangeMs"] = json!(detail
+            .best_range
+            .as_ref()
+            .map(|best| json!({"startMs": best.start_ms, "endMs": best.end_ms, "reason": best.reason})));
+        card["contentFlags"] = json!({
+            "onScreenText": detail.on_screen_text,
+            "textLanguages": detail.text_languages,
+            "brandLogos": detail.brand_logos,
+            "crowd": detail.crowd,
+            "exhibition": detail.exhibition,
+        });
+    }
     card
 }
 
@@ -1142,6 +1162,7 @@ mod tests {
                     segment_id: None,
                     narrative_role: None,
                     caption: None,
+                    detail: None,
                 }];
                 scored(item, (20 - index) as f64)
             })
@@ -1324,6 +1345,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let mut factory = source("factory");
         factory.visual_evidence = vec![crate::models::VisualEvidence {
@@ -1338,6 +1360,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let summary = super::build_library_inventory_summary(&[certificate, factory]);
         assert!(summary.contains("framed certificates"));
@@ -1875,6 +1898,7 @@ mod tests {
             segment_id: Some("s001".to_owned()),
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let mut look_b = source_segment("look-b", "s002", 0, 2_000);
         look_b.visual_evidence = vec![look_a.visual_evidence[0].clone()];
@@ -2527,6 +2551,7 @@ mod tests {
             segment_id: None,
             narrative_role: Some("establishing stored goods".to_owned()),
             caption: Some("Rows of wrapped packs with a shipping overlay.".to_owned()),
+            detail: None,
         }];
         let pool = BeatCandidatePool {
             beat_id: "beat-1".to_owned(),
@@ -3165,6 +3190,7 @@ fn select_one_beat(
         Candidates with keyframeGridAttached=false have no image — judge them from visibleCaption, scene, subjects, and visualTags.\n\
         Each candidate lists usableMs: the playable motion window, not the whole hard-cut span.\n\
         If narrationMs is longer than the selected candidate's usableMs, keep the best visual match. The program will slow that clip to cover the spoken duration. Do not swap only to get more usableMs, and do not add a second shot.\n\
+        Some candidates also carry whole-shot labels from import: changes (what happens when, in source ms), focus (shallow_depth_of_field is intentional background blur, out_of_focus is a defect), bestRangeMs, and contentFlags (visible text, brand logos, crowd, exhibition). Use them to judge fit, but they are unverified too.
         Selection order: (1) look at the attached frames first; visibleCaption/scene/subjects/actions are unverified labels — if they conflict with the frames, trust the frames; (2) prefer the candidate whose frames best cover this beat's requiredVisual; (3) if none cover it literally, pick the closest honest scene-setting clip from this pool.\n\
         Narrative continuity: consider what already-selected shots show (see already-selected list above) and choose a visually distinct angle or scene to advance the story — avoid repeating the same location or subject if variety is available.\n\
         Narration is what will be spoken and how long the picture must last. Do not pick a clip only because it echoes abstract wording in the narration or brief.\n\
@@ -3290,8 +3316,9 @@ fn pool_trace_candidates(
         .collect()
 }
 
-fn candidate_evidence_summary(candidate: &StoryboardSource) -> Value {
-    let evidence = candidate
+/// 候选对应的画面证据：有片段时取该段的，否则取素材级第一条。
+fn candidate_visual_evidence(candidate: &StoryboardSource) -> Option<&crate::models::VisualEvidence> {
+    candidate
         .segment
         .as_ref()
         .and_then(|segment| {
@@ -3299,9 +3326,12 @@ fn candidate_evidence_summary(candidate: &StoryboardSource) -> Value {
                 .visual_evidence
                 .iter()
                 .find(|item| item.segment_id.as_deref() == Some(segment.id.as_str()))
-                .or_else(|| candidate.visual_evidence.first())
         })
-        .or_else(|| candidate.visual_evidence.first());
+        .or_else(|| candidate.visual_evidence.first())
+}
+
+fn candidate_evidence_summary(candidate: &StoryboardSource) -> Value {
+    let evidence = candidate_visual_evidence(candidate);
     match evidence {
         Some(evidence) => json!({
             "scene": evidence.scene,

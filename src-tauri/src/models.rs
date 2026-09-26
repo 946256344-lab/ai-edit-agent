@@ -1097,6 +1097,72 @@ pub struct VisualEvidence {
     /// 画面上能看见的一句描述。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) caption: Option<String>,
+    /// 导入时整段 6 帧识别得到的时间维度信息；旧证据与单帧识别为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) detail: Option<ShotDetail>,
+}
+
+impl VisualEvidence {
+    /// 召回文本用：按时间的画面变化描述。
+    pub(crate) fn change_descriptions(&self) -> impl Iterator<Item = &String> {
+        self.detail
+            .iter()
+            .flat_map(|detail| detail.changes.iter().map(|change| &change.description))
+    }
+}
+
+/// 一段镜头随时间的变化、主体位置、画质与敏感内容；时间均为源视频毫秒，已夹在本段范围内。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotDetail {
+    /// 动作起止、人或物进出画面、机位移动、焦点变化。
+    #[serde(default)]
+    pub(crate) changes: Vec<ShotChange>,
+    /// 每帧主体横向位置：left / center-left / center / center-right / right。
+    #[serde(default)]
+    pub(crate) subject_positions: Vec<SubjectPosition>,
+    /// sharp / shallow_depth_of_field（故意虚化）/ out_of_focus（主体失焦）/ motion_blur。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) focus: Option<String>,
+    /// 画面里可见的文字、招牌、字幕示例；空表示没有。
+    #[serde(default)]
+    pub(crate) on_screen_text: Vec<String>,
+    #[serde(default)]
+    pub(crate) text_languages: Vec<String>,
+    #[serde(default)]
+    pub(crate) brand_logos: Vec<String>,
+    /// none / few / crowd。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) crowd: Option<String>,
+    /// 展会、展台或展厅。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exhibition: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) best_range: Option<BestRange>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotChange {
+    pub(crate) start_ms: i64,
+    pub(crate) end_ms: i64,
+    pub(crate) description: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectPosition {
+    pub(crate) time_ms: i64,
+    pub(crate) position: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BestRange {
+    pub(crate) start_ms: i64,
+    pub(crate) end_ms: i64,
+    #[serde(default)]
+    pub(crate) reason: String,
 }
 
 #[cfg(test)]

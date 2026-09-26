@@ -521,6 +521,7 @@ fn evidence_blob(candidate: &StoryboardSource) -> String {
         if let Some(caption) = &evidence.caption {
             parts.push(caption.clone());
         }
+        parts.extend(evidence.change_descriptions().cloned());
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -804,6 +805,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
@@ -820,6 +822,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-factory".to_owned(),
@@ -860,6 +863,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.95);
         office.visual_evidence = vec![crate::models::VisualEvidence {
@@ -876,6 +880,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-logistics".to_owned(),
@@ -923,6 +928,7 @@ mod tests {
             segment_id: None,
             narrative_role: None,
             caption: None,
+            detail: None,
         }];
         let beat = StoryboardBeat {
             id: "beat-battery".to_owned(),
@@ -1065,6 +1071,7 @@ mod tests {
             caption: Some(
                 "Thick orange high-voltage cables are neatly bundled in trays.".to_owned(),
             ),
+            detail: None,
         }];
         let mut segment = make_source("segment", "video", Some(10_000), 0.4);
         segment.segment = Some(crate::models::CandidateSegment {

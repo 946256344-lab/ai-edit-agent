@@ -191,6 +191,7 @@ pub(crate) fn evidence_text(metadata: &TechnicalMetadata) -> String {
         if let Some(caption) = &evidence.caption {
             parts.push(caption.clone());
         }
+        parts.extend(evidence.change_descriptions().cloned());
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -230,6 +231,7 @@ pub(crate) fn segment_evidence_text(
         if let Some(caption) = &evidence.caption {
             parts.push(caption.clone());
         }
+        parts.extend(evidence.change_descriptions().cloned());
         if let Some(scene) = &evidence.scene {
             parts.push(scene.clone());
         }
@@ -571,6 +573,7 @@ mod tests {
                 segment_id: None,
                 narrative_role: None,
                 caption: None,
+                detail: None,
             }],
             ocr_evidence: vec![
                 crate::models::OcrEvidence {

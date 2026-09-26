@@ -514,6 +514,7 @@ pub(crate) fn run_segment_visual_analysis_batch(
                         segment_id: Some(item.segment_id),
                         narrative_role: None,
                         caption: None,
+                        detail: None,
                     },
                 );
             }
