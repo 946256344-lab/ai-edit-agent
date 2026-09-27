@@ -31,7 +31,6 @@ export type AgentSideEffectToolName =
   | 'reselect_shots'
   | 'refine_shot_ranges'
   | 'reorder_clips'
-  | 'review_cut'
   | 'replace_text_tracks'
   | 'replace_music_tracks'
   | 'synthesize_voiceover'

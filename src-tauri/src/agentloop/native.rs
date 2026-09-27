@@ -63,7 +63,6 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "reselect_shots",
     "refine_shot_ranges",
     "reorder_clips",
-    "review_cut",
     "replace_text_tracks",
     "download_music",
     "use_online_music",
@@ -545,7 +544,6 @@ fn merge_native_outcomes(
                 | "reselect_shots"
                 | "refine_shot_ranges"
                 | "reorder_clips"
-                | "review_cut"
                 | "replace_text_tracks"
                 | "replace_music_tracks"
                 | "use_online_music"
@@ -619,21 +617,6 @@ fn record_successful_write(receipt: &mut NativeRunReceipt, tool: &str, result: &
             receipt.preview_timeline_version_id = timeline_version_id;
             receipt.successful_write_tools.insert(tool.to_owned());
         }
-        return;
-    }
-    if tool == "review_cut" {
-        // 只读复查不改时间线；修复落地时新时间线和随之重渲染的预览一起算数。
-        if let Some(repaired) = timeline_version_id {
-            receipt.preview_timeline_version_id = result["previewTimelineVersionId"]
-                .as_str()
-                .filter(|preview| *preview == repaired)
-                .map(str::to_owned);
-            if receipt.preview_timeline_version_id.is_none() {
-                receipt.successful_write_tools.remove("render_preview");
-            }
-            receipt.latest_timeline_version_id = Some(repaired);
-        }
-        receipt.successful_write_tools.insert(tool.to_owned());
         return;
     }
 
@@ -1190,7 +1173,7 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
             coerce_blank_strings_to_null(&mut value, &["query", "kind", "tag", "collectionId"])
         }
         "search_asset_segments" => coerce_blank_strings_to_null(&mut value, &["assetId"]),
-        "get_timeline" | "render_preview" | "create_jianying_draft" | "review_cut" => {
+        "get_timeline" | "render_preview" | "create_jianying_draft" => {
             coerce_blank_strings_to_null(&mut value, &["timelineVersionId"]);
         }
         "transcribe_asset" => coerce_blank_strings_to_null(&mut value, &["assetId", "language"]),
@@ -1416,18 +1399,6 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 _ => false,
             };
             if !valid {
-                return Err(invalid_arguments());
-            }
-            Ok(value)
-        }
-        "review_cut" => {
-            let keys = ["timelineVersionId", "repair"];
-            if object.len() != keys.len() || !keys.iter().all(|key| object.contains_key(*key)) {
-                return Err(invalid_arguments());
-            }
-            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string())
-                || !(object["repair"].is_null() || object["repair"].is_boolean())
-            {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -3492,24 +3463,6 @@ mod tests {
             r#"{"timelineVersionId":null,"order":[]}"#
         )
         .is_err());
-    }
-
-    #[test]
-    fn review_cut_arguments_are_closed_and_repair_is_optional() {
-        for valid in [
-            r#"{"timelineVersionId":null,"repair":null}"#,
-            r#"{"timelineVersionId":"timeline-1","repair":true}"#,
-            r#"{"timelineVersionId":"","repair":false}"#,
-        ] {
-            assert!(parse_native_arguments("review_cut", valid).is_ok(), "{valid}");
-        }
-        for invalid in [
-            r#"{"timelineVersionId":null}"#,
-            r#"{"timelineVersionId":null,"repair":"yes"}"#,
-            r#"{"timelineVersionId":null,"repair":true,"projectId":"p"}"#,
-        ] {
-            assert!(parse_native_arguments("review_cut", invalid).is_err(), "{invalid}");
-        }
     }
 
     #[test]

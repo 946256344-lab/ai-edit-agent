@@ -125,10 +125,6 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         } else {
             "voice_provider_error"
         }
-    } else if error.starts_with("cut_review_needs_preview:") {
-        "cut_review_needs_preview"
-    } else if error.starts_with("cut_review_failed:") {
-        "cut_review_failed"
     } else if error.contains("storyboard") || error.contains("timeline") {
         "missing_or_invalid_prerequisite"
     } else if error.contains("asset") || error.contains("media") {
@@ -234,30 +230,6 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": true,
             "recovery": "若还没有分镜，先调用 generate_storyboard；用户确认后再调用 create_timeline_draft，然后重试当前工具。",
             "responseInstruction": "Tell the user this step needs an internal timeline. If generate_storyboard and create_timeline_draft are available, use that path. Do not claim the requested artifact was created."
-        });
-    }
-    if code == "cut_review_needs_preview" {
-        return json!({
-            "status": "failed",
-            "operation": tool,
-            "stage": "prerequisite_validation",
-            "code": code,
-            "facts": ["This timeline version has no rendered preview to review."],
-            "retryable": true,
-            "recovery": "Call render_preview for the same timelineVersionId, then call review_cut again.",
-            "responseInstruction": "Do not describe findings: nothing was reviewed. Render the preview first, then review it."
-        });
-    }
-    if code == "cut_review_failed" {
-        return json!({
-            "status": "failed",
-            "operation": tool,
-            "stage": "cut_review",
-            "code": code,
-            "facts": ["The rendered cut could not be reviewed; the timeline was not changed."],
-            "retryable": true,
-            "recovery": "Retry review_cut once. If it fails again, tell the user the review could not run.",
-            "responseInstruction": "Tell the user the review did not complete and nothing was changed. Do not invent findings."
         });
     }
     if error.starts_with("voiceover_longer_than_picture:") {
@@ -1753,7 +1725,6 @@ pub(super) fn apply_skill(
                 json!({"tool":"replace_music_tracks","status":"ok","timelineVersionId":timeline_version_id,"versionNumber":version_number,"jianying":"experimental_review_required"}),
             )
         }
-        "review_cut" => super::review_cut::run_review_cut_tool(state, args),
         "render_preview" => {
             let timeline = select_timeline_for_tool(state, args)?;
             let timeline_version_id = timeline.id.clone();

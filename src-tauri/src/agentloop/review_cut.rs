@@ -7,11 +7,11 @@
 //! 同一素材重复出现是时间线事实，由本地直接判定。
 //! 任何一步失败都写进报告，未修掉的问题转成 qualityWarnings；模型文字不算修复证据，
 //! 只有局部编辑工具落地的新版本才算。
+//! 只在生成流程里自动运行，不做成模型可调用工具：Voycut 一次出基本满意的初剪，精修交给编辑器。
 
 use super::schema::LoopState;
 use crate::models::{
-    AgentEditResult, PreviewResult, StoryboardSource, StoryboardVersion, TimelineClip,
-    TimelineVersion,
+    PreviewResult, StoryboardSource, StoryboardVersion, TimelineClip, TimelineVersion,
 };
 use crate::process::{hidden_command, run_hidden_command_with_timeout};
 use crate::provider::{
@@ -23,7 +23,7 @@ use crate::storyboard::local_edit::{
 };
 use crate::storyboard::multimodal::{draw_cell_label, fit_into_box, read_input_image};
 use image::{ImageBuffer, Rgb, RgbImage};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -96,7 +96,7 @@ pub(super) struct CutFinding {
     repair_status: Option<String>,
 }
 
-/// 复查结果：报告进工具结果，未修掉的问题进 qualityWarnings，message 追加到中文回执。
+/// 复查结果：报告进 generate_storyboard 结果的 cutReview，未修掉的问题进 qualityWarnings，message 追加到中文回执。
 pub(super) struct CutReview {
     pub(super) report: Value,
     pub(super) quality_warnings: Vec<Value>,
@@ -155,13 +155,7 @@ pub(super) fn auto_review_after_generation(
             "\n成片复查已跳过：本轮剩余时间不足，本版未经复查。",
         );
     }
-    match review_rendered_cut(
-        ctx,
-        reselected,
-        timeline,
-        Path::new(&preview.preview_path),
-        true,
-    ) {
+    match review_rendered_cut(ctx, reselected, timeline, Path::new(&preview.preview_path)) {
         Ok(review) => review,
         Err(error) => {
             log::warn!("Cut review after storyboard skipped: {error}");
@@ -176,91 +170,6 @@ pub(super) fn auto_review_after_generation(
     }
 }
 
-/// 模型工具 `review_cut`：默认只读；`repair=true` 才修一轮并复核。
-pub(super) fn run_review_cut_tool(state: &mut LoopState<'_>, args: &Value) -> Result<Value, String> {
-    let timeline = super::skills::select_timeline_for_tool(state, args)?;
-    let repair = args.get("repair").and_then(Value::as_bool).unwrap_or(false);
-    let preview_path = rendered_preview_path(state.app, state.connection, &timeline.id)?;
-    let ctx = ReviewContext::from_state(state);
-    let review = review_rendered_cut(
-        &ctx,
-        &mut state.reselected_beats,
-        &timeline,
-        &preview_path,
-        repair,
-    )
-    .map_err(|error| format!("cut_review_failed: {error}"))?;
-    let mut result = json!({
-        "tool": "review_cut",
-        "status": "ok",
-        "reviewedTimelineVersionId": timeline.id,
-        "reviewedVersionNumber": timeline.version_number,
-        "repairRequested": repair,
-        "cutReview": review.report,
-    });
-    if repair {
-        result["qualityWarnings"] = json!(review.quality_warnings);
-    } else {
-        result["responseInstruction"] = json!(
-            "Read-only review: nothing was changed. Tell the user each finding with its shot numbers and what the frames show, then ask whether to fix them. Do not edit the timeline unless the user asks."
-        );
-    }
-    if let Some(repaired) = review.repaired {
-        result["timelineVersionId"] = json!(repaired.timeline.id);
-        result["versionNumber"] = json!(repaired.timeline.version_number);
-        if let Some(storyboard) = repaired.storyboard.as_ref() {
-            result["storyboardVersionId"] = json!(storyboard.id);
-            state.storyboard = Some(storyboard.clone());
-        }
-        if repaired.preview.is_some() {
-            result["previewTimelineVersionId"] = json!(repaired.timeline.id);
-        }
-        if let Some(error) = repaired.preview_error.as_ref() {
-            result["previewError"] = json!(error);
-        }
-        super::skills::upsert_timeline(&mut state.timelines, repaired.timeline.clone());
-        state.last_outcome = Some(AgentEditResult {
-            agent_task_id: state.agent_task_id.to_owned(),
-            message: review.message.trim().to_owned(),
-            storyboard: repaired.storyboard,
-            timeline: Some(repaired.timeline),
-            preview: repaired.preview,
-            jianying_draft: None,
-        });
-    }
-    Ok(result)
-}
-
-/// 已渲染的预览才可复查；只读复查不替用户渲染。
-fn rendered_preview_path(
-    app: &AppHandle,
-    connection: &Connection,
-    timeline_version_id: &str,
-) -> Result<PathBuf, String> {
-    let status = connection
-        .query_row(
-            "SELECT status FROM timeline_versions WHERE id = ?1",
-            params![timeline_version_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    let path = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("previews")
-        .join(timeline_version_id)
-        .join("preview.mp4");
-    if status.as_deref() != Some("preview_ready") || !path.is_file() {
-        return Err(
-            "cut_review_needs_preview: this timeline version has no rendered preview yet; call render_preview first."
-                .to_owned(),
-        );
-    }
-    Ok(path)
-}
-
 // ──────────────────────────────────────────────────────────────────────────────
 // 复查主流程
 // ──────────────────────────────────────────────────────────────────────────────
@@ -270,7 +179,6 @@ fn review_rendered_cut(
     reselected: &mut HashSet<String>,
     timeline: &TimelineVersion,
     preview_path: &Path,
-    repair: bool,
 ) -> Result<CutReview, String> {
     if timeline.clips.is_empty() {
         return Err("The timeline has no clips to review.".to_owned());
@@ -300,21 +208,6 @@ fn review_rendered_cut(
             message: format!(
                 "\n成片复查：逐镜看过 v{} 的预览，未发现需要处理的问题。",
                 timeline.version_number
-            ),
-            repaired: None,
-        });
-    }
-
-    if !repair {
-        report["status"] = json!("issues_found");
-        report["findings"] = json!(findings);
-        let warnings = findings_to_warnings(&findings);
-        return Ok(CutReview {
-            report,
-            quality_warnings: warnings,
-            message: format!(
-                "\n成片复查发现 {} 处问题（未改动时间线）。",
-                findings.len()
             ),
             repaired: None,
         });

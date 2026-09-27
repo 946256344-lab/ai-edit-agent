@@ -32,7 +32,6 @@ const CHANGE_CLIP_DURATION: &str = "change_clip_duration";
 const RESELECT_SHOTS: &str = "reselect_shots";
 const REFINE_SHOT_RANGES: &str = "refine_shot_ranges";
 const REORDER_CLIPS: &str = "reorder_clips";
-const REVIEW_CUT: &str = "review_cut";
 const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
 const DOWNLOAD_MUSIC: &str = "download_music";
 const USE_ONLINE_MUSIC: &str = "use_online_music";
@@ -503,21 +502,6 @@ fn main_chain_function_tools() -> Vec<Value> {
             }),
             vec!["timelineVersionId", "order"],
         ),
-        function_tool(
-            REVIEW_CUT,
-            "Watch the rendered preview of a timeline the way an editor would: contact sheets of every shot (frames from its start, middle and end, labelled with shot number and time) go to the model, which reports per shot repeated or near-duplicate footage, continuity breaks (day/night, location, screen direction), beat order against the brief, weak/blurred/badly framed shots, and distracting source text/logos/crowds. Reusing the same asset is reported as a timeline fact. With repair null or false it is read-only and changes nothing: report the findings and ask the user. Pass repair=true only when the user asks to fix the problems: Rust then runs one safe repair round (refine_shot_ranges, reselect_shots, and reorder_clips only when no narration or subtitles are timed to the order), re-renders the preview and re-checks it; what it could not fix comes back as qualityWarnings. Report only repairs whose status is applied. Needs a rendered preview of that timeline (call render_preview first). generate_storyboard already runs this review with repair and returns cutReview; do not call review_cut again right after it unless the user asks.",
-            json!({
-                "timelineVersionId": {
-                    "type": ["string", "null"],
-                    "description": "Optional scoped timeline version; null selects the current version."
-                },
-                "repair": {
-                    "type": ["boolean", "null"],
-                    "description": "True only when the user asked to fix what the review finds. Null or false reviews without changing anything."
-                }
-            }),
-            vec!["timelineVersionId", "repair"],
-        ),
     ];
     tools.extend(delivery_function_tools());
     tools
@@ -967,7 +951,6 @@ mod tests {
             "reselect_shots",
             "refine_shot_ranges",
             "reorder_clips",
-            "review_cut",
         ] {
             let tool = tools
                 .iter()

@@ -825,44 +825,6 @@
       ]
     },
     {
-      "name": "review_cut",
-      "version": 1,
-      "kind": "edit",
-      "inputShape": {
-        "type": "object",
-        "properties": {
-          "timelineVersionId": { "type": "string", "optional": true },
-          "repair": { "type": "boolean", "optional": true }
-        },
-        "required": []
-      },
-      "scope": {
-        "boundary": "timeline_loaded_for_current_storyboard_with_its_rendered_preview",
-        "resolution": "timeline is selected only from LoopState; the preview is read from that timeline's own preview file; repairs reuse the scoped local edit tools"
-      },
-      "sideEffect": true,
-      "idempotency": "read_only_unless_repair_then_non_idempotent_new_version",
-      "retryPolicy": "review may be retried once after cut_review_failed; with repair=true at most one repair round runs, then the new cut is re-checked but not repaired again",
-      "preconditions": [
-        "the timeline version has a rendered preview (status preview_ready and preview file present)",
-        "each model request carries at most 4 contact-sheet images",
-        "repairs only use refine_shot_ranges, reselect_shots and reorder_clips under their own preconditions; reorder only when no voiceover or subtitle cues are timed to the shot order"
-      ],
-      "produces": [
-        "storyboard_version",
-        "timeline_version",
-        "operation_log",
-        "preview"
-      ],
-      "returns": [
-        "reviewedTimelineVersionId",
-        "cutReview",
-        "qualityWarnings",
-        "timelineVersionId",
-        "previewTimelineVersionId"
-      ]
-    },
-    {
       "name": "replace_text_tracks",
       "version": 1,
       "kind": "edit",
