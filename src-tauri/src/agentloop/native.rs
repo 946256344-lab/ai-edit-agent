@@ -309,6 +309,22 @@ fn initial_native_input(
     Ok(input)
 }
 
+/// 只读本机项目事实的查询工具；不含 `search_music`、`list_voices`、`transcribe_asset`，
+/// 它们失败意味着配乐、配音或转写可能没落地。
+const LOCAL_LOOKUP_TOOLS: &[&str] = &[
+    "read_logs",
+    "get_edit_status",
+    "get_asset_health_summary",
+    "list_assets",
+    "get_library_visual_overview",
+    "get_asset_visual_detail",
+    "search_assets",
+    "search_asset_segments",
+    "get_storyboard",
+    "get_timeline",
+    "get_text_capabilities",
+];
+
 fn finish_native_result(
     agent_task_id: &str,
     loop_result: Result<String, String>,
@@ -318,11 +334,17 @@ fn finish_native_result(
 ) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
     match loop_result {
         Ok(message) => {
+            // 只读查项目状态失败（多为模型传错参数）不缺任何交付物，不把整轮降为部分完成；
+            // 失败步骤仍在运行步骤里可见。外部查询与写工具失败照旧计入。
+            let unfinished = receipt
+                .failed_tools
+                .iter()
+                .any(|tool| !LOCAL_LOOKUP_TOOLS.contains(&tool.as_str()));
             let status = if receipt.needs_confirmation {
                 AgentLoopTerminalStatus::NeedsClarification
-            } else if !receipt.failed_tools.is_empty() && receipt.successful_tool_call {
+            } else if unfinished && receipt.successful_tool_call {
                 AgentLoopTerminalStatus::PartiallyCompleted
-            } else if !receipt.failed_tools.is_empty() {
+            } else if !receipt.failed_tools.is_empty() && !receipt.successful_tool_call {
                 AgentLoopTerminalStatus::Failed
             } else if !receipt.pending_tools.is_empty() {
                 AgentLoopTerminalStatus::PartiallyCompleted
@@ -3887,6 +3909,24 @@ mod tests {
         )
         .expect("safe failed terminal result");
         assert_eq!(status, AgentLoopTerminalStatus::Failed);
+    }
+
+    #[test]
+    fn failed_lookup_after_delivered_storyboard_still_completes() {
+        let mut receipt = NativeRunReceipt {
+            tool_called: true,
+            successful_tool_call: true,
+            failed_tools: ["search_assets".to_owned()].into_iter().collect(),
+            ..NativeRunReceipt::default()
+        };
+        let finish = |receipt: &NativeRunReceipt| {
+            finish_native_result("task-1", Ok("Done.".to_owned()), None, receipt, UiLocale::En)
+                .expect("terminal result")
+                .1
+        };
+        assert_eq!(finish(&receipt), AgentLoopTerminalStatus::Completed);
+        receipt.failed_tools.insert("search_music".to_owned());
+        assert_eq!(finish(&receipt), AgentLoopTerminalStatus::PartiallyCompleted);
     }
 
     #[test]

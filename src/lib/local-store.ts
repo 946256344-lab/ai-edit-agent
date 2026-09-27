@@ -458,7 +458,7 @@ export async function clearFishAudioApiKey() { requireDesktopRuntime(); return i
 export async function importFishAudioApiKeyFromEnvironment() { requireDesktopRuntime(); return invoke<FishAudioStatus>('import_fish_audio_api_key_from_environment') }
 
 export async function listProjects() { requireDesktopRuntime(); return invoke<StoredProject[]>('list_projects') }
-export type SharedLibrary = { id: string; name: string; assetCount: number }
+export type SharedLibrary = { id: string; name: string; assetCount: number; unfiled: boolean }
 export async function listSharedLibraries() { requireDesktopRuntime(); return invoke<SharedLibrary[]>('list_shared_libraries') }
 export async function createProject(name: string, libraryIds?: string[]) { requireDesktopRuntime(); return invoke<StoredProject>('create_project', { name, libraryIds }) }
 export async function renameProject(projectId: string, name: string) { requireDesktopRuntime(); return invoke<StoredProject>('rename_project', { projectId, name }) }

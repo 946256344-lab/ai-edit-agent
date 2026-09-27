@@ -247,7 +247,8 @@ function App() {
 
   async function appendStoredMessage(conversationId: string, sessionId: string, role: StoredMessage['role'], content: string, routeReceipt?: string) {
     const storedMessage = await createStoredMessage(conversationId, role, content, routeReceipt)
-    if (sessionId === activeEditingSessionRef.current) setMessages((current) => [...current, toMessage(storedMessage)])
+    // 相同提示不重复落库时 Rust 返回原消息，界面也不再追加。
+    if (sessionId === activeEditingSessionRef.current) setMessages((current) => current.some((message) => message.id === storedMessage.id) ? current : [...current, toMessage(storedMessage)])
     if (role === 'user') setPendingUserMessage(null)
   }
 
@@ -642,6 +643,7 @@ function App() {
                 listenerReady: agentReconciliation.listenerReady,
                 composerNotice,
                 mediaOptions: composerMedia.options,
+                outputEditorLabel: artifactWorkspace.model.selectedEditorLabel,
                 analysis: {
                   progress: analysisGate.progress ?? assetWorkspace.page.progress,
                   waiting: analysisGate.waiting,

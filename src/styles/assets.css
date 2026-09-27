@@ -58,13 +58,13 @@
 .asset-card-thumb span { top: 8px; right: 8px; }
 .asset-card-thumb img ~ span { display: none; }
 .asset-card-thumb time { right: 8px; bottom: 8px; }
-.asset-card-body { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 2px; padding: 10px 4px 2px; }
-.asset-card-body header { grid-column: 1 / -1; min-width: 0; }
+/* 状态与路径同行：状态不收缩、完整显示，窄卡（4 列、英文）只截断路径；操作按钮单独靠右一行。 */
+.asset-card-body { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 2px; padding: 10px 4px 2px; }
+.asset-card-body header { flex: 1 0 100%; min-width: 0; }
 .asset-card-body header strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: 500; }
-.asset-card-body header small { display: block; margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-2); font-size: var(--text-xs); }
-.asset-chip-row { display: flex; align-items: center; min-width: 0; }
-.asset-chip-row > span:not(.asset-status-chip) { display: none; }
-.asset-status-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-2); font-size: var(--text-xs); }
+.asset-card-meta { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 2px; }
+.asset-card-meta small { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-2); font-size: var(--text-xs); }
+.asset-status-chip { display: inline-flex; flex: none; align-items: center; gap: 6px; white-space: nowrap; color: var(--text-2); font-size: var(--text-xs); }
 .asset-status-chip::before { content: ''; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
 .asset-status-chip--ready::before { background: var(--ok); }
 .asset-status-chip--analyzing::before { background: var(--warn); animation: analysis-pulse 1.6s ease-in-out infinite; }

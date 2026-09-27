@@ -1016,6 +1016,15 @@ pub fn create_message(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    if message.role == "agent" {
+        if let Some(existing) = latest_identical_agent_message(
+            &transaction,
+            &message.conversation_id,
+            &message.content,
+        )? {
+            return Ok(existing);
+        }
+    }
     if message.role == "user" {
         crate::taskrouter::claim_route_receipt_for_user_message(
             &transaction,
@@ -1032,6 +1041,32 @@ pub fn create_message(
     touch_after_message(&transaction, &message)?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(message)
+}
+
+/// 界面系统提示（导入完成等）与会话最后一条完全相同时不再追加，返回原消息；
+/// 例如反复移除后重导同一文件夹，只留一条提示。中间有其他消息时照常追加。
+fn latest_identical_agent_message(
+    connection: &Connection,
+    conversation_id: &str,
+    content: &str,
+) -> Result<Option<Message>, String> {
+    connection
+        .query_row(
+            "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            [conversation_id],
+            |row| {
+                Ok(Message {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map(|latest| latest.filter(|latest| latest.role == "agent" && latest.content == content))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command(async)]
@@ -1080,6 +1115,35 @@ pub fn list_messages(app: AppHandle, conversation_id: String) -> Result<Vec<Mess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_agent_notice_is_not_stacked() {
+        let connection = Connection::open_in_memory().expect("open message test database");
+        crate::db::migrate(&connection).expect("create current schema");
+        connection
+            .execute_batch(
+                "
+                INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p', 'P', 1, 1);
+                INSERT INTO conversations (id, project_id, title, status, created_at, updated_at)
+                VALUES ('c', 'p', 'S', 'ready', 1, 1);
+                INSERT INTO messages (id, conversation_id, role, content, created_at)
+                VALUES ('notice', 'c', 'agent', 'Imported 94 items', 2);
+                ",
+            )
+            .expect("seed notice");
+        let repeated = latest_identical_agent_message(&connection, "c", "Imported 94 items")
+            .expect("query latest");
+        assert_eq!(repeated.map(|message| message.id), Some("notice".to_owned()));
+        connection
+            .execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('ask', 'c', 'user', 'cut it', 3)",
+                [],
+            )
+            .expect("seed user message");
+        assert!(latest_identical_agent_message(&connection, "c", "Imported 94 items")
+            .expect("query latest")
+            .is_none());
+    }
 
     #[test]
     fn project_and_session_names_are_editable_and_project_delete_is_scoped() {

@@ -95,6 +95,8 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
   const currentStep = sortedSteps.find((step) => step.status === 'running')
     ?? sortedSteps.find((step) => step.status === 'queued')
   const completedCount = sortedSteps.filter((step) => step.status === 'completed').length
+  // 整轮状态只看交付物；个别只读查询失败另行计数，展开步骤可见具体哪一步。
+  const failedCount = sortedSteps.filter((step) => step.status === 'failed').length
   const artifacts = [...new Set(sortedSteps
     .filter((step) => step.status === 'completed' && step.artifactType)
     .map((step) => step.artifactType as string))]
@@ -115,7 +117,7 @@ export function AgentRunCard({ task, onOpenStoryboard }: AgentRunCardProps) {
       <button className="agent-run-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? copy.collapse : copy.viewSteps}>
         <span className={`agent-run-state ${task.status}`} aria-hidden="true" />
         <strong>{currentCopy}</strong>
-        <small>{elapsedCopy(task, t)} · {copy.stepsDone(completedCount)}</small>
+        <small>{elapsedCopy(task, t)} · {copy.stepsDone(completedCount)}{failedCount > 0 && !ACTIVE_TASK_STATUSES.has(task.status) ? ` · ${copy.stepsFailed(failedCount)}` : ''}</small>
         <WorkspaceIcon name="chevron" />
       </button>
       {hasResult && !ACTIVE_TASK_STATUSES.has(task.status) && <button type="button" className="text-button agent-run-result" onClick={onOpenStoryboard}>{copy.viewResult}</button>}
