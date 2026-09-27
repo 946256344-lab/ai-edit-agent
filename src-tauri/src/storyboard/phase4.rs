@@ -17,6 +17,7 @@ use crate::storyboard::phases::{
 use crate::storyboard::repair::{
     parse_affected_shot_indices, repair_packet_prompt_block, RepairPacket, StoryboardIssue,
 };
+use crate::storyboard::timing::SpeechTimingKind;
 use crate::storyboard::{model_response_json_text, post_model_payload, STORYBOARD_TIMEOUT};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1291,16 +1292,33 @@ User instruction for these shots (follow it inside the locked window; never swap
     let pick_map = session.pick_map().clone();
     let mutable = session.mutable_orders();
     clamp_shots_to_chosen_windows_scoped(&mut refined, &pick_map, mutable.as_ref());
-    if rough.speech_timing.beats.is_empty() {
-        apply_narration_phrase_duration_floor_scoped(&mut refined, &pick_map, mutable.as_ref());
-    }
     refined.uncovered_beat_ids = selected.uncovered_beat_ids.clone();
-    let mut issues = crate::storyboard::timing::fit_shots_scoped(
-        &mut refined,
-        &rough.speech_timing,
-        &pick_map,
-        mutable.as_ref(),
-    );
+    let mut issues = Vec::new();
+    if rough.speech_timing.kind == SpeechTimingKind::Content {
+        // 没有配音时钟：时长跟精修内容走，源区间与槽位等长。
+        let bounds = crate::storyboard::length::content_shot_bounds(
+            crate::storyboard::phases::normalize_shot_length_hint(&rough.shot_length_hint),
+        );
+        crate::storyboard::length::fit_shots_to_content(
+            &mut refined,
+            &pick_map,
+            sources,
+            bounds,
+            mutable.as_ref(),
+        );
+    } else {
+        if rough.speech_timing.beats.is_empty() {
+            apply_narration_phrase_duration_floor_scoped(&mut refined, &pick_map, mutable.as_ref());
+        }
+        issues = crate::storyboard::timing::fit_shots_scoped(
+            &mut refined,
+            &rough.speech_timing,
+            &pick_map,
+            mutable.as_ref(),
+        );
+    }
+    // 任何时钟下都不让源区间长于槽位：预览和编辑器都会按比值加速，精修区间等于被丢掉。
+    crate::storyboard::length::trim_sources_to_slots(&mut refined, sources, mutable.as_ref());
     resolve_overlaps_within_chosen_windows_scoped(&mut refined, &pick_map, mutable.as_ref());
     crate::execution_deadline::check()?;
     issues.extend(collect_phase4_issues(&mut refined, selected));
@@ -1545,6 +1563,25 @@ fn run_pending_pass_b(
             crate::media_options::AspectRatio::Landscape => "16:9",
             crate::media_options::AspectRatio::Square => "1:1",
         };
+        // 没有配音时钟时拍时段只是召回提示，不给模型当硬约束，让它按内容定区间长度。
+        let (timing_json, pacing_rule) = if rough.speech_timing.kind == SpeechTimingKind::Content {
+            let (min_ms, max_ms) = crate::storyboard::length::content_shot_bounds(
+                crate::storyboard::phases::normalize_shot_length_hint(&rough.shot_length_hint),
+            );
+            (
+                "{}".to_owned(),
+                format!(
+                    "No voiceover clock: the draft durationMs is only a placeholder. Choose the span this visual moment needs to read completely, usually {:.1}-{:.1} seconds and varied between shots rather than identical. Rust sets each shot's on-screen length from your span (1x speed) and scales the whole cut to targetDurationMs, trimming around the best part only when the total requires it.",
+                    min_ms as f64 / 1000.0,
+                    max_ms as f64 / 1000.0
+                ),
+            )
+        } else {
+            (
+                serde_json::to_string(&rough.speech_timing).unwrap_or_else(|_| "{}".to_owned()),
+                "When beat timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.".to_owned(),
+            )
+        };
         let mut pass_b_blocks = vec![json!({
             "type": "input_text",
             "text": format!(
@@ -1559,7 +1596,7 @@ fn run_pending_pass_b(
                 Refine sourceStartMs/sourceEndMs inside that window so the span best matches purpose/requiredVisual.\n\
                 Do NOT cut mid spoken phrase in narrationText — prefer natural phrase boundaries.\n\
                 Keep durationMs = sourceEndMs - sourceStartMs. No asset swaps, no add/remove/reorder shots.\n\
-                No overlapping ranges from the same asset. When beat timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
+                No overlapping ranges from the same asset. {pacing_rule}\n\
                 Divide beat narration across shots when needed.\n\
                 For scriptMode=key_message, keep lead-shot onScreenText equal to that beat's onScreenText marker; leave narrationText empty.\n\
                 Choose cropFocus from the timed frames so the subject remains inside a {output_frame} crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
@@ -1567,7 +1604,7 @@ fn run_pending_pass_b(
                 matchLevel must stay 'direct' or 'contextual'.",
                 batch_index + 1,
                 batch,
-                serde_json::to_string(&rough.speech_timing).unwrap_or_else(|_| "{}".to_owned()),
+                timing_json,
                 serde_json::to_string(
                     &batch
                         .iter()

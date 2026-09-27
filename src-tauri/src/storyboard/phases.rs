@@ -209,6 +209,7 @@ pub(crate) fn phase1_generate_narrative(
         {mode_instructions}\n\
         Use beat segmentation to express separate information points, not broad paragraph chunks. One beat should cover one concrete idea, action, or emotional turn — split here rather than collapsing a whole product act (intro / problem / proof / CTA) into one beat. One picture shot is selected per beat, so a 6-second beat produces a 6-second hold.\n\
         Determine the appropriate number of beats from distinct information points. Do not select any media yet — this stage is pure story structure.\n\
+        Keep the order of events the brief gives (numbered or listed beats stay in that order; split an event into several beats in place, never move a later event earlier or add a title montage that previews later events). When the brief places an event at a time of day (night, sunset, morning), write that word into the beat's requiredVisual and visualKeywords; do not ask for night, dark or dim footage in beats the brief places before it.\n\
         targetDurationMs priority: if the system already gave you a fixed duration above (voiceover pre-synthesized, or user named one), copy it exactly — do not invent a different value. Otherwise propose a duration consistent with the script length (full_script) or the 15-45s guidance (key_message).\n\
         {feedback_context}{inventory_block}"
     );
@@ -415,11 +416,23 @@ pub(crate) fn phase2_rough_shot_selection(
     let mut uncovered_beat_ids = Vec::new();
     let mut candidate_pools = Vec::new();
     let shared_terms = scoring::shared_lexical_terms(&narrative.beats);
+    let daypart_rules = super::daypart::beat_rules(&narrative.beats);
     for (beat_index, beat) in narrative.beats.iter().enumerate() {
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
+        // 简报白天→夜晚：夜拍之前不召回夜景，夜拍不召回白天素材。
+        let rule = daypart_rules[beat_index];
+        let beat_sources = super::daypart::sources_for_rule(sources, rule, PHASE2_POOL_SIZE);
+        if beat_sources.len() != sources.len() {
+            log::info!(
+                "Beat '{}': daypart rule {rule:?} kept {} of {} sources",
+                beat.id,
+                beat_sources.len(),
+                sources.len()
+            );
+        }
         match build_beat_pool(
             beat,
-            sources,
+            &beat_sources,
             usage_counts,
             embeddings.get(beat_index).map(Vec::as_slice),
             clip_embeddings.get(beat_index).map(Vec::as_slice),
@@ -3076,7 +3089,14 @@ fn available_candidate_indexes(
         .len()
         .saturating_sub(rough.uncovered_beat_ids.len())
         .max(covered_beat_ids(rough).len());
-    let max_uses = super::max_asset_uses_for_shot_count(covered_beats);
+    // 各拍候选池合起来的不同素材够每拍一条时不复用（2026-09-27 同一素材曾在两拍各用一次）。
+    let pool_assets = rough
+        .candidate_pools
+        .iter()
+        .flat_map(|pool| pool.candidates.iter().map(|candidate| candidate.asset_id.as_str()))
+        .collect::<HashSet<_>>()
+        .len();
+    let max_uses = super::preferred_asset_uses(covered_beats, pool_assets);
     let mut uses: HashMap<&str, usize> = HashMap::new();
     for (_, asset_id, _) in already_selected {
         *uses.entry(asset_id.as_str()).or_default() += 1;

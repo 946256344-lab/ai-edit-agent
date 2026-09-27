@@ -2,6 +2,7 @@
 //! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
 
 pub(crate) mod clip;
+mod daypart;
 mod keyframes;
 mod length;
 pub(crate) mod local_edit;
@@ -709,6 +710,54 @@ fn validate_shot_diversity(
 
 pub(crate) fn max_asset_uses_for_shot_count(shot_count: usize) -> usize {
     (shot_count * 2 / 5).max(1)
+}
+
+/// 选镜时希望的单素材使用次数：库里不同素材够每镜一条就不复用；不够时平均摊开，
+/// 仍不超过 40% 硬上限。硬上限只在候选确实用尽时兜底，复用会写进镜头 reason。
+pub(crate) fn preferred_asset_uses(shot_count: usize, distinct_assets: usize) -> usize {
+    if distinct_assets >= shot_count {
+        1
+    } else {
+        shot_count
+            .div_ceil(distinct_assets.max(1))
+            .clamp(1, max_asset_uses_for_shot_count(shot_count))
+    }
+}
+
+const REUSE_TAG: &str = " [reused asset:";
+
+/// 成片里复用了同一素材时，在后出现的镜头 reason 里写明原因，不让复用悄悄发生。
+fn note_asset_reuse(content: &mut StoryboardContent, sources: &[StoryboardSource]) {
+    let distinct_assets = sources
+        .iter()
+        .filter(|source| matches!(source.kind.as_str(), "video" | "image"))
+        .map(|source| source.asset_id.as_str())
+        .collect::<HashSet<_>>()
+        .len();
+    let shot_count = content.shots.len();
+    let mut seen = HashSet::new();
+    for shot in &mut content.shots {
+        if let Some(position) = shot.reason.find(REUSE_TAG) {
+            shot.reason.truncate(position);
+        }
+        if seen.insert(shot.asset_id.clone()) {
+            continue;
+        }
+        let why = if distinct_assets < shot_count {
+            format!("library has {distinct_assets} assets for {shot_count} shots]")
+        } else {
+            "no unused candidate matched this beat]".to_owned()
+        };
+        log::warn!(
+            "Shot {} reuses asset {}: {}",
+            shot.order_index,
+            shot.asset_id,
+            why.trim_end_matches(']')
+        );
+        shot.reason.push_str(REUSE_TAG);
+        shot.reason.push(' ');
+        shot.reason.push_str(&why);
+    }
 }
 
 fn estimated_english_words(text: &str) -> f64 {
@@ -1445,10 +1494,10 @@ mod tests {
         brief_has_voiceover_script, coarse_beat_issue, decide_script_mode,
         enforce_decided_script_mode, estimated_storyboard_duration_ms, expected_beat_count,
         key_message_marker_issue, minimum_storyboard_duration, normalize_storyboard_candidate,
-        phase5_should_retry_phase4, resolve_voiceover_script, short_brief_duration_issue,
-        spoken_duration_conflicts, storyboard_completion_gaps, storyboard_sources,
-        storyboard_usage_counts, subtitle_text_from_narration, validate_storyboard,
-        StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
+        phase5_should_retry_phase4, preferred_asset_uses, resolve_voiceover_script,
+        short_brief_duration_issue, spoken_duration_conflicts, storyboard_completion_gaps,
+        storyboard_sources, storyboard_usage_counts, subtitle_text_from_narration,
+        validate_storyboard, StoryboardCompletionGap, MAX_STORYBOARD_SHOTS,
     };
     use crate::models::{
         StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource, StoryboardVersion,
@@ -1459,6 +1508,15 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use uuid::Uuid;
+
+    /// 2026-09-27「Weekend Road Trip」：25 条素材剪 12 镜，同一素材仍被两拍各用一次。
+    #[test]
+    fn assets_are_not_reused_when_the_library_covers_every_shot() {
+        assert_eq!(preferred_asset_uses(12, 25), 1);
+        assert_eq!(preferred_asset_uses(12, 12), 1);
+        assert_eq!(preferred_asset_uses(12, 5), 3);
+        assert_eq!(preferred_asset_uses(12, 1), 4);
+    }
 
     fn source() -> StoryboardSource {
         StoryboardSource {
@@ -2881,11 +2939,12 @@ fn generate_storyboard_internal(
         error
     })?;
 
-    // Phase 1：配音开着时 brief 已是可念稿，先 TTS 再拆拍；否则仍按朗读时长锁定模式。
-    let required_script_mode = if media_options.is_some_and(|options| options.voiceover) {
-        "full_script"
-    } else {
-        decide_script_mode(brief)
+    // Phase 1：配音开着时 brief 已是可念稿，先 TTS 再拆拍；配音明确关掉时没有旁白可念，
+    // 长 brief 也只是剪辑说明，锁 key_message（否则会把说明拆成逐词「旁白」拍）；未给选项时按朗读时长判断。
+    let required_script_mode = match media_options.map(|options| options.voiceover) {
+        Some(true) => "full_script",
+        Some(false) => "key_message",
+        None => decide_script_mode(brief),
     };
     log::info!("Phase 1 script mode locked by system: {required_script_mode}");
     let mut audio_first: Option<(i64, crate::voice_provider::AudioFirstPrepared)> = None;
@@ -3081,7 +3140,7 @@ fn generate_storyboard_internal(
         .unwrap_or_else(|| {
             if narrative.script_mode == "key_message" {
                 let covered: Vec<String> = narrative.beats.iter().map(|b| b.id.clone()).collect();
-                timing::from_pacing_plan(&narrative.beats, &covered, narrative.target_duration_ms)
+                timing::content_plan(&narrative.beats, &covered, narrative.target_duration_ms)
             } else {
                 timing::SpeechTiming::default()
             }
@@ -3123,7 +3182,7 @@ fn generate_storyboard_internal(
             .into_iter()
             .collect();
         rough.speech_timing =
-            timing::from_pacing_plan(&narrative.beats, &covered, narrative.target_duration_ms);
+            timing::content_plan(&narrative.beats, &covered, narrative.target_duration_ms);
     }
     log::info!(
         "Phase 2 complete: rough storyboard with {} lead shots across pools, {} uncovered beats",
@@ -3159,7 +3218,7 @@ fn generate_storyboard_internal(
             .filter(|id| !selected.uncovered_beat_ids.iter().any(|u| u == id))
             .collect();
         rough.speech_timing =
-            timing::from_pacing_plan(&selected.beats, &covered, selected.target_duration_ms);
+            timing::content_plan(&selected.beats, &covered, selected.target_duration_ms);
     }
 
     // Phase 4 + Phase 5: 精修时间段；normalize 自修后校验；仅精修类失败回 Phase 4
@@ -3461,6 +3520,8 @@ pub(crate) fn run_phase4_and_validate(
                 {
                     Ok(()) => {
                         log::info!("Phase 5 validation passed.");
+                        let mut candidate = candidate;
+                        note_asset_reuse(&mut candidate, sources);
                         content = Some(candidate);
                         break;
                     }

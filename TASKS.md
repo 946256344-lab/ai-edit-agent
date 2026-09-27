@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [x] 已实现（2026-09-27，P0，待桌面确认，claude/pensive-elion-66e5e3）：粗剪要真正用上 Phase 4 精修的源区间，镜头顺序与复用要合理。「Weekend Road Trip」实测：12 镜全是 2500ms；多镜源区间远长于槽位（预览只播前 2.5 秒、剪映/CapCut 按整段加速）；1.4 秒区间被放慢到 2.5 秒；同一素材用了两次；夜景排在白天海滩之前。已改：配音关锁 key_message；无配音时每镜时长跟精修区间走（约 1.5–5 秒、缩放到目标总长），源区间与槽位等长，窗口不够才放慢并写明；预览与编辑器同样按源区间÷槽位变速；素材够就不复用；夜拍前不召回夜景。「部分完成」来自 agentloop 回执，未改。已知限制：`reselect_shots` 复用仍按 40%。见 docs/changes/2026-09-27-content-driven-shot-lengths.md。
 <!-- ACTIVE_TASKS_START -->
 - [ ] 待修（2026-09-27，P0）：删除会话等确认框失效，删除不经确认直接执行。开发版 webview 中 `window.confirm` 被 Tauri 替换为 `async function(i){return await n("plugin:dialog|confirm",…)}`，返回 Promise（恒为真），`src/App.tsx` 的 `deleteEditingSessionWorkspace`、`ProjectSettingsModal` 清缓存、`useNavigationEditController` 的 `if (!confirmed) return` 全部失效；调用还报「dialog.confirm not allowed. Command not found」。09-27 12:10 录屏期间「Weekend Road Trip」两个会话因此被直接删除（会话、Agent 记录、故事板一并永久删除）。需改为 await 插件 `ask()` 并确认权限。
 - [x] 已实现（2026-09-27，待桌面确认）：输入框下方按钮改为「画幅 · BGM · 配音」。字幕开关换成画幅（9:16 / 16:9 / 1:1），字幕随配音自动添加；画幅写入本轮 mediaOptions 快照，预览渲染、镜头裁切和剪映 / CapCut / FCPXML 画布都按所选比例（此前写死 540×960 竖屏）。预览面板的空白画框与镜头缩略图随所选画幅即时变化（成片仍按真实比例播放）。BGM 开启时由 `generate_storyboard` 直接配乐：先用素材库里的音频，没有再走 Jamendo，两边都不可用时如实报告原因（此前靠模型自行调工具，演示项目无音频、Jamendo 未配置时必然无音乐）。09-27 桌面实测通过（16:9 预览 960×540、素材库音频自动配乐、CapCut 草稿）；同日补：模型不得擅自改动输入框选择（实测曾在配音关时自行打开配音）、播放器按成片比例显示。已知限制：Phase 3 候选卡的竖屏可裁性标签不随画幅变，字幕每行字数仍按竖屏。见 docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md。

@@ -33,31 +33,23 @@ pub(crate) fn render_timeline_clip(
     canvas: Canvas,
     destination: &Path,
 ) -> Result<(), String> {
-    // 用源范围播放，时间线槽位更长时按源窗/槽位放慢，避免黑帧或静帧。
+    // 整段源范围铺满槽位：槽位更长就放慢，更短就加快，与剪映 / FCPXML timeMap / OTIO 变速一致，
+    // 不再只播源范围开头一段（那样会丢掉精修选出的区间，预览和交付物也不一致）。
     let timeline_duration_ms = clip.timeline_end_ms - clip.timeline_start_ms;
     let source_duration_ms = (clip.source_end_ms - clip.source_start_ms).max(0);
     let freeze = clip.clip_kind == "freeze_frame";
-    let output_duration = if freeze {
-        timeline_duration_ms as f64 / 1000.0
-    } else if kind == "image" {
+    let retimed = !freeze && kind == "video" && source_duration_ms > 0;
+    let output_duration = if freeze || kind == "image" || retimed {
         timeline_duration_ms.max(1) as f64 / 1000.0
-    } else if timeline_duration_ms > source_duration_ms && source_duration_ms > 0 {
-        timeline_duration_ms as f64 / 1000.0
     } else {
         timeline_duration_ms.min(source_duration_ms).max(1) as f64 / 1000.0
     };
-    let input_duration = if freeze || kind == "image" {
-        output_duration
-    } else if timeline_duration_ms > source_duration_ms && source_duration_ms > 0 {
+    let input_duration = if retimed {
         source_duration_ms as f64 / 1000.0
     } else {
         output_duration
     };
-    let slow_factor = if !freeze
-        && kind == "video"
-        && timeline_duration_ms > source_duration_ms
-        && source_duration_ms > 0
-    {
+    let pts_factor = if retimed && timeline_duration_ms != source_duration_ms {
         timeline_duration_ms as f64 / source_duration_ms as f64
     } else {
         1.0
@@ -100,8 +92,8 @@ pub(crate) fn render_timeline_clip(
         return Err("Timeline clip uses unsupported media.".to_owned());
     }
     let [x, y] = clip.crop_focus.unwrap_or([0.5, 0.5]);
-    let setpts = if (slow_factor - 1.0).abs() > 0.001 {
-        format!("setpts=PTS*{slow_factor:.6},")
+    let setpts = if (pts_factor - 1.0).abs() > 0.001 {
+        format!("setpts=PTS*{pts_factor:.6},")
     } else {
         String::new()
     };

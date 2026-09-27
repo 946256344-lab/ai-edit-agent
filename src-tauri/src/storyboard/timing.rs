@@ -6,13 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-/// Voice：TTS alignment 时段；Pacing：key_message 屏幕标记可读性节奏。
+/// Voice：TTS alignment 时段；Pacing：固定槽位（局部编辑沿用上一版时长）；
+/// Content：没有配音时钟，拍时段只是召回提示，Phase 4 按精修内容定每镜时长。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SpeechTimingKind {
     #[default]
     Voice,
     Pacing,
+    Content,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -262,6 +264,18 @@ pub(crate) fn from_pacing_plan(
     result
 }
 
+/// 无配音的整条生成：按可读性节奏给出每拍提示时段，但不锁槽位，时长由精修内容决定。
+pub(crate) fn content_plan(
+    beats: &[StoryboardBeat],
+    covered_ids: &[String],
+    target_duration_ms: i64,
+) -> SpeechTiming {
+    SpeechTiming {
+        kind: SpeechTimingKind::Content,
+        ..from_pacing_plan(beats, covered_ids, target_duration_ms)
+    }
+}
+
 impl SpeechTiming {
     pub(crate) fn duration(&self, beat_id: &str) -> Option<i64> {
         self.beats
@@ -272,7 +286,10 @@ impl SpeechTiming {
 
     pub(crate) fn validate(&self, content: &StoryboardContent) -> Result<(), String> {
         // Voice：有 uncovered 时跳过；Pacing 仍校验已计划的 covered beats。
-        if self.kind == SpeechTimingKind::Voice && !content.uncovered_beat_ids.is_empty() {
+        // Content：拍时段只是召回提示；覆盖与总长由 validate_storyboard 校验。
+        if self.kind == SpeechTimingKind::Content
+            || (self.kind == SpeechTimingKind::Voice && !content.uncovered_beat_ids.is_empty())
+        {
             return Ok(());
         }
         for beat in &self.beats {
@@ -329,7 +346,7 @@ pub(crate) fn fit_shots_scoped(
     windows: &HashMap<i64, (Phase4ContentWindow, bool)>,
     mutable: Option<&HashSet<i64>>,
 ) -> Vec<StoryboardIssue> {
-    if timing.beats.is_empty() {
+    if timing.beats.is_empty() || timing.kind == SpeechTimingKind::Content {
         return Vec::new();
     }
     if timing.kind == SpeechTimingKind::Voice && !content.uncovered_beat_ids.is_empty() {

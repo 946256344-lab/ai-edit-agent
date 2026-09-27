@@ -1,10 +1,13 @@
 //! 口播时钟对照源窗：短了就放慢镜头，不换片、不补镜、不拼下一段硬切。
+//! 没有配音时钟时，每镜时长跟精修出的内容区间走，源区间与槽位保持等长。
 
-use super::phases::{BeatCandidatePool, RoughStoryboard};
+use super::multimodal::Phase4ContentWindow;
+use super::phases::{BeatCandidatePool, RoughStoryboard, ShotLengthHint};
 use super::repair::StoryboardIssue;
-use super::timing::{self, SpeechTiming};
+use super::timing::{self, SpeechTiming, SpeechTimingKind};
 use crate::models::{StoryboardBeat, StoryboardContent, StoryboardShot, StoryboardSource};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 const TOP_ALTERNATE_INDEX: usize = 4;
 
@@ -35,7 +38,8 @@ pub(crate) fn stretch_shots_to_speech_timing(
     content: &mut StoryboardContent,
     timing: &SpeechTiming,
 ) {
-    if timing.beats.is_empty() {
+    // Content 的拍时段只是提示：这里裁短会把整片候选的锁定窗一起裁掉。
+    if timing.beats.is_empty() || timing.kind == SpeechTimingKind::Content {
         return;
     }
     for beat in &timing.beats {
@@ -86,6 +90,273 @@ pub(crate) fn stretch_shots_to_speech_timing(
             remaining = remaining.saturating_sub(share);
         }
     }
+}
+
+/// 无配音时钟时单镜时长上下界（毫秒）：约 1.5–5 秒，用户要快切或长镜时随 shotLengthHint 调整。
+pub(crate) fn content_shot_bounds(hint: ShotLengthHint) -> (i64, i64) {
+    match hint {
+        ShotLengthHint::Short => (1_000, 2_500),
+        ShotLengthHint::Default => (1_500, 5_000),
+        ShotLengthHint::Long => (2_000, 8_000),
+    }
+}
+
+const SLOWED_TAG: &str = " [slowed ";
+
+/// 无配音时钟：每镜时长跟 Phase 4 精修出的内容区间走，在上下界内按比例缩放到目标总长。
+/// 源区间始终与槽位等长（1 倍速）：长了按证据最佳区间裁，短了在锁定窗内向两侧补；
+/// 锁定窗本身不够长才放慢，并在 reason 里写明倍速，不静默截断。
+pub(crate) fn fit_shots_to_content(
+    content: &mut StoryboardContent,
+    windows: &HashMap<i64, (Phase4ContentWindow, bool)>,
+    sources: &[StoryboardSource],
+    bounds: (i64, i64),
+    mutable: Option<&HashSet<i64>>,
+) {
+    let (min_ms, max_ms) = bounds;
+    let mut plans = Vec::new();
+    let mut frozen_ms = 0_i64;
+    for (index, shot) in content.shots.iter().enumerate() {
+        let adjustable = mutable.map_or(true, |allowed| allowed.contains(&shot.order_index));
+        let window = windows
+            .get(&shot.order_index)
+            .map(|(window, _)| window)
+            .filter(|window| window.asset_id == shot.asset_id);
+        let (Some(window), true) = (window, adjustable) else {
+            frozen_ms += shot.duration_ms.max(0);
+            continue;
+        };
+        let is_image = sources
+            .iter()
+            .find(|source| source.asset_id == shot.asset_id)
+            .is_some_and(|source| source.kind == "image");
+        let marker = shot.on_screen_text.trim();
+        let floor = if shot.beat_part_index <= 1 && !marker.is_empty() {
+            min_ms.max(timing::marker_readability_floor_ms(marker))
+        } else {
+            min_ms
+        };
+        let (refined, capacity, preferred) = if is_image {
+            ((0, 0), i64::MAX / 4, (min_ms + max_ms) / 2)
+        } else {
+            let start = shot.source_start_ms.clamp(window.start_ms, window.end_ms);
+            let end = shot.source_end_ms.clamp(start, window.end_ms);
+            ((start, end), window.span_ms().max(1), (end - start).max(1))
+        };
+        plans.push(ContentPlan {
+            index,
+            window: (window.start_ms, window.end_ms),
+            refined,
+            capacity,
+            floor,
+            preferred,
+            is_image,
+        });
+    }
+    if plans.is_empty() {
+        return;
+    }
+    let target = content
+        .target_duration_ms
+        .saturating_sub(frozen_ms)
+        .max(plans.len() as i64);
+    let lo = plans.iter().map(|plan| plan.floor).collect::<Vec<_>>();
+    // 先按 1.5–5 秒上限分；素材窗够长但总长不够时放开 5 秒上限（仍 1 倍速）；
+    // 窗口本身都不够长时才按比例放慢补足目标时长。
+    let hi_capped = plans
+        .iter()
+        .map(|plan| plan.floor.max(max_ms.min(plan.capacity)))
+        .collect::<Vec<_>>();
+    let hi = if hi_capped.iter().sum::<i64>() >= target {
+        hi_capped
+    } else {
+        plans
+            .iter()
+            .map(|plan| plan.floor.max(plan.capacity.min(target)))
+            .collect::<Vec<_>>()
+    };
+    let preferred = plans
+        .iter()
+        .zip(lo.iter().zip(hi.iter()))
+        .map(|(plan, (lo, hi))| plan.preferred.clamp(*lo, *hi))
+        .collect::<Vec<_>>();
+    let mut slots = allocate_between(&lo, &preferred, &hi, target);
+    let filled = slots.iter().sum::<i64>();
+    if filled < target {
+        log::warn!(
+            "Content-driven pacing: usable windows total {filled}ms for a {target}ms target; slowing shots to fill the gap"
+        );
+        let unbounded = vec![target; slots.len()];
+        slots = allocate_between(&slots, &slots, &unbounded, target);
+    }
+    for (plan, slot) in plans.iter().zip(slots) {
+        let shot = &mut content.shots[plan.index];
+        if let Some(position) = shot.reason.find(SLOWED_TAG) {
+            shot.reason.truncate(position);
+        }
+        shot.duration_ms = slot;
+        if plan.is_image {
+            continue;
+        }
+        let anchor = evidence_anchor_ms(sources, shot, plan.refined);
+        let (start, end) = place_source_range(plan.refined, plan.window, slot, anchor);
+        if plan.refined.1 - plan.refined.0 > slot {
+            log::info!(
+                "Shot {} refined range [{}-{}] trimmed to [{start}-{end}] for a {slot}ms slot",
+                shot.order_index,
+                plan.refined.0,
+                plan.refined.1
+            );
+        }
+        shot.source_start_ms = start;
+        shot.source_end_ms = end.max(start + 1);
+        let span = shot.source_end_ms - shot.source_start_ms;
+        if span < slot {
+            let speed = span as f64 / slot as f64;
+            log::info!(
+                "Shot {} slowing {span}ms source to {slot}ms on-screen ({speed:.2}x)",
+                shot.order_index
+            );
+            shot.reason.push_str(&format!(
+                "{SLOWED_TAG}{speed:.2}x: usable window {span}ms shorter than {slot}ms slot]"
+            ));
+        }
+    }
+}
+
+/// 源区间长于槽位时按证据最佳区间裁到槽位长度，保证成片播放的就是故事版写下的区间。
+/// 预览、剪映和 FCPXML/OTIO 都按「源区间 ÷ 槽位」变速，长区间不裁会被加速。
+pub(crate) fn trim_sources_to_slots(
+    content: &mut StoryboardContent,
+    sources: &[StoryboardSource],
+    mutable: Option<&HashSet<i64>>,
+) {
+    for index in 0..content.shots.len() {
+        let shot = &content.shots[index];
+        if mutable.is_some_and(|allowed| !allowed.contains(&shot.order_index)) {
+            continue;
+        }
+        let refined = (shot.source_start_ms, shot.source_end_ms);
+        let slot = shot.duration_ms.max(1);
+        if refined.1 - refined.0 <= slot {
+            continue;
+        }
+        let anchor = evidence_anchor_ms(sources, shot, refined);
+        let (start, end) = place_source_range(refined, refined, slot, anchor);
+        let shot = &mut content.shots[index];
+        shot.source_start_ms = start;
+        shot.source_end_ms = end;
+    }
+}
+
+struct ContentPlan {
+    index: usize,
+    window: (i64, i64),
+    refined: (i64, i64),
+    capacity: i64,
+    floor: i64,
+    preferred: i64,
+    is_image: bool,
+}
+
+/// 目标总长落在 lo..preferred 或 preferred..hi 之间时按各镜余量线性分配，保留镜头间的长短差异。
+fn allocate_between(lo: &[i64], preferred: &[i64], hi: &[i64], target: i64) -> Vec<i64> {
+    let sum = |values: &[i64]| values.iter().sum::<i64>();
+    let (sum_lo, sum_pref, sum_hi) = (sum(lo), sum(preferred), sum(hi));
+    let mut slots = if target <= sum_pref {
+        let room = sum_pref - sum_lo;
+        let take = (sum_pref - target).min(room);
+        preferred
+            .iter()
+            .zip(lo)
+            .map(|(pref, lo)| {
+                if room <= 0 {
+                    *lo
+                } else {
+                    pref - ((pref - lo) as i128 * take as i128 / room as i128) as i64
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let room = sum_hi - sum_pref;
+        let add = (target - sum_pref).min(room);
+        preferred
+            .iter()
+            .zip(hi)
+            .map(|(pref, hi)| {
+                if room <= 0 {
+                    *pref
+                } else {
+                    pref + ((hi - pref) as i128 * add as i128 / room as i128) as i64
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut diff = target.clamp(sum_lo, sum_hi) - sum(&slots);
+    for index in 0..slots.len() {
+        if diff > 0 {
+            let step = (hi[index] - slots[index]).min(diff);
+            slots[index] += step;
+            diff -= step;
+        } else if diff < 0 {
+            let step = (slots[index] - lo[index]).min(-diff);
+            slots[index] -= step;
+            diff += step;
+        }
+    }
+    slots
+}
+
+/// 在精修区间里放一段槽位长的源区间：长了围绕锚点裁，短了在锁定窗内向两侧补，窗不够就用整窗。
+fn place_source_range(
+    refined: (i64, i64),
+    window: (i64, i64),
+    slot: i64,
+    anchor: Option<i64>,
+) -> (i64, i64) {
+    let span = refined.1 - refined.0;
+    if span >= slot {
+        let center = anchor.unwrap_or(refined.0 + span / 2);
+        let start = (center - slot / 2).clamp(refined.0, refined.1 - slot);
+        return (start, start + slot);
+    }
+    if window.1 - window.0 <= slot {
+        return window;
+    }
+    let start = (refined.0 - (slot - span) / 2).clamp(window.0, window.1 - slot);
+    (start, start + slot)
+}
+
+/// 视觉证据给的最佳区间（与精修区间交叠最多的那段）中心，其次是落在区间内的高光时刻。
+fn evidence_anchor_ms(
+    sources: &[StoryboardSource],
+    shot: &StoryboardShot,
+    refined: (i64, i64),
+) -> Option<i64> {
+    let mut best: Option<(i64, i64)> = None;
+    let mut highlight = None;
+    let details = sources
+        .iter()
+        .filter(|source| source.asset_id == shot.asset_id)
+        .flat_map(|source| source.visual_evidence.iter())
+        .filter_map(|evidence| evidence.detail.as_ref());
+    for detail in details {
+        if let Some(range) = &detail.best_range {
+            let start = range.start_ms.max(refined.0);
+            let end = range.end_ms.min(refined.1);
+            if end > start && best.map_or(true, |(_, overlap)| end - start > overlap) {
+                best = Some((start + (end - start) / 2, end - start));
+            }
+        }
+        if highlight.is_none() {
+            highlight = detail
+                .highlights
+                .iter()
+                .map(|moment| moment.time_ms)
+                .find(|time| *time >= refined.0 && *time <= refined.1);
+        }
+    }
+    best.map(|(center, _)| center).or(highlight)
 }
 
 pub(crate) fn usable_ms_for_shot(shot: &StoryboardShot, pools: &[BeatCandidatePool]) -> i64 {
@@ -536,6 +807,77 @@ mod tests {
         assert_eq!(
             sync_narration_and_timing(&mut far, &mut rough, None)[0].kind,
             "narration_move_not_adjacent"
+        );
+    }
+
+    /// 2026-09-27「Weekend Road Trip」（无配音）：12 镜全是 2500ms，10 秒以上的精修区间只播前 2.5 秒，
+    /// 1.4 秒的区间被放慢到 2.5 秒。改为时长跟精修区间走、源区间与槽位等长。
+    #[test]
+    fn content_clock_follows_refined_ranges_without_truncating_or_slowing() {
+        let refined = [
+            ("walk", 3_865, 14_208),
+            ("tent", 9_100, 10_500),
+            ("jam", 6_500, 8_500),
+            ("glow", 0, 22_568),
+        ];
+        let shots = refined
+            .iter()
+            .enumerate()
+            .map(|(index, (asset, start, end))| {
+                let mut shot = shot(index as i64 + 1, asset, asset, *start, *end);
+                shot.duration_ms = 2_500;
+                shot
+            })
+            .collect::<Vec<_>>();
+        let mut content: StoryboardContent = serde_json::from_value(
+            json!({"title":"t","summary":"s","targetDurationMs":12_000,"shots":[]}),
+        )
+        .unwrap();
+        content.shots = shots;
+        let windows = refined
+            .iter()
+            .enumerate()
+            .map(|(index, (asset, _, _))| {
+                let window = Phase4ContentWindow {
+                    window_id: "s1".to_owned(),
+                    asset_id: (*asset).to_owned(),
+                    start_ms: 0,
+                    end_ms: 23_000,
+                };
+                (index as i64 + 1, (window, false))
+            })
+            .collect::<HashMap<_, _>>();
+        let sources = refined
+            .iter()
+            .map(|(asset, _, _)| source(asset, 0, 23_000))
+            .collect::<Vec<_>>();
+        fit_shots_to_content(&mut content, &windows, &sources, (1_500, 5_000), None);
+
+        let durations = content
+            .shots
+            .iter()
+            .map(|shot| shot.duration_ms)
+            .collect::<Vec<_>>();
+        assert_eq!(durations.iter().sum::<i64>(), 12_000);
+        assert!(
+            durations.iter().all(|ms| (1_500..=5_000).contains(ms)),
+            "{durations:?}"
+        );
+        assert!(
+            durations.windows(2).any(|pair| pair[0] != pair[1]),
+            "{durations:?}"
+        );
+        for (shot, (_, start, end)) in content.shots.iter().zip(refined) {
+            assert_eq!(shot.source_end_ms - shot.source_start_ms, shot.duration_ms);
+            assert!(!shot.reason.contains("slowed"), "{}", shot.reason);
+            // 长区间裁在精修区间内部，不是永远取开头。
+            if end - start > shot.duration_ms {
+                assert!(shot.source_start_ms >= start && shot.source_end_ms <= end);
+            }
+        }
+        assert!(
+            content.shots[3].source_start_ms > 0,
+            "long range must not keep only its head"
         );
     }
 }
