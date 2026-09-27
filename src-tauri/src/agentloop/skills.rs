@@ -1014,16 +1014,15 @@ pub(super) fn apply_skill(
                 .get("mediaOptions")
                 .filter(|value| !value.is_null())
                 .map(|value| {
-                    let mut options = crate::media_options::parse_media_options(value)?;
-                    // 模型漏传画幅时沿用输入框选择，不能静默退回竖屏。
-                    let names_ratio = value.get("aspectRatio").is_some()
-                        || value.as_str().is_some_and(|text| text.contains("aspectRatio"));
-                    if !names_ratio {
-                        if let Some(composer) = composer_options {
-                            options.aspect_ratio = composer.aspect_ratio;
-                        }
-                    }
-                    Ok::<_, String>(options)
+                    let options = crate::media_options::parse_media_options(value)?;
+                    Ok::<_, String>(match composer_options {
+                        Some(composer) => crate::media_options::guard_model_options(
+                            options,
+                            composer,
+                            &state.user_request,
+                        ),
+                        None => options,
+                    })
                 })
                 .transpose()?
                 .or(composer_options);

@@ -144,6 +144,7 @@ pub(crate) fn run_native_tool_loop(
         editing_task_id,
         conversation_id,
         task_brief: task_brief.to_owned(),
+        user_request: request.to_owned(),
         media_options,
         storyboard: storyboard.cloned(),
         timelines: timelines.to_vec(),

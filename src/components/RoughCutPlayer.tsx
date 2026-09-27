@@ -1,6 +1,6 @@
 // 粗剪播放器：轻量播放、定位与全屏控件，仅管理媒体展示状态；进度条按镜头分段显示已播与当前镜头。
 import { useRef, useState } from 'react'
-import type { RefObject } from 'react'
+import type { CSSProperties, RefObject } from 'react'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { useI18n } from '../lib/i18n'
 
@@ -21,13 +21,23 @@ export function RoughCutPlayer({ src, videoRef, onTimeChange, segments = [] }: {
   const [duration, setDuration] = useState(0)
   const [position, setPosition] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // 画框按成片真实宽高比放进可用区域（横屏、方形、竖屏都不留灰边）；元数据到达前按竖屏占位。
+  const [ratio, setRatio] = useState<[number, number]>([9, 16])
+  const frameStyle = { '--video-w': ratio[0], '--video-h': ratio[1] } as CSSProperties
   return <div className="cut-player" ref={stage}>
+    <div className="cut-player-frame" style={frameStyle}>
     <video ref={videoRef} src={src} playsInline muted={muted}
-      onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); onTimeChange(0) }}
+      onLoadedMetadata={(event) => {
+        const { videoWidth, videoHeight, duration: seconds } = event.currentTarget
+        if (videoWidth > 0 && videoHeight > 0) setRatio([videoWidth, videoHeight])
+        setDuration(seconds)
+        onTimeChange(0)
+      }}
       onTimeUpdate={(event) => { setPosition(event.currentTarget.currentTime); onTimeChange(event.currentTarget.currentTime * 1000) }}
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
       onError={() => setError(copy.playFailed)}
     />
+    </div>
     {error && <p className="player-error" role="status">{error}</p>}
     <div className="cut-player-controls">
       <button className="player-play" aria-label={playing ? copy.pause : copy.play} title={playing ? copy.pause : copy.play} onClick={() => {

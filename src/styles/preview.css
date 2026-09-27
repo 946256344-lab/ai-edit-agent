@@ -23,7 +23,8 @@
 .empty-play { display: grid; place-items: center; width: 48px; height: 48px; margin: auto; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-frame); color: var(--text); font-size: 18px; }
 
 .cut-player { position: relative; display: flex; flex-direction: column; gap: 12px; width: 100%; height: 100%; min-height: 0; padding: 16px 14px 12px; background: var(--stage); }
-.cut-player video { flex: 1 1 0; align-self: center; min-height: 0; max-width: 100%; aspect-ratio: auto 9 / 16; object-fit: contain; border-radius: 10px; background: var(--fill-strong); box-shadow: var(--shadow-frame); }
+.cut-player-frame { display: grid; place-items: center; flex: 1 1 0; min-height: 0; container-type: size; }
+.cut-player-frame video { width: min(100cqw, 100cqh * var(--video-w) / var(--video-h)); height: auto; aspect-ratio: var(--video-w) / var(--video-h); object-fit: contain; border-radius: 10px; background: var(--fill-strong); box-shadow: var(--shadow-frame); }
 .cut-player-controls { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; grid-template-areas: 'track track track track track track' 'play time total . mute full'; align-items: center; column-gap: 8px; row-gap: 8px; flex: none; color: var(--text); }
 .cut-player-controls > .player-play { grid-area: play; }
 .cut-player-controls > .player-time { grid-area: time; }

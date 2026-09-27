@@ -26,6 +26,8 @@ pub(super) struct LoopState<'a> {
     pub(super) editing_task_id: &'a str,
     pub(super) conversation_id: &'a str,
     pub(super) task_brief: String,
+    /// 用户本轮原话：判断模型能否改动输入框的媒体选择。
+    pub(super) user_request: String,
     pub(super) media_options: Option<crate::media_options::MediaOptions>,
     pub(super) storyboard: Option<StoryboardVersion>,
     pub(super) timelines: Vec<TimelineVersion>,
