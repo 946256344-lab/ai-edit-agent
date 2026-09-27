@@ -125,6 +125,10 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         } else {
             "voice_provider_error"
         }
+    } else if error.starts_with("cut_review_needs_preview:") {
+        "cut_review_needs_preview"
+    } else if error.starts_with("cut_review_failed:") {
+        "cut_review_failed"
     } else if error.contains("storyboard") || error.contains("timeline") {
         "missing_or_invalid_prerequisite"
     } else if error.contains("asset") || error.contains("media") {
@@ -230,6 +234,30 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": true,
             "recovery": "若还没有分镜，先调用 generate_storyboard；用户确认后再调用 create_timeline_draft，然后重试当前工具。",
             "responseInstruction": "Tell the user this step needs an internal timeline. If generate_storyboard and create_timeline_draft are available, use that path. Do not claim the requested artifact was created."
+        });
+    }
+    if code == "cut_review_needs_preview" {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "prerequisite_validation",
+            "code": code,
+            "facts": ["This timeline version has no rendered preview to review."],
+            "retryable": true,
+            "recovery": "Call render_preview for the same timelineVersionId, then call review_cut again.",
+            "responseInstruction": "Do not describe findings: nothing was reviewed. Render the preview first, then review it."
+        });
+    }
+    if code == "cut_review_failed" {
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "cut_review",
+            "code": code,
+            "facts": ["The rendered cut could not be reviewed; the timeline was not changed."],
+            "retryable": true,
+            "recovery": "Retry review_cut once. If it fails again, tell the user the review could not run.",
+            "responseInstruction": "Tell the user the review did not complete and nothing was changed. Do not invent findings."
         });
     }
     if error.starts_with("voiceover_longer_than_picture:") {
@@ -548,26 +576,19 @@ pub(super) fn upsert_timeline(timelines: &mut Vec<TimelineVersion>, updated: Tim
     upsert(timelines, updated)
 }
 
-fn deliver_playable_preview_and_editor(
+fn render_playable_preview(
     app: tauri::AppHandle,
     timeline: &TimelineVersion,
     message: &mut String,
-) -> (
-    Option<crate::models::PreviewResult>,
-    Option<crate::models::JianyingDraftResult>,
-    Option<String>,
-    Option<String>,
-) {
+) -> (Option<crate::models::PreviewResult>, Option<String>) {
     if timeline.clips.is_empty() {
         message.push_str(" 时间线没有可播镜头，跳过预览和编辑器交付。");
         return (
             None,
-            None,
             Some("preview skipped: timeline has no playable clips".to_owned()),
-            None,
         );
     }
-    let (preview, preview_error) = match render_preview(app.clone(), timeline.id.clone()) {
+    match render_preview(app, timeline.id.clone()) {
         Ok(preview) => {
             message.push_str("\n预览也已生成。");
             (Some(preview), None)
@@ -576,8 +597,19 @@ fn deliver_playable_preview_and_editor(
             message.push_str(" 但预览生成失败，请稍后重试。 ");
             (None, Some(error))
         }
-    };
-    let (jianying_draft, editor_error) = match deliver_to_editor(app, timeline.id.clone(), None) {
+    }
+}
+
+/// 编辑器只交付复查（及修复）之后的最终时间线。
+fn deliver_editor_draft(
+    app: tauri::AppHandle,
+    timeline: &TimelineVersion,
+    message: &mut String,
+) -> (Option<crate::models::JianyingDraftResult>, Option<String>) {
+    if timeline.clips.is_empty() {
+        return (None, None);
+    }
+    match deliver_to_editor(app, timeline.id.clone(), None) {
         Ok(result) => {
             message.push_str(&format!(" {}", result.message));
             (result.jianying, None)
@@ -587,8 +619,7 @@ fn deliver_playable_preview_and_editor(
             message.push_str(&format!(" 编辑器交付未完成：{brief}。"));
             (None, Some(error))
         }
-    };
-    (preview, jianying_draft, preview_error, editor_error)
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1186,8 +1217,6 @@ pub(super) fn apply_skill(
                             }
                         }
                     }
-                    let timeline_version_id = timeline.id.clone();
-                    state.timelines = vec![timeline.clone()];
                     // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
                     // requestedMedia 只是用户要求；appliedMedia 按时间线实际轨道给出，模型只能据此汇报。
                     let applied_media = json!({
@@ -1214,18 +1243,42 @@ pub(super) fn apply_skill(
                             media_not_applied.join("、")
                         ));
                     }
-                    let (preview, jianying_draft, preview_error, editor_error) =
-                        deliver_playable_preview_and_editor(
-                            state.app.clone(),
+                    let (mut preview, mut preview_error) =
+                        render_playable_preview(state.app.clone(), &timeline, &mut message);
+                    // 出了预览就按成片复查并修一轮；修复落地时交付与汇报都以修复后的版本为准。
+                    let mut final_storyboard = generated;
+                    let mut cut_review = None;
+                    if let Some(rendered) = preview.as_ref() {
+                        let ctx = super::review_cut::ReviewContext::from_state(state);
+                        let review = super::review_cut::auto_review_after_generation(
+                            &ctx,
+                            &mut state.reselected_beats,
                             &timeline,
-                            &mut message,
+                            rendered,
                         );
+                        message.push_str(&review.message);
+                        quality_warnings.extend(review.quality_warnings);
+                        cut_review = Some(review.report);
+                        if let Some(repaired) = review.repaired {
+                            timeline = repaired.timeline;
+                            if let Some(storyboard) = repaired.storyboard {
+                                final_storyboard = storyboard;
+                            }
+                            preview = repaired.preview;
+                            preview_error = repaired.preview_error;
+                        }
+                    }
+                    let (jianying_draft, editor_error) =
+                        deliver_editor_draft(state.app.clone(), &timeline, &mut message);
+                    let timeline_version_id = timeline.id.clone();
+                    state.timelines = vec![timeline.clone()];
+                    state.storyboard = Some(final_storyboard.clone());
                     let mut result = json!({
                         "tool": "generate_storyboard",
                         "status": "ok",
-                        "storyboardVersionId": storyboard_version_id,
+                        "storyboardVersionId": final_storyboard.id,
                         "timelineVersionId": timeline_version_id,
-                        "versionNumber": version_number,
+                        "versionNumber": final_storyboard.version_number,
                         "timelineVersionNumber": timeline.version_number,
                         "qualityWarnings": quality_warnings,
                         "requestedMedia": media_options,
@@ -1254,10 +1307,13 @@ pub(super) fn apply_skill(
                     if let Some(error) = editor_error {
                         result["jianyingError"] = json!(error);
                     }
+                    if let Some(report) = cut_review {
+                        result["cutReview"] = report;
+                    }
                     state.last_outcome = Some(AgentEditResult {
                         agent_task_id,
                         message,
-                        storyboard: Some(generated),
+                        storyboard: Some(final_storyboard),
                         timeline: Some(timeline),
                         preview,
                         jianying_draft,
@@ -1697,6 +1753,7 @@ pub(super) fn apply_skill(
                 json!({"tool":"replace_music_tracks","status":"ok","timelineVersionId":timeline_version_id,"versionNumber":version_number,"jianying":"experimental_review_required"}),
             )
         }
+        "review_cut" => super::review_cut::run_review_cut_tool(state, args),
         "render_preview" => {
             let timeline = select_timeline_for_tool(state, args)?;
             let timeline_version_id = timeline.id.clone();

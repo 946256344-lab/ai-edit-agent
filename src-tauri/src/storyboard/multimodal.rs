@@ -232,7 +232,7 @@ pub(crate) fn compose_feature_frame_sheet(
 }
 
 /// 按原比例缩放进 `width`×`height` 的黑底格子并居中。
-fn fit_into_box(img: &RgbImage, width: u32, height: u32) -> RgbImage {
+pub(crate) fn fit_into_box(img: &RgbImage, width: u32, height: u32) -> RgbImage {
     let scale = (width as f64 / img.width().max(1) as f64)
         .min(height as f64 / img.height().max(1) as f64);
     let resized_w = ((img.width() as f64 * scale).round() as u32).clamp(1, width);
@@ -264,13 +264,14 @@ fn glyph(character: char) -> Option<[u8; 5]> {
         '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
         '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
         's' => [0b000, 0b111, 0b100, 0b011, 0b111],
+        '#' => [0b101, 0b111, 0b101, 0b111, 0b101],
         ' ' => [0; 5],
         _ => return None,
     })
 }
 
-/// 左上角黑底白字，每个点放大为 4×4 像素。
-fn draw_cell_label(cell: &mut RgbImage, label: &str) {
+/// 左上角黑底白字，每个点放大为 4×4 像素。只画数字、小数点、空格、`s` 和 `#`（成片复查的镜号）。
+pub(crate) fn draw_cell_label(cell: &mut RgbImage, label: &str) {
     const SCALE: u32 = 4;
     const PAD: u32 = 4;
     let glyphs = label.chars().filter_map(glyph).collect::<Vec<_>>();
