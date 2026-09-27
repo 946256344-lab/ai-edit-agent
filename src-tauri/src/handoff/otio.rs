@@ -16,49 +16,48 @@ pub(super) fn render_otio(plan: &HandoffPlan, project_name: &str) -> Value {
         "kind": "Video",
         "children": video_children,
     })];
-    let mut audio_children = Vec::new();
-    for track in &plan.voiceover_tracks {
-        if !track.enabled {
-            continue;
-        }
-        for cue in &track.cues {
-            let Some(path) = cue.source_reference.as_deref() else {
-                continue;
-            };
-            audio_children.push(otio_audio_clip(
-                "voiceover",
+    // 旁白与音乐各占一条音轨：OTIO 轨内子项首尾相接，起点靠 Gap 补齐，否则音乐会排在旁白后面。
+    let voice = plan
+        .voiceover_tracks
+        .iter()
+        .filter(|track| track.enabled)
+        .flat_map(|track| track.cues.iter())
+        .filter_map(|cue| {
+            cue.source_reference.as_deref().map(|path| AudioCue {
                 path,
-                cue.cue.source_start_ms,
-                cue.cue.source_end_ms,
-                cue.cue.timeline_end_ms - cue.cue.timeline_start_ms,
-                rate,
-            ));
-        }
-    }
-    for track in &plan.music_tracks {
-        if !track.enabled {
+                source_start_ms: cue.cue.source_start_ms,
+                source_end_ms: cue.cue.source_end_ms,
+                timeline_start_ms: cue.cue.timeline_start_ms,
+                timeline_end_ms: cue.cue.timeline_end_ms,
+                loop_enabled: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    let music = plan
+        .music_tracks
+        .iter()
+        .filter(|track| track.enabled)
+        .flat_map(|track| track.cues.iter())
+        .map(|cue| AudioCue {
+            path: &cue.source_reference,
+            source_start_ms: cue.cue.source_start_ms,
+            source_end_ms: cue.cue.source_end_ms,
+            timeline_start_ms: cue.cue.timeline_start_ms,
+            timeline_end_ms: cue.cue.timeline_end_ms,
+            loop_enabled: cue.cue.loop_enabled,
+        })
+        .collect::<Vec<_>>();
+    for (name, label, cues) in [("A1", "voiceover", voice), ("A2", "music", music)] {
+        if cues.is_empty() {
             continue;
         }
-        for cue in &track.cues {
-            audio_children.push(otio_audio_clip(
-                "music",
-                &cue.source_reference,
-                cue.cue.source_start_ms,
-                cue.cue.source_end_ms,
-                cue.cue.timeline_end_ms - cue.cue.timeline_start_ms,
-                rate,
-            ));
-        }
-    }
-    if !audio_children.is_empty() {
         tracks.push(json!({
             "OTIO_SCHEMA": "Track.1",
-            "name": "A1",
+            "name": name,
             "kind": "Audio",
-            "children": audio_children,
+            "children": audio_track_children(label, cues, rate),
         }));
-    }
-    json!({
+    }    json!({
         "OTIO_SCHEMA": "Timeline.1",
         "name": project_name,
         "tracks": {
@@ -75,7 +74,7 @@ fn otio_clip(clip: &HandoffClip, rate: f64, with_warp: bool) -> Value {
     let mut item = json!({
         "OTIO_SCHEMA": "Clip.1",
         "name": format!("shot-{}", clip.shot_index),
-        "source_range": time_range(clip.source_start_ms, source_span, rate),
+        "source_range": span_range(clip.source_start_ms, clip.timeline_start_ms, clip.timeline_end_ms, rate),
         "media_reference": {
             "OTIO_SCHEMA": "ExternalReference.1",
             "name": clip.asset_id,
@@ -84,6 +83,7 @@ fn otio_clip(clip: &HandoffClip, rate: f64, with_warp: bool) -> Value {
         },
     });
     if with_warp && (source_span - timeline_span).abs() > 50 {
+        item["source_range"] = time_range(clip.source_start_ms, source_span, rate);
         item["effects"] = json!([{
             "OTIO_SCHEMA": "LinearTimeWarp.1",
             "name": "Speed",
@@ -93,37 +93,80 @@ fn otio_clip(clip: &HandoffClip, rate: f64, with_warp: bool) -> Value {
     item
 }
 
-fn otio_audio_clip(
-    name: &str,
-    path: &str,
+struct AudioCue<'a> {
+    path: &'a str,
     source_start_ms: i64,
     source_end_ms: i64,
-    timeline_span_ms: i64,
-    rate: f64,
-) -> Value {
-    let source_span = (source_end_ms - source_start_ms).max(1);
-    let timeline_span = timeline_span_ms.max(1);
-    let mut item = json!({
-        "OTIO_SCHEMA": "Clip.1",
-        "name": name,
-        "source_range": time_range(source_start_ms, source_span, rate),
-        "media_reference": {
-            "OTIO_SCHEMA": "ExternalReference.1",
-            "name": name,
-            "target_url": media_file_url(path),
-            "available_range": time_range(0, source_end_ms.max(source_span), rate),
-        },
-    });
-    if (source_span - timeline_span).abs() > 50 {
-        item["effects"] = json!([{
-            "OTIO_SCHEMA": "LinearTimeWarp.1",
-            "name": "Speed",
-            "time_scalar": source_span as f64 / timeline_span as f64,
-        }]);
-    }
-    item
+    timeline_start_ms: i64,
+    timeline_end_ms: i64,
+    loop_enabled: bool,
 }
 
+/// 按时间线起点排好，前面空出的地方放 Gap；循环音乐按源区间重复铺满，不用变速凑长度。
+fn audio_track_children(name: &str, mut cues: Vec<AudioCue<'_>>, rate: f64) -> Vec<Value> {
+    cues.sort_by_key(|cue| cue.timeline_start_ms);
+    let mut children = Vec::new();
+    let mut cursor = 0_i64;
+    for cue in cues {
+        if cue.timeline_start_ms > cursor {
+            children.push(json!({
+                "OTIO_SCHEMA": "Gap.1",
+                "name": "gap",
+                "source_range": span_range(0, cursor, cue.timeline_start_ms, rate),
+            }));
+        }
+        let source_span = (cue.source_end_ms - cue.source_start_ms).max(1);
+        let mut start = cue.timeline_start_ms.max(cursor);
+        while start < cue.timeline_end_ms {
+            let piece = if cue.loop_enabled {
+                source_span.min(cue.timeline_end_ms - start)
+            } else {
+                cue.timeline_end_ms - start
+            };
+            let end = start + piece;
+            let mut item = json!({
+                "OTIO_SCHEMA": "Clip.1",
+                "name": name,
+                "source_range": span_range(cue.source_start_ms, start, end, rate),
+                "media_reference": {
+                    "OTIO_SCHEMA": "ExternalReference.1",
+                    "name": name,
+                    "target_url": media_file_url(cue.path),
+                    "available_range": time_range(0, cue.source_end_ms.max(source_span), rate),
+                },
+            });
+            if !cue.loop_enabled && (source_span - piece).abs() > 50 {
+                item["source_range"] = time_range(cue.source_start_ms, source_span, rate);
+                item["effects"] = json!([{
+                    "OTIO_SCHEMA": "LinearTimeWarp.1",
+                    "name": "Speed",
+                    "time_scalar": source_span as f64 / piece as f64,
+                }]);
+            }
+            children.push(item);
+            start = end;
+            if !cue.loop_enabled {
+                break;
+            }
+        }
+        cursor = cue.timeline_end_ms.max(cursor);
+    }
+    children
+}
+
+/// 源起点 + 按时间线绝对帧位相减得到的时长：逐段取整不累积漂移，音乐与画面切点保持对齐。
+fn span_range(source_start_ms: i64, timeline_start_ms: i64, timeline_end_ms: i64, rate: f64) -> Value {
+    let frame = |ms: i64| ((ms.max(0) as f64) * rate / 1000.0).round();
+    json!({
+        "OTIO_SCHEMA": "TimeRange.1",
+        "start_time": rational_time(source_start_ms, rate),
+        "duration": {
+            "OTIO_SCHEMA": "RationalTime.1",
+            "rate": rate,
+            "value": (frame(timeline_end_ms) - frame(timeline_start_ms)).max(1.0),
+        },
+    })
+}
 fn time_range(start_ms: i64, duration_ms: i64, rate: f64) -> Value {
     json!({
         "OTIO_SCHEMA": "TimeRange.1",

@@ -1004,6 +1004,28 @@ pub struct TechnicalMetadata {
     /// 旧记录读取为 None，表示尚未生成网格图。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) keyframe_grid_path: Option<String>,
+    /// 音频素材的节拍分析（本地解码 PCM 计算）；视频/图片与旧记录为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) beat_analysis: Option<BeatAnalysis>,
+}
+
+/// 音乐节拍网格，时间都是源文件毫秒。算法见 `assets/beats.rs`。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatAnalysis {
+    /// 音频分析格式版本；低于 `assets::beats::AUDIO_ANALYSIS_VERSION` 时按需重算。
+    pub(crate) version: u32,
+    pub(crate) duration_ms: i64,
+    pub(crate) tempo_bpm: f64,
+    /// 0–1：节奏自相关峰值相对背景的显著程度，低于阈值的曲子不拿来卡点。
+    pub(crate) confidence: f64,
+    pub(crate) beats_ms: Vec<i64>,
+    /// 小节起点（按 4/4 估计），是 `beats_ms` 的子集。
+    pub(crate) downbeats_ms: Vec<i64>,
+    /// 乐句起点（每 4 小节，相位按能量变化估计），是 `downbeats_ms` 的子集。
+    pub(crate) phrase_starts_ms: Vec<i64>,
+    /// 每小节相对能量 0–1，与 `downbeats_ms` 一一对应。
+    pub(crate) bar_energy: Vec<f32>,
 }
 
 fn default_visual_analysis_status() -> String {

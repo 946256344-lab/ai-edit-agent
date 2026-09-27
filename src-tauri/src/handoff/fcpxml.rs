@@ -64,52 +64,29 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
         }
     }
 
-    let mut spine = String::new();
-    for clip in &plan.clips {
-        let ref_id = seen.get(&clip.asset_id).map(String::as_str).unwrap_or("r2");
-        spine.push_str(&asset_clip_xml(clip, ref_id, fps, None));
-    }
+    // 旁白和音乐是挂在第一镜下的连接片段（FCPXML 规定 lane 只能出现在锚定片段上），
+    // offset 按父片段的本地时间（从它的 start 起算），这样音乐起点与各切点在成片时间上对齐。
+    let mut connected = String::new();
     if let Some(first) = plan.clips.first() {
-        for track in &plan.voiceover_tracks {
-            if !track.enabled {
+        let voice = plan.voiceover_tracks.iter().filter(|track| track.enabled).flat_map(|track| {
+            track.cues.iter().map(|cue| (&cue.cue.asset_id, cue.cue.timeline_start_ms, cue.cue.timeline_end_ms, cue.cue.source_start_ms, -1))
+        });
+        let music = plan.music_tracks.iter().filter(|track| track.enabled).flat_map(|track| {
+            track.cues.iter().map(|cue| (&cue.cue.asset_id, cue.cue.timeline_start_ms, cue.cue.timeline_end_ms, cue.cue.source_start_ms, -2))
+        });
+        for (asset_id, timeline_start, timeline_end, source_start, lane) in voice.chain(music) {
+            let Some(ref_id) = seen.get(asset_id) else {
                 continue;
-            }
-            for cue in &track.cues {
-                let Some(ref_id) = seen.get(&cue.cue.asset_id) else {
-                    continue;
-                };
-                spine.push_str(&connected_audio_xml(
-                    first,
-                    cue.cue.timeline_start_ms,
-                    cue.cue.timeline_end_ms,
-                    cue.cue.source_start_ms,
-                    ref_id,
-                    fps,
-                    -1,
-                ));
-            }
-        }
-        for track in &plan.music_tracks {
-            if !track.enabled {
-                continue;
-            }
-            for cue in &track.cues {
-                let Some(ref_id) = seen.get(&cue.cue.asset_id) else {
-                    continue;
-                };
-                spine.push_str(&connected_audio_xml(
-                    first,
-                    cue.cue.timeline_start_ms,
-                    cue.cue.timeline_end_ms,
-                    cue.cue.source_start_ms,
-                    ref_id,
-                    fps,
-                    -2,
-                ));
-            }
+            };
+            connected.push_str(&connected_audio_xml(first, timeline_start, timeline_end, source_start, ref_id, fps, lane));
         }
     }
-
+    let mut spine = String::new();
+    for (index, clip) in plan.clips.iter().enumerate() {
+        let ref_id = seen.get(&clip.asset_id).map(String::as_str).unwrap_or("r2");
+        let children = if index == 0 { connected.as_str() } else { "" };
+        spine.push_str(&asset_clip_xml(clip, ref_id, fps, None, children));
+    }
     let name = xml_escape(project_name);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -152,7 +129,7 @@ fn audio_asset_xml(id: &str, name: &str, path: &str, source_end_ms: i64, fps: i6
     )
 }
 
-fn asset_clip_xml(clip: &HandoffClip, ref_id: &str, fps: i64, lane: Option<i64>) -> String {
+fn asset_clip_xml(clip: &HandoffClip, ref_id: &str, fps: i64, lane: Option<i64>, children: &str) -> String {
     let source_span = (clip.source_end_ms - clip.source_start_ms).max(1);
     let timeline_span = (clip.timeline_end_ms - clip.timeline_start_ms).max(1);
     let lane_attr = lane
@@ -163,7 +140,7 @@ fn asset_clip_xml(clip: &HandoffClip, ref_id: &str, fps: i64, lane: Option<i64>)
         clip.shot_index,
         xml_time(clip.timeline_start_ms, fps),
         xml_time(clip.source_start_ms, fps),
-        xml_time(timeline_span, fps),
+        xml_span(clip.timeline_start_ms, clip.timeline_end_ms, fps),
     );
     if (source_span - timeline_span).abs() > 50 {
         xml.push_str(&format!(
@@ -173,12 +150,13 @@ fn asset_clip_xml(clip: &HandoffClip, ref_id: &str, fps: i64, lane: Option<i64>)
             xml_time(clip.source_end_ms, fps),
         ));
     }
+    xml.push_str(children);
     xml.push_str("                        </asset-clip>\n");
     xml
 }
 
 fn connected_audio_xml(
-    _anchor: &HandoffClip,
+    anchor: &HandoffClip,
     timeline_start_ms: i64,
     timeline_end_ms: i64,
     source_start_ms: i64,
@@ -186,15 +164,21 @@ fn connected_audio_xml(
     fps: i64,
     lane: i64,
 ) -> String {
-    let duration = (timeline_end_ms - timeline_start_ms).max(1);
+    let offset = anchor.source_start_ms + (timeline_start_ms - anchor.timeline_start_ms);
     format!(
-        "                        <asset-clip name=\"audio\" ref=\"{ref_id}\" offset=\"{}\" start=\"{}\" duration=\"{}\" lane=\"{lane}\"/>\n",
-        xml_time(timeline_start_ms, fps),
+        "                            <asset-clip name=\"audio\" ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" start=\"{}\" duration=\"{}\"/>\n",
+        xml_time(offset, fps),
         xml_time(source_start_ms, fps),
-        xml_time(duration, fps),
+        xml_span(timeline_start_ms, timeline_end_ms, fps),
     )
 }
 
+/// 按起止点的绝对帧位相减取时长，逐镜取整不累积漂移。
+fn xml_span(start_ms: i64, end_ms: i64, fps: i64) -> String {
+    let frame = |ms: i64| ((ms.max(0) as f64) * (fps as f64) / 1000.0).round() as i64;
+    let frames = (frame(end_ms) - frame(start_ms)).max(1);
+    format!("{frames}/{fps}s")
+}
 pub(super) fn xml_time(ms: i64, fps: i64) -> String {
     let frames = ((ms.max(0) as f64) * (fps as f64) / 1000.0).round() as i64;
     if frames <= 0 {

@@ -33,6 +33,7 @@ mod media_options;
 /// 可序列化领域/Tauri 边界类型；本模块不放持久化行为。
 mod models;
 /// Jamendo 凭据、搜索、授权资格与有界下载适配器。
+mod music_plan;
 mod music_provider;
 /// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;

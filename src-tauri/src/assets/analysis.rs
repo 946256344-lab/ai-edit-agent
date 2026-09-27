@@ -221,6 +221,7 @@ fn probe_media(source: &Path) -> Result<TechnicalMetadata, String> {
         keyframe_grid_path: None,
         visual_analysis_retry_count: 0,
         analysis_retry_count: 0,
+        beat_analysis: None,
     })
 }
 
@@ -589,6 +590,15 @@ fn run_technical_analysis(app: AppHandle, asset_id: String, task_id: String) {
                 }
             }
             segments_ms = segments_started.elapsed().as_millis();
+        }
+        if kind == "audio" {
+            // 节拍分析失败不让素材失败：素材仍可当 BGM，只是不卡点；配乐时会按需重算并如实报告。
+            let beats_started = Instant::now();
+            match super::beats::analyze_audio_file(&source) {
+                Ok(analysis) => metadata.beat_analysis = Some(analysis),
+                Err(error) => log::warn!("Beat analysis skipped for asset {asset_id}: {error}"),
+            }
+            segments_ms = beats_started.elapsed().as_millis();
         }
         if !super::controls::task_running(&app, &task_id) { return Ok(None); }
         let ocr_started = Instant::now();

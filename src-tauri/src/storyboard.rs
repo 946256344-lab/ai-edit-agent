@@ -6,6 +6,7 @@ mod daypart;
 mod keyframes;
 mod length;
 pub(crate) mod local_edit;
+mod music_cuts;
 pub(crate) mod multimodal;
 pub(crate) mod phase4;
 pub(crate) mod phases;
@@ -2760,6 +2761,7 @@ pub fn generate_storyboard(
         true,
         None,
         None,
+        None,
     )
 }
 
@@ -2774,6 +2776,7 @@ pub(crate) fn generate_storyboard_for_agent(
     voice_id: Option<String>,
     media_options: Option<crate::media_options::MediaOptions>,
     requested_duration_ms: Option<i64>,
+    music: Option<&crate::music_plan::MusicChoice>,
 ) -> Result<StoryboardVersion, String> {
     let result = generate_storyboard_internal(
         app.clone(),
@@ -2784,6 +2787,7 @@ pub(crate) fn generate_storyboard_for_agent(
         false,
         media_options,
         requested_duration_ms,
+        music,
     );
     // 暂停等用户决定时，下一轮对话历史只有文字、看不到本轮工具参数；
     // 把已确认（多已配音）的稿子存为任务 brief，下一轮 brief=null 即可按原稿续跑并复用配音缓存。
@@ -2818,6 +2822,7 @@ fn generate_storyboard_internal(
     schedule_visual_analysis: bool,
     media_options: Option<crate::media_options::MediaOptions>,
     requested_duration_ms: Option<i64>,
+    music: Option<&crate::music_plan::MusicChoice>,
 ) -> Result<StoryboardVersion, String> {
     crate::execution_deadline::check()?;
     log::info!(
@@ -3092,6 +3097,44 @@ fn generate_storyboard_internal(
     if let Some((hard_target, _)) = &audio_first {
         narrative.target_duration_ms = (*hard_target).clamp(3_000, 120_000);
     }
+    // 音乐先行：配音关、已选好曲子时按目标时长定音乐窗口（乐句起、乐句止），成片总长跟窗口走；
+    // 不能卡点时记下真实原因，时长仍按内容定。
+    let music_outcome = match music {
+        Some(choice) if audio_first.is_none() && narrative.script_mode == "key_message" => {
+            let target = requested_duration_ms
+                .filter(|value| *value > 0)
+                .unwrap_or(narrative.target_duration_ms);
+            Some(
+                crate::music_plan::plan_window(choice, target)
+                    .and_then(|plan| {
+                        if (3_000..=120_000).contains(&plan.duration_ms) {
+                            Ok(plan)
+                        } else {
+                            Err(format!("the music section is {}ms, outside 3–120 seconds", plan.duration_ms))
+                        }
+                    })
+                    .map(|plan| {
+                        narrative.target_duration_ms = plan.duration_ms;
+                        plan
+                    }),
+            )
+        }
+        _ => None,
+    };
+    if let Some(outcome) = &music_outcome {
+        match outcome {
+            Ok(plan) => log::info!(
+                "Music-first plan: \"{}\" {:.1} BPM, source {}-{}ms, ends on phrase={}",
+                plan.title,
+                plan.tempo_bpm,
+                plan.source_start_ms,
+                plan.source_start_ms + plan.duration_ms,
+                plan.ends_on_phrase
+            ),
+            Err(reason) => log::warn!("Music-first pacing unavailable: {reason}"),
+        }
+    }
+    let music_plan = music_outcome.as_ref().and_then(|outcome| outcome.as_ref().ok());
     log::info!(
         "Phase 1 complete: narrative with {} beats, target_duration={}ms audio_first={}",
         narrative.beats.len(),
@@ -3231,6 +3274,7 @@ fn generate_storyboard_internal(
         &sources,
         None,
         media_options.map(|options| options.aspect_ratio).unwrap_or_default(),
+        music_plan,
     )?;
     crate::execution_deadline::check()?;
     log::info!("Storyboard content finalized. Persisting to database.");
@@ -3243,6 +3287,13 @@ fn generate_storyboard_internal(
         &rough.candidate_pools,
         media_options,
     )?;
+    if let Some(outcome) = &music_outcome {
+        crate::music_plan::store_storyboard_music_outcome(
+            &connection,
+            &version.id,
+            outcome.as_ref().map_err(String::as_str),
+        )?;
+    }
     if let Some((_, prepared)) = audio_first {
         let _ =
             finalize_audio_first_timeline(&app, &connection, &version, &editing_task_id, prepared);
@@ -3409,6 +3460,7 @@ pub(crate) fn run_phase4_and_validate(
     sources: &[StoryboardSource],
     local_scope: Option<(HashSet<i64>, Option<String>)>,
     aspect_ratio: crate::media_options::AspectRatio,
+    music_plan: Option<&crate::music_plan::MusicPlan>,
 ) -> Result<StoryboardContent, String> {
     let mut repair: Option<RepairPacket> = None;
     let mut content = None;
@@ -3420,6 +3472,7 @@ pub(crate) fn run_phase4_and_validate(
         None => crate::storyboard::phase4::Phase4Session::new(),
     };
     phase4_session.aspect_ratio = aspect_ratio;
+    phase4_session.music_plan = music_plan.cloned();
     loop {
         crate::execution_deadline::check()?;
         let attempt = budget.semantic_attempt_number();

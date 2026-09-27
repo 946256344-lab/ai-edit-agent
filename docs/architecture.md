@@ -1,5 +1,8 @@
 # 架构
 
+## 音乐先行剪辑（2026-09-27）
+
+BGM 开时先选曲（素材库优先，其次 Jamendo），音频素材导入时已由 `assets/beats.rs` 算好节拍、小节、乐句与能量。配音关：Phase 1 后 `music_plan` 按目标时长选乐句对齐的音乐窗口，Phase 4 内容定长后 `storyboard/music_cuts` 把切点吸附到拍上、段落切换落在乐句边界，窗口存进分镜 `musicPlan`，配乐按同一起点偏移铺、结尾乐句处淡出。配音开：旁白仍是时钟，只在 ±120ms 内把切点挪到拍上。预览按绝对帧位出帧，FCPXML / OTIO / 剪映 / CapCut 按同一偏移写音乐。见 `docs/changes/2026-09-27-music-first-editing.md`。
 ## CapCut 投放链接器（2026-09-18）
 
 CapCut 与剪映平行：按本机注册表识别草稿库，只新建不覆盖。换设备后只要那台电脑打开过 CapCut，就能自己找到草稿目录。见 `docs/changes/2026-09-18-capcut-linker.md`。

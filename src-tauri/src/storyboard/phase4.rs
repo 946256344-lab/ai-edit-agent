@@ -142,6 +142,8 @@ pub(crate) struct Phase4Session {
     instruction: Option<String>,
     /// 成片画幅：cropFocus 按这个比例裁切，旧分镜为竖屏。
     pub(crate) aspect_ratio: crate::media_options::AspectRatio,
+    /// 音乐先行时的音乐窗口：内容定长后切点吸附到节拍上；整条生成且配音关、有可卡点的曲子时才有。
+    pub(crate) music_plan: Option<crate::music_plan::MusicPlan>,
 }
 
 impl Phase4Session {
@@ -1306,6 +1308,15 @@ User instruction for these shots (follow it inside the locked window; never swap
             bounds,
             mutable.as_ref(),
         );
+        if let (Some(plan), None) = (session.music_plan.as_ref(), mutable.as_ref()) {
+            crate::storyboard::music_cuts::snap_shots_to_music(
+                &mut refined,
+                &pick_map,
+                sources,
+                bounds,
+                plan,
+            );
+        }
     } else {
         if rough.speech_timing.beats.is_empty() {
             apply_narration_phrase_duration_floor_scoped(&mut refined, &pick_map, mutable.as_ref());

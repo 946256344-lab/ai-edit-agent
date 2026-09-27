@@ -1,5 +1,8 @@
 # API 与工具契约
 
+## 2026-09-27：音乐先行剪辑
+
+公开 Tauri 命令不变。音频素材技术分析新增 `metadata.beatAnalysis`（`version`、`durationMs`、`tempoBpm`、`confidence`、`beatsMs`、`downbeatsMs`、`phraseStartsMs`、`barEnergy`），旧素材在被选为 BGM 时按需补算。BGM 开时 Native `generate_storyboard` 先选曲再生成分镜；配音关时分镜 `content_json.musicPlan` 保存音乐窗口（`assetId`、`sourceStartMs`、`durationMs`、`tempoBpm`、`endsOnPhrase`、淡入淡出与窗口内网格），不能卡点时 `content_json.musicPlanNote` 写原因。工具结果新增 `musicTiming`（`mode`、`tempoBpm`、`musicStartMs`、`endsOnPhrase`、`cutsOnBeat`、`cuts`、`note`）。FCPXML 的旁白 / 音乐改为挂在第一镜下的连接片段，OTIO 旁白与音乐分轨并用 Gap 定位。见 `docs/changes/2026-09-27-music-first-editing.md`。
 ## 2026-09-27：画幅选择与 BGM 自动配乐
 
 `submit_conversation_turn` 的 `mediaOptions` 增加可选 `aspectRatio: '9:16' | '16:9' | '1:1'`（缺省 9:16），前端字幕随配音发送。Native `generate_storyboard` 的 `mediaOptions` 同样接受 `aspectRatio`，漏传时沿用输入框选择。`render_preview`、试选镜头预览和剪映 / CapCut / FCPXML 交付按时间线所属分镜的画幅出画布（540×960 / 960×540 / 720×720）；剪映适配器输入新增 `canvas: { width, height }`，旧输入缺省竖屏。BGM 开启时 `generate_storyboard` 直接配乐（素材库音频优先，其次 Jamendo 器乐），不可用时 `mediaNotApplied.bgm` 写明原因。见 `docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`。

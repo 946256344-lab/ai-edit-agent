@@ -3,6 +3,7 @@
 //! 失败对调用方封闭，不得静默修改其他任务或产物。
 
 pub mod analysis;
+pub mod beats;
 pub mod controls;
 pub mod health;
 pub mod library;
