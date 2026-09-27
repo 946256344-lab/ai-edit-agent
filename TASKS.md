@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [x] 已修复（2026-09-27，待桌面确认）：Agent 自称「画面节奏对齐音乐」「更像卡点」却没有任何节拍依据（「Weekend Road Trip」「跟随音乐节奏剪一版」会话）。系统提示改为只按 `generate_storyboard` 的 `musicTiming` 说明是否卡点，缺失或 `not_beat_aligned` 时如实说明并转述 note，不得凭自己判断声称节拍 / 节奏 / 情绪对齐。
 - [x] 已实现（2026-09-27，claude/title-cards-transitions，待桌面验收）：品牌卡与镜头转场。可编辑文字仍走原生文字；logo、渐变字、卡片、片尾卡由 HTML/CSS 模板经应用内隐藏 WebView2 渲染成透明 PNG，预览 ffmpeg 叠加，交付为「图片，文字不可编辑」。首批四个模板：开场标题卡、片尾卡、角标 logo、信息卡。项目设置新增品牌套件与默认转场（默认硬切）；设了品牌套件时生成自动加开场 / 片尾 / 角标。新工具 `add_title_cards`、`set_transitions`，只在用户本轮明确要求时可用，模型只填短文案，Rust 截断并计算时间。转场以切点为中心不改总时长：预览 xfade，剪映 / CapCut 原生叠化 / 闪黑，FCPXML / OTIO 只带叠化；FCPXML 补 Basic Title，OTIO 文字写成 marker；交付结果带 `notes` 如实说明降级。顺带修复居中 / 顶部标题在预览里按底部对齐。待桌面确认：剪映 / CapCut 草稿里转场、品牌卡图片与渐显渐隐的实际效果（剪映闪黑 is_overlap=false，CapCut 为 true）；Resolve 导入 FCPXML 标题 / 图片 / 叠化与 OTIO 转场 / marker。见 docs/changes/2026-09-27-brand-cards-and-transitions.md。
 - [ ] 待办（2026-09-27）：原生文字剪映「已验证」判定两处不一致——`storyboard_text_tracks` 把默认描边 + 阴影字幕直接标 `verified`，`validate_text_tracks` 对同样样式判 `local_preview_only`；需在真实剪映 / CapCut 草稿确认描边与阴影后统一。
 - [x] 已实现（2026-09-27，P1，待桌面确认，claude/music-first-cuts）：BGM 开时音乐先行。音频素材导入时本地算节拍 / 小节 / 乐句 / 能量（`metadata.beatAnalysis`，旧素材选曲时按需补算）；`generate_storyboard` 先选曲再生成分镜。配音关：按目标时长选乐句对齐的音乐窗口，Phase 4 内容定长后切点吸附到拍上、段落切换落在乐句边界，镜头长短随能量与内容变化，音乐从窗口起点铺、乐句结束处淡出。配音开：旁白仍是时钟，切点只在 ±120ms 内挪到拍上。预览按绝对帧位出帧（不再逐镜累积漂移），FCPXML 音频改为连接片段、OTIO 旁白与音乐分轨。`summer-fun.mp3` 实测 114.9 BPM。已知限制：只按 4/4、4 小节乐句；局部编辑不重新吸附；FCPXML / OTIO 不带淡入淡出。见 docs/changes/2026-09-27-music-first-editing.md。

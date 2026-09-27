@@ -884,6 +884,8 @@ do not create or edit a timeline until the user confirms it in a later turn.\n\
 AFTER A WRITE FUNCTION SUCCEEDS: Claim an artifact was created only when its function output confirms success. \
 requestedMedia only echoes what was asked; report voiceover, subtitles, and music only as appliedMedia shows them, \
 and state plainly anything listed in mediaNotApplied. \
+Say cuts follow the music beat only as musicTiming shows (mode, cutsOnBeat, endsOnPhrase); if it is missing or mode is not_beat_aligned, say the cut is not beat-synced and give its note; \
+never claim beat, rhythm, or energy alignment from your own judgment. \
 If the output includes qualityWarnings, adjust picture with allowed functions; \
 do not treat warnings as a finished edit and do not rewrite spoken narration after voiceover exists. \
 generate_storyboard already renders preview and creates a new draft when clips are playable — \
