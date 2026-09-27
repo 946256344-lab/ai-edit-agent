@@ -29,7 +29,18 @@ pub(crate) fn key(value: &impl serde::Serialize) -> String {
     )
 }
 
-pub(crate) fn clip_key(source: &Path, kind: &str, clip: &TimelineClip) -> Result<String, String> {
+/// 竖屏沿用旧渲染器名，已有缓存继续命中；其他画幅各自成键。
+pub(crate) fn clip_key(
+    source: &Path,
+    kind: &str,
+    clip: &TimelineClip,
+    canvas: crate::media_options::Canvas,
+) -> Result<String, String> {
+    let renderer = if canvas == crate::media_options::AspectRatio::Portrait.canvas() {
+        "vertical-540x960-30-x264-v3-slow".to_owned()
+    } else {
+        format!("canvas-{}x{}-30-x264-v3-slow", canvas.width, canvas.height)
+    };
     let metadata = fs::metadata(source).map_err(|error| error.to_string())?;
     let modified = metadata
         .modified()
@@ -38,7 +49,7 @@ pub(crate) fn clip_key(source: &Path, kind: &str, clip: &TimelineClip) -> Result
         .map_err(|error| error.to_string())?
         .as_nanos();
     Ok(key(&json!({
-        "renderer": "vertical-540x960-30-x264-v3-slow",
+        "renderer": renderer,
         "source": source, "size": metadata.len(), "modified": modified.to_string(),
         "kind": kind, "clipKind": clip.clip_kind,
         "start": clip.source_start_ms, "end": clip.source_end_ms,

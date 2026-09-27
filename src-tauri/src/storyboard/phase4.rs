@@ -139,6 +139,8 @@ pub(crate) struct Phase4Session {
     initial_scope: Option<HashSet<i64>>,
     /// 局部编辑时用户的原话，附在 Pass B 提示词里。
     instruction: Option<String>,
+    /// 成片画幅：cropFocus 按这个比例裁切，旧分镜为竖屏。
+    pub(crate) aspect_ratio: crate::media_options::AspectRatio,
 }
 
 impl Phase4Session {
@@ -1538,6 +1540,11 @@ fn run_pending_pass_b(
             .and_then(|content| serde_json::to_string(content).ok())
             .unwrap_or_else(|| "{}".to_owned());
         let pick_map = session.pick_map().clone();
+        let output_frame = match session.aspect_ratio {
+            crate::media_options::AspectRatio::Portrait => "9:16",
+            crate::media_options::AspectRatio::Landscape => "16:9",
+            crate::media_options::AspectRatio::Square => "1:1",
+        };
         let mut pass_b_blocks = vec![json!({
             "type": "input_text",
             "text": format!(
@@ -1555,7 +1562,7 @@ fn run_pending_pass_b(
                 No overlapping ranges from the same asset. When beat timing is supplied, the total duration of each beat must equal its endMs-startMs; prefer its verified pausesMs for internal cuts while preserving complete visual actions. Otherwise approach targetDurationMs.\n\
                 Divide beat narration across shots when needed.\n\
                 For scriptMode=key_message, keep lead-shot onScreenText equal to that beat's onScreenText marker; leave narrationText empty.\n\
-                Choose cropFocus from the timed frames so the subject remains inside a 9:16 crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
+                Choose cropFocus from the timed frames so the subject remains inside a {output_frame} crop throughout the chosen source range. Prefer complete actions and coherent screen direction at adjacent cuts.\n\
                 {}\n\
                 matchLevel must stay 'direct' or 'contextual'.",
                 batch_index + 1,

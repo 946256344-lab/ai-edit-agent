@@ -144,20 +144,33 @@ def fit_source_duration(source_start_us, requested_duration_us, material_duratio
     return available_duration_us
 
 
-def portrait_clip_settings(material, focus):
-    """以源主体中心填满 9:16 画布，与本地预览使用相同裁剪边界。"""
+DEFAULT_CANVAS = (540, 960)
+
+
+def payload_canvas(payload):
+    """画布来自时间线画幅；旧输入没有 canvas 时按竖屏 540×960。"""
+    canvas = payload.get("canvas") or {}
+    width, height = int(canvas.get("width", DEFAULT_CANVAS[0])), int(canvas.get("height", DEFAULT_CANVAS[1]))
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Draft canvas size is invalid.")
+    return width, height
+
+
+def canvas_clip_settings(material, focus, canvas=DEFAULT_CANVAS):
+    """以源主体中心填满画布，与本地预览使用相同裁剪边界。"""
     if focus is None:
         return None
+    canvas_width, canvas_height = canvas
     width, height = material.width, material.height
-    cover = max(540 / width, 960 / height)
-    contain = min(540 / width, 960 / height)
-    crop_width, crop_height = 540 / cover, 960 / cover
+    cover = max(canvas_width / width, canvas_height / height)
+    contain = min(canvas_width / width, canvas_height / height)
+    crop_width, crop_height = canvas_width / cover, canvas_height / cover
     left = max(0, min(width - crop_width, width * focus[0] - crop_width / 2))
     top = max(0, min(height - crop_height, height * focus[1] - crop_height / 2))
     return ClipSettings(
         scale_x=cover / contain, scale_y=cover / contain,
-        transform_x=(width / 2 - left - crop_width / 2) * cover / 270,
-        transform_y=(top + crop_height / 2 - height / 2) * cover / 480,
+        transform_x=(width / 2 - left - crop_width / 2) * cover / (canvas_width / 2),
+        transform_y=(top + crop_height / 2 - height / 2) * cover / (canvas_height / 2),
     )
 
 
@@ -317,7 +330,7 @@ def add_text_tracks(script, tracks):
             escape_text_material_unicode(script)
 
 
-def add_overlay_tracks(script, clips):
+def add_overlay_tracks(script, clips, canvas=DEFAULT_CANVAS):
     if not clips:
         return
     prepared = []
@@ -336,7 +349,7 @@ def add_overlay_tracks(script, clips):
             material,
             Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
             source_timerange=Timerange(source_start_us, source_duration_us),
-            clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
+            clip_settings=canvas_clip_settings(material, clip.get("cropFocus"), canvas),
         )
         add_segment(script, segment, "overlay-main")
 
@@ -590,9 +603,10 @@ def main():
         )
         duration_ms = max(duration_ms, clip["timelineEndMs"])
 
+    canvas = payload_canvas(payload)
     try:
         script = DraftFolder(str(root)).create_draft(
-            draft_name, 540, 960, 30, allow_replace=False
+            draft_name, canvas[0], canvas[1], 30, allow_replace=False
         )
         add_track(script, TrackType.video)
         for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared_clips:
@@ -600,10 +614,10 @@ def main():
                 material,
                 Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
                 source_timerange=Timerange(source_start_us, source_duration_us),
-                clip_settings=portrait_clip_settings(material, clip.get("cropFocus")),
+                clip_settings=canvas_clip_settings(material, clip.get("cropFocus"), canvas),
             )
             add_segment(script, segment)
-        add_overlay_tracks(script, payload.get("overlayClips", []))
+        add_overlay_tracks(script, payload.get("overlayClips", []), canvas)
         add_text_tracks(script, payload.get("textTracks", []))
         add_music_tracks(script, payload.get("musicTracks", []))
         add_voiceover_tracks(script, payload.get("voiceoverTracks", []))

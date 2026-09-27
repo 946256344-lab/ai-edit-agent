@@ -183,7 +183,8 @@ fn write_import_file(
 ) -> Result<EditorDeliveryResult, String> {
     let connection = open_connection(&app)?;
     let sources = collect_export_sources(&connection, timeline, true)?;
-    let plan = build_handoff_plan(timeline, &sources)?;
+    let canvas = crate::media_options::timeline_canvas(&connection, timeline)?;
+    let plan = build_handoff_plan(timeline, &sources, canvas)?;
     let stem = unique_export_stem(&connection, &timeline.project_id);
     drop(connection);
     let directory = app

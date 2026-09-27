@@ -360,7 +360,10 @@ export type TaskRouteResult = {
   routeReceipt: string | null
 }
 
-export type MediaOptions = { voiceover: boolean; subtitles: boolean; bgm: boolean }
+export type AspectRatio = '9:16' | '16:9' | '1:1'
+export const aspectRatios: AspectRatio[] = ['9:16', '16:9', '1:1']
+// 旧任务记录没有 aspectRatio，按竖屏 9:16 显示；字幕不再单独开关，随配音一起发送。
+export type MediaOptions = { voiceover: boolean; subtitles: boolean; bgm: boolean; aspectRatio?: AspectRatio }
 
 export type StoredAgentTask = {
   id: string

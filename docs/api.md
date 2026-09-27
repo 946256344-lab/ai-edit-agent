@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-27：画幅选择与 BGM 自动配乐
+
+`submit_conversation_turn` 的 `mediaOptions` 增加可选 `aspectRatio: '9:16' | '16:9' | '1:1'`（缺省 9:16），前端字幕随配音发送。Native `generate_storyboard` 的 `mediaOptions` 同样接受 `aspectRatio`，漏传时沿用输入框选择。`render_preview`、试选镜头预览和剪映 / CapCut / FCPXML 交付按时间线所属分镜的画幅出画布（540×960 / 960×540 / 720×720）；剪映适配器输入新增 `canvas: { width, height }`，旧输入缺省竖屏。BGM 开启时 `generate_storyboard` 直接配乐（素材库音频优先，其次 Jamendo 器乐），不可用时 `mediaNotApplied.bgm` 写明原因。见 `docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`。
+
 ## 2026-09-26：本地选镜模型优先用显卡
 
 公开命令与 `RuntimeModelStatus` 不变。BGE/CLIP 推理先用随包 DirectML 在显卡上建会话并试算，失败回退 CPU，日志写明设备；同一模型推理串行。见 `docs/changes/2026-09-26-local-models-on-gpu.md`。
@@ -142,11 +146,11 @@ Schema 18/19 增加 `shared_libraries`、`project_libraries`、`shared_library_a
 
 ## 2026-09-15：对话媒体开关
 
-`submit_conversation_turn` 增加可选 `mediaOptions: { voiceover: boolean, subtitles: boolean, bgm: boolean }`。前端新会话默认全开，选中显示勾选标志；发送时冻结选择，`agent_tasks.input_json` 保存 `mediaOptions` 和 receipt 对应的 `userMessageId`。会话恢复读取最近一次发送设置，消息摘要按 `userMessageId` 关联。关闭项不自动新增轨道，不表示删除已有轨道；本轮明确的自然语言指令优先，普通问答不触发编辑。
+`submit_conversation_turn` 增加可选 `mediaOptions: { voiceover: boolean, subtitles: boolean, bgm: boolean, aspectRatio?: '9:16' | '16:9' | '1:1' }`（2026-09-27 起前端以画幅选择替代字幕开关，`subtitles` 随 `voiceover` 发送）。前端新会话默认全开，选中显示勾选标志；发送时冻结选择，`agent_tasks.input_json` 保存 `mediaOptions` 和 receipt 对应的 `userMessageId`。会话恢复读取最近一次发送设置，消息摘要按 `userMessageId` 关联。关闭项不自动新增轨道，不表示删除已有轨道；本轮明确的自然语言指令优先，普通问答不触发编辑。
 
 Native `generate_storyboard` 增加 `mediaOptions`（null 沿用本轮选择，非 null 为模型按明确文字要求合并后的选择）和 `requestedDurationMs`（用户点名的成片毫秒，null 表示没说）；`synthesize_voiceover` 增加 `includeSubtitles`（null 沿用本轮字幕选择）。严格工具 Schema 包含这些 nullable 参数，旧的内部调用省略时仍使用默认路径。
 
-分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启时必须配音：已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并征求同意，同意后再生成并合成。完整文案仍照稿念。BGM 由 Agent 复用 `search_music` / `use_online_music` 后重新渲染，有旁白时新选音乐音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`、`docs/changes/2026-09-16-voiceover-script-consent.md`。
+分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启时必须配音：已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并征求同意，同意后再生成并合成。完整文案仍照稿念。BGM 由 `generate_storyboard` 在配音之后直接写入（2026-09-27 起；素材库用户音频优先，其次 Jamendo 器乐，都不可用时在 `mediaNotApplied.bgm` 说明原因），有旁白时音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`、`docs/changes/2026-09-16-voiceover-script-consent.md`。
 
 ## 2026-09-10：剪辑失败修复
 
@@ -216,7 +220,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 ## 2026-09-07：剪辑流程与预览复用
 
 - `list_asset_page.counts.visualPending` 返回项目内视觉分析 `queued/running` 素材数，与技术分析计数共同决定前端是否继续刷新。`assets-changed` 事件的 payload 为项目 ID，在技术分析向视觉队列交接的事务提交后发出；空闲不再持续轮询素材或健康摘要，导入、重链路、健康扫描动作与 Agent 终态会主动刷新。健康摘要轮询仅在计数或活动任务状态变化时连带刷新素材页，首次观察与空闲重复摘要不触发。
-- Storyboard shot 与 `TimelineClipDto` 增加可选 `cropFocus: [x, y] | null`，坐标为源画面归一化主体中心。旧版本缺省居中；分镜生成时由已有视觉精修请求判断，创建时间线时保留，替换源片段时清除。预览按主体中心裁剪至 9:16，Jianying handoff 将焦点转换成现有 ClipSettings；不新增编辑命令。
+- Storyboard shot 与 `TimelineClipDto` 增加可选 `cropFocus: [x, y] | null`，坐标为源画面归一化主体中心。旧版本缺省居中；分镜生成时由已有视觉精修请求判断，创建时间线时保留，替换源片段时清除。预览按主体中心裁剪至分镜画幅（默认 9:16），Jianying handoff 将焦点转换成现有 ClipSettings；不新增编辑命令。
 - `render_preview` 命令的参数和返回值不变，桌面调用通过阻塞工作线程运行媒体任务，Agent/确认流水线共用 `render_preview_inner`。源文件版本、源区间、画面参数确定镜头缓存；底片和文字/叠加画面分层复用，音轨修改不重新编码未变化的视频层。缓存位于本机 `previews/cache/<projectId>`，失败中的临时文件不会作为可复用结果。
 - 完整旁白模式在拆拍前合成配音。优先词级时间戳；只有句级片段时按字数比例插值到字符边界，使拍可以切在句中。文案对不上则不用这段对齐。合成失败不开始生成。
 
@@ -284,7 +288,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `list_agent_run_steps` | `{ projectId, editingTaskId, agentTaskId }` | `AgentRunStep[]` | 仅在项目、剪辑任务和调用三重作用域匹配时返回步骤；不包含参数、模型原文、对话或媒体证据。 |
 | `list_agent_diagnostics` | `{ projectId, editingTaskId, agentTaskId }` | `AgentDiagnostic[]` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
 | `list_operation_logs` | `{ projectId, editingTaskId, agentTaskId? }` | `OperationLog[]` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
-| `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 540 x 960 MP4。成功写入后对 `previews/cache/<projectId>` 执行单项目上限淘汰（默认 2 GiB，按修改时间删最旧中间文件）。 |
+| `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 MP4，画布按分镜画幅：540 x 960 / 960 x 540 / 720 x 720。成功写入后对 `previews/cache/<projectId>` 执行单项目上限淘汰（默认 2 GiB，按修改时间删最旧中间文件）。 |
 | `get_preview_cache_status` | `{ projectId }` | `PreviewCacheStatus { projectId, bytesUsed, limitBytes, fileCount }` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
 | `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
 | `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message/messageKey/messageParams`（`status`=`ok|warn|fail`；`messageKey` 如 `diskSpace.low` 为稳定文案键，前端按界面语言翻译，未知键回落中文 `message`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
@@ -418,7 +422,7 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
 | `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`，facts 附当前稿长、单位（中文按字、否则按词）和按本次实测语速换算的 `targetScriptLength`。任一 `storyboard_needs_user_decision` 暂停都把本次 brief 存为任务 brief，下一轮 `brief=null` 即按原稿续跑并复用配音缓存。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 源窗短于旁白则放慢已选镜头 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并按项目输出端口交付（剪映新建草稿，或写出 FCPXML/OTIO；不覆盖旧草稿）；预览或交付失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat 等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
 | `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
-| `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 540 x 960 H.264 preview。 |
+| `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 H.264 preview，画布按分镜画幅（默认 540 x 960）。 |
 | `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
 | `replace_clips` | Native `{ timelineVersionId: string|null, shots: [{ shotIndex, assetId, sourceStartMs, sourceEndMs }] }` | 已实现，批量替换既有镜头并保持对应时间线时长；素材证据与源范围仍由 Rust 复核。 |
 | `insert_clips` | Native `{ timelineVersionId: string|null, clips: [{ assetId, sourceStartMs, sourceEndMs, durationMs: number|null, insertAfterShotIndex: number|null }] }` | 已实现，在既有时间线插入已验证素材以补足画面时长；`insertAfterShotIndex` 为 null 插到开头。禁止用冻结帧垫时长；配音长于画面时应先搜段再插入，然后重试 `synthesize_voiceover`。 |
@@ -466,7 +470,7 @@ NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 stric
 
 `StoryboardVersion` 的 `shots` 响应新增 `beatId` 与 `matchLevel`（`direct` 或 `contextual`）；同时新增 `beats`（`id`、`purpose`、`requiredVisual`，可选 `narration` / `onScreenText`）和 `uncoveredBeatIds`。这是加性契约：旧 storyboard 读取时返回空的 `beats`/`uncoveredBeatIds`，旧镜头的 `matchLevel` 回退为 `contextual`，旧 beat 缺少 `onScreenText` 时读为空串。`uncoveredBeatIds` 不会映射成时间线 clip；调用方不得将其表述为已经被素材画面覆盖。
 
-preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成本地 540 x 960 H.264 MP4。存在已启用 `textTracks` 时，后端会生成 ASS 并以 FFmpeg/libass 叠加文本；当前允许 `sans_bold`、`sans_clean`、`serif_editorial`、`mono_tech` 字体 key 及 `fade`、`slide_up`、`slide_down`、`pop`、`wipe` 基础动态。结果包含黑帧扫描、精确重复源范围、低分辨率视觉相似候选、节奏异常与文本安全区/可读时长检查。当前不混音、不做多帧语义重复检测，也不提供取消语义。
+preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成本地 H.264 MP4（画布按分镜画幅，默认 540 x 960）。存在已启用 `textTracks` 时，后端会生成 ASS 并以 FFmpeg/libass 叠加文本；当前允许 `sans_bold`、`sans_clean`、`serif_editorial`、`mono_tech` 字体 key 及 `fade`、`slide_up`、`slide_down`、`pop`、`wipe` 基础动态。结果包含黑帧扫描、精确重复源范围、低分辨率视觉相似候选、节奏异常与文本安全区/可读时长检查。当前不混音、不做多帧语义重复检测，也不提供取消语义。
 
 ## Jianying draft 创建规则
 

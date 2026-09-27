@@ -322,7 +322,12 @@ fn main_chain_function_tools() -> Vec<Value> {
                     "properties": {
                         "voiceover": {"type": "boolean"},
                         "subtitles": {"type": "boolean"},
-                        "bgm": {"type": "boolean"}
+                        "bgm": {"type": "boolean"},
+                        "aspectRatio": {
+                            "type": "string",
+                            "enum": ["9:16", "16:9", "1:1"],
+                            "description": "Output frame. Copy the composer choice unless the user's current text names another ratio."
+                        }
                     },
                     "required": ["voiceover", "subtitles", "bgm"],
                     "additionalProperties": false

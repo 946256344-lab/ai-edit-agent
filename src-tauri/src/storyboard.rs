@@ -3163,7 +3163,16 @@ fn generate_storyboard_internal(
     }
 
     // Phase 4 + Phase 5: 精修时间段；normalize 自修后校验；仅精修类失败回 Phase 4
-    let content = run_phase4_and_validate(&app, &access, brief, &selected, &rough, &sources, None)?;
+    let content = run_phase4_and_validate(
+        &app,
+        &access,
+        brief,
+        &selected,
+        &rough,
+        &sources,
+        None,
+        media_options.map(|options| options.aspect_ratio).unwrap_or_default(),
+    )?;
     crate::execution_deadline::check()?;
     log::info!("Storyboard content finalized. Persisting to database.");
     let version = persist_storyboard_version(
@@ -3340,6 +3349,7 @@ pub(crate) fn run_phase4_and_validate(
     rough: &phases::RoughStoryboard,
     sources: &[StoryboardSource],
     local_scope: Option<(HashSet<i64>, Option<String>)>,
+    aspect_ratio: crate::media_options::AspectRatio,
 ) -> Result<StoryboardContent, String> {
     let mut repair: Option<RepairPacket> = None;
     let mut content = None;
@@ -3350,6 +3360,7 @@ pub(crate) fn run_phase4_and_validate(
         }
         None => crate::storyboard::phase4::Phase4Session::new(),
     };
+    phase4_session.aspect_ratio = aspect_ratio;
     loop {
         crate::execution_deadline::check()?;
         let attempt = budget.semantic_attempt_number();

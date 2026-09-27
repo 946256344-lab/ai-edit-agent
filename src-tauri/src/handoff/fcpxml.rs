@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn fcpxml_keeps_source_window_and_media_url() {
-        let plan = build_handoff_plan(&sample_timeline(), &sample_sources()).expect("plan");
+        let plan = build_handoff_plan(&sample_timeline(), &sample_sources(), crate::media_options::AspectRatio::Portrait.canvas()).expect("plan");
         let xml = render_fcpxml(&plan, "工厂试片");
         assert!(xml.contains("file:///D:/media/a.mp4"));
         assert!(xml.contains("start=\"30/30s\""));

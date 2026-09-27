@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn otio_keeps_media_url_and_slow_warp() {
-        let plan = build_handoff_plan(&sample_timeline(), &sample_sources()).expect("plan");
+        let plan = build_handoff_plan(&sample_timeline(), &sample_sources(), crate::media_options::AspectRatio::Portrait.canvas()).expect("plan");
         let otio = render_otio(&plan, "试片");
         let json = serde_json::to_string(&otio).expect("json");
         assert!(json.contains("file:///D:/media/a.mp4"));

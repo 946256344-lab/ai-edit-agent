@@ -35,22 +35,22 @@ fn preview_cache_reuses_text_only_edits_and_invalidates_source_or_crop_changes()
         timeline_end_ms: 1_000,
         ..Default::default()
     };
-    let first = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    let first = cached_timeline_clip(&directory, &source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap();
     let modified = fs::metadata(&first).unwrap().modified().unwrap();
     clip.on_screen_text = "new subtitle".to_owned();
     clip.shot_index = 8;
     clip.timeline_start_ms = 5_000;
     clip.timeline_end_ms = 6_000;
-    let reused = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    let reused = cached_timeline_clip(&directory, &source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap();
     assert_eq!(first, reused);
     assert_eq!(modified, fs::metadata(&reused).unwrap().modified().unwrap());
-    let key = crate::preview_cache::clip_key(&source, "video", &clip).unwrap();
+    let key = crate::preview_cache::clip_key(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap();
     clip.crop_focus = Some([0.8, 0.5]);
     assert_ne!(
         key,
-        crate::preview_cache::clip_key(&source, "video", &clip).unwrap()
+        crate::preview_cache::clip_key(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap()
     );
-    let focused = cached_timeline_clip(&directory, &source, "video", &clip).unwrap();
+    let focused = cached_timeline_clip(&directory, &source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap();
     let pixel = hidden_command("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(&focused)
@@ -83,7 +83,7 @@ fn preview_cache_reuses_text_only_edits_and_invalidates_source_or_crop_changes()
         .unwrap();
     assert_ne!(
         key,
-        crate::preview_cache::clip_key(&source, "video", &clip).unwrap()
+        crate::preview_cache::clip_key(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas()).unwrap()
     );
     fs::remove_dir_all(directory).unwrap();
 }
@@ -137,7 +137,7 @@ fn ffmpeg_renders_a_source_bound_vertical_clip() {
         on_screen_text: String::new(),
         ..Default::default()
     };
-    render_timeline_clip(&source, "video", &clip, &destination)
+    render_timeline_clip(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas(), &destination)
         .expect("render vertical timeline clip");
     assert!(
         destination.is_file(),
@@ -208,7 +208,7 @@ fn render_timeline_clip_slows_short_source_to_timeline_slot() {
         on_screen_text: String::new(),
         ..Default::default()
     };
-    render_timeline_clip(&source, "video", &clip, &destination).expect("render slowed clip");
+    render_timeline_clip(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas(), &destination).expect("render slowed clip");
     assert!(
         destination.is_file(),
         "timeline render must create an MP4 clip"
@@ -279,7 +279,7 @@ fn ffmpeg_assembles_normalized_clips_into_a_preview() {
         on_screen_text: String::new(),
         ..Default::default()
     };
-    render_timeline_clip(&source, "video", &clip, &first).expect("render first clip");
+    render_timeline_clip(&source, "video", &clip, crate::media_options::AspectRatio::Portrait.canvas(), &first).expect("render first clip");
     let second_clip = TimelineClip {
         shot_index: 2,
         asset_id: "test".to_owned(),
@@ -290,7 +290,7 @@ fn ffmpeg_assembles_normalized_clips_into_a_preview() {
         on_screen_text: String::new(),
         ..Default::default()
     };
-    render_timeline_clip(&source, "video", &second_clip, &second).expect("render second clip");
+    render_timeline_clip(&source, "video", &second_clip, crate::media_options::AspectRatio::Portrait.canvas(), &second).expect("render second clip");
     let list = directory.join("concat.txt");
     fs::write(
         &list,
@@ -514,7 +514,7 @@ fn ass_text_tracks_use_the_local_libass_filter() {
         }],
         ..Default::default()
     };
-    write_text_tracks_ass(&ass_path, &[track]).expect("write ASS overlay");
+    write_text_tracks_ass(&ass_path, &[track], crate::media_options::AspectRatio::Portrait.canvas()).expect("write ASS overlay");
     let source = directory.join("source.mp4");
     let output = directory.join("output.mp4");
     let create = hidden_command("ffmpeg")

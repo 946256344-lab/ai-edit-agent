@@ -1009,12 +1009,24 @@ pub(super) fn apply_skill(
             "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only."
         })),
         "generate_storyboard" => {
+            let composer_options = state.media_options;
             let media_options = args
                 .get("mediaOptions")
                 .filter(|value| !value.is_null())
-                .map(crate::media_options::parse_media_options)
+                .map(|value| {
+                    let mut options = crate::media_options::parse_media_options(value)?;
+                    // 模型漏传画幅时沿用输入框选择，不能静默退回竖屏。
+                    let names_ratio = value.get("aspectRatio").is_some()
+                        || value.as_str().is_some_and(|text| text.contains("aspectRatio"));
+                    if !names_ratio {
+                        if let Some(composer) = composer_options {
+                            options.aspect_ratio = composer.aspect_ratio;
+                        }
+                    }
+                    Ok::<_, String>(options)
+                })
                 .transpose()?
-                .or(state.media_options);
+                .or(composer_options);
             state.media_options = media_options;
             let brief = args
                 .get("brief")
@@ -1151,6 +1163,30 @@ pub(super) fn apply_skill(
                             }
                         }
                     }
+                    // BGM 开启且没有音乐时直接配乐（在配音之后，音量随有无旁白调整）；不可用时把原因交给模型转告。
+                    let mut bgm_note: Option<String> = None;
+                    let wants_bgm = media_options.is_some_and(|options| options.bgm);
+                    if wants_bgm && !timeline.music_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()) {
+                        let scope = super::auto_music::MusicScope {
+                            app: &state.app,
+                            connection: state.connection,
+                            project_id: state.project_id,
+                            editing_task_id: state.editing_task_id,
+                            conversation_id: state.conversation_id,
+                            agent_task_id: &agent_task_id,
+                        };
+                        match super::auto_music::attach_background_music(&scope, &timeline, brief) {
+                            super::auto_music::AutoMusic::Attached { timeline: scored, source, title } => {
+                                timeline = scored;
+                                message.push_str(&format!("\n已自动配乐（来源 {source}）：{title}。"));
+                            }
+                            super::auto_music::AutoMusic::Unavailable(reason) => {
+                                log::warn!("Automatic background music skipped: {reason}");
+                                message.push_str("\n未能自动配乐，原因见 mediaNotApplied.bgm。");
+                                bgm_note = Some(reason);
+                            }
+                        }
+                    }
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
                     // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
@@ -1201,9 +1237,9 @@ pub(super) fn apply_skill(
                             .iter()
                             .map(|key| {
                                 let note = if *key == "bgm" {
-                                    "generate_storyboard never adds music. Add it with replace_music_tracks using a ready local audio asset, or search_music then download_music; otherwise tell the user the video has no music."
+                                    bgm_note.clone().unwrap_or_else(|| "Background music was requested but is not on the timeline.".to_owned())
                                 } else {
-                                    "Requested but not on the timeline."
+                                    "Requested but not on the timeline.".to_owned()
                                 };
                                 ((*key).to_owned(), json!(note))
                             })

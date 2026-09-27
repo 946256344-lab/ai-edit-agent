@@ -153,6 +153,30 @@ pub(crate) fn search_tracks(query: &str) -> Result<Vec<JamendoTrack>, String> {
     Ok(checked_tracks(response)?.into_iter().filter(allowed).collect())
 }
 
+/// 自动配乐按情绪标签找器乐曲（`namesearch` 只匹配曲名，搜 “upbeat” 这类词几乎无结果）。
+pub(crate) fn search_instrumental_by_tags(tags: &str) -> Result<Vec<JamendoTrack>, String> {
+    let id = client_id()?;
+    let url = api_url(
+        "tracks",
+        &[
+            ("client_id", id),
+            ("format", "json".to_owned()),
+            ("limit", "20".to_owned()),
+            ("fuzzytags", tags.trim().to_owned()),
+            ("vocalinstrumental", "instrumental".to_owned()),
+            ("order", "popularity_total".to_owned()),
+            ("audioformat", "mp32".to_owned()),
+        ],
+    )?;
+    let response = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(20))
+        .call()
+        .map_err(|_| "Jamendo music search is unavailable.".to_owned())?;
+    let response: JamendoResponse = serde_json::from_reader(response.into_reader())
+        .map_err(|_| "Jamendo returned an invalid music catalog response.".to_owned())?;
+    Ok(checked_tracks(response)?.into_iter().filter(allowed).collect())
+}
+
 pub(crate) fn download_track(
     app: &AppHandle,
     project_id: &str,

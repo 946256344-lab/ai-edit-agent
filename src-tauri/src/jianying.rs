@@ -438,7 +438,8 @@ pub fn create_jianying_draft(
             .to_owned()
     })?;
     let sources = collect_export_sources(&connection, &timeline, true)?;
-    let plan = build_handoff_plan(&timeline, &sources)?;
+    let canvas = crate::media_options::timeline_canvas(&connection, &timeline)?;
+    let plan = build_handoff_plan(&timeline, &sources, canvas)?;
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");

@@ -1,5 +1,6 @@
 //! 从已持久化 timeline 生成可重建的低清 preview；不负责最终导出或覆盖用户文件。
 use crate::db::open_connection;
+use crate::media_options::Canvas;
 use crate::models::{
     PreviewQualityCheck, PreviewQualityReport, PreviewResult, TextAnimation, TextCue, TextTrack,
     TimelineClip,
@@ -29,6 +30,7 @@ pub(crate) fn render_timeline_clip(
     source: &Path,
     kind: &str,
     clip: &TimelineClip,
+    canvas: Canvas,
     destination: &Path,
 ) -> Result<(), String> {
     // 用源范围播放，时间线槽位更长时按源窗/槽位放慢，避免黑帧或静帧。
@@ -103,8 +105,9 @@ pub(crate) fn render_timeline_clip(
     } else {
         String::new()
     };
+    let Canvas { width, height } = canvas;
     let filter = format!(
-        "{setpts}scale=540:960:force_original_aspect_ratio=increase,crop=540:960:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
+        "{setpts}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
         x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)
     );
     let status = command
@@ -217,13 +220,18 @@ fn ass_alignment(anchor: &str) -> (i64, i64) {
     }
 }
 
-fn animation_tags(cue: &TextCue, animation: Option<&TextAnimation>, phase: &str) -> String {
+fn animation_tags(
+    cue: &TextCue,
+    animation: Option<&TextAnimation>,
+    phase: &str,
+    canvas: Canvas,
+) -> String {
     let Some(animation) = animation else {
         return String::new();
     };
     let distance = (40.0 * animation.intensity).round() as i64;
-    let x = (cue.layout.x * 540.0).round() as i64;
-    let y = (cue.layout.y * 960.0).round() as i64;
+    let x = (cue.layout.x * canvas.width as f64).round() as i64;
+    let y = (cue.layout.y * canvas.height as f64).round() as i64;
     match (animation.template_id.as_str(), phase) {
         ("fade" | "wipe", "in") => format!("\\fad({},0)", animation.duration_ms),
         ("fade" | "wipe", "out") => format!("\\fad(0,{})", animation.duration_ms),
@@ -245,7 +253,9 @@ fn animation_tags(cue: &TextCue, animation: Option<&TextAnimation>, phase: &str)
     }
 }
 
-fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack]) -> Result<(), String> {
+/// 字号按画布长边换算：竖屏与横屏字号一致，横屏每行能放下更多字。
+fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack], canvas: Canvas) -> Result<(), String> {
+    let long_edge = canvas.width.max(canvas.height) as f64;
     let mut styles = String::new();
     let mut events = String::new();
     let mut style_index = 0_usize;
@@ -254,7 +264,7 @@ fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack]) -> Result<(), String
             let style_name = format!("cue_{style_index}");
             style_index += 1;
             let (alignment, _) = ass_alignment(&cue.layout.anchor);
-            let font_size = (cue.style.font_size * 960.0).round().max(12.0) as i64;
+            let font_size = (cue.style.font_size * long_edge).round().max(12.0) as i64;
             let outline = cue.style.stroke_width.max(0.0);
             let shadow = if cue.style.shadow { 2 } else { 0 };
             // 列序必须与下方 Format 行一致（…Angle,BorderStyle,Alignment,MarginL,MarginR,MarginV,Outline,Shadow,Encoding）。
@@ -267,12 +277,12 @@ fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack]) -> Result<(), String
                 ass_color(cue.style.stroke_color.as_deref().unwrap_or("#000000")),
                 if cue.style.bold { -1 } else { 0 },
             ));
-            let x = (cue.layout.x * 540.0).round() as i64;
-            let y = (cue.layout.y * 960.0).round() as i64;
+            let x = (cue.layout.x * canvas.width as f64).round() as i64;
+            let y = (cue.layout.y * canvas.height as f64).round() as i64;
             let tags = format!(
                 "{{\\an{alignment}\\pos({x},{y}){}{}}}",
-                animation_tags(cue, cue.entrance.as_ref(), "in"),
-                animation_tags(cue, cue.exit.as_ref(), "out")
+                animation_tags(cue, cue.entrance.as_ref(), "in", canvas),
+                animation_tags(cue, cue.exit.as_ref(), "out", canvas)
             );
             events.push_str(&format!(
                 "Dialogue: {},{},{},{style_name},,0,0,0,,{tags}{}\n",
@@ -284,7 +294,8 @@ fn write_text_tracks_ass(path: &Path, tracks: &[TextTrack]) -> Result<(), String
         }
     }
     let content = format!(
-        "[Script Info]\nScriptType: v4.00+\nPlayResX: 540\nPlayResY: 960\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Alignment,MarginL,MarginR,MarginV,Outline,Shadow,Encoding\n{styles}\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n{events}"
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {}\nPlayResY: {}\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Alignment,MarginL,MarginR,MarginV,Outline,Shadow,Encoding\n{styles}\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n{events}",
+        canvas.width, canvas.height
     );
     fs::write(path, content).map_err(|_| "Could not prepare text preview overlays.".to_owned())
 }
@@ -300,6 +311,7 @@ fn composite_preview_layers(
     base: &Path,
     overlays: &[(PathBuf, f64, f64)],
     subtitles: Option<&Path>,
+    canvas: Canvas,
     out: &Path,
 ) -> Result<(), String> {
     if overlays.is_empty() && subtitles.is_none() {
@@ -322,7 +334,9 @@ fn composite_preview_layers(
     for (i, (_, start, end)) in overlays.iter().enumerate() {
         let input = i + 1;
         parts.push(format!(
-            "[{input}:v]scale=180:320:flags=bicubic,setpts=PTS-STARTPTS+{start:.3}/TB[ov{i}]"
+            "[{input}:v]scale={}:{}:flags=bicubic,setpts=PTS-STARTPTS+{start:.3}/TB[ov{i}]",
+            canvas.width / 3,
+            canvas.height / 3
         ));
         parts.push(format!("[{last}][ov{i}]overlay=W-w-16:16:eof_action=pass:enable='between(t,{start:.3},{end:.3})'[layer{i}]"));
         last = format!("layer{i}");
@@ -356,12 +370,13 @@ fn cached_timeline_clip(
     source: &Path,
     kind: &str,
     clip: &TimelineClip,
+    canvas: Canvas,
 ) -> Result<PathBuf, String> {
-    let key = crate::preview_cache::clip_key(source, kind, clip)?;
+    let key = crate::preview_cache::clip_key(source, kind, clip, canvas)?;
     let destination = cache.join(format!("clip-{key}.mp4"));
     if !destination.is_file() {
         let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
-        render_timeline_clip(source, kind, clip, &pending)?;
+        render_timeline_clip(source, kind, clip, canvas, &pending)?;
         fs::rename(pending, &destination).map_err(|error| error.to_string())?;
     }
     Ok(destination)
@@ -540,6 +555,7 @@ pub(crate) fn render_preview_inner(
     if timeline.clips.is_empty() {
         return Err("Timeline has no clips to render.".to_owned());
     }
+    let canvas = crate::media_options::timeline_canvas(&connection, &timeline)?;
     let directory = preview_directory(&app, &timeline.id)?;
     let cache = directory
         .parent()
@@ -559,7 +575,8 @@ pub(crate) fn render_preview_inner(
         if !Path::new(&source_reference).is_file() {
             return Err("Timeline source media is no longer available. Reconnect or replace the missing asset before rendering.".to_owned());
         }
-        let destination = cached_timeline_clip(&cache, Path::new(&source_reference), &kind, clip)?;
+        let destination =
+            cached_timeline_clip(&cache, Path::new(&source_reference), &kind, clip, canvas)?;
         rendered.push(destination);
     }
     let list_path = directory.join("concat.txt");
@@ -606,7 +623,7 @@ pub(crate) fn render_preview_inner(
         None
     } else {
         let path = directory.join("text_tracks.ass");
-        write_text_tracks_ass(&path, &timeline.text_tracks)?;
+        write_text_tracks_ass(&path, &timeline.text_tracks, canvas)?;
         Some(path)
     };
     let mut overlay_renders: Vec<(PathBuf, f64, f64)> = Vec::new();
@@ -622,14 +639,14 @@ pub(crate) fn render_preview_inner(
             if !Path::new(&src).is_file() {
                 return Err("Timeline overlay source media is no longer available.".to_owned());
             }
-            let dest = cached_timeline_clip(&cache, Path::new(&src), &kind, clip)?;
+            let dest = cached_timeline_clip(&cache, Path::new(&src), &kind, clip, canvas)?;
             let start = clip.timeline_start_ms as f64 / 1000.0;
             let end = clip.timeline_end_ms as f64 / 1000.0;
             overlay_renders.push((dest, start, end));
         }
     }
     let layer_key = crate::preview_cache::key(&serde_json::json!({
-        "renderer": "layers-v2", "base": assembled_path,
+        "renderer": "layers-v2", "base": assembled_path, "canvas": [canvas.width, canvas.height],
         "text": timeline.text_tracks, "overlays": overlay_renders,
     }));
     let layered = cache.join(format!("layers-{layer_key}.mp4"));
@@ -639,6 +656,7 @@ pub(crate) fn render_preview_inner(
             &assembled_path,
             &overlay_renders,
             subtitles.as_deref(),
+            canvas,
             &pending,
         )?;
         fs::rename(pending, &layered).map_err(|error| error.to_string())?;

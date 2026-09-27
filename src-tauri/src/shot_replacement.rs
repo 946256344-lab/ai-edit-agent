@@ -460,6 +460,10 @@ pub async fn prepare_shot_replacement(
         };
         let access = ModelAccess::resolve()?;
         let mut phase4_session = crate::storyboard::phase4::Phase4Session::new();
+        phase4_session.aspect_ratio =
+            crate::media_options::storyboard_options(&connection, &ctx.storyboard.id)?
+                .map(|options| options.aspect_ratio)
+                .unwrap_or_default();
         let (refined, issues) = phases::phase4_refine_ranges(
             &app,
             &access,
@@ -486,6 +490,10 @@ pub async fn prepare_shot_replacement(
         preview_clip.source_end_ms = refined.source_end_ms;
         preview_clip.crop_focus = refined.crop_focus;
         preview_clip.clip_kind = "source".to_owned();
+        let canvas = crate::media_options::storyboard_options(&connection, &ctx.storyboard.id)?
+            .map(|options| options.aspect_ratio)
+            .unwrap_or_default()
+            .canvas();
         let directory = app
             .path()
             .app_data_dir()
@@ -498,6 +506,7 @@ pub async fn prepare_shot_replacement(
             Path::new(source.source_path.as_deref().ok_or("素材来源不可用。")?),
             "video",
             &preview_clip,
+            canvas,
             &destination,
         )?;
         Ok(PreparedShotReplacement {

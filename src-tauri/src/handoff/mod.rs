@@ -244,6 +244,7 @@ pub(super) fn media_file_url(path: &str) -> String {
 pub(crate) fn build_handoff_plan(
     timeline: &TimelineVersion,
     sources: &HashMap<String, HandoffSource>,
+    canvas: crate::media_options::Canvas,
 ) -> Result<HandoffPlan, String> {
     Ok(HandoffPlan {
         format_version: HANDOFF_FORMAT_VERSION,
@@ -257,8 +258,8 @@ pub(crate) fn build_handoff_plan(
             .max()
             .unwrap_or(0),
         canvas: HandoffCanvas {
-            width: 540,
-            height: 960,
+            width: canvas.width,
+            height: canvas.height,
             fps: 30,
         },
         clips: map_clips(&timeline.clips, sources)?,
@@ -282,6 +283,7 @@ pub(crate) fn jianying_create_draft_input(
         "draftRoot": dest.draft_root,
         "draftName": dest.draft_name,
         "draftRegistryPath": dest.draft_registry_path,
+        "canvas": {"width": plan.canvas.width, "height": plan.canvas.height},
         "clips": plan.clips.iter().map(jianying_clip_json).collect::<Vec<_>>(),
         "overlayClips": plan.overlay_clips.iter().map(jianying_clip_json).collect::<Vec<_>>(),
         "textTracks": plan.text_tracks,
@@ -524,7 +526,7 @@ pub(crate) mod tests {
 
     #[test]
     fn plan_keeps_source_window_and_voiceover() {
-        let plan = build_handoff_plan(&sample_timeline(), &sample_sources()).expect("plan");
+        let plan = build_handoff_plan(&sample_timeline(), &sample_sources(), crate::media_options::AspectRatio::Portrait.canvas()).expect("plan");
         assert_eq!(plan.clips[0].source_end_ms, 2_000);
         assert_eq!(plan.clips[0].timeline_end_ms, 4_000);
         assert_eq!(plan.clips[0].kind, "video");
@@ -539,7 +541,7 @@ pub(crate) mod tests {
 
     #[test]
     fn jianying_payload_includes_source_end_and_voiceover() {
-        let plan = build_handoff_plan(&sample_timeline(), &sample_sources()).expect("plan");
+        let plan = build_handoff_plan(&sample_timeline(), &sample_sources(), crate::media_options::AspectRatio::Portrait.canvas()).expect("plan");
         let payload = jianying_create_draft_input(
             &plan,
             &JianyingDraftDestination {
