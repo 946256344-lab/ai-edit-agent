@@ -1,5 +1,6 @@
 // 粗剪预览与候选面板：始终与对话并排，试选画面和已保存的整片预览分开呈现。
 import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ArtifactWorkspaceController } from '../hooks/useArtifactWorkspaceController'
 import type { ShotReplacementController } from '../hooks/useShotReplacementController'
@@ -7,13 +8,15 @@ import { WorkspaceIcon } from './WorkspaceIcon'
 import { RoughCutPlayer } from './RoughCutPlayer'
 import { StoryboardVersionPicker } from './StoryboardVersionPicker'
 import { useI18n } from '../lib/i18n'
+import type { AspectRatio } from '../lib/local-store'
 
 type Props = {
-  model: { artifact: ArtifactWorkspaceController['model']; replacement: ShotReplacementController['model']; agentBusy: boolean }
+  // aspectRatio 是输入框当前选择：只决定空白画框与缩略图形状，已渲染的成片按其真实比例播放。
+  model: { artifact: ArtifactWorkspaceController['model']; replacement: ShotReplacementController['model']; agentBusy: boolean; aspectRatio: AspectRatio }
   actions: { artifact: ArtifactWorkspaceController['actions']; replacement: ShotReplacementController['actions'] }
 }
 
-export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, actions }: Props) {
+export function RoughCutPreview({ model: { artifact, replacement, agentBusy, aspectRatio }, actions }: Props) {
   const video = useRef<HTMLVideoElement>(null)
   const { t } = useI18n()
   const copy = t.preview
@@ -43,8 +46,10 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
     if (replacement.pending) pendingDialog.current?.showModal()
     else pendingDialog.current?.close()
   }, [replacement.pending])
+  const [frameW, frameH] = aspectRatio.split(':')
+  const frameStyle = { '--frame-w': frameW, '--frame-h': frameH } as CSSProperties
   return (
-    <section className="rough-preview" aria-label={copy.aria}>
+    <section className="rough-preview" aria-label={copy.aria} style={frameStyle}>
       {/* 标题行：左侧标题与有信息量的状态，右侧故事版版本；替换镜头时换成保留时长，避免中途切版本。 */}
       <header className="preview-heading">
         <div className="preview-title">
@@ -78,7 +83,7 @@ export function RoughCutPreview({ model: { artifact, replacement, agentBusy }, a
       ) : (
         <>
           <div className={`rough-player ${artifact.preview ? 'has-video' : ''}`}>
-            {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} segments={stalePreview ? [] : clips.map((clip) => ({ startMs: clip.timelineStartMs, endMs: clip.timelineEndMs }))} /> : <div className="preview-empty"><span className="empty-play">▷</span><h3>{agentBusy ? copy.makingFirstCut : copy.firstCutFromChat}</h3><p>{copy.emptyLine1}<br />{copy.emptyLine2}</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? copy.renderPreview : copy.createTimeline}</button>}</div>}
+            {artifact.preview ? <RoughCutPlayer key={`${artifact.preview.previewPath}:${artifact.previewNonce}`} videoRef={video} src={convertFileSrc(artifact.preview.previewPath)} onTimeChange={setPlayhead} segments={stalePreview ? [] : clips.map((clip) => ({ startMs: clip.timelineStartMs, endMs: clip.timelineEndMs }))} /> : <div className="preview-empty"><div className="preview-frame" aria-hidden="true"><span className="empty-play">▷</span><small>{aspectRatio}</small></div><h3>{agentBusy ? copy.makingFirstCut : copy.firstCutFromChat}</h3><p>{copy.emptyLine1}<br />{copy.emptyLine2}</p>{artifact.storyboard && <button className="outline-button" disabled={busy || artifact.busy.creatingTimeline} onClick={artifact.timeline ? actions.artifact.renderPreview : actions.artifact.createTimeline}>{artifact.timeline ? copy.renderPreview : copy.createTimeline}</button>}</div>}
           </div>
           <div className="preview-tools">
             {currentClip

@@ -664,7 +664,7 @@ function App() {
           )}
           preview={(
             <RoughCutPreview
-              model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending }}
+              model={{ artifact: artifactWorkspace.model, replacement: shotReplacement.model, agentBusy: isSending, aspectRatio: composerMedia.options.aspectRatio ?? '9:16' }}
               actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
             />
           )}

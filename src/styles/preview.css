@@ -15,6 +15,9 @@
 /* 舞台：浅灰底，画面带柔和投影；空状态给出下一步。 */
 .rough-player { display: flex; flex: 1; justify-content: center; align-items: center; min-height: 160px; overflow: hidden; border-radius: var(--radius-md); background: var(--stage); }
 .preview-empty { max-width: 300px; padding: 24px; text-align: center; }
+/* 空白画框跟随输入框所选画幅（--frame-w / --frame-h 由面板注入）：高约 200px，宽不超过舞台。 */
+.preview-frame { position: relative; display: grid; place-items: center; width: min(100%, calc(200px * var(--frame-w, 9) / var(--frame-h, 16))); aspect-ratio: var(--frame-w, 9) / var(--frame-h, 16); margin: 0 auto 4px; border: 1.5px dashed var(--line-strong); border-radius: 12px; background: var(--fill); transition: width var(--dur-panel) var(--ease); }
+.preview-frame small { position: absolute; right: 8px; bottom: 6px; color: var(--text-3); font: 500 var(--text-xs)/1 var(--font-mono); }
 .preview-empty h3 { margin: 14px 0 6px; font: 600 16px/1.5 var(--font-display); color: var(--text); }
 .preview-empty p { margin: 0 0 14px; color: var(--text-2); font-size: var(--text-sm); line-height: 1.7; }
 .empty-play { display: grid; place-items: center; width: 48px; height: 48px; margin: auto; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-frame); color: var(--text); font-size: 18px; }
@@ -67,7 +70,7 @@
 .shot-strip { display: flex; gap: 8px; flex-shrink: 0; margin: -4px; padding: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; animation: message-in var(--dur-enter) var(--ease); }
 .shot-strip::-webkit-scrollbar { display: none; }
 .shot-strip button { display: flex; flex-direction: column; gap: 6px; flex: 0 0 calc((100% - 40px) / 6); min-width: 36px; padding: 0; border: 0; background: transparent; color: var(--text-2); scroll-snap-align: start; }
-.shot-thumbnail { display: grid; place-items: center; width: 100%; aspect-ratio: 9 / 16; overflow: hidden; border-radius: var(--radius-sm); background: var(--fill-strong); transition: box-shadow var(--dur-fast) ease; }
+.shot-thumbnail { display: grid; place-items: center; width: 100%; aspect-ratio: var(--frame-w, 9) / var(--frame-h, 16); overflow: hidden; border-radius: var(--radius-sm); background: var(--fill-strong); transition: box-shadow var(--dur-fast) ease; }
 .shot-thumbnail img { width: 100%; height: 100%; object-fit: cover; }
 .shot-thumbnail .workspace-icon { color: var(--text-3); }
 .shot-strip button:hover .shot-thumbnail { box-shadow: 0 0 0 2px var(--line-strong); }
