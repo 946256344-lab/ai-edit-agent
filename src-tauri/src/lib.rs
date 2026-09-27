@@ -10,6 +10,10 @@ mod agent;
 mod agentloop;
 /// 素材导入、分析 worker、安全素材库投影、健康与恢复。
 mod assets;
+/// 项目品牌套件（名称、logo、品牌色、字体）与默认转场设置。
+mod brand_kit;
+/// 品牌卡：HTML/CSS 模板经本地 WebView2 渲染成透明 PNG。
+mod cards;
 /// 不含 payload 的 Agent 步骤、诊断、任务状态与操作记录。
 mod audit;
 /// CapCut 链接器：按本机注册表识别草稿库并单向新建。
@@ -42,6 +46,8 @@ mod onnx_device;
 mod outbound_http;
 /// FFmpeg preview 渲染、文字/音乐合成与质量检查。
 mod preview;
+/// 预览里的镜头转场（xfade）与品牌卡叠加。
+mod preview_graphics;
 /// Preview 旁白与 BGM 混音；禁止用 `-shortest` 截断口播。
 mod preview_audio;
 /// 跨时间线版本复用预览镜头与无字幕底片。
@@ -69,6 +75,8 @@ mod subtitle;
 mod taskrouter;
 /// 内部 timeline 创建、校验编辑、文字/音乐轨与版本查询。
 mod timeline;
+/// 品牌图层与镜头转场的校验、贴合与切点解析。
+mod timeline_graphics;
 /// 旁白写入时间线：补画面、替换系统字幕、创建旁白轨版本。
 mod timeline_voice;
 /// ElevenLabs 配音凭据、合成、指纹缓存与 alignment 字幕。
@@ -170,6 +178,8 @@ pub fn run() {
             audit::list_agent_diagnostics,
             audit::list_operation_logs,
             preview::render_preview,
+            brand_kit::get_brand_kit,
+            brand_kit::set_brand_kit,
             preview_cache::get_preview_cache_status,
             preview_cache::clear_preview_cache,
             release_readiness::get_release_readiness,

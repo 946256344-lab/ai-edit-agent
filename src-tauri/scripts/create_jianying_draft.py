@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 AudioMaterial = AudioSegment = ClipSettings = DraftFolder = FontType = None
+IntroType = OutroType = TransitionType = None
 TextBackground = TextBorder = TextIntro = TextOutro = TextSegment = TextShadow = None
 TextStyle = Timerange = TrackSpec = TrackType = VideoMaterial = VideoSegment = None
 
@@ -27,6 +28,7 @@ _bound_editor = None
 def bind_sdk(editor):
     """按本机所选编辑器绑定 SDK。换设备不改代码，只换本机安装的包与草稿注册表。"""
     global AudioMaterial, AudioSegment, ClipSettings, DraftFolder, FontType
+    global IntroType, OutroType, TransitionType
     global TextBackground, TextBorder, TextIntro, TextOutro, TextSegment, TextShadow
     global TextStyle, Timerange, TrackSpec, TrackType, VideoMaterial, VideoSegment, _bound_editor
     if editor == _bound_editor:
@@ -42,6 +44,9 @@ def bind_sdk(editor):
     ClipSettings = pkg.ClipSettings
     DraftFolder = pkg.DraftFolder
     FontType = pkg.FontType
+    IntroType = pkg.IntroType
+    OutroType = pkg.OutroType
+    TransitionType = pkg.TransitionType
     TextBackground = pkg.TextBackground
     TextBorder = pkg.TextBorder
     TextIntro = pkg.TextIntro
@@ -354,6 +359,67 @@ def add_overlay_tracks(script, clips, canvas=DEFAULT_CANVAS):
         add_segment(script, segment, "overlay-main")
 
 
+# 内部转场类型 → 编辑器原生转场。黑场过渡用「闪黑」近似；两者都待真实草稿验证。
+TRANSITION_NAMES = {"crossfade": "叠化", "dip_to_black": "闪黑"}
+
+
+def transitions_by_clip(transitions):
+    return {int(item["afterClip"]): item for item in transitions or []}
+
+
+def apply_transition(segment, transition):
+    """转场挂在切点左侧片段上，必须在 add_segment 之前挂，SDK 在加入片段时收集转场素材。"""
+    if not transition:
+        return
+    name = TRANSITION_NAMES.get(transition.get("kind"))
+    member = getattr(TransitionType, name, None) if name else None
+    if member is None:
+        raise RuntimeError("Draft adapter received an unsupported transition.")
+    segment.add_transition(member, duration=to_microseconds(int(transition["durationMs"])))
+
+
+def add_graphic_overlays(script, overlays, draft_path):
+    """品牌卡是整画布透明 PNG：复制进草稿目录，放在上层视频轨，按时间不重叠分轨。
+
+    图片里的文字不可编辑；交付结果会如实标注。
+    """
+    if not overlays:
+        return
+    cards_dir = draft_path / "voycut-cards"
+    cards_dir.mkdir(parents=True, exist_ok=True)
+    lanes = []
+    prepared = []
+    for index, overlay in enumerate(sorted(overlays, key=lambda item: int(item["startMs"])), start=1):
+        source = Path(overlay["pngPath"])
+        if not source.is_file():
+            raise RuntimeError(f"Brand card image {index} is unavailable.")
+        target = cards_dir / source.name
+        shutil.copy2(source, target)
+        start_ms, end_ms = int(overlay["startMs"]), int(overlay["endMs"])
+        if end_ms <= start_ms:
+            raise RuntimeError("Brand card duration must be positive.")
+        lane = next((i for i, last_end in enumerate(lanes) if last_end <= start_ms), None)
+        if lane is None:
+            lanes.append(0)
+            lane = len(lanes) - 1
+        lanes[lane] = end_ms
+        prepared.append((overlay, target, lane, start_ms, end_ms))
+    for lane in range(len(lanes)):
+        add_track(script, TrackType.video, f"assembly-brand-{lane}")
+    for overlay, target, lane, start_ms, end_ms in prepared:
+        segment = VideoSegment(
+            VideoMaterial(str(target)),
+            Timerange(to_microseconds(start_ms), to_microseconds(end_ms - start_ms)),
+        )
+        fade_in_ms = int(overlay.get("fadeInMs", 0))
+        fade_out_ms = int(overlay.get("fadeOutMs", 0))
+        if fade_in_ms > 0:
+            segment.add_animation(IntroType.渐显, to_microseconds(fade_in_ms))
+        if fade_out_ms > 0:
+            segment.add_animation(OutroType.渐隐, to_microseconds(fade_out_ms))
+        add_segment(script, segment, f"assembly-brand-{lane}")
+
+
 def add_music_tracks(script, tracks):
     enabled_tracks = [track for track in tracks if track.get("enabled", True)]
     for track_index, track in enumerate(enabled_tracks):
@@ -609,16 +675,19 @@ def main():
             draft_name, canvas[0], canvas[1], 30, allow_replace=False
         )
         add_track(script, TrackType.video)
-        for clip, material, timeline_duration_us, source_start_us, source_duration_us in prepared_clips:
+        transitions = transitions_by_clip(payload.get("transitions"))
+        for index, (clip, material, timeline_duration_us, source_start_us, source_duration_us) in enumerate(prepared_clips):
             segment = VideoSegment(
                 material,
                 Timerange(to_microseconds(clip["timelineStartMs"]), timeline_duration_us),
                 source_timerange=Timerange(source_start_us, source_duration_us),
                 clip_settings=canvas_clip_settings(material, clip.get("cropFocus"), canvas),
             )
+            apply_transition(segment, transitions.get(index))
             add_segment(script, segment)
         add_overlay_tracks(script, payload.get("overlayClips", []), canvas)
         add_text_tracks(script, payload.get("textTracks", []))
+        add_graphic_overlays(script, payload.get("graphicOverlays", []), draft_path)
         add_music_tracks(script, payload.get("musicTracks", []))
         add_voiceover_tracks(script, payload.get("voiceoverTracks", []))
         script.save()

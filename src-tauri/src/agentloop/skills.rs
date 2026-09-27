@@ -44,6 +44,8 @@ pub(super) fn produced_artifact_for_tool(tool: &str) -> Option<&'static str> {
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
+        | "add_title_cards"
+        | "set_transitions"
         | "use_online_music"
         | "synthesize_voiceover" => Some("timeline"),
         "render_preview" => Some("preview"),
@@ -71,6 +73,8 @@ pub(super) fn persisted_artifact_for_tool(
         | "reorder_clips"
         | "replace_text_tracks"
         | "replace_music_tracks"
+        | "add_title_cards"
+        | "set_transitions"
         | "use_online_music"
         | "synthesize_voiceover" => result
             .timeline
@@ -1006,7 +1010,23 @@ pub(super) fn apply_skill(
             "textRecipes": text_recipe_capabilities(),
             "subtitlePresets": subtitle_style_presets(),
             "styleGuide": "For花字: call transcribe_asset -> pick a textRecipe templateId (subtitle_douyin/variety/newsbar...) and/or supply style overrides (color/strokeColor/strokeWidth/shadow/backgroundColor). Setting templateId auto-fills a curated style; omitting it allows full custom via replace_text_tracks style field.",
-            "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only."
+            "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only.",
+            "brandCardTemplates": crate::cards::templates::card_templates().iter().map(|template| json!({
+                "templateId": template.manifest.id,
+                "placement": template.manifest.anchor,
+                "purpose": template.manifest.purpose,
+                "requiresLogo": template.manifest.requires_logo,
+                "slots": template.manifest.slots.iter().map(|(name, limit)| json!({
+                    "slot": name, "required": limit.required, "maxWords": limit.max_words, "maxCjkChars": limit.max_cjk_chars,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "brandKitSet": crate::brand_kit::read_brand_kit(state.connection, state.project_id).is_set(),
+            "transitions": ["none", "crossfade", "dip_to_black"],
+            "delivery": {
+                "text": "Jianying/CapCut: native editable text within the verified matrix. FCPXML: Basic Title with editable text, font, size and colour; position and animation are not carried. OTIO: markers only; the user adds text in Resolve.",
+                "brandCards": "All editors: image overlays; the text inside is not editable.",
+                "transitions": "Jianying/CapCut: native 叠化 (crossfade) and 闪黑 (dip_to_black). FCPXML/OTIO: crossfade only. Desktop verification of transitions is still pending."
+            }
         })),
         "generate_storyboard" => {
             let composer_options = state.media_options;
@@ -1186,14 +1206,37 @@ pub(super) fn apply_skill(
                             }
                         }
                     }
+                    // 设了品牌套件自动加开场 / 片尾 / 角标；项目默认转场不是硬切时写入。失败只提示，不挡预览。
+                    let mut graphics_note: Option<String> = None;
+                    {
+                        let scope = super::auto_music::MusicScope {
+                            app: &state.app,
+                            connection: state.connection,
+                            project_id: state.project_id,
+                            editing_task_id: state.editing_task_id,
+                            conversation_id: state.conversation_id,
+                            agent_task_id: &agent_task_id,
+                        };
+                        match super::auto_graphics::apply_finishing_defaults(&scope, &timeline, &generated.title) {
+                            Ok(Some(finished)) => timeline = finished,
+                            Ok(None) => {}
+                            Err(error) => {
+                                log::warn!("Brand cards and default transition skipped: {error}");
+                                graphics_note = Some(error);
+                            }
+                        }
+                    }
                     let timeline_version_id = timeline.id.clone();
                     state.timelines = vec![timeline.clone()];
                     // 能播就出预览和新建剪映草稿；收尾缺口只进 qualityWarnings，不挡预览。
                     // requestedMedia 只是用户要求；appliedMedia 按时间线实际轨道给出，模型只能据此汇报。
+                    let graphics = super::auto_graphics::graphics_summary(&timeline);
                     let applied_media = json!({
                         "voiceover": timeline.voiceover_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()),
                         "subtitles": timeline.text_tracks.iter().any(|track| track.enabled && track.role == "subtitle" && !track.cues.is_empty()),
                         "bgm": timeline.music_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()),
+                        "brandCards": graphics["brandCards"],
+                        "transitions": graphics["transitions"],
                     });
                     let media_not_applied = media_options
                         .map(|options| {
@@ -1244,6 +1287,9 @@ pub(super) fn apply_skill(
                             })
                             .collect::<serde_json::Map<_, _>>()
                             .into();
+                    }
+                    if let Some(note) = graphics_note {
+                        result["brandCardsNotApplied"] = json!(note);
                     }
                     if preview.is_some() {
                         result["previewTimelineVersionId"] = json!(timeline_version_id);
@@ -1696,6 +1742,39 @@ pub(super) fn apply_skill(
             Ok(
                 json!({"tool":"replace_music_tracks","status":"ok","timelineVersionId":timeline_version_id,"versionNumber":version_number,"jianying":"experimental_review_required"}),
             )
+        }
+        "add_title_cards" | "set_transitions" => {
+            let existing = select_timeline_for_tool(state, args)?;
+            let (created, result) = {
+                let scope = super::auto_music::MusicScope {
+                    app: &state.app,
+                    connection: state.connection,
+                    project_id: state.project_id,
+                    editing_task_id: state.editing_task_id,
+                    conversation_id: state.conversation_id,
+                    agent_task_id: &agent_task_id,
+                };
+                if tool == "add_title_cards" {
+                    super::auto_graphics::add_title_cards(state, &scope, &existing, args)?
+                } else {
+                    super::auto_graphics::set_transitions(state, &scope, &existing, args)?
+                }
+            };
+            let version_number = created.version_number;
+            upsert(&mut state.timelines, created.clone());
+            state.last_outcome = Some(AgentEditResult {
+                agent_task_id,
+                message: if tool == "add_title_cards" {
+                    format!("已更新品牌卡并创建内部时间线 v{version_number}；品牌卡在编辑器里是图片，文字不可编辑。")
+                } else {
+                    format!("已更新转场并创建内部时间线 v{version_number}。")
+                },
+                storyboard: None,
+                timeline: Some(created),
+                preview: None,
+                jianying_draft: None,
+            });
+            Ok(result)
         }
         "render_preview" => {
             let timeline = select_timeline_for_tool(state, args)?;

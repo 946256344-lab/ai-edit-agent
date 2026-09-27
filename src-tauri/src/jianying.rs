@@ -2,7 +2,10 @@
 
 use crate::db::{now_millis, open_connection};
 use crate::handoff::deliver::collect_export_sources;
-use crate::handoff::{build_handoff_plan, jianying_create_draft_input, JianyingDraftDestination};
+use crate::handoff::{
+    attach_brand_cards, build_handoff_plan, delivery_notes, jianying_create_draft_input,
+    JianyingDraftDestination,
+};
 use crate::models::{JianyingDraftResult, JianyingRegistrationStatus, TimelineVersion};
 use crate::process::{apply_bundled_runtime_path, hidden_command, python_program};
 use crate::timeline::load_timeline_version;
@@ -439,7 +442,8 @@ pub fn create_jianying_draft(
     })?;
     let sources = collect_export_sources(&connection, &timeline, true)?;
     let canvas = crate::media_options::timeline_canvas(&connection, &timeline)?;
-    let plan = build_handoff_plan(&timeline, &sources, canvas)?;
+    let mut plan = build_handoff_plan(&timeline, &sources, canvas)?;
+    attach_brand_cards(&app, &timeline, canvas, &mut plan);
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");
@@ -452,10 +456,11 @@ pub fn create_jianying_draft(
             draft_registry_path: draft_registry_path.clone(),
         },
     );
-    let result = run_jianying_adapter(&app, &input).map_err(|error| {
+    let mut result = run_jianying_adapter(&app, &input).map_err(|error| {
         log::error!("Jianying draft adapter failed: {error}");
         format!("Jianying draft adapter could not create a draft: {error}")
     })?;
+    result.notes = delivery_notes(crate::handoff::EditorId::Jianying, &plan);
     let registration = PendingJianyingRegistration {
         input_format_version: 2,
         operation: "registerDraft".to_owned(),
@@ -533,6 +538,7 @@ mod tests {
             music_tracks: Vec::new(),
             voiceover_tracks: Vec::new(),
             overlay_clips: Vec::new(),
+            graphics: Default::default(),
             quality_report: None,
             created_at: 1,
         }

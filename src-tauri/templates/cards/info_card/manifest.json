@@ -1,0 +1,13 @@
+{
+  "id": "info_card",
+  "version": 1,
+  "anchor": "at_shot",
+  "defaultDurationMs": 3000,
+  "requiresLogo": false,
+  "requiresBrand": false,
+  "purpose": "Rounded translucent card with an accent bar for one key point or figure during a specific shot.",
+  "slots": {
+    "headline": { "required": true, "maxWords": 10, "maxCjkChars": 20, "maxChars": 72 },
+    "subline": { "required": false, "maxWords": 10, "maxCjkChars": 20, "maxChars": 72 }
+  }
+}

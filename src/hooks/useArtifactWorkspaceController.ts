@@ -109,15 +109,18 @@ function linkerLabel(linker: { id: string; label: string } | undefined) {
 function deliveryMessage(delivery: EditorDeliveryResult) {
   const copy = messages().backend
   const label = copy.editorLabels[delivery.editorId] ?? delivery.editorId
-  if (delivery.deliveryKind === 'dropInDraft') {
-    return delivery.status === 'pending'
+  const headline = delivery.deliveryKind === 'dropInDraft'
+    ? delivery.status === 'pending'
       ? copy.deliveryPending(delivery.displayName, label)
       : copy.deliveryReady(delivery.displayName, label)
-  }
-  if (delivery.deliveryKind === 'importFile') {
-    return copy.deliveryExported(delivery.displayName, copy.editorSummaries[delivery.editorId] ?? '')
-  }
-  return delivery.message
+    : delivery.deliveryKind === 'importFile'
+      ? copy.deliveryExported(delivery.displayName, copy.editorSummaries[delivery.editorId] ?? '')
+      : delivery.message
+  // 降级与图片交付说明如实跟在后面；未知 code 不展示，避免露出内部字段。
+  const notes = (delivery.notes ?? [])
+    .map((note) => copy.deliveryNotes[note.code]?.(note.detail ?? '', label))
+    .filter((line): line is string => Boolean(line))
+  return notes.length ? [headline, ...notes].join('\n') : headline
 }
 
 /** 所选编辑器已实现但本机未找到草稿库时为真。 */

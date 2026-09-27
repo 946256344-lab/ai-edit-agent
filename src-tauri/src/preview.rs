@@ -175,7 +175,7 @@ fn ass_color(color: &str) -> String {
     format!("&H00{}{}{}", &hex[4..6], &hex[2..4], &hex[0..2])
 }
 
-fn ass_font_name(font_key: &str) -> &'static str {
+pub(crate) fn ass_font_name(font_key: &str) -> &'static str {
     match font_key {
         "sans_bold"
         | "jianying_default"
@@ -199,7 +199,10 @@ fn ass_escape(text: &str) -> String {
 }
 
 fn ass_alignment(anchor: &str) -> (i64, i64) {
+    // 时间线校验只接受 top / center / bottom；此前这两个值落到默认分支，居中和顶部标题按底边对齐。
     match anchor {
+        "top" => (8, 0),
+        "center" => (5, 0),
         "top_left" => (7, 0),
         "top_center" => (8, 0),
         "top_right" => (9, 0),
@@ -302,11 +305,12 @@ fn ass_filter_path(path: &Path) -> String {
 fn composite_preview_layers(
     base: &Path,
     overlays: &[(PathBuf, f64, f64)],
+    graphics: &[crate::preview_graphics::GraphicInput],
     subtitles: Option<&Path>,
     canvas: Canvas,
     out: &Path,
 ) -> Result<(), String> {
-    if overlays.is_empty() && subtitles.is_none() {
+    if overlays.is_empty() && graphics.is_empty() && subtitles.is_none() {
         fs::copy(base, out).map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -316,6 +320,7 @@ fn composite_preview_layers(
     for (path, _, _) in overlays {
         cmd.arg("-i").arg(path);
     }
+    cmd.args(crate::preview_graphics::graphic_input_args(graphics));
     let mut parts = Vec::new();
     let mut last = "0:v".to_owned();
     // 文字仍在主画面之上、叠加画面之下，与原来的分次渲染层序一致。
@@ -333,6 +338,15 @@ fn composite_preview_layers(
         parts.push(format!("[{last}][ov{i}]overlay=W-w-16:16:eof_action=pass:enable='between(t,{start:.3},{end:.3})'[layer{i}]"));
         last = format!("layer{i}");
     }
+    // 品牌卡在最上层：片尾卡要盖住字幕与叠加画面。
+    let last = crate::preview_graphics::graphic_filters(
+        &mut parts,
+        last,
+        graphics,
+        overlays.len() + 1,
+        canvas.width,
+        canvas.height,
+    );
     cmd.args([
         "-filter_complex",
         &parts.join(";"),
@@ -555,21 +569,32 @@ pub(crate) fn render_preview_inner(
         .join("cache")
         .join(&timeline.project_id);
     fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
+    let transitions =
+        crate::timeline_graphics::resolve_transitions(&timeline.clips, &timeline.graphics.transitions);
+    let needs = crate::preview_graphics::handle_needs(timeline.clips.len(), &transitions);
     let mut rendered = Vec::with_capacity(timeline.clips.len());
-    for (_index, clip) in timeline.clips.iter().enumerate() {
-        let (source_reference, kind): (String, String) = connection
+    let mut freezes = Vec::with_capacity(timeline.clips.len());
+    for (index, clip) in timeline.clips.iter().enumerate() {
+        let (source_reference, kind, metadata_json): (String, String, String) = connection
             .query_row(
-                "SELECT source_reference, kind FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
+                "SELECT source_reference, kind, metadata_json FROM assets WHERE id = ?1 AND id IN (SELECT asset_id FROM project_asset_access WHERE project_id = ?2)",
                 params![clip.asset_id, timeline.project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(|_| "Timeline references an unavailable asset.".to_owned())?;
         if !Path::new(&source_reference).is_file() {
             return Err("Timeline source media is no longer available. Reconnect or replace the missing asset before rendering.".to_owned());
         }
+        let file_duration_ms = serde_json::from_str::<crate::models::TechnicalMetadata>(&metadata_json)
+            .ok()
+            .and_then(|metadata| metadata.duration_ms);
+        let (head_ms, tail_ms) = needs[index];
+        let handles =
+            crate::preview_graphics::extend_clip(clip, &kind, head_ms, tail_ms, file_duration_ms);
         let destination =
-            cached_timeline_clip(&cache, Path::new(&source_reference), &kind, clip, canvas)?;
+            cached_timeline_clip(&cache, Path::new(&source_reference), &kind, &handles.clip, canvas)?;
         rendered.push(destination);
+        freezes.push((handles.freeze_head_ms, handles.freeze_tail_ms));
     }
     let list_path = directory.join("concat.txt");
     let list = rendered
@@ -586,7 +611,34 @@ pub(crate) fn render_preview_inner(
         .join("\n");
     fs::write(&list_path, list).map_err(|_| "Could not prepare preview sequence.".to_owned())?;
     let preview_path = directory.join("preview.mp4");
-    let assembled_path = cache.join(format!("base-{}.mp4", crate::preview_cache::key(&rendered)));
+    let assembled_path = if transitions.is_empty() {
+        cache.join(format!("base-{}.mp4", crate::preview_cache::key(&rendered)))
+    } else {
+        cache.join(format!(
+            "base-xfade-{}.mp4",
+            crate::preview_cache::key(&(&rendered, &freezes, format!("{transitions:?}")))
+        ))
+    };
+    if !assembled_path.is_file() && !transitions.is_empty() {
+        let lengths = rendered
+            .iter()
+            .zip(&timeline.clips)
+            .zip(&needs)
+            .map(|((path, clip), (head, tail))| {
+                rendered_duration_ms(path)
+                    .unwrap_or(clip.timeline_end_ms - clip.timeline_start_ms + head + tail)
+            })
+            .collect::<Vec<_>>();
+        let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
+        crate::preview_graphics::assemble_with_transitions(
+            &rendered,
+            &lengths,
+            &freezes,
+            &transitions,
+            &pending,
+        )?;
+        fs::rename(pending, &assembled_path).map_err(|error| error.to_string())?;
+    }
     if !assembled_path.is_file() {
         let pending = cache.join(format!("{}.mp4", uuid::Uuid::new_v4()));
         let status = hidden_command("ffmpeg")
@@ -637,9 +689,22 @@ pub(crate) fn render_preview_inner(
             overlay_renders.push((dest, start, end));
         }
     }
+    // 品牌卡渲染失败不挡预览，但写进质量报告，不装作已经加上。
+    let mut card_warnings = Vec::new();
+    let mut graphic_inputs = Vec::new();
+    for overlay in &timeline.graphics.graphic_overlays {
+        match crate::cards::ensure_card_png(&app, &timeline.project_id, overlay, canvas) {
+            Ok(png) => graphic_inputs.push(crate::preview_graphics::GraphicInput { png, overlay }),
+            Err(error) => {
+                log::warn!("Brand card {} did not render: {error}", overlay.template_id);
+                card_warnings.push(format!("{}: {error}", overlay.template_id));
+            }
+        }
+    }
     let layer_key = crate::preview_cache::key(&serde_json::json!({
-        "renderer": "layers-v2", "base": assembled_path, "canvas": [canvas.width, canvas.height],
+        "renderer": "layers-v3", "base": assembled_path, "canvas": [canvas.width, canvas.height],
         "text": timeline.text_tracks, "overlays": overlay_renders,
+        "graphics": graphic_inputs.iter().map(|input| (&input.png, input.overlay)).collect::<Vec<_>>(),
     }));
     let layered = cache.join(format!("layers-{layer_key}.mp4"));
     if !layered.is_file() {
@@ -647,6 +712,7 @@ pub(crate) fn render_preview_inner(
         composite_preview_layers(
             &assembled_path,
             &overlay_renders,
+            &graphic_inputs,
             subtitles.as_deref(),
             canvas,
             &pending,
@@ -673,12 +739,24 @@ pub(crate) fn render_preview_inner(
         rendered_duration_ms(&preview_path),
         timeline.visual_duration_ms(),
     )?;
-    let quality_report = inspect_preview_quality(
+    let mut quality_report = inspect_preview_quality(
         &preview_path,
         &timeline.clips,
         &rendered,
         &timeline.text_tracks,
     );
+    if !card_warnings.is_empty() {
+        quality_report.checks.push(PreviewQualityCheck {
+            category: "brand_cards".to_owned(),
+            // info：渲染器故障不是模型能修的镜头问题，不触发自动修正续跑；照常展示给用户。
+            severity: "info".to_owned(),
+            message: format!(
+                "Some brand cards are not in this preview: {}",
+                card_warnings.join("; ")
+            ),
+            shot_indices: Vec::new(),
+        });
+    }
     let mut timeline_for_store = timeline.clone();
     timeline_for_store.quality_report = Some(quality_report.clone());
     let content_json = serde_json::to_string(&timeline_for_store.to_content())

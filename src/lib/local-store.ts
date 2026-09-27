@@ -272,9 +272,17 @@ export type TimelineVersion = {
   musicTracks?: MusicTrackState[]
   voiceoverTracks?: VoiceoverTrackState[]
   overlayClips?: TimelineClipDto[]
+  graphicOverlays?: GraphicOverlay[]
+  transitions?: TimelineTransitions
   qualityReport: PreviewQualityReport | null
   createdAt: number
 }
+
+/** 品牌卡：模板渲染的透明图片，交付到编辑器后文字不可编辑。 */
+export type GraphicOverlay = { id: string; templateId: string; anchor: string; startMs: number; endMs: number; fadeInMs: number; fadeOutMs: number; slots?: { headline?: string | null; subline?: string | null; cta?: string | null } }
+export type TransitionKind = 'none' | 'crossfade' | 'dip_to_black'
+export type TransitionSpec = { kind: TransitionKind; durationMs: number }
+export type TimelineTransitions = { default?: TransitionSpec | null; cuts?: Array<TransitionSpec & { afterShotIndex: number }> }
 
 export type PreviewQualityReport = { checks: Array<{ category: string; severity: string; message: string; shotIndices: number[] }> }
 
@@ -295,7 +303,11 @@ export type JianyingDraftResult = {
   draftDirectory: string
   draftContentPath: string
   registrationStatus: 'pending' | 'registered' | string
+  notes?: DeliveryNote[]
 }
+
+/** 交付说明：按 code 在前端翻译，detail 只含模板 id 或转场类型。 */
+export type DeliveryNote = { code: string; detail?: string | null }
 
 export type EditorLinkerInfo = {
   id: string
@@ -319,6 +331,7 @@ export type EditorDeliveryResult = {
   message: string
   outputPath: string | null
   jianying: JianyingDraftResult | null
+  notes?: DeliveryNote[]
 }
 
 export type JianyingRegistrationStatus = {
@@ -577,6 +590,43 @@ export async function getPreviewCacheStatus(projectId: string) {
 export async function clearPreviewCache(projectId: string, confirmed: boolean) {
   requireDesktopRuntime()
   return invoke<PreviewCacheStatus>('clear_preview_cache', { projectId, confirmed })
+}
+
+/** 项目品牌套件；logoPreview 是 data URL，不含本机路径。 */
+export type BrandKit = {
+  name: string
+  handle: string
+  cta: string
+  primaryColor: string
+  accentColor: string
+  logoFile: string | null
+  fontFile: string | null
+  logoPreview: string | null
+  fontName: string | null
+  defaultTransition: TransitionSpec
+}
+
+export type BrandKitInput = {
+  name: string
+  handle: string
+  cta: string
+  primaryColor: string
+  accentColor: string
+  logoSourcePath: string | null
+  clearLogo: boolean
+  fontSourcePath: string | null
+  clearFont: boolean
+  defaultTransition: TransitionSpec
+}
+
+export async function getBrandKit(projectId: string) {
+  requireDesktopRuntime()
+  return invoke<BrandKit>('get_brand_kit', { projectId })
+}
+
+export async function setBrandKit(projectId: string, input: BrandKitInput) {
+  requireDesktopRuntime()
+  return invoke<BrandKit>('set_brand_kit', { projectId, input })
 }
 
 export async function getCandidateScoreFirstSlots(projectId: string) {

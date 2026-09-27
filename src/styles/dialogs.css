@@ -41,6 +41,20 @@
 .custom-api-form input { padding: 0 10px; }
 .custom-api-form .modal-button { justify-self: start; margin-top: 2px; }
 
+/* 项目设置：品牌套件与默认转场 */
+.brand-kit { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.brand-kit-head { margin-bottom: 12px; }
+.brand-kit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-bottom: 12px; }
+.brand-kit-grid label { display: grid; gap: 4px; }
+.brand-kit-grid label > span { color: var(--text-2); font-size: var(--text-xs); }
+.brand-kit-grid input { padding: 0 10px; }
+.brand-kit-grid input[type="color"] { width: 100%; padding: 2px 4px; cursor: pointer; }
+.brand-kit-wide { grid-column: 1 / -1; }
+.brand-kit-file, .brand-kit-transition { display: flex; flex: none; align-items: center; align-self: center; gap: 8px; }
+.brand-kit-file .outline-button { min-height: 32px; padding: 0 10px; font-size: var(--text-xs); }
+.brand-kit-logo { width: 40px; height: 40px; object-fit: contain; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.brand-kit-error { color: var(--danger-text); }
+
 .name-edit-dialog { width: min(440px, calc(100vw - 48px)); }
 .name-edit-field { display: grid; gap: 8px; margin-top: 20px; color: var(--text-2); font-size: var(--text-xs); }
 .name-edit-field input { width: 100%; padding: 0 10px; }

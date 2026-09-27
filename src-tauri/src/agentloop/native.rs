@@ -67,6 +67,8 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "download_music",
     "use_online_music",
     "replace_music_tracks",
+    "add_title_cards",
+    "set_transitions",
     "synthesize_voiceover",
     "create_jianying_draft",
 ];
@@ -118,7 +120,7 @@ pub(crate) fn run_native_tool_loop(
     )?;
     if let Some(options) = media_options {
         let instruction = format!(
-            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。用户说了成片秒数时，把 requestedDurationMs 传给 generate_storyboard。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。aspectRatio 是成片画幅（9:16 / 16:9 / 1:1），用户本轮文字点名其他比例时按文字传，否则原样传。BGM 开启时 generate_storyboard 会自动配乐（先用素材库音频，没有再用 Jamendo），不要再为本轮另调音乐工具；按 appliedMedia 与 mediaNotApplied.bgm 的原因如实告诉用户，不得声称已加音乐。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。generate_storyboard 成功后会自动出预览并按当前输出端口交付到所选编辑器；能播的时间线不要因为 qualityWarnings 再拦预览。已有配音的故事版禁止改旁白，只改画面。不要再调用 create_jianying_draft，除非用户明确要求剪映且这次生成没有草稿。",
+            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。用户说了成片秒数时，把 requestedDurationMs 传给 generate_storyboard。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。aspectRatio 是成片画幅（9:16 / 16:9 / 1:1），用户本轮文字点名其他比例时按文字传，否则原样传。BGM 开启时 generate_storyboard 会自动配乐（先用素材库音频，没有再用 Jamendo），不要再为本轮另调音乐工具；按 appliedMedia 与 mediaNotApplied.bgm 的原因如实告诉用户，不得声称已加音乐。项目设置了品牌套件时 generate_storyboard 会自动加开场卡、片尾卡和角标 logo，并按项目默认转场处理切点；按 appliedMedia.brandCards 与 appliedMedia.transitions 如实汇报，品牌卡在编辑器里是图片、其中文字不可编辑，要告诉用户。只有用户本轮明确要求标题 / 字卡 / logo / 片尾或转场时才调用 add_title_cards 或 set_transitions，只填短文案。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。generate_storyboard 成功后会自动出预览并按当前输出端口交付到所选编辑器；能播的时间线不要因为 qualityWarnings 再拦预览。已有配音的故事版禁止改旁白，只改画面。不要再调用 create_jianying_draft，除非用户明确要求剪映且这次生成没有草稿。",
             serde_json::to_string(&options).map_err(|error| error.to_string())?
         );
         let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
@@ -546,6 +548,8 @@ fn merge_native_outcomes(
                 | "reorder_clips"
                 | "replace_text_tracks"
                 | "replace_music_tracks"
+                | "add_title_cards"
+                | "set_transitions"
                 | "use_online_music"
                 | "synthesize_voiceover"
         );
@@ -590,6 +594,8 @@ const TIMELINE_VERSION_WRITE_TOOLS: &[&str] = &[
     "download_music",
     "use_online_music",
     "replace_music_tracks",
+    "add_title_cards",
+    "set_transitions",
     "synthesize_voiceover",
 ];
 
@@ -1625,6 +1631,37 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 return Err(invalid_arguments());
             }
             normalize_nullable_music_fields(&mut value);
+            Ok(value)
+        }
+        "add_title_cards" => {
+            if object.len() != 3
+                || !object.contains_key("timelineVersionId")
+                || !object.contains_key("cards")
+                || !object.contains_key("removeTemplateIds")
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string())
+                || !object["cards"].as_array().is_some_and(|cards| cards.iter().all(Value::is_object))
+                || !object["removeTemplateIds"].as_array().is_some_and(|ids| ids.iter().all(Value::is_string))
+            {
+                return Err(invalid_arguments());
+            }
+            Ok(value)
+        }
+        "set_transitions" => {
+            if object.len() != 4
+                || !object.contains_key("timelineVersionId")
+                || !required_non_empty_string(&object["kind"])
+                || !(object["durationMs"].is_null() || object["durationMs"].is_i64())
+                || !(object["afterShotIndices"].is_null()
+                    || object["afterShotIndices"].as_array().is_some_and(|items| items.iter().all(Value::is_i64)))
+            {
+                return Err(invalid_arguments());
+            }
+            if !(object["timelineVersionId"].is_null() || object["timelineVersionId"].is_string()) {
+                return Err(invalid_arguments());
+            }
             Ok(value)
         }
         "transcribe_asset" => {

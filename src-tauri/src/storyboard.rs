@@ -1607,6 +1607,7 @@ mod tests {
             music_tracks: Vec::new(),
             voiceover_tracks: Vec::new(),
             overlay_clips: Vec::new(),
+            graphics: Default::default(),
             quality_report: None,
         })
         .expect("serialize timeline fixture")
@@ -1894,6 +1895,7 @@ mod tests {
                 music_tracks: Vec::new(),
                 voiceover_tracks: Vec::new(),
                 overlay_clips: Vec::new(),
+                graphics: Default::default(),
                 quality_report: None,
                 created_at: 0,
             };
@@ -4023,6 +4025,7 @@ fn finalize_audio_first_timeline(
         music_tracks: Vec::new(),
         voiceover_tracks: vt,
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
     };
     let content_json = serde_json::to_string(&content).map_err(|e| e.to_string())?;

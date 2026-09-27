@@ -349,6 +349,9 @@ pub struct TimelineVersion {
     pub voiceover_tracks: Vec<VoiceoverTrack>,
     #[serde(default)]
     pub overlay_clips: Vec<TimelineClip>,
+    /// 品牌图层与转场；与 content_json 同键平铺存储，旧版本读出为空。
+    #[serde(flatten)]
+    pub graphics: TimelineGraphics,
     pub quality_report: Option<PreviewQualityReport>,
     pub created_at: i64,
 }
@@ -361,6 +364,7 @@ impl TimelineVersion {
             music_tracks: self.music_tracks.clone(),
             voiceover_tracks: self.voiceover_tracks.clone(),
             overlay_clips: self.overlay_clips.clone(),
+            graphics: self.graphics.clone(),
             quality_report: self.quality_report.clone(),
         }
     }
@@ -639,8 +643,96 @@ pub struct TimelineContent {
     pub(crate) voiceover_tracks: Vec<VoiceoverTrack>,
     #[serde(default)]
     pub(crate) overlay_clips: Vec<TimelineClip>,
+    #[serde(flatten, default)]
+    pub(crate) graphics: TimelineGraphics,
     #[serde(default)]
     pub(crate) quality_report: Option<PreviewQualityReport>,
+}
+
+/// 时间线上「不可编辑文字」的品牌图层和镜头间转场。
+/// 品牌图层只存文案与品牌快照，PNG 是按这些数据重建的派生产物；转场以切点为中心，不改总时长。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineGraphics {
+    #[serde(default)]
+    pub graphic_overlays: Vec<GraphicOverlay>,
+    #[serde(default)]
+    pub transitions: TimelineTransitions,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicOverlay {
+    pub id: String,
+    pub template_id: String,
+    /// opening | closing | whole | at_shot：时间由后端按锚点计算，每个新版本重新贴合。
+    pub anchor: String,
+    #[serde(default)]
+    pub anchor_shot_index: Option<i64>,
+    #[serde(default)]
+    pub slots: CardSlots,
+    #[serde(default)]
+    pub brand: BrandSnapshot,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub fade_in_ms: i64,
+    pub fade_out_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct CardSlots {
+    #[serde(default)]
+    pub headline: Option<String>,
+    #[serde(default)]
+    pub subline: Option<String>,
+    #[serde(default)]
+    pub cta: Option<String>,
+}
+
+/// 添加品牌图层时的品牌套件快照；logo / 字体文件按内容寻址保存在应用数据目录，旧版本可重建。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct BrandSnapshot {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub handle: String,
+    #[serde(default)]
+    pub primary_color: String,
+    #[serde(default)]
+    pub accent_color: String,
+    #[serde(default)]
+    pub logo_file: Option<String>,
+    #[serde(default)]
+    pub font_file: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineTransitions {
+    /// 所有切点的默认转场；None 等同硬切。
+    #[serde(default)]
+    pub default: Option<TransitionSpec>,
+    /// 逐刀覆盖，按切点左侧镜头的 shotIndex 标识，重排后仍跟着镜头走。
+    #[serde(default)]
+    pub cuts: Vec<CutTransition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionSpec {
+    /// none | crossfade | dip_to_black
+    pub kind: String,
+    pub duration_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CutTransition {
+    pub after_shot_index: i64,
+    pub kind: String,
+    pub duration_ms: i64,
 }
 
 #[derive(Serialize)]
@@ -657,6 +749,18 @@ pub struct JianyingDraftResult {
     pub draft_directory: String,
     pub draft_content_path: String,
     pub registration_status: String,
+    /// 交付说明：哪些元素以图片交付、哪些转场未带入等；由 Rust 按交付计划填写。
+    #[serde(default)]
+    pub notes: Vec<DeliveryNote>,
+}
+
+/// 交付说明以代码给前端翻译；detail 只放模板 id、转场类型等安全信息。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryNote {
+    pub code: String,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

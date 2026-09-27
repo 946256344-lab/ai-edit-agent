@@ -1,13 +1,13 @@
 //! 输出端口：列出链接器、记住项目选择、按选择交付。
 
 use super::{
-    all_editor_ids, build_handoff_plan, editor_capabilities, fcpxml, otio, posix_media_path,
-    DeliveryKind, EditorId, HandoffSource,
+    all_editor_ids, attach_brand_cards, build_handoff_plan, delivery_notes, editor_capabilities,
+    fcpxml, otio, posix_media_path, DeliveryKind, EditorId, HandoffSource,
 };
 use crate::capcut;
 use crate::db::{now_millis, open_connection};
 use crate::jianying::{create_jianying_draft, draft_location_available};
-use crate::models::{JianyingDraftResult, TimelineVersion};
+use crate::models::{DeliveryNote, JianyingDraftResult, TimelineVersion};
 use crate::timeline::load_timeline_version;
 use rusqlite::params;
 use serde::Serialize;
@@ -47,6 +47,8 @@ pub struct EditorDeliveryResult {
     pub message: String,
     pub output_path: Option<String>,
     pub jianying: Option<JianyingDraftResult>,
+    /// 降级与图片交付说明，前端按 code 翻译。
+    pub notes: Vec<DeliveryNote>,
 }
 
 #[tauri::command(async)]
@@ -150,6 +152,7 @@ fn wrap_jianying(draft: JianyingDraftResult) -> Result<EditorDeliveryResult, Str
         },
         display_name,
         output_path: Some(draft.draft_directory.clone()),
+        notes: draft.notes.clone(),
         jianying: Some(draft),
     })
 }
@@ -172,6 +175,7 @@ fn wrap_capcut(draft: JianyingDraftResult) -> Result<EditorDeliveryResult, Strin
         },
         display_name,
         output_path: Some(draft.draft_directory.clone()),
+        notes: draft.notes.clone(),
         jianying: None,
     })
 }
@@ -184,7 +188,8 @@ fn write_import_file(
     let connection = open_connection(&app)?;
     let sources = collect_export_sources(&connection, timeline, true)?;
     let canvas = crate::media_options::timeline_canvas(&connection, timeline)?;
-    let plan = build_handoff_plan(timeline, &sources, canvas)?;
+    let mut plan = build_handoff_plan(timeline, &sources, canvas)?;
+    attach_brand_cards(&app, timeline, canvas, &mut plan);
     let stem = unique_export_stem(&connection, &timeline.project_id);
     drop(connection);
     let directory = app
@@ -194,6 +199,17 @@ fn write_import_file(
         .join("editor-handoffs")
         .join(&timeline.project_id);
     fs::create_dir_all(&directory).map_err(|_| "无法准备编辑器导出目录。".to_owned())?;
+    // 品牌卡 PNG 复制到导出文件旁的独立目录，预览缓存清理后导入的工程仍能找到图片。
+    if !plan.graphic_overlays.is_empty() {
+        let cards_dir = directory.join(format!("{stem}-cards"));
+        fs::create_dir_all(&cards_dir).map_err(|_| "无法准备品牌卡图片目录。".to_owned())?;
+        for graphic in &mut plan.graphic_overlays {
+            let source = Path::new(&graphic.png_path);
+            let target = cards_dir.join(source.file_name().unwrap_or_default());
+            fs::copy(source, &target).map_err(|_| "无法复制品牌卡图片。".to_owned())?;
+            graphic.png_path = posix_media_path(&target.to_string_lossy());
+        }
+    }
     let (filename, contents) = match editor {
         EditorId::Fcpxml => (
             format!("{stem}.fcpxml"),
@@ -221,6 +237,7 @@ fn write_import_file(
         display_name,
         output_path: Some(output_path.to_string_lossy().replace('\\', "/")),
         jianying: None,
+        notes: delivery_notes(editor, &plan),
     })
 }
 

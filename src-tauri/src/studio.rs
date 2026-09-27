@@ -650,6 +650,7 @@ fn commit_studio_edits_inner(
         music_tracks: music_tracks.clone(),
         voiceover_tracks: voiceover_tracks.clone(),
         overlay_clips: overlay_clips.clone(),
+        graphics: crate::timeline_graphics::fit_graphics(&base.graphics, &clips),
         quality_report: None,
         created_at,
     };
@@ -659,6 +660,7 @@ fn commit_studio_edits_inner(
         music_tracks: music_tracks.clone(),
         voiceover_tracks: voiceover_tracks.clone(),
         overlay_clips,
+        graphics: new_version.graphics.clone(),
         quality_report: None,
     };
     let content_json = serde_json::to_string(&content).map_err(|e| e.to_string())?;

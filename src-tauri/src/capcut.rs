@@ -2,7 +2,10 @@
 
 use crate::db::{now_millis, open_connection};
 use crate::handoff::deliver::collect_export_sources;
-use crate::handoff::{build_handoff_plan, capcut_create_draft_input, JianyingDraftDestination};
+use crate::handoff::{
+    attach_brand_cards, build_handoff_plan, capcut_create_draft_input, delivery_notes,
+    JianyingDraftDestination,
+};
 use crate::jianying::{
     find_lveditor_draft_location, run_jianying_adapter, text_tracks_are_ready_for_jianying,
     unique_draft_name,
@@ -226,7 +229,8 @@ pub(crate) fn create_capcut_draft(
     })?;
     let sources = collect_export_sources(&connection, &timeline, true)?;
     let canvas = crate::media_options::timeline_canvas(&connection, &timeline)?;
-    let plan = build_handoff_plan(&timeline, &sources, canvas)?;
+    let mut plan = build_handoff_plan(&timeline, &sources, canvas)?;
+    attach_brand_cards(&app, &timeline, canvas, &mut plan);
     let draft_name = unique_draft_name(&connection, &timeline.project_id);
     let draft_root = root.to_string_lossy().replace('\\', "/");
     let draft_registry_path = registry_path.to_string_lossy().replace('\\', "/");
@@ -239,10 +243,11 @@ pub(crate) fn create_capcut_draft(
             draft_registry_path: draft_registry_path.clone(),
         },
     );
-    let result = run_jianying_adapter(&app, &input).map_err(|error| {
+    let mut result = run_jianying_adapter(&app, &input).map_err(|error| {
         log::error!("CapCut draft adapter failed.");
         format!("CapCut draft adapter could not create a draft: {error}")
     })?;
+    result.notes = delivery_notes(crate::handoff::EditorId::CapCut, &plan);
     let registration = PendingCapCutRegistration {
         input_format_version: 2,
         operation: "registerDraft".to_owned(),

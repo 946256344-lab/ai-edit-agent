@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-27：品牌卡、镜头转场与品牌套件
+
+新增 `get_brand_kit` / `set_brand_kit`。`TimelineVersion` 增加 `graphicOverlays`、`transitions`，旧版本读出为空。`EditorDeliveryResult` 与 `JianyingDraftResult` 增加 `notes[{ code, detail }]`。剪映适配器输入增加 `graphicOverlays`、`transitions`，格式版本不变。Native 工具新增 `add_title_cards`、`set_transitions`。`generate_storyboard` 的 `appliedMedia` 增加 `brandCards`、`transitions`，自动收尾失败时有 `brandCardsNotApplied`。见 `docs/changes/2026-09-27-brand-cards-and-transitions.md`。
+
 ## 2026-09-27：画幅选择与 BGM 自动配乐
 
 `submit_conversation_turn` 的 `mediaOptions` 增加可选 `aspectRatio: '9:16' | '16:9' | '1:1'`（缺省 9:16），前端字幕随配音发送。Native `generate_storyboard` 的 `mediaOptions` 同样接受 `aspectRatio`，漏传时沿用输入框选择。`render_preview`、试选镜头预览和剪映 / CapCut / FCPXML 交付按时间线所属分镜的画幅出画布（540×960 / 960×540 / 720×720）；剪映适配器输入新增 `canvas: { width, height }`，旧输入缺省竖屏。BGM 开启时 `generate_storyboard` 直接配乐（素材库音频优先，其次 Jamendo 器乐），不可用时 `mediaNotApplied.bgm` 写明原因。见 `docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`。
@@ -277,6 +281,8 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
 | `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 从段里取最多 9 个候选，模型从池中选出 1–3 个互异素材（有第二条不相似且对得上才加镜）后再精修源时间范围，本地校验后创建任务内版本。 |
 | `get_candidate_score_first_slots` | `{ projectId }` | `number` | 读取项目每拍 9 条候选中按综合分优先选入的名额，默认 5。 |
+| `get_brand_kit` | `{ projectId }` | `BrandKit { name, handle, cta, primaryColor, accentColor, logoFile, fontFile, logoPreview, fontName, defaultTransition }` | 读取项目品牌套件与默认转场。`logoPreview` 是 data URL，`logoFile`/`fontFile` 只是应用数据目录内的文件名，不含本机路径。 |
+| `set_brand_kit` | `{ projectId, input: { name, handle, cta, primaryColor, accentColor, logoSourcePath, clearLogo, fontSourcePath, clearFont, defaultTransition: { kind, durationMs } } }` | `BrandKit` | 校验长度与颜色（`#RRGGBB` 或空），把 logo（png/jpg/webp/svg，≤5 MB）和字体（ttf/otf/woff/woff2，≤20 MB）按内容哈希复制进 `app_data/brand/<projectId>/`，写 `settings_json.brandKit` 与 `defaultTransition`（`none | crossfade | dip_to_black`，200–1000 ms）。下次生成生效，不改已有时间线。 |
 | `set_candidate_score_first_slots` | `{ projectId, scoreFirstSlots }` | `number` | 保存项目候选名额；设置界面提供 3～9 条。其余名额轮流从 CLIP 画面、语义、关键词分项高分候选中选入，仍遵守同素材和相似画面限制；下次生成生效。 |
 | `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
 | `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按创建先后倒序。`versionNumber` 是会话内版本号，每个剪辑任务从 1 开始，局部编辑派生版本同样在任务内累加；schema v20 之前的旧版本保留原项目内编号。 |
@@ -322,7 +328,7 @@ Provider 设置弹窗提供 Jamendo Client ID 输入框，保存后只显示凭�
 | `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
 | `list_editor_linkers` | `{ projectId }` | `EditorLinkerCatalog` | 列出输出端口（剪映 / CapCut / FCPXML / OTIO）及当前项目选择。 |
 | `set_output_editor` | `{ projectId, editorId }` | `EditorLinkerCatalog` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
-| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。 |
+| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。品牌卡先本地渲染成 PNG 并复制进草稿或导出文件旁；`notes` 如实列出图片交付、未渲染的卡、未带入或待确认的转场、文字降级（code：`brand_cards_as_images`、`brand_cards_failed`、`transitions_unverified`、`transition_not_delivered`、`text_basic_titles`、`text_as_markers`）。 |
 
 `agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
 
@@ -433,6 +439,27 @@ NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开
 | `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
 | `synthesize_voiceover` | `{ text, voiceId, timelineVersionId }` 均可空；空 `text` 用 storyboard `narrationText` | 已实现：优先 Fish Audio，传输类失败可回退 ElevenLabs。用户没给文案时由 storyboard 撰写 `narrationText`（`key_message` 通常无旁白，需显式提供 `text` 或 beat `narration`）。禁止朗读 `onScreenText`。真实音频时长写入 `voiceoverTracks`（旁白必成）；alignment 字幕尽力，失败不回滚旁白。结果含 `voiceoverApplied`/`subtitleApplied`/`providerUsed`。相同指纹复用缓存。 |
 “分析素材”“重新分析视频/图片/媒体文件”等请求由 NativeToolLoop 在请求级权限允许时自主选择观察或分析工具；没有独立对话 Router 替模型决定首个工具。澄清通过模型自然语言和持久化确认状态表达，不使用 `ask_user`/`finish` 控制动作。
+
+### `add_title_cards`
+
+`{ timelineVersionId: string|null, cards: [{ templateId, shotIndex: number|null, headline: string|null, subline: string|null, cta: string|null }], removeTemplateIds: string[] }`，最多 4 张。
+
+- 模板只能是 `opening_title`、`end_card`、`corner_logo`、`info_card`。
+- 用户本轮原话没提到标题 / 卡片 / logo / 片尾时拒绝。
+- Rust 按模板 manifest 校验槽位，去掉换行、控制字符和 emoji，中文按字数、拉丁文按词数截断（标题 6 词 / 14 字，副标题与信息卡 10 词 / 20 字，CTA 6 词 / 12 字）。
+- `end_card` 缺文案时用品牌套件的名称、账号和 CTA；`corner_logo` 需要 logo；`info_card` 需要 `shotIndex`。
+- 时间由后端按锚点算：开场 / 片尾 / 全程 / 某镜头。
+- 结果含 `cards`（实际时间）、`copyAdjustments`、`editableInEditor: false`；放不下的卡列在 `notPlaced`。
+- 每次成功写新时间线版本。
+
+### `set_transitions`
+
+`{ timelineVersionId: string|null, kind: 'none'|'crossfade'|'dip_to_black', durationMs: number|null, afterShotIndices: number[]|null }`。
+
+- 用户本轮原话没提到转场 / 叠化 / 硬切时拒绝。
+- `afterShotIndices` 为 null 时改默认转场并清掉逐刀设置；给出列表时只改这些镜头之后的切点。
+- 时长夹到 200–1000 ms，解析时再夹到相邻较短镜头的 40%，过短则硬切。转场以切点为中心，不改总时长。
+- 结果含 `resolvedTransitions`。
 
 ### `replace_music_tracks`
 

@@ -1,0 +1,10 @@
+{
+  "id": "corner_logo",
+  "version": 1,
+  "anchor": "whole",
+  "defaultDurationMs": 0,
+  "requiresLogo": true,
+  "requiresBrand": true,
+  "purpose": "Small semi-transparent logo in the top-right corner between the opening and end cards.",
+  "slots": {}
+}

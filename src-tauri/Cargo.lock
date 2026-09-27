@@ -152,6 +152,8 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

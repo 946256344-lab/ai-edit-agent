@@ -31,6 +31,8 @@
   .saved { display: none; }
 }
 @media (max-width: 760px) {
+  .brand-kit-grid { grid-template-columns: 1fr; }
+  .brand-kit .provider-option { flex-wrap: wrap; }
   .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
   .project-sidebar { overflow: visible; padding: 14px 8px; }
   .assembly-wordmark { justify-content: center; padding: 4px 0 20px; }

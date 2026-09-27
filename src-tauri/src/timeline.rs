@@ -227,6 +227,7 @@ pub(crate) fn create_timeline_draft_with_options(
         music_tracks: Vec::new(),
         voiceover_tracks,
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: now_millis(),
     };
@@ -333,8 +334,41 @@ pub(crate) fn insert_timeline_version_with_log(
     music_tracks: Vec<MusicTrack>,
     voiceover_tracks: Vec<crate::models::VoiceoverTrack>,
 ) -> Result<TimelineVersion, String> {
+    insert_timeline_version_with_graphics(
+        connection,
+        project_id,
+        editing_task_id,
+        conversation_id,
+        agent_task_id,
+        timeline,
+        operation_type,
+        clips,
+        text_tracks,
+        music_tracks,
+        voiceover_tracks,
+        &timeline.graphics,
+    )
+}
+
+/// 同上，但显式给出品牌图层与转场；两者都按新镜头重新贴合（锚点镜头没了的卡随之移除）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_timeline_version_with_graphics(
+    connection: &Connection,
+    project_id: &str,
+    editing_task_id: &str,
+    conversation_id: &str,
+    agent_task_id: &str,
+    timeline: &TimelineVersion,
+    operation_type: &str,
+    clips: Vec<TimelineClip>,
+    text_tracks: Vec<TextTrack>,
+    music_tracks: Vec<MusicTrack>,
+    voiceover_tracks: Vec<crate::models::VoiceoverTrack>,
+    graphics: &crate::models::TimelineGraphics,
+) -> Result<TimelineVersion, String> {
     let numbers =
         next_timeline_version_numbers(connection, project_id, &timeline.storyboard_version_id)?;
+    let graphics = crate::timeline_graphics::fit_graphics(graphics, &clips);
     let version = TimelineVersion {
         id: Uuid::new_v4().to_string(),
         project_id: project_id.to_owned(),
@@ -345,6 +379,7 @@ pub(crate) fn insert_timeline_version_with_log(
         music_tracks,
         voiceover_tracks,
         overlay_clips: timeline.overlay_clips.clone(),
+        graphics,
         quality_report: None,
         created_at: now_millis(),
     };
@@ -1509,7 +1544,7 @@ pub(crate) fn load_timeline_version(
             let content: TimelineContent = serde_json::from_str(&row.get::<_, String>(4)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok(TimelineVersion {
-                id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, quality_report: content.quality_report, created_at: row.get(5)?,
+                id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, graphics: content.graphics, quality_report: content.quality_report, created_at: row.get(5)?,
             })
         },
     ).map_err(|_| "Timeline version could not be read.".to_owned())
@@ -1539,6 +1574,7 @@ pub(crate) fn timeline_candidates_for_storyboard(
                 music_tracks: content.music_tracks,
                 voiceover_tracks: content.voiceover_tracks,
                 overlay_clips: content.overlay_clips,
+                graphics: content.graphics,
                 quality_report: content.quality_report,
                 created_at: row.get(5)?,
             })
@@ -1572,6 +1608,7 @@ pub(crate) fn timeline_candidates_for_editing_task(
                 music_tracks: content.music_tracks,
                 voiceover_tracks: content.voiceover_tracks,
                 overlay_clips: content.overlay_clips,
+                graphics: content.graphics,
                 quality_report: content.quality_report,
                 created_at: row.get(5)?,
             })
@@ -1616,7 +1653,7 @@ pub fn get_latest_timeline(
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok((
                 TimelineVersion {
-                    id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, quality_report: content.quality_report, created_at: row.get(5)?,
+                    id: row.get(0)?, project_id: row.get(1)?, storyboard_version_id: row.get(2)?, version_number: row.get(3)?, clips: content.clips, text_tracks: content.text_tracks, music_tracks: content.music_tracks, voiceover_tracks: content.voiceover_tracks, overlay_clips: content.overlay_clips, graphics: content.graphics, quality_report: content.quality_report, created_at: row.get(5)?,
                 },
                 row.get::<_, String>(6)?,
             ))

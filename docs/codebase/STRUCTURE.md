@@ -1,5 +1,7 @@
 # 代码库结构
 
+2026-09-27 品牌卡与转场：`brand_kit.rs` 管项目品牌套件和默认转场；`cards/` 管 HTML/CSS 模板注册（`templates.rs`，模板文件在 `src-tauri/templates/cards/`）与 WebView2 截图渲染（`renderer.rs`）；`timeline_graphics.rs` 做图层与转场的校验、贴合、切点解析；`preview_graphics.rs` 做预览的 `xfade` 拼接与卡片叠加；`agentloop/auto_graphics.rs` 负责生成时的自动收尾和 `add_title_cards` / `set_transitions`。前端 `useBrandKitController` + `BrandKitSection` 放在项目设置里。
+
 2026-09-25 Voycut 品牌风格：`src/index.css` 新增画布、品牌渐变与主色填充变量；`BrandMark` 绘制侧栏字标与助手头像的占位标志；对话区与预览区为画布上的白色面板。
 
 2026-09-25 消息 Markdown：`MessageMarkdown` 渲染助手回复（`react-markdown` + `remark-gfm`），不执行原始 HTML、不加载图片，外部链接经 `@tauri-apps/plugin-opener` 交给系统浏览器；用户消息保持原文。
@@ -92,6 +94,10 @@ src/main.tsx
 | `timeline_voice.rs` | 旁白写入、画面补尾、系统字幕替换 |
 | `preview.rs` | FFmpeg 渲染、文本/音乐合成、质量检查 |
 | `preview_audio.rs` | 旁白与 BGM 混音；禁止 `-shortest` |
+| `preview_graphics.rs` | 预览镜头转场（xfade，余量优先取源素材）与品牌卡 PNG 叠加 |
+| `timeline_graphics.rs` | 品牌图层与转场：规范化、按镜头贴合、切点解析、模型文案截断与用户意图守卫 |
+| `brand_kit.rs` | 项目品牌套件（名称、账号、CTA、品牌色、logo、字体）与默认转场，文件按内容哈希入库 |
+| `cards/` | 品牌卡模板注册（编译期嵌入）与隐藏 WebView2 透明 PNG 渲染 |
 | `handoff/` | 编辑器无关交接计划、输出端口选择与 FCPXML/OTIO 写出 |
 | `jianying.rs` | 剪映链接器：新草稿创建和延迟注册 |
 | `capcut.rs` | CapCut 链接器：按本机注册表识别草稿库并新建 |

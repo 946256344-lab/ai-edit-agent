@@ -1,8 +1,10 @@
-// 当前项目设置：候选召回比例与预览缓存维护。
+// 当前项目设置：品牌套件与默认转场、候选召回比例、预览缓存维护。
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clearPreviewCache, getCandidateScoreFirstSlots, getPreviewCacheStatus, setCandidateScoreFirstSlots } from '../lib/local-store'
 import type { PreviewCacheStatus } from '../lib/local-store'
 import { messages, useI18n } from '../lib/i18n'
+import { useBrandKitController } from '../hooks/useBrandKitController'
+import { BrandKitSection } from './BrandKitSection'
 
 type ProjectSettingsModalProps = {
   open: boolean
@@ -31,6 +33,7 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
   const [scoreFirstSlots, setScoreFirstSlots] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const brand = useBrandKitController(projectId, open)
 
   useEffect(() => {
     if (!open || !projectId) {
@@ -98,6 +101,8 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
         <span className="eyebrow">PROJECT</span>
         <h2>{copy.title}</h2>
         <p>{projectName ? copy.projectLine(projectName) : copy.selectProjectFirst}</p>
+
+        <BrandKitSection brand={brand} disabled={!projectId} />
 
         <label className="provider-option chosen">
           <span>

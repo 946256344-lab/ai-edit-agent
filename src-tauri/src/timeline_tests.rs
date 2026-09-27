@@ -452,6 +452,7 @@ fn requested_timeline_is_used_when_multiple_candidates_exist() {
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: version_number,
     };
@@ -474,6 +475,7 @@ fn explicit_unknown_timeline_never_falls_back_to_the_only_candidate() {
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 1,
     };
@@ -533,6 +535,7 @@ fn replacing_clips_creates_a_new_version_without_moving_timeline_bounds() {
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 1,
     };
@@ -629,6 +632,7 @@ fn insert_clips_extends_picture_after_target_shot_and_never_uses_freeze_frame() 
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 1,
     };
@@ -727,6 +731,7 @@ fn changing_clip_duration_shifts_following_shots_and_stays_in_source_range() {
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 1,
     };
@@ -872,6 +877,7 @@ fn reordering_clips_requires_a_full_permutation() {
         music_tracks: Vec::new(),
         voiceover_tracks: Vec::new(),
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 1,
     };
@@ -926,6 +932,7 @@ fn select_timeline_candidate_picks_latest_when_multiple_versions_exist() {
         music_tracks: vec![],
         voiceover_tracks: vec![],
         overlay_clips: Vec::new(),
+        graphics: Default::default(),
         quality_report: None,
         created_at: 2000,
     };

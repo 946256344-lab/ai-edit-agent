@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!--CARD_HEAD-->
+    <style>
+      .card {
+        position: absolute;
+        left: 7vmin;
+        right: 7vmin;
+        top: 15%;
+        display: flex;
+        gap: 2.6vmin;
+        padding: 3.4vmin 4vmin;
+        border-radius: 3.4vmin;
+        background: rgba(14, 18, 24, 0.66);
+        border: 0.25vmin solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 1.6vmin 4.8vmin rgba(0, 0, 0, 0.42);
+      }
+      [data-aspect="landscape"] .card {
+        top: auto;
+        right: auto;
+        bottom: 12%;
+        max-width: 56vw;
+      }
+      .bar {
+        flex: 0 0 1vmin;
+        border-radius: 1vmin;
+        background: linear-gradient(180deg, var(--primary), var(--accent));
+      }
+      .copy {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1.2vmin;
+      }
+      h2 {
+        margin: 0;
+        max-height: 16vmin;
+        font-size: 5.6vmin;
+        font-weight: 700;
+        line-height: 1.18;
+        overflow: hidden;
+      }
+      p {
+        margin: 0;
+        max-height: 10vmin;
+        font-size: 3.6vmin;
+        line-height: 1.3;
+        opacity: 0.82;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="bar"></div>
+      <div class="copy">
+        <h2 data-slot="headline" data-fit></h2>
+        <p data-slot="subline" data-fit></p>
+      </div>
+    </div>
+    <!--CARD_RUNTIME-->
+  </body>
+</html>

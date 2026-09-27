@@ -33,6 +33,8 @@ const RESELECT_SHOTS: &str = "reselect_shots";
 const REFINE_SHOT_RANGES: &str = "refine_shot_ranges";
 const REORDER_CLIPS: &str = "reorder_clips";
 const REPLACE_TEXT_TRACKS: &str = "replace_text_tracks";
+const ADD_TITLE_CARDS: &str = "add_title_cards";
+const SET_TRANSITIONS: &str = "set_transitions";
 const DOWNLOAD_MUSIC: &str = "download_music";
 const USE_ONLINE_MUSIC: &str = "use_online_music";
 const REPLACE_MUSIC_TRACKS: &str = "replace_music_tracks";
@@ -539,6 +541,36 @@ fn delivery_function_tools() -> Vec<Value> {
             vec!["trackId", "timelineVersionId"],
         ),
         function_tool(
+            ADD_TITLE_CARDS,
+            "Add or replace brand cards drawn from built-in templates: opening_title, end_card, corner_logo, info_card. Call only when the user asks this turn for a title, card, logo, or end screen; generate_storyboard already adds opening, end, and corner cards when a brand kit is set. The cards are images in the editor, so their text is NOT editable there; editable captions belong in replace_text_tracks. Give short copy only: headline up to 6 words, subline up to 10 words, cta up to 6 words. The backend shortens longer copy and decides timing, layout, colors, fonts, and animation. end_card falls back to the brand kit name, handle, and CTA; corner_logo needs a brand logo; info_card needs shotIndex.",
+            json!({
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version."),
+                "cards": {
+                    "type": "array", "minItems": 0, "maxItems": 4,
+                    "items": title_card_schema()
+                },
+                "removeTemplateIds": {
+                    "type": "array", "minItems": 0, "maxItems": 4,
+                    "items": {"type": "string", "enum": ["opening_title", "end_card", "corner_logo", "info_card"]}
+                }
+            }),
+            vec!["timelineVersionId", "cards", "removeTemplateIds"],
+        ),
+        function_tool(
+            SET_TRANSITIONS,
+            "Set transitions between shots. Call only when the user asks this turn for transitions, dissolves, fades, or hard cuts. afterShotIndices null sets every cut and clears per-cut choices; a list sets only the cuts right after those shots. Transitions are centred on the cut and never change the video length; the backend shortens them to fit short shots. Jianying and CapCut receive native transitions; FCPXML and OTIO carry crossfade only.",
+            json!({
+                "timelineVersionId": nullable_timeline_version("Optional scoped timeline version; null selects the current version."),
+                "kind": {"type": "string", "enum": ["none", "crossfade", "dip_to_black"]},
+                "durationMs": {"type": ["integer", "null"], "minimum": 200, "maximum": 1000, "description": "Null uses 300 ms."},
+                "afterShotIndices": {
+                    "type": ["array", "null"], "minItems": 1, "maxItems": 100,
+                    "items": {"type": "integer", "minimum": 0}
+                }
+            }),
+            vec!["timelineVersionId", "kind", "durationMs", "afterShotIndices"],
+        ),
+        function_tool(
             REPLACE_MUSIC_TRACKS,
             "Create a scoped timeline version using ready local audio assets and validated music cues.",
             json!({
@@ -592,6 +624,21 @@ fn bounded_required_string_schema(description: &str, max_length: usize) -> Value
         "minLength": 1,
         "maxLength": max_length,
         "description": description
+    })
+}
+
+fn title_card_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "templateId": {"type": "string", "enum": ["opening_title", "end_card", "corner_logo", "info_card"]},
+            "shotIndex": {"type": ["integer", "null"], "minimum": 0, "description": "Shot the info_card appears on; null for other templates."},
+            "headline": {"type": ["string", "null"], "maxLength": 120},
+            "subline": {"type": ["string", "null"], "maxLength": 120},
+            "cta": {"type": ["string", "null"], "maxLength": 80}
+        },
+        "required": ["templateId", "shotIndex", "headline", "subline", "cta"],
+        "additionalProperties": false
     })
 }
 
@@ -930,6 +977,8 @@ mod tests {
             "download_music",
             "use_online_music",
             "replace_music_tracks",
+            "add_title_cards",
+            "set_transitions",
             "synthesize_voiceover",
             "create_jianying_draft",
         ] {
@@ -1022,7 +1071,7 @@ mod tests {
     #[test]
     fn delivery_nested_schemas_are_closed_with_complete_required_keys() {
         let tools = native_function_tools_for_request(false, true);
-        for name in ["replace_text_tracks", "replace_music_tracks"] {
+        for name in ["replace_text_tracks", "replace_music_tracks", "add_title_cards", "set_transitions"] {
             let tool = tools
                 .iter()
                 .find(|tool| tool["name"] == name)

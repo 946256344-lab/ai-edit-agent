@@ -11,7 +11,9 @@ from unittest.mock import Mock, patch
 from pyJianYingDraft import TrackType
 
 from create_jianying_draft import (
+    add_graphic_overlays,
     add_music_tracks,
+    apply_transition,
     add_voiceover_tracks,
     add_text_tracks,
     bind_sdk,
@@ -244,6 +246,53 @@ class VoiceoverTrackExportTests(unittest.TestCase):
 
         source_range = audio_segment.call_args.kwargs["source_timerange"]
         self.assertEqual(source_range.duration, 17_580_000)
+
+
+class BrandCardAndTransitionTests(unittest.TestCase):
+    @patch("create_jianying_draft.VideoSegment")
+    @patch("create_jianying_draft.VideoMaterial")
+    def test_copies_cards_into_the_draft_and_splits_overlapping_cards_across_tracks(
+        self, video_material, video_segment
+    ):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            png = root / "card-1.png"
+            png.write_bytes(b"png")
+            draft = root / "draft"
+            draft.mkdir()
+            script = Mock()
+            overlays = [
+                {"pngPath": str(png), "startMs": 2_800, "endMs": 17_000, "fadeInMs": 350, "fadeOutMs": 350},
+                {"pngPath": str(png), "startMs": 5_000, "endMs": 8_000, "fadeInMs": 350, "fadeOutMs": 0},
+                {"pngPath": str(png), "startMs": 0, "endMs": 2_800, "fadeInMs": 0, "fadeOutMs": 0},
+            ]
+
+            add_graphic_overlays(script, overlays, draft)
+
+            self.assertTrue((draft / "voycut-cards" / "card-1.png").is_file())
+            self.assertEqual(
+                video_material.call_args.args[0], str(draft / "voycut-cards" / "card-1.png")
+            )
+        self.assertEqual(
+            [call.args[0].name for call in script.append_track.call_args_list],
+            ["assembly-brand-0", "assembly-brand-1"],
+        )
+        self.assertEqual(
+            [call.kwargs["track"] for call in script.add_segment.call_args_list],
+            ["assembly-brand-0", "assembly-brand-0", "assembly-brand-1"],
+        )
+        faded = video_segment.return_value.add_animation.call_args_list
+        self.assertEqual([call.args[1] for call in faded], [350_000, 350_000, 350_000])
+
+    def test_maps_transitions_to_native_types_and_rejects_unknown_kinds(self):
+        segment = Mock()
+        apply_transition(segment, {"kind": "crossfade", "durationMs": 300})
+        transition_type, = segment.add_transition.call_args.args
+        self.assertEqual(transition_type.name, "叠化")
+        self.assertEqual(segment.add_transition.call_args.kwargs["duration"], 300_000)
+        apply_transition(Mock(), None)
+        with self.assertRaises(RuntimeError):
+            apply_transition(Mock(), {"kind": "wipe", "durationMs": 300})
 
 
 class DeferredRegistrationTests(unittest.TestCase):

@@ -6,7 +6,8 @@ mod fcpxml;
 mod otio;
 
 use crate::models::{
-    MusicCue, MusicTrack, TextTrack, TimelineClip, TimelineVersion, VoiceoverCue, VoiceoverTrack,
+    DeliveryNote, MusicCue, MusicTrack, TextTrack, TimelineClip, TimelineVersion, VoiceoverCue,
+    VoiceoverTrack,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -141,7 +142,8 @@ pub(crate) fn editor_capabilities(id: EditorId) -> EditorCapabilities {
             overlays: Support::Restricted,
             music: Support::Full,
             voiceover: Support::Full,
-            text: Support::Unsupported,
+            // FCPXML 写 Basic Title（文字可编辑、样式与动画不带）；OTIO 只能写成 marker。
+            text: Support::Restricted,
             images: Support::Restricted,
         },
     }
@@ -207,6 +209,29 @@ pub(crate) struct HandoffVoiceoverTrack {
     pub cues: Vec<HandoffVoiceoverCue>,
 }
 
+/// 品牌卡：已渲染好的整画布透明 PNG，编辑器里是图片，文字不可编辑。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HandoffGraphic {
+    pub id: String,
+    pub template_id: String,
+    pub png_path: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub fade_in_ms: i64,
+    pub fade_out_ms: i64,
+}
+
+/// 已落到具体切点的转场；after_clip 是切点左侧镜头在 clips 中的位置。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HandoffTransition {
+    pub after_clip: usize,
+    pub kind: String,
+    pub duration_ms: i64,
+    pub cut_ms: i64,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HandoffPlan {
@@ -220,6 +245,11 @@ pub(crate) struct HandoffPlan {
     pub text_tracks: Vec<TextTrack>,
     pub music_tracks: Vec<HandoffMusicTrack>,
     pub voiceover_tracks: Vec<HandoffVoiceoverTrack>,
+    pub graphic_overlays: Vec<HandoffGraphic>,
+    pub transitions: Vec<HandoffTransition>,
+    /// 没能渲染出来、因此没带入的品牌卡模板 id。
+    #[serde(skip)]
+    pub card_failures: Vec<String>,
 }
 
 pub(crate) struct JianyingDraftDestination {
@@ -267,7 +297,91 @@ pub(crate) fn build_handoff_plan(
         text_tracks: timeline.text_tracks.clone(),
         music_tracks: map_music_tracks(&timeline.music_tracks, sources)?,
         voiceover_tracks: map_voiceover_tracks(&timeline.voiceover_tracks, sources),
+        graphic_overlays: Vec::new(),
+        transitions: crate::timeline_graphics::resolve_transitions(
+            &timeline.clips,
+            &timeline.graphics.transitions,
+        )
+        .into_iter()
+        .map(|transition| HandoffTransition {
+            after_clip: transition.after_clip,
+            kind: transition.kind,
+            duration_ms: transition.duration_ms,
+            cut_ms: transition.cut_ms,
+        })
+        .collect(),
+        card_failures: Vec::new(),
     })
+}
+
+/// 渲染时间线上的品牌卡并放进交付计划；渲染失败的卡不带入，记进 card_failures 由交付说明如实告知。
+pub(crate) fn attach_brand_cards(
+    app: &tauri::AppHandle,
+    timeline: &TimelineVersion,
+    canvas: crate::media_options::Canvas,
+    plan: &mut HandoffPlan,
+) {
+    for overlay in &timeline.graphics.graphic_overlays {
+        match crate::cards::ensure_card_png(app, &timeline.project_id, overlay, canvas) {
+            Ok(png) => plan.graphic_overlays.push(HandoffGraphic {
+                id: overlay.id.clone(),
+                template_id: overlay.template_id.clone(),
+                png_path: posix_media_path(&png.to_string_lossy()),
+                start_ms: overlay.start_ms,
+                end_ms: overlay.end_ms,
+                fade_in_ms: overlay.fade_in_ms,
+                fade_out_ms: overlay.fade_out_ms,
+            }),
+            Err(error) => {
+                log::warn!("Brand card {} was not delivered: {error}", overlay.template_id);
+                plan.card_failures.push(overlay.template_id.clone());
+            }
+        }
+    }
+}
+
+fn note(code: &str, detail: Option<String>) -> DeliveryNote {
+    DeliveryNote { code: code.to_owned(), detail }
+}
+
+/// 交付说明：按编辑器能力如实列出降级项，前端按 code 翻译。
+pub(crate) fn delivery_notes(editor: EditorId, plan: &HandoffPlan) -> Vec<DeliveryNote> {
+    let mut notes = Vec::new();
+    if !plan.graphic_overlays.is_empty() {
+        notes.push(note("brand_cards_as_images", None));
+    }
+    if !plan.card_failures.is_empty() {
+        notes.push(note("brand_cards_failed", Some(plan.card_failures.join(", "))));
+    }
+    let file_export = matches!(editor, EditorId::Fcpxml | EditorId::Otio);
+    let dropped = plan
+        .transitions
+        .iter()
+        .filter(|transition| file_export && transition.kind == "dip_to_black")
+        .count();
+    if dropped > 0 {
+        notes.push(note("transition_not_delivered", Some("dip_to_black".to_owned())));
+    }
+    if plan.transitions.len() > dropped {
+        notes.push(note("transitions_unverified", None));
+    }
+    let has_text = plan
+        .text_tracks
+        .iter()
+        .any(|track| track.enabled && !track.cues.is_empty());
+    match editor {
+        EditorId::Fcpxml if has_text => notes.push(note("text_basic_titles", None)),
+        EditorId::Otio if has_text => notes.push(note("text_as_markers", None)),
+        _ => {}
+    }
+    notes
+}
+
+/// FCPXML / OTIO 只交付叠化；黑场过渡在这两种格式里没有可靠的对应，交付说明里标出。
+pub(crate) fn file_export_transitions(plan: &HandoffPlan) -> impl Iterator<Item = &HandoffTransition> {
+    plan.transitions
+        .iter()
+        .filter(|transition| transition.kind == "crossfade")
 }
 
 /// 剪映适配器 JSON。能力表里旁白为 Unsupported 时不写入草稿，避免改变已交付行为。
@@ -288,6 +402,8 @@ pub(crate) fn jianying_create_draft_input(
         "overlayClips": plan.overlay_clips.iter().map(jianying_clip_json).collect::<Vec<_>>(),
         "textTracks": plan.text_tracks,
         "musicTracks": plan.music_tracks,
+        "graphicOverlays": plan.graphic_overlays,
+        "transitions": plan.transitions,
     });
     if caps.voiceover != Support::Unsupported {
         payload["voiceoverTracks"] = json!(plan.voiceover_tracks);
@@ -490,6 +606,7 @@ pub(crate) mod tests {
                 }],
             }],
             overlay_clips: vec![clip("overlay-1", 1_500, 2_000)],
+            graphics: Default::default(),
             quality_report: None,
             created_at: 1,
         }

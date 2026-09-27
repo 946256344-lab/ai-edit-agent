@@ -1,0 +1,13 @@
+{
+  "id": "opening_title",
+  "version": 1,
+  "anchor": "opening",
+  "defaultDurationMs": 2800,
+  "requiresLogo": false,
+  "requiresBrand": false,
+  "purpose": "Opening title over the first shot: optional logo, a gradient headline and one supporting line.",
+  "slots": {
+    "headline": { "required": true, "maxWords": 6, "maxCjkChars": 14, "maxChars": 48 },
+    "subline": { "required": false, "maxWords": 10, "maxCjkChars": 20, "maxChars": 72 }
+  }
+}

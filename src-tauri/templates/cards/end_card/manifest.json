@@ -1,0 +1,14 @@
+{
+  "id": "end_card",
+  "version": 1,
+  "anchor": "closing",
+  "defaultDurationMs": 3000,
+  "requiresLogo": false,
+  "requiresBrand": true,
+  "purpose": "Closing card on a dark backdrop: logo, brand name or headline, handle or website, and an optional call-to-action pill.",
+  "slots": {
+    "headline": { "required": false, "maxWords": 6, "maxCjkChars": 14, "maxChars": 48 },
+    "subline": { "required": false, "maxWords": 6, "maxCjkChars": 20, "maxChars": 48 },
+    "cta": { "required": false, "maxWords": 6, "maxCjkChars": 12, "maxChars": 40 }
+  }
+}

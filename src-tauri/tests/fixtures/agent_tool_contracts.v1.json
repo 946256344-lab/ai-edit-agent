@@ -871,6 +871,98 @@
       "returns": ["timelineVersionId"]
     },
     {
+      "name": "add_title_cards",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "cards": {
+            "type": "array"
+          },
+          "removeTemplateIds": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "cards",
+          "removeTemplateIds"
+        ]
+      },
+      "scope": {
+        "boundary": "current_timeline_and_project_brand_kit",
+        "resolution": "Rust validates template ids against bundled manifests, shortens copy, snapshots the brand kit, and computes timing"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every success creates a new version",
+      "preconditions": [
+        "the user asked this turn for a title, card, logo, or end screen",
+        "a scoped timeline exists",
+        "corner_logo requires a brand logo; end_card requires a brand name or logo"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "cards",
+        "copyAdjustments"
+      ]
+    },
+    {
+      "name": "set_transitions",
+      "version": 1,
+      "kind": "edit",
+      "inputShape": {
+        "type": "object",
+        "properties": {
+          "timelineVersionId": {
+            "type": "string",
+            "optional": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer",
+            "optional": true
+          },
+          "afterShotIndices": {
+            "type": "array",
+            "optional": true
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "scope": {
+        "boundary": "current_timeline_cuts",
+        "resolution": "Rust clamps duration to 200-1000 ms and to 40% of the shorter neighbouring shot; the video length never changes"
+      },
+      "sideEffect": true,
+      "idempotency": "non_idempotent_new_version",
+      "retryPolicy": "do not automatically retry; every success creates a new version",
+      "preconditions": [
+        "the user asked this turn for transitions or hard cuts",
+        "a scoped timeline exists"
+      ],
+      "produces": [
+        "timeline_version",
+        "operation_log"
+      ],
+      "returns": [
+        "timelineVersionId",
+        "resolvedTransitions"
+      ]
+    },
+    {
       "name": "synthesize_voiceover",
       "version": 1,
       "kind": "edit",

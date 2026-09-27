@@ -42,6 +42,8 @@ pub(super) const EDIT_TOOLS: &[&str] = &[
     "reorder_clips",
     "replace_text_tracks",
     "replace_music_tracks",
+    "add_title_cards",
+    "set_transitions",
     "synthesize_voiceover",
     "render_preview",
     "create_jianying_draft",

@@ -1,0 +1,36 @@
+/* 品牌卡共享样式：画布即整张透明 PNG；尺寸用 vmin，三种画幅共用一份模板。 */
+html,
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  position: relative;
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+.brand-font body {
+  font-family: BrandFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.gradient-text {
+  background: linear-gradient(100deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lift {
+  filter: drop-shadow(0 0.4vmin 1.4vmin rgba(0, 0, 0, 0.5));
+}
+
+img[data-logo] {
+  display: block;
+  object-fit: contain;
+}
