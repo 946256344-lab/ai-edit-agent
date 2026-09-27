@@ -96,11 +96,11 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
         let id = format!("r{next_id}");
         next_id += 1;
         resources.push_str(&format!(
-            "        <effect id=\"{id}\" name=\"Cross Dissolve\" uid=\"{CROSS_DISSOLVE_UID}\"/>
-"
+            "        <effect id=\"{id}\" name=\"Cross Dissolve\" uid=\"{CROSS_DISSOLVE_UID}\"/>\n"
         ));
         id
     });
+    // 连接片段（标题、品牌卡、旁白、音乐）都挂在所在主线片段下：FCPXML 规定 lane 只能出现在锚定片段上。
     let mut children = vec![String::new(); plan.clips.len()];
     let text_cues = plan
         .text_tracks
@@ -113,25 +113,16 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
         let title_id = format!("r{next_id}");
         next_id += 1;
         resources.push_str(&format!(
-            "        <effect id=\"{title_id}\" name=\"Basic Title\" uid=\"{BASIC_TITLE_UID}\"/>
-"
+            "        <effect id=\"{title_id}\" name=\"Basic Title\" uid=\"{BASIC_TITLE_UID}\"/>\n"
         ));
         let long_edge = plan.canvas.width.max(plan.canvas.height) as f64;
         for (number, (lane, cue)) in text_cues.iter().enumerate() {
             let Some((parent, offset)) = anchor_clip(plan, cue.start_ms) else { continue };
             let style_id = format!("ts{}", number + 1);
             children[parent].push_str(&format!(
-                "                            <title ref=\"{title_id}\" lane=\"{lane}\" name=\"{name}\" offset=\"{}\" duration=\"{}\">
-                                <text>
-                                    <text-style ref=\"{style_id}\">{text}</text-style>
-                                </text>
-                                <text-style-def id=\"{style_id}\">
-                                    <text-style font=\"{}\" fontSize=\"{}\" fontColor=\"{}\" bold=\"{}\" alignment=\"{}\"/>
-                                </text-style-def>
-                            </title>
-",
+                "                            <title ref=\"{title_id}\" lane=\"{lane}\" name=\"{name}\" offset=\"{}\" duration=\"{}\">\n                                <text>\n                                    <text-style ref=\"{style_id}\">{text}</text-style>\n                                </text>\n                                <text-style-def id=\"{style_id}\">\n                                    <text-style font=\"{}\" fontSize=\"{}\" fontColor=\"{}\" bold=\"{}\" alignment=\"{}\"/>\n                                </text-style-def>\n                            </title>\n",
                 xml_time(offset, fps),
-                xml_time((cue.end_ms - cue.start_ms).max(1), fps),
+                xml_span(cue.start_ms, cue.end_ms, fps),
                 crate::preview::ass_font_name(&cue.style.font_key),
                 (cue.style.font_size * long_edge).round().max(8.0),
                 fcp_color(&cue.style.color),
@@ -146,8 +137,7 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
         let format_id = format!("r{next_id}");
         next_id += 1;
         resources.push_str(&format!(
-            "        <format id=\"{format_id}\" name=\"FFVideoFormatRateUndefined\" width=\"{}\" height=\"{}\"/>
-",
+            "        <format id=\"{format_id}\" name=\"FFVideoFormatRateUndefined\" width=\"{}\" height=\"{}\"/>\n",
             plan.canvas.width * 2,
             plan.canvas.height * 2
         ));
@@ -156,21 +146,33 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
             next_id += 1;
             let src = xml_escape(&media_file_url(&graphic.png_path));
             resources.push_str(&format!(
-                "        <asset id=\"{asset_id}\" name=\"{}\" src=\"{src}\" start=\"0s\" duration=\"0s\" hasVideo=\"1\" format=\"{format_id}\">
-            <media-rep kind=\"original-media\" src=\"{src}\"/>
-        </asset>
-",
+                "        <asset id=\"{asset_id}\" name=\"{}\" src=\"{src}\" start=\"0s\" duration=\"0s\" hasVideo=\"1\" format=\"{format_id}\">\n            <media-rep kind=\"original-media\" src=\"{src}\"/>\n        </asset>\n",
                 xml_escape(&graphic.template_id)
             ));
             let Some((parent, offset)) = anchor_clip(plan, graphic.start_ms) else { continue };
             children[parent].push_str(&format!(
-                "                            <video ref=\"{asset_id}\" lane=\"{}\" name=\"{} (image, text not editable)\" offset=\"{}\" duration=\"{}\" start=\"0s\"/>
-",
+                "                            <video ref=\"{asset_id}\" lane=\"{}\" name=\"{} (image, text not editable)\" offset=\"{}\" duration=\"{}\" start=\"0s\"/>\n",
                 20 + index,
                 xml_escape(&graphic.template_id),
                 xml_time(offset, fps),
-                xml_time((graphic.end_ms - graphic.start_ms).max(1), fps),
+                xml_span(graphic.start_ms, graphic.end_ms, fps),
             ));
+        }
+    }
+    // 旁白和音乐是挂在第一镜下的连接片段（FCPXML 规定 lane 只能出现在锚定片段上），
+    // offset 按父片段的本地时间（从它的 start 起算），这样音乐起点与各切点在成片时间上对齐。
+    if let Some(first) = plan.clips.first() {
+        let voice = plan.voiceover_tracks.iter().filter(|track| track.enabled).flat_map(|track| {
+            track.cues.iter().map(|cue| (&cue.cue.asset_id, cue.cue.timeline_start_ms, cue.cue.timeline_end_ms, cue.cue.source_start_ms, -1))
+        });
+        let music = plan.music_tracks.iter().filter(|track| track.enabled).flat_map(|track| {
+            track.cues.iter().map(|cue| (&cue.cue.asset_id, cue.cue.timeline_start_ms, cue.cue.timeline_end_ms, cue.cue.source_start_ms, -2))
+        });
+        for (asset_id, timeline_start, timeline_end, source_start, lane) in voice.chain(music) {
+            let Some(ref_id) = seen.get(asset_id) else {
+                continue;
+            };
+            children[0].push_str(&connected_audio_xml(first, timeline_start, timeline_end, source_start, ref_id, fps, lane));
         }
     }
     let mut spine = String::new();
@@ -182,56 +184,12 @@ pub(super) fn render_fcpxml(plan: &HandoffPlan, project_name: &str) -> String {
             transitions.iter().find(|item| item.after_clip == index),
         ) {
             spine.push_str(&format!(
-                "                        <transition name=\"Cross Dissolve\" offset=\"{}\" duration=\"{}\">
-                            <filter-video ref=\"{dissolve_id}\" name=\"Cross Dissolve\"/>
-                        </transition>
-",
+                "                        <transition name=\"Cross Dissolve\" offset=\"{}\" duration=\"{}\">\n                            <filter-video ref=\"{dissolve_id}\" name=\"Cross Dissolve\"/>\n                        </transition>\n",
                 xml_time(transition.cut_ms - transition.duration_ms / 2, fps),
                 xml_time(transition.duration_ms, fps),
             ));
         }
     }
-    if let Some(first) = plan.clips.first() {
-        for track in &plan.voiceover_tracks {
-            if !track.enabled {
-                continue;
-            }
-            for cue in &track.cues {
-                let Some(ref_id) = seen.get(&cue.cue.asset_id) else {
-                    continue;
-                };
-                spine.push_str(&connected_audio_xml(
-                    first,
-                    cue.cue.timeline_start_ms,
-                    cue.cue.timeline_end_ms,
-                    cue.cue.source_start_ms,
-                    ref_id,
-                    fps,
-                    -1,
-                ));
-            }
-        }
-        for track in &plan.music_tracks {
-            if !track.enabled {
-                continue;
-            }
-            for cue in &track.cues {
-                let Some(ref_id) = seen.get(&cue.cue.asset_id) else {
-                    continue;
-                };
-                spine.push_str(&connected_audio_xml(
-                    first,
-                    cue.cue.timeline_start_ms,
-                    cue.cue.timeline_end_ms,
-                    cue.cue.source_start_ms,
-                    ref_id,
-                    fps,
-                    -2,
-                ));
-            }
-        }
-    }
-
     let name = xml_escape(project_name);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -274,13 +232,7 @@ fn audio_asset_xml(id: &str, name: &str, path: &str, source_end_ms: i64, fps: i6
     )
 }
 
-fn asset_clip_xml(
-    clip: &HandoffClip,
-    ref_id: &str,
-    fps: i64,
-    lane: Option<i64>,
-    connected: &str,
-) -> String {
+fn asset_clip_xml(clip: &HandoffClip, ref_id: &str, fps: i64, lane: Option<i64>, children: &str) -> String {
     let source_span = (clip.source_end_ms - clip.source_start_ms).max(1);
     let timeline_span = (clip.timeline_end_ms - clip.timeline_start_ms).max(1);
     let lane_attr = lane
@@ -291,7 +243,7 @@ fn asset_clip_xml(
         clip.shot_index,
         xml_time(clip.timeline_start_ms, fps),
         xml_time(clip.source_start_ms, fps),
-        xml_time(timeline_span, fps),
+        xml_span(clip.timeline_start_ms, clip.timeline_end_ms, fps),
     );
     if (source_span - timeline_span).abs() > 50 {
         xml.push_str(&format!(
@@ -301,13 +253,13 @@ fn asset_clip_xml(
             xml_time(clip.source_end_ms, fps),
         ));
     }
-    xml.push_str(connected);
+    xml.push_str(children);
     xml.push_str("                        </asset-clip>\n");
     xml
 }
 
 fn connected_audio_xml(
-    _anchor: &HandoffClip,
+    anchor: &HandoffClip,
     timeline_start_ms: i64,
     timeline_end_ms: i64,
     source_start_ms: i64,
@@ -315,15 +267,21 @@ fn connected_audio_xml(
     fps: i64,
     lane: i64,
 ) -> String {
-    let duration = (timeline_end_ms - timeline_start_ms).max(1);
+    let offset = anchor.source_start_ms + (timeline_start_ms - anchor.timeline_start_ms);
     format!(
-        "                        <asset-clip name=\"audio\" ref=\"{ref_id}\" offset=\"{}\" start=\"{}\" duration=\"{}\" lane=\"{lane}\"/>\n",
-        xml_time(timeline_start_ms, fps),
+        "                            <asset-clip name=\"audio\" ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" start=\"{}\" duration=\"{}\"/>\n",
+        xml_time(offset, fps),
         xml_time(source_start_ms, fps),
-        xml_time(duration, fps),
+        xml_span(timeline_start_ms, timeline_end_ms, fps),
     )
 }
 
+/// 按起止点的绝对帧位相减取时长，逐镜取整不累积漂移。
+fn xml_span(start_ms: i64, end_ms: i64, fps: i64) -> String {
+    let frame = |ms: i64| ((ms.max(0) as f64) * (fps as f64) / 1000.0).round() as i64;
+    let frames = (frame(end_ms) - frame(start_ms)).max(1);
+    format!("{frames}/{fps}s")
+}
 pub(super) fn xml_time(ms: i64, fps: i64) -> String {
     let frames = ((ms.max(0) as f64) * (fps as f64) / 1000.0).round() as i64;
     if frames <= 0 {

@@ -538,6 +538,7 @@ export function useArtifactWorkspaceController(options: ArtifactWorkspaceControl
       deliveryNoticeTone,
       editorCatalog,
       selectedEditorId: editorCatalog.selectedId,
+      selectedEditorLabel: messages().backend.editorLabels[editorCatalog.selectedId] ?? linkerLabel(editorCatalog.linkers.find((linker) => linker.id === editorCatalog.selectedId)),
       editorRecheck,
       deliverLabel: deliverActionLabel(editorCatalog.selectedId, isDelivering),
       busy: {

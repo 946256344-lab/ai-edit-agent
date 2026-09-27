@@ -190,37 +190,49 @@ pub(crate) fn fit_shots_to_content(
         slots = allocate_between(&slots, &slots, &unbounded, target);
     }
     for (plan, slot) in plans.iter().zip(slots) {
-        let shot = &mut content.shots[plan.index];
-        if let Some(position) = shot.reason.find(SLOWED_TAG) {
-            shot.reason.truncate(position);
-        }
-        shot.duration_ms = slot;
-        if plan.is_image {
-            continue;
-        }
-        let anchor = evidence_anchor_ms(sources, shot, plan.refined);
-        let (start, end) = place_source_range(plan.refined, plan.window, slot, anchor);
-        if plan.refined.1 - plan.refined.0 > slot {
-            log::info!(
-                "Shot {} refined range [{}-{}] trimmed to [{start}-{end}] for a {slot}ms slot",
-                shot.order_index,
-                plan.refined.0,
-                plan.refined.1
-            );
-        }
-        shot.source_start_ms = start;
-        shot.source_end_ms = end.max(start + 1);
-        let span = shot.source_end_ms - shot.source_start_ms;
-        if span < slot {
-            let speed = span as f64 / slot as f64;
-            log::info!(
-                "Shot {} slowing {span}ms source to {slot}ms on-screen ({speed:.2}x)",
-                shot.order_index
-            );
-            shot.reason.push_str(&format!(
-                "{SLOWED_TAG}{speed:.2}x: usable window {span}ms shorter than {slot}ms slot]"
-            ));
-        }
+        let window = (!plan.is_image).then_some(plan.window);
+        apply_content_slot(&mut content.shots[plan.index], plan.refined, window, sources, slot);
+    }
+}
+
+/// 给镜头换一个槽位长度，源区间保持与槽位等长：长了围绕证据锚点裁，短了在锁定窗内补，
+/// 窗不够才放慢并在 reason 写明倍速。`window` 为 None 表示图片，只改时长。
+pub(crate) fn apply_content_slot(
+    shot: &mut StoryboardShot,
+    refined: (i64, i64),
+    window: Option<(i64, i64)>,
+    sources: &[StoryboardSource],
+    slot: i64,
+) {
+    if let Some(position) = shot.reason.find(SLOWED_TAG) {
+        shot.reason.truncate(position);
+    }
+    shot.duration_ms = slot;
+    let Some(window) = window else {
+        return;
+    };
+    let anchor = evidence_anchor_ms(sources, shot, refined);
+    let (start, end) = place_source_range(refined, window, slot, anchor);
+    if refined.1 - refined.0 > slot {
+        log::info!(
+            "Shot {} refined range [{}-{}] trimmed to [{start}-{end}] for a {slot}ms slot",
+            shot.order_index,
+            refined.0,
+            refined.1
+        );
+    }
+    shot.source_start_ms = start;
+    shot.source_end_ms = end.max(start + 1);
+    let span = shot.source_end_ms - shot.source_start_ms;
+    if span < slot {
+        let speed = span as f64 / slot as f64;
+        log::info!(
+            "Shot {} slowing {span}ms source to {slot}ms on-screen ({speed:.2}x)",
+            shot.order_index
+        );
+        shot.reason.push_str(&format!(
+            "{SLOWED_TAG}{speed:.2}x: usable window {span}ms shorter than {slot}ms slot]"
+        ));
     }
 }
 

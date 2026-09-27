@@ -23,7 +23,7 @@ export function ProjectCreationModal({ controller }: { controller: ReturnType<ty
         <div className="library-choice-heading"><span>{copy.libraries} <small>{copy.selectedCount(model.selectedIds.length, model.libraries.length)}</small></span><div><button type="button" onClick={actions.selectAll}>{t.common.selectAll}</button><button type="button" onClick={actions.clear}>{t.common.clearSelection}</button></div></div>
         <p className="library-choice-hint">{copy.hint}</p>
         <div className="library-choices">
-          {model.loading ? <p>{copy.loadingLibraries}</p> : model.libraries.length === 0 ? <p>{copy.noLibraries}</p> : model.libraries.map((library) => <label key={library.id} className="library-choice"><input type="checkbox" checked={model.selectedIds.includes(library.id)} onChange={() => actions.toggle(library.id)} /><WorkspaceIcon name="folder" /><span>{library.name}</span><small>{copy.assetCount(library.assetCount)}</small></label>)}
+          {model.loading ? <p>{copy.loadingLibraries}</p> : model.libraries.length === 0 ? <p>{copy.noLibraries}</p> : model.libraries.map((library) => <label key={library.id} className="library-choice"><input type="checkbox" checked={model.selectedIds.includes(library.id)} onChange={() => actions.toggle(library.id)} /><WorkspaceIcon name="folder" /><span>{library.unfiled ? t.assets.unfiled : library.name}</span><small>{copy.assetCount(library.assetCount)}</small></label>)}
         </div>
       </fieldset>
       {model.error && <p role="alert" className="project-create-error">{model.error}</p>}

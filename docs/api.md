@@ -4,6 +4,9 @@
 
 新增 `get_brand_kit` / `set_brand_kit`。`TimelineVersion` 增加 `graphicOverlays`、`transitions`，旧版本读出为空。`EditorDeliveryResult` 与 `JianyingDraftResult` 增加 `notes[{ code, detail }]`。剪映适配器输入增加 `graphicOverlays`、`transitions`，格式版本不变。Native 工具新增 `add_title_cards`、`set_transitions`。`generate_storyboard` 的 `appliedMedia` 增加 `brandCards`、`transitions`，自动收尾失败时有 `brandCardsNotApplied`。见 `docs/changes/2026-09-27-brand-cards-and-transitions.md`。
 
+## 2026-09-27：音乐先行剪辑
+
+公开 Tauri 命令不变。音频素材技术分析新增 `metadata.beatAnalysis`（`version`、`durationMs`、`tempoBpm`、`confidence`、`beatsMs`、`downbeatsMs`、`phraseStartsMs`、`barEnergy`），旧素材在被选为 BGM 时按需补算。BGM 开时 Native `generate_storyboard` 先选曲再生成分镜；配音关时分镜 `content_json.musicPlan` 保存音乐窗口（`assetId`、`sourceStartMs`、`durationMs`、`tempoBpm`、`endsOnPhrase`、淡入淡出与窗口内网格），不能卡点时 `content_json.musicPlanNote` 写原因。工具结果新增 `musicTiming`（`mode`、`tempoBpm`、`musicStartMs`、`endsOnPhrase`、`cutsOnBeat`、`cuts`、`note`）。FCPXML 的旁白 / 音乐改为挂在第一镜下的连接片段，OTIO 旁白与音乐分轨并用 Gap 定位。见 `docs/changes/2026-09-27-music-first-editing.md`。
 ## 2026-09-27：画幅选择与 BGM 自动配乐
 
 `submit_conversation_turn` 的 `mediaOptions` 增加可选 `aspectRatio: '9:16' | '16:9' | '1:1'`（缺省 9:16），前端字幕随配音发送。Native `generate_storyboard` 的 `mediaOptions` 同样接受 `aspectRatio`，漏传时沿用输入框选择。`render_preview`、试选镜头预览和剪映 / CapCut / FCPXML 交付按时间线所属分镜的画幅出画布（540×960 / 960×540 / 720×720）；剪映适配器输入新增 `canvas: { width, height }`，旧输入缺省竖屏。BGM 开启时 `generate_storyboard` 直接配乐（素材库音频优先，其次 Jamendo 器乐），不可用时 `mediaNotApplied.bgm` 写明原因。见 `docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`。
@@ -144,7 +147,7 @@
 
 ## 2026-09-16：共享子素材库与新建项目
 
-`list_shared_libraries` 无参数，返回 `{ id, name, assetCount }[]`，不暴露源目录。`create_project` 接受 `{ name, libraryIds?: string[] }`：省略时选取当前全部子素材库，空数组不关联素材库；名称与库关联在同一事务提交。前端先弹出表单并默认全选。
+`list_shared_libraries` 无参数，返回 `{ id, name, assetCount, unfiled }[]`，不暴露源目录；`unfiled` 标出无导入根目录的默认子库，存储名仍为「未归类素材」，前端按界面语言显示。`create_project` 接受 `{ name, libraryIds?: string[] }`：省略时选取当前全部子素材库，空数组不关联素材库；名称与库关联在同一事务提交。前端先弹出表单并默认全选。
 
 Schema 18/19 增加 `shared_libraries`、`project_libraries`、`shared_library_assets` 和 `project_asset_access` 视图。按已有导入根目录建立子库，无目录素材归入“未归类素材”；成员通过素材 ID 关联，重链路不丢失库归属。源文件及分析结果不复制，旧项目保留原有素材访问。新导入自动关联当前项目；浏览、搜索、选片、替换、预览与交付统一使用共享范围。`assets.project_id` 保留为导入来源，不再是素材读取的唯一范围。
 
@@ -246,7 +249,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `create_project` | `{ name, libraryIds? }` | `StoredProject` | 省略库列表默认全选，空数组不选库。 |
 | `rename_project` | `{ projectId, name }` | `StoredProject` | 修改项目名称并更新时间，拒绝空名称。 |
 | `delete_project` | `{ projectId, confirmed }` | `void` | 删除项目及其素材索引、分析派生文件、会话和本地预览；保留原始媒体与外部剪映草稿。必须 `confirmed=true`。 |
-| `list_shared_libraries` | 无 | `SharedLibrary[]` | 全局子素材库名称与素材数量。 |
+| `list_shared_libraries` | 无 | `SharedLibrary[]` | 全局子素材库名称、素材数量与默认子库标记 `unfiled`。 |
 | `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
 | `create_editing_session` | `{ projectId, title }` | `StoredEditingSession` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
 | `list_editing_sessions` | `{ projectId }` | `StoredEditingSession[]` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |
@@ -257,7 +260,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `update_editing_task_brief` | `{ editingTaskId, brief }` | `void` | 保存非空 brief；首次请求会为未命名任务定名。 |
 | `create_conversation` | `{ projectId, editingTaskId, title }` | `StoredConversation` | 任务必须属于指定项目，拒绝空标题。 |
 | `list_conversations` | `{ projectId, editingTaskId? }` | `StoredConversation[]` | 按最后更新时间倒序；可按任务过滤。 |
-| `create_message` | `{ conversationId, role, content, routeReceipt? }` | `StoredMessage` | 保存消息并更新时间；`role` 可为 `user`、`assistant`、`agent`、`tool` 或 `system`。`role=user` 必须提供与目标 conversation 和完整 content 匹配、仍未消费的 route receipt，其他角色不需要。 |
+| `create_message` | `{ conversationId, role, content, routeReceipt? }` | `StoredMessage` | 保存消息并更新时间；`role` 可为 `user`、`assistant`、`agent`、`tool` 或 `system`。`role=user` 必须提供与目标 conversation 和完整 content 匹配、仍未消费的 route receipt，其他角色不需要。`role=agent` 且会话最后一条正是内容相同的 agent 消息时不再插入，直接返回那条消息（如重复导入提示）。 |
 | `set_conversation_status` | `{ conversationId, status }` | `void` | 状态为 `ready`、`working` 或 `review`。 |
 | `list_messages` | `{ conversationId }` | `StoredMessage[]` | 按时间正序。 |
 | `resolve_conversation_task` | `{ projectId, activeEditingTaskId?, request }` | `TaskRouteResult` | 在消息持久化前解析当前激活任务的归属；候选仅为仍属于该项目的显式活动任务，不把兄弟任务的 title/brief/`active_subgoal` 交给路由模型。返回继续当前任务、原子创建新任务或澄清（继续或新建，不列举其他任务）。没有激活任务时直接创建新任务。确定目标时签发一次性 route receipt；只选择任务，不选择 Agent 工具。 |
@@ -332,7 +335,7 @@ Provider 设置弹窗提供 Jamendo Client ID 输入框，保存后只显示凭�
 
 `agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
 
-Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。
+Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。只读查询本机项目事实的工具（`search_assets`、`list_assets`、`get_storyboard` 等，不含 `search_music`、`list_voices`、`transcribe_asset`）失败且本轮另有成功工具时，不把整轮降为 `partially_completed`；失败步骤仍记录在运行步骤中，任务卡另列失败步数。
 
 debug 构建且 `NATIVE_PROVIDER_FULL_TRACE=1` 时，NativeToolLoop 每次真实 HTTP 尝试把实际发送的完整 JSON 和服务器响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。每行是 `{ recordId, stepNumber, attemptNumber, direction, adapter, httpStatus, body, createdAt }`。响应正文在写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识与自定义 Base URL；请求头从不进入该文件。网络层没有收到响应时只有 request，不伪造 response。该文件在 gitignored 的 `target/` 内，进程首次开启时截断，不进入 SQLite、浏览器存储、Tauri 命令或前端。`npm run tauri:dev` 会设置该开关；release 构建即使设置同名变量也强制关闭。
 

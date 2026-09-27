@@ -54,6 +54,7 @@ pub(crate) fn clip_key(
         "kind": kind, "clipKind": clip.clip_kind,
         "start": clip.source_start_ms, "end": clip.source_end_ms,
         "duration": clip.timeline_end_ms - clip.timeline_start_ms,
+        "frames": crate::preview::clip_frame_count(clip),
         "cropFocus": clip.crop_focus,
     })))
 }

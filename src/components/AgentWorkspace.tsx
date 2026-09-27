@@ -23,6 +23,8 @@ export type AgentWorkspaceModel = {
   listenerReady: boolean
   composerNotice: string | null
   mediaOptions: MediaOptions
+  /** 当前输出编辑器的界面名称，空对话引导语按它说明交付去向。 */
+  outputEditorLabel: string
   analysis: { progress: AnalysisProgress; waiting: boolean; importing: boolean }
   routeStatus: {
     text: string | null
@@ -103,7 +105,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
           <p>
             {model.storyboard?.summary
               ?? model.session?.brief
-              ?? copy.introBody}
+              ?? copy.introBody(model.outputEditorLabel)}
           </p>
           {model.routeStatus.text && (
             <p

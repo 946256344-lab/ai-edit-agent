@@ -12,6 +12,8 @@ pub struct SharedLibrary {
     id: String,
     name: String,
     asset_count: i64,
+    /// 无导入根目录的默认子库；存储名保持「未归类素材」，前端按界面语言显示。
+    unfiled: bool,
 }
 
 pub(crate) fn attach_folder(
@@ -105,13 +107,14 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn list_shared_libraries(app: AppHandle) -> Result<Vec<SharedLibrary>, String> {
     let connection = open_connection(&app)?;
-    let mut statement = connection.prepare("SELECT l.id, l.name, COUNT(a.asset_id) FROM shared_libraries l LEFT JOIN shared_library_assets a ON a.library_id = l.id AND a.asset_id IN (SELECT id FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0) GROUP BY l.id ORDER BY l.name COLLATE NOCASE, l.id").map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare("SELECT l.id, l.name, COUNT(a.asset_id), l.source_key = '' FROM shared_libraries l LEFT JOIN shared_library_assets a ON a.library_id = l.id AND a.asset_id IN (SELECT id FROM assets WHERE coalesce(json_extract(metadata_json, '$.libraryRemoved'), 0) = 0) GROUP BY l.id ORDER BY l.name COLLATE NOCASE, l.id").map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(SharedLibrary {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 asset_count: row.get(2)?,
+                unfiled: row.get(3)?,
             })
         })
         .map_err(|error| error.to_string())?;

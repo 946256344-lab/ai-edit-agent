@@ -262,6 +262,7 @@ pub(crate) fn reselect_shots(
         crate::media_options::storyboard_options(&connection, &base.storyboard.id)?
             .map(|options| options.aspect_ratio)
             .unwrap_or_default(),
+        None,
     )?;
     ensure_frozen_untouched(&base, &refined, &new_to_old)?;
     ensure_beats_fill_slots(&refined, &rough.speech_timing, &target_set)?;
@@ -379,6 +380,7 @@ pub(crate) fn refine_shot_ranges(
         crate::media_options::storyboard_options(&connection, &base.storyboard.id)?
             .map(|options| options.aspect_ratio)
             .unwrap_or_default(),
+        None,
     )?;
     // 只精修切点：每个镜头的时间线时长锁回原槽位，素材与片段不得变化。
     for shot in &mut refined.shots {

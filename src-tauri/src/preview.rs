@@ -26,6 +26,13 @@ fn preview_directory(app: &AppHandle, timeline_version_id: &str) -> Result<PathB
     Ok(directory)
 }
 
+/// 预览帧率固定 30：每镜帧数按起止点在时间线上的绝对帧位相减，拼接后切点误差不超过半帧、不随镜数累积
+///（逐镜按时长取整会累积漂移，后半段切点偏离音乐节拍）。
+pub(crate) fn clip_frame_count(clip: &TimelineClip) -> i64 {
+    let frame = |ms: i64| (ms as f64 * 30.0 / 1000.0).round() as i64;
+    (frame(clip.timeline_end_ms) - frame(clip.timeline_start_ms)).max(1)
+}
+
 pub(crate) fn render_timeline_clip(
     source: &Path,
     kind: &str,
@@ -71,23 +78,22 @@ pub(crate) fn render_timeline_clip(
             return Err("FFmpeg could not extract a freeze-frame.".to_owned());
         }
         command
-            .args(["-loop", "1", "-i"])
-            .arg(&frame_path)
-            .args(["-t", &format!("{output_duration:.3}")]);
+            .args(["-loop", "1", "-t", &format!("{output_duration:.3}"), "-i"])
+            .arg(&frame_path);
     } else if kind == "video" {
         command
             .args([
                 "-ss",
                 &format!("{:.3}", clip.source_start_ms as f64 / 1000.0),
+                "-t",
+                &format!("{input_duration:.3}"),
                 "-i",
             ])
-            .arg(source)
-            .args(["-t", &format!("{input_duration:.3}")]);
+            .arg(source);
     } else if kind == "image" {
         command
-            .args(["-loop", "1", "-i"])
-            .arg(source)
-            .args(["-t", &format!("{output_duration:.3}")]);
+            .args(["-loop", "1", "-t", &format!("{output_duration:.3}"), "-i"])
+            .arg(source);
     } else {
         return Err("Timeline clip uses unsupported media.".to_owned());
     }
@@ -99,15 +105,15 @@ pub(crate) fn render_timeline_clip(
     };
     let Canvas { width, height } = canvas;
     let filter = format!(
-        "{setpts}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,format=yuv420p",
+        "{setpts}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}:x='max(0,min(iw-ow,iw*{:.6}-ow/2))':y='max(0,min(ih-oh,ih*{:.6}-oh/2))',fps=30,tpad=stop_mode=clone:stop_duration=0.1,format=yuv420p",
         x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)
     );
     let status = command
         .args([
             "-vf",
             &filter,
-            "-t",
-            &format!("{output_duration:.3}"),
+            "-frames:v",
+            &clip_frame_count(clip).to_string(),
             "-an",
             "-c:v",
             "libx264",

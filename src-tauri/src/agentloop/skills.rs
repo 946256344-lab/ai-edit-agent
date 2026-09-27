@@ -1066,6 +1066,33 @@ pub(super) fn apply_skill(
                 .get("requestedDurationMs")
                 .and_then(Value::as_i64)
                 .filter(|ms| *ms > 0);
+            // BGM 开：先选曲（与时长无关），配音关时分镜按曲子的节拍网格定切点。
+            let wants_bgm = media_options.is_some_and(|options| options.bgm);
+            let mut bgm_note: Option<String> = None;
+            let music_choice = if wants_bgm {
+                let scope = super::auto_music::MusicScope {
+                    app: &state.app,
+                    connection: state.connection,
+                    project_id: state.project_id,
+                    editing_task_id: state.editing_task_id,
+                    conversation_id: state.conversation_id,
+                    agent_task_id: &agent_task_id,
+                };
+                match super::auto_music::choose_background_music(
+                    &scope,
+                    brief,
+                    requested_duration_ms.unwrap_or(30_000),
+                ) {
+                    Ok(choice) => Some(choice),
+                    Err(reason) => {
+                        log::warn!("Automatic background music skipped: {reason}");
+                        bgm_note = Some(reason);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let generated = crate::storyboard::generate_storyboard_for_agent(
                 state.app.clone(),
                 state.project_id.to_owned(),
@@ -1074,6 +1101,7 @@ pub(super) fn apply_skill(
                 voice_id,
                 media_options,
                 requested_duration_ms,
+                music_choice.as_ref(),
             )?;
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;
@@ -1182,10 +1210,11 @@ pub(super) fn apply_skill(
                             }
                         }
                     }
-                    // BGM 开启且没有音乐时直接配乐（在配音之后，音量随有无旁白调整）；不可用时把原因交给模型转告。
-                    let mut bgm_note: Option<String> = None;
-                    let wants_bgm = media_options.is_some_and(|options| options.bgm);
-                    if wants_bgm && !timeline.music_tracks.iter().any(|track| track.enabled && !track.cues.is_empty()) {
+                    // BGM 开启且没有音乐时直接配乐（在配音之后，音量随有无旁白调整）；按分镜的音乐窗口铺，
+                    // 与切点对齐；不可用时把原因交给模型转告。
+                    let mut music_timing: Option<Value> = None;
+                    let already_scored = timeline.music_tracks.iter().any(|track| track.enabled && !track.cues.is_empty());
+                    if let (Some(choice), false) = (music_choice.as_ref(), already_scored) {
                         let scope = super::auto_music::MusicScope {
                             app: &state.app,
                             connection: state.connection,
@@ -1194,10 +1223,22 @@ pub(super) fn apply_skill(
                             conversation_id: state.conversation_id,
                             agent_task_id: &agent_task_id,
                         };
-                        match super::auto_music::attach_background_music(&scope, &timeline, brief) {
-                            super::auto_music::AutoMusic::Attached { timeline: scored, source, title } => {
+                        let (plan, plan_note) = crate::music_plan::storyboard_music_outcome(
+                            state.connection,
+                            &storyboard_version_id,
+                        )
+                        .unwrap_or_default();
+                        match super::auto_music::attach_background_music(
+                            &scope,
+                            &timeline,
+                            choice,
+                            plan.as_ref(),
+                            plan_note.as_deref(),
+                        ) {
+                            super::auto_music::AutoMusic::Attached { timeline: scored, source, title, timing } => {
                                 timeline = scored;
                                 message.push_str(&format!("\n已自动配乐（来源 {source}）：{title}。"));
+                                music_timing = Some(timing);
                             }
                             super::auto_music::AutoMusic::Unavailable(reason) => {
                                 log::warn!("Automatic background music skipped: {reason}");
@@ -1273,7 +1314,9 @@ pub(super) fn apply_skill(
                         "qualityWarnings": quality_warnings,
                         "requestedMedia": media_options,
                         "appliedMedia": applied_media,
-                    });
+                    });                    if let Some(timing) = music_timing {
+                        result["musicTiming"] = timing;
+                    }
                     if !media_not_applied.is_empty() {
                         result["mediaNotApplied"] = media_not_applied
                             .iter()

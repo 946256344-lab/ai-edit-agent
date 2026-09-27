@@ -2,6 +2,7 @@
 
 2026-09-27 品牌卡与转场：`brand_kit.rs` 管项目品牌套件和默认转场；`cards/` 管 HTML/CSS 模板注册（`templates.rs`，模板文件在 `src-tauri/templates/cards/`）与 WebView2 截图渲染（`renderer.rs`）；`timeline_graphics.rs` 做图层与转场的校验、贴合、切点解析；`preview_graphics.rs` 做预览的 `xfade` 拼接与卡片叠加；`agentloop/auto_graphics.rs` 负责生成时的自动收尾和 `add_title_cards` / `set_transitions`。前端 `useBrandKitController` + `BrandKitSection` 放在项目设置里。
 
+2026-09-27 音乐先行：`assets/beats.rs` 解码音频并算节拍网格（写入 `metadata.beatAnalysis`）；`music_plan.rs` 拥有音乐窗口、切点吸附与配音容差吸附的纯计算及分镜 `musicPlan` 读写；`storyboard/music_cuts.rs` 在 Phase 4 调用吸附；`agentloop/auto_music.rs` 负责分镜前选曲与时间线后铺音乐。
 2026-09-25 Voycut 品牌风格：`src/index.css` 新增画布、品牌渐变与主色填充变量；`BrandMark` 绘制侧栏字标与助手头像的占位标志；对话区与预览区为画布上的白色面板。
 
 2026-09-25 消息 Markdown：`MessageMarkdown` 渲染助手回复（`react-markdown` + `remark-gfm`），不执行原始 HTML、不加载图片，外部链接经 `@tauri-apps/plugin-opener` 交给系统浏览器；用户消息保持原文。
@@ -103,7 +104,7 @@ src/main.tsx
 | `capcut.rs` | CapCut 链接器：按本机注册表识别草稿库并新建 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
-| `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
+| `music_plan.rs` | 音乐先行：音乐窗口选择、切点吸附到节拍、配音模式容差吸附、分镜 `musicPlan` 读写 || `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
 | `db.rs`、`models.rs`、`audit.rs`、`process.rs`、`onnx_device.rs` | 数据库、边界类型、审计、外部进程基础设施、本地 ONNX 推理设备（显卡优先、CPU 回退） |
 
 ## 5）命名与组织规则

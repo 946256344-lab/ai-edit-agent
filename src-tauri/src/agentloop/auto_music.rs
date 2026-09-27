@@ -1,17 +1,29 @@
-//! BGM 开启时 generate_storyboard 的自动配乐：先用素材库里用户导入的音频，没有再按情绪标签找 Jamendo 器乐曲。
-//! 只写一条新时间线版本；两条路都不可用时返回真实原因，由 Agent 如实转告，不静默跳过。
-use crate::models::{MusicCue, MusicTrack, TimelineVersion};
+//! BGM 开启时 generate_storyboard 的自动配乐，分两步：
+//! 1. 生成分镜前选曲（先用素材库里用户导入的音频，没有再按情绪标签找 Jamendo 器乐曲），并按需补节拍分析，
+//!    配音关时分镜据此定音乐窗口、把切点吸附到拍上（见 `music_plan.rs`）；
+//! 2. 时间线生成后按分镜的音乐窗口铺音乐（同一起点偏移、结尾落在乐句结束并淡出）；配音开或没有窗口时，
+//!    选起点让结尾落在乐句边界，切点只在 ±120ms 内挪到拍上。
+//! 只写一条新时间线版本；两条选曲路都不可用时返回真实原因，由 Agent 如实转告，不静默跳过。
+use crate::models::{MusicCue, MusicTrack, TimelineClip, TimelineVersion};
+use crate::music_plan::{nudge_cuts_to_beats, plan_for_fixed_length, MusicChoice, MusicPlan};
 use crate::music_provider::{attribution_for, download_track, search_instrumental_by_tags};
 use crate::timeline::replace_music_tracks;
 use rusqlite::{params, Connection};
+use serde_json::{json, Value};
 use std::path::Path;
 use tauri::{AppHandle, Manager};
+
+/// 配音开时切点吸附到拍上的容差：不到半拍，口播对位基本不受影响。
+const VOICEOVER_SNAP_TOLERANCE_MS: i64 = 120;
+const MIN_NUDGED_SHOT_MS: i64 = 500;
 
 pub(super) enum AutoMusic {
     Attached {
         timeline: TimelineVersion,
         source: &'static str,
         title: String,
+        /// 给 Agent 解释卡点的事实（BPM、音乐起点、切点在拍上的数量）。
+        timing: Value,
     },
     Unavailable(String),
 }
@@ -105,107 +117,248 @@ fn pick_library_audio(audio: Vec<LibraryAudio>, brief: &str, timeline_ms: i64) -
     })
 }
 
-fn music_track(
-    id: String,
-    asset_id: String,
-    source_duration_ms: i64,
-    timeline: &TimelineVersion,
-    timeline_ms: i64,
-    license: Option<(String, String)>,
-) -> MusicTrack {
-    let source_end = source_duration_ms.min(timeline_ms);
-    let (provider, license_url, attribution) = match license {
-        Some((url, attribution)) => (Some("Jamendo".to_owned()), Some(url), Some(attribution)),
-        None => (None, None, None),
-    };
-    MusicTrack {
-        id: id.clone(),
-        enabled: true,
-        cues: vec![MusicCue {
-            id: format!("{id}-cue"),
-            asset_id,
-            source_start_ms: 0,
-            source_end_ms: source_end,
-            timeline_start_ms: 0,
-            timeline_end_ms: timeline_ms,
-            loop_enabled: source_end < timeline_ms,
-            volume: if timeline.voiceover_tracks.is_empty() { 0.35 } else { 0.15 },
-            fade_in_ms: 250,
-            fade_out_ms: 1_200,
-            jianying_compatibility: "not_deliverable".to_owned(),
-            provider,
-            license_url,
-            attribution,
-        }],
-    }
-}
-
-pub(super) fn attach_background_music(
+/// 生成分镜前选曲并补节拍分析。`duration_hint_ms` 只用来偏好能覆盖全片的曲子。
+pub(super) fn choose_background_music(
     scope: &MusicScope<'_>,
-    timeline: &TimelineVersion,
     brief: &str,
-) -> AutoMusic {
-    let Some(timeline_ms) = timeline.clips.iter().map(|clip| clip.timeline_end_ms).max() else {
-        return AutoMusic::Unavailable("The timeline has no shots to score.".to_owned());
-    };
-    let write = |track: MusicTrack| {
-        replace_music_tracks(
-            scope.connection,
-            scope.project_id,
-            scope.editing_task_id,
-            scope.conversation_id,
-            scope.agent_task_id,
-            timeline,
-            vec![track],
-        )
-    };
+    duration_hint_ms: i64,
+) -> Result<MusicChoice, String> {
     let library_reason = match library_audio(scope) {
-        Ok(audio) => match pick_library_audio(audio, brief, timeline_ms) {
+        Ok(audio) => match pick_library_audio(audio, brief, duration_hint_ms) {
             Some(pick) => {
-                let track = music_track(
-                    format!("library-{}", pick.asset_id),
-                    pick.asset_id.clone(),
-                    pick.duration_ms,
-                    timeline,
-                    timeline_ms,
-                    None,
-                );
-                match write(track) {
-                    Ok(timeline) => {
-                        return AutoMusic::Attached { timeline, source: "library", title: pick.name }
-                    }
-                    Err(error) => format!("the library track could not be used ({error})"),
-                }
+                return Ok(with_beats(
+                    scope,
+                    MusicChoice {
+                        asset_id: pick.asset_id,
+                        title: pick.name,
+                        source: "library",
+                        duration_ms: pick.duration_ms,
+                        license: None,
+                        analysis: None,
+                        analysis_note: None,
+                    },
+                ))
             }
             None => "the media library has no analyzed audio".to_owned(),
         },
         Err(error) => format!("the media library could not be read ({error})"),
     };
     let tags = mood_tags(brief);
-    let jamendo = (|| -> Result<(TimelineVersion, String), String> {
+    let jamendo = (|| -> Result<MusicChoice, String> {
         let track = search_instrumental_by_tags(tags)?
             .into_iter()
             .next()
             .ok_or_else(|| format!("Jamendo found no eligible instrumental for \"{tags}\""))?;
         let asset = download_track(scope.app, scope.project_id, &track.id)?;
         let asset = crate::assets::wait_for_asset_ready(scope.app, scope.project_id, &asset.id)?;
-        let duration = asset
+        let duration_ms = asset
             .duration_ms
             .ok_or_else(|| "the downloaded music has no verified duration".to_owned())?;
-        let written = write(music_track(
-            format!("jamendo-{}", track.id),
-            asset.id,
-            duration,
-            timeline,
-            timeline_ms,
-            Some((track.license_ccurl.clone(), attribution_for(&track))),
-        ))?;
-        Ok((written, format!("{} — {}", track.artist_name, track.name)))
+        Ok(MusicChoice {
+            asset_id: asset.id,
+            title: format!("{} — {}", track.artist_name, track.name),
+            source: "jamendo",
+            duration_ms,
+            license: Some((track.license_ccurl.clone(), attribution_for(&track))),
+            analysis: None,
+            analysis_note: None,
+        })
     })();
     match jamendo {
-        Ok((timeline, title)) => AutoMusic::Attached { timeline, source: "jamendo", title },
-        Err(error) => AutoMusic::Unavailable(format!(
+        Ok(choice) => Ok(with_beats(scope, choice)),
+        Err(error) => Err(format!(
             "No background music was added: {library_reason}, and {error}. Import a music file into the media library or add a Jamendo Client ID in Model settings."
+        )),
+    }
+}
+
+/// 节拍分析缺失或版本旧时现算；失败只记原因，曲子照样可以当 BGM。
+fn with_beats(scope: &MusicScope<'_>, mut choice: MusicChoice) -> MusicChoice {
+    match crate::assets::beats::ensure_beat_analysis(scope.connection, &choice.asset_id) {
+        Ok(analysis) => choice.analysis = Some(analysis),
+        Err(error) => {
+            log::warn!("Beat analysis unavailable for music {}: {error}", choice.asset_id);
+            choice.analysis_note = Some(format!("beat analysis failed ({error})"));
+        }
+    }
+    choice
+}
+
+fn music_cue(
+    choice: &MusicChoice,
+    source_start_ms: i64,
+    timeline_ms: i64,
+    volume: f64,
+    fades: (i64, i64),
+) -> MusicCue {
+    let source_end = (source_start_ms + timeline_ms).min(choice.duration_ms);
+    let (provider, license_url, attribution) = match &choice.license {
+        Some((url, attribution)) => (Some("Jamendo".to_owned()), Some(url.clone()), Some(attribution.clone())),
+        None => (None, None, None),
+    };
+    let id = format!("{}-{}", choice.source, choice.asset_id);
+    MusicCue {
+        id: format!("{id}-cue"),
+        asset_id: choice.asset_id.clone(),
+        source_start_ms,
+        source_end_ms: source_end,
+        timeline_start_ms: 0,
+        timeline_end_ms: timeline_ms,
+        loop_enabled: source_end - source_start_ms < timeline_ms,
+        volume,
+        fade_in_ms: fades.0,
+        fade_out_ms: fades.1,
+        jianying_compatibility: "not_deliverable".to_owned(),
+        provider,
+        license_url,
+        attribution,
+    }
+}
+
+fn cut_points(clips: &[TimelineClip]) -> Vec<i64> {
+    let mut ends = clips.iter().map(|clip| clip.timeline_end_ms).collect::<Vec<_>>();
+    ends.sort_unstable();
+    ends.pop();
+    ends
+}
+
+fn cuts_on_beats(cuts: &[i64], beats: &[i64]) -> usize {
+    cuts.iter()
+        .filter(|cut| beats.iter().any(|beat| (*beat - **cut).abs() <= 15))
+        .count()
+}
+
+fn asset_duration_ms(connection: &Connection, asset_id: &str) -> Option<i64> {
+    connection
+        .query_row(
+            "SELECT json_extract(metadata_json, '$.durationMs') FROM assets WHERE id = ?1",
+            params![asset_id],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten()
+}
+
+/// 把相邻两镜的分界挪到新切点：前一镜延长 / 缩短，后一镜反向；源区间按各自原倍速同步移动，
+/// 素材不够长就不动源区间（倍速变化不到一成）。
+fn move_boundaries(connection: &Connection, clips: &mut [TimelineClip], new_cuts: &[i64]) {
+    clips.sort_by_key(|clip| clip.timeline_start_ms);
+    for (index, cut) in new_cuts.iter().enumerate() {
+        if index + 1 >= clips.len() {
+            break;
+        }
+        let delta = cut - clips[index].timeline_end_ms;
+        if delta == 0 {
+            continue;
+        }
+        let ratio = |clip: &TimelineClip| {
+            (clip.source_end_ms - clip.source_start_ms).max(0) as f64
+                / (clip.timeline_end_ms - clip.timeline_start_ms).max(1) as f64
+        };
+        let (before, after) = clips.split_at_mut(index + 1);
+        let (left, right) = (&mut before[index], &mut after[0]);
+        let left_shift = (delta as f64 * ratio(left)).round() as i64;
+        let right_shift = (delta as f64 * ratio(right)).round() as i64;
+        let left_end = left.source_end_ms + left_shift;
+        let left_limit = asset_duration_ms(connection, &left.asset_id).unwrap_or(left.source_end_ms);
+        if left.source_end_ms > left.source_start_ms && left_end > left.source_start_ms && left_end <= left_limit.max(left.source_end_ms) {
+            left.source_end_ms = left_end;
+        }
+        let right_start = right.source_start_ms + right_shift;
+        if right.source_end_ms > right.source_start_ms && right_start >= 0 && right_start < right.source_end_ms {
+            right.source_start_ms = right_start;
+        }
+        left.timeline_end_ms = *cut;
+        right.timeline_start_ms = *cut;
+    }
+}
+
+/// 时间线生成后铺音乐。`plan` 是分镜按音乐先行定下的窗口；没有时按成片长度现选起点并小幅吸附切点。
+pub(super) fn attach_background_music(
+    scope: &MusicScope<'_>,
+    timeline: &TimelineVersion,
+    choice: &MusicChoice,
+    plan: Option<&MusicPlan>,
+    plan_note: Option<&str>,
+) -> AutoMusic {
+    let Some(timeline_ms) = timeline.clips.iter().map(|clip| clip.timeline_end_ms).max() else {
+        return AutoMusic::Unavailable("The timeline has no shots to score.".to_owned());
+    };
+    let volume = if timeline.voiceover_tracks.is_empty() { 0.35 } else { 0.15 };
+    let mut scored = timeline.clone();
+    let (cue, timing) = match plan {
+        Some(plan) => {
+            if plan.duration_ms != timeline_ms {
+                log::warn!(
+                    "Music-first plan covers {}ms but the timeline is {timeline_ms}ms; keeping the planned start so cuts stay on the beat",
+                    plan.duration_ms
+                );
+            }
+            let cuts = cut_points(&timeline.clips);
+            let timing = json!({
+                "mode": "music_first",
+                "tempoBpm": plan.tempo_bpm,
+                "musicStartMs": plan.source_start_ms,
+                "endsOnPhrase": plan.ends_on_phrase && plan.duration_ms == timeline_ms,
+                "cutsOnBeat": cuts_on_beats(&cuts, &plan.beats_ms),
+                "cuts": cuts.len(),
+            });
+            (music_cue(choice, plan.source_start_ms, timeline_ms, volume, (plan.fade_in_ms, plan.fade_out_ms)), timing)
+        }
+        None => match plan_for_fixed_length(choice, timeline_ms) {
+            Ok(fitted) => {
+                let cuts = cut_points(&timeline.clips);
+                let nudged = nudge_cuts_to_beats(
+                    &cuts,
+                    &fitted.beats_ms,
+                    VOICEOVER_SNAP_TOLERANCE_MS,
+                    MIN_NUDGED_SHOT_MS,
+                    timeline_ms,
+                );
+                move_boundaries(scope.connection, &mut scored.clips, &nudged);
+                let timing = json!({
+                    "mode": if timeline.voiceover_tracks.is_empty() { "content_clock" } else { "voiceover_clock" },
+                    "tempoBpm": fitted.tempo_bpm,
+                    "musicStartMs": fitted.source_start_ms,
+                    "endsOnPhrase": true,
+                    "cutsOnBeat": cuts_on_beats(&nudged, &fitted.beats_ms),
+                    "cuts": nudged.len(),
+                    "snapToleranceMs": VOICEOVER_SNAP_TOLERANCE_MS,
+                    "note": plan_note,
+                });
+                (music_cue(choice, fitted.source_start_ms, timeline_ms, volume, (fitted.fade_in_ms, fitted.fade_out_ms)), timing)
+            }
+            Err(reason) => {
+                let note = plan_note.map_or(reason.clone(), |note| format!("{note}; {reason}"));
+                log::info!("Background music is not beat-aligned: {note}");
+                let timing = json!({ "mode": "not_beat_aligned", "note": note });
+                (music_cue(choice, 0, timeline_ms, volume, (250, 1_200)), timing)
+            }
+        },
+    };
+    let track = MusicTrack {
+        id: format!("{}-{}", choice.source, choice.asset_id),
+        enabled: true,
+        cues: vec![cue],
+    };
+    match replace_music_tracks(
+        scope.connection,
+        scope.project_id,
+        scope.editing_task_id,
+        scope.conversation_id,
+        scope.agent_task_id,
+        &scored,
+        vec![track],
+    ) {
+        Ok(timeline) => AutoMusic::Attached {
+            timeline,
+            source: choice.source,
+            title: choice.title.clone(),
+            timing,
+        },
+        Err(error) => AutoMusic::Unavailable(format!(
+            "No background music was added: the {} track could not be used ({error}).",
+            choice.source
         )),
     }
 }

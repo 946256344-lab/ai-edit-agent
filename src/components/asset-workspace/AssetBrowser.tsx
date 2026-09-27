@@ -46,12 +46,11 @@ function AssetCard({ asset, onInspect, editing }: { asset: AssetView; onInspect:
       <div className="asset-card-body">
         <header>
           <strong title={asset.name}>{asset.name}</strong>
-          <small>{asset.relativePath ?? asset.folderName ?? copy.unfiled}</small>
+          <div className="asset-card-meta">
+            <small>{asset.relativePath ?? asset.folderName ?? copy.unfiled}</small>
+            <span className={`asset-status-chip asset-status-chip--${status.tone}`} title={status.label}>{status.label}</span>
+          </div>
         </header>
-        <div className="asset-chip-row">
-          <span className={`asset-status-chip asset-status-chip--${status.tone}`}>{status.label}</span>
-          {asset.duration ? <span>{copy.duration(asset.duration)}</span> : null}
-        </div>
         <button className="asset-inspect-button" onClick={() => editing.actions.rename(asset.id)}>{t.common.rename}</button>
         <button className="asset-inspect-button" onClick={() => onInspect(asset.id)} aria-label={copy.inspectAria(asset.name)}>{copy.inspect} <span aria-hidden="true">↗</span></button>
       </div>

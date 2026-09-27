@@ -104,7 +104,7 @@
 - 剪映、CapCut 里的转场、品牌卡图片和动画，以及 Resolve 对 FCPXML 标题、图片、叠化和 OTIO 转场、marker 的导入效果，都还没在真实编辑器里打开确认。交付说明因此带 `transitions_unverified`。叠化在编辑器里是否要求源素材余量、剪映会不会因为重叠转场缩短总长，需要桌面验收时确认。
 - 原生文字的剪映「已验证」矩阵没有扩展：`storyboard_text_tracks` 直接把默认描边 + 阴影字幕标为 `verified`，而 `validate_text_tracks` 会把同样样式判为 `local_preview_only`，两处不一致。这次没改交付门槛，已登记为待办。
 - 品牌卡是整画布 PNG，编辑器里只能整体移动、缩放或删除。
-- FCPXML 已有的配乐、配音连接片段仍以 `lane` 属性直接写在 spine 里（本次新增的标题和图片按规范挂在父片段下），待 Resolve 实测后统一。
+- 与同日 master 的音乐驱动剪辑合并：FCPXML 里配乐、配音、标题、品牌卡统一作为连接片段挂在所在主线片段下；OTIO 旁白、音乐分轨，品牌卡另起图片轨。
 
 ## 同步文档
 
