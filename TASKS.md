@@ -2,6 +2,7 @@
 
 ## 当前任务窗口
 
+- [ ] 待定方案（2026-09-27，P0，方向已定）：产品核心收敛为「策划 + 选镜」，见 docs/decisions.md 首条。09-27 三次宣传片实测（94 条工业素材）暴露的问题——先编故事再硬凑画面、Agent 反问与说错结果、文字与画面对不上、别家品牌与展会画面入选——都按新方向重做，不再在精修层打补丁。下一步：出素材先行的策划 + 选镜方案，与用户确认后再动代码。
 - [x] 已修复（2026-09-27，待桌面确认）：Agent 自称「画面节奏对齐音乐」「更像卡点」却没有任何节拍依据（「Weekend Road Trip」「跟随音乐节奏剪一版」会话）。系统提示改为只按 `generate_storyboard` 的 `musicTiming` 说明是否卡点，缺失或 `not_beat_aligned` 时如实说明并转述 note，不得凭自己判断声称节拍 / 节奏 / 情绪对齐。
 - [x] 已实现（2026-09-27，claude/title-cards-transitions，待桌面验收）：品牌卡与镜头转场。可编辑文字仍走原生文字；logo、渐变字、卡片、片尾卡由 HTML/CSS 模板经应用内隐藏 WebView2 渲染成透明 PNG，预览 ffmpeg 叠加，交付为「图片，文字不可编辑」。首批四个模板：开场标题卡、片尾卡、角标 logo、信息卡。项目设置新增品牌套件与默认转场（默认硬切）；设了品牌套件时生成自动加开场 / 片尾 / 角标。新工具 `add_title_cards`、`set_transitions`，只在用户本轮明确要求时可用，模型只填短文案，Rust 截断并计算时间。转场以切点为中心不改总时长：预览 xfade，剪映 / CapCut 原生叠化 / 闪黑，FCPXML / OTIO 只带叠化；FCPXML 补 Basic Title，OTIO 文字写成 marker；交付结果带 `notes` 如实说明降级。顺带修复居中 / 顶部标题在预览里按底部对齐。待桌面确认：剪映 / CapCut 草稿里转场、品牌卡图片与渐显渐隐的实际效果（剪映闪黑 is_overlap=false，CapCut 为 true）；Resolve 导入 FCPXML 标题 / 图片 / 叠化与 OTIO 转场 / marker。见 docs/changes/2026-09-27-brand-cards-and-transitions.md。
 - [ ] 待办（2026-09-27）：原生文字剪映「已验证」判定两处不一致——`storyboard_text_tracks` 把默认描边 + 阴影字幕直接标 `verified`，`validate_text_tracks` 对同样样式判 `local_preview_only`；需在真实剪映 / CapCut 草稿确认描边与阴影后统一。
