@@ -105,6 +105,8 @@ pub(super) fn safe_step_error_code(error: &str) -> &'static str {
         "storyboard_voiceover_failed"
     } else if error.starts_with("voiceover_longer_than_picture:") {
         "voiceover_longer_than_picture"
+    } else if let Some(code) = crate::music_provider::gateway_voice::error_code(error) {
+        code
     } else if error.starts_with("storyboard_source_inventory_unavailable:")
         || error.starts_with("storyboard_visual_evidence_unavailable:")
     {
@@ -213,12 +215,16 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
         });
     }
     if error.starts_with("storyboard_voiceover_failed:") {
+        let mut facts = vec!["Voiceover could not be synthesized, so beats were not split and no storyboard was saved."];
+        if let Some(code) = crate::music_provider::gateway_voice::error_code(error) {
+            facts.push(crate::music_provider::gateway_voice::failure_guidance(code).0);
+        }
         return json!({
             "status": "failed",
             "operation": tool,
             "stage": "storyboard_voiceover",
             "code": "storyboard_voiceover_failed",
-            "facts": ["Voiceover could not be synthesized, so beats were not split and no storyboard was saved."],
+            "facts": facts,
             "retryable": false,
             "recovery": "Stop this run. Explain that voiceover failed before the storyboard started. Do not call generate_storyboard again until the user asks to retry.",
             "responseInstruction": "Tell the user the video was not generated because voiceover could not be synthesized. Do not claim a storyboard was saved."
@@ -295,6 +301,19 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "retryable": false,
             "recovery": "Stop this run and explain the failed phase and unresolved issue. Do not call generate_storyboard again in this run. Do not shorten the brief or assemble unverified shots.",
             "responseInstruction": "Tell the user the storyboard was not created and explain partialCandidateSummary. Local phase repairs have already been attempted; do not restart the whole pipeline."
+        });
+    }
+    if code.starts_with("voice_gateway_") {
+        let (fact, recovery) = crate::music_provider::gateway_voice::failure_guidance(code);
+        return json!({
+            "status": "failed",
+            "operation": tool,
+            "stage": "voice_provider",
+            "code": code,
+            "facts": [fact],
+            "retryable": code == crate::music_provider::gateway_voice::UNAVAILABLE,
+            "recovery": recovery,
+            "responseInstruction": "Explain the voiceover failure reason from facts in the user's language. Do not claim narration was synthesized, and do not suggest adding a personal voice API key."
         });
     }
     if code.starts_with("voice_provider_") {

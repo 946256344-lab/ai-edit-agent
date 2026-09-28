@@ -458,6 +458,9 @@ export async function clearCustomApi() { requireDesktopRuntime(); return invoke<
 export async function signInFellowCut(email: string, password: string) { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('sign_in_fellowcut', { email, password }) }
 export async function getFellowCutAccountStatus() { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('get_fellowcut_account_status') }
 export async function signOutFellowCut() { requireDesktopRuntime(); return invoke<FellowCutAccountStatus>('sign_out_fellowcut') }
+/** 配音开关是否可用：只有网关明确没有配音能力时 available 为 false；reason 为探测失败的稳定码。 */
+export type VoiceAvailability = { available: boolean; viaGateway: boolean; reason: string | null }
+export async function getVoiceAvailability() { requireDesktopRuntime(); return invoke<VoiceAvailability>('get_voice_availability') }
 
 export async function getElevenLabsStatus() { requireDesktopRuntime(); return invoke<ElevenLabsStatus>('get_elevenlabs_status') }
 export async function getJamendoStatus() { requireDesktopRuntime(); return invoke<JamendoStatus>('get_jamendo_status') }

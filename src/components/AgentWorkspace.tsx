@@ -23,6 +23,8 @@ export type AgentWorkspaceModel = {
   listenerReady: boolean
   composerNotice: string | null
   mediaOptions: MediaOptions
+  /** 网关明确没有配音能力时为 false，隐藏配音开关。 */
+  voiceAvailable: boolean
   /** 当前输出编辑器的界面名称，空对话引导语按它说明交付去向。 */
   outputEditorLabel: string
   analysis: { progress: AnalysisProgress; waiting: boolean; importing: boolean }
@@ -180,7 +182,7 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
                 {aspectRatios.map((ratio) => <option key={ratio} value={ratio}>{copy.aspectOption(ratio)}</option>)}
               </select>
             </label>
-            {mediaKeys.map((key) => (
+            {mediaKeys.filter((key) => key !== 'voiceover' || model.voiceAvailable).map((key) => (
               <button key={key} type="button" aria-pressed={model.mediaOptions[key]}
                 disabled={analysis.waiting}
                 title={copy.mediaToggleTitle(model.mediaOptions[key], copy.media[key])}

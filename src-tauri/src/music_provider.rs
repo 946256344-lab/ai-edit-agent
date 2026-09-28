@@ -1,4 +1,4 @@
-//! Jamendo 音乐与 ElevenLabs 配音的凭据、有界 HTTP 适配器。
+//! Jamendo 音乐、ElevenLabs / Fish Audio 配音的凭据、有界 HTTP 适配器，以及经 Voycut 网关的配音。
 //! 下载后的音频仍通过素材模块登记并进入本地分析与审计流程；TTS 领域算法在 voice_provider。
 
 use crate::assets::store_downloaded_audio;
@@ -628,6 +628,12 @@ pub(crate) mod fish_audio {
             body["reference_id"] = json!(reference_id);
         }
         let response = request("POST", "/v1/tts/stream/with-timestamp", Some(body))?;
+        read_timestamp_stream(response)
+    }
+
+    /// 读取 Fish 带时间戳的 SSE 流，合成音频并按 chunk 偏移拼接 segments/words。
+    /// 直连与经 Voycut 网关转发的是同一格式，共用本解析。
+    pub(crate) fn read_timestamp_stream(response: ureq::Response) -> Result<Value, String> {
         let mut raw = String::new();
         response
             .into_reader()
@@ -766,6 +772,200 @@ pub(crate) mod fish_audio {
                 last_error_code: Some("environment_key_missing".to_owned()),
                 importable: false,
             },
+        }
+    }
+}
+
+pub(crate) mod gateway_voice {
+    // Voycut 网关配音：登录 Voycut 账号后经网站网关合成，配音密钥只在服务端，桌面不持有。
+    // 网关原样转发 Fish Audio 带时间戳的流，解析复用 `music_provider::fish_audio`；
+    // 失败带 `voice_gateway_*` 稳定码前缀，由 Agent 失败上下文按码说明，不静默换 Provider。
+
+    use serde::Serialize;
+    use serde_json::{json, Value};
+    use std::{io::Read, time::Duration};
+
+    const TIMEOUT: Duration = Duration::from_secs(90);
+    const MAX_LIST_BYTES: u64 = 1024 * 1024;
+
+    pub(crate) const AUTH: &str = "voice_gateway_auth";
+    pub(crate) const ENTITLEMENT: &str = "voice_gateway_entitlement";
+    pub(crate) const UPGRADE_REQUIRED: &str = "voice_gateway_upgrade_required";
+    pub(crate) const DAILY_QUOTA: &str = "voice_gateway_daily_quota";
+    pub(crate) const NOT_CONFIGURED: &str = "voice_gateway_not_configured";
+    pub(crate) const REJECTED: &str = "voice_gateway_rejected";
+    pub(crate) const UNAVAILABLE: &str = "voice_gateway_unavailable";
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct VoiceAvailability {
+        /// 配音开关是否显示；只有网关明确没有配音能力时为 false。
+        available: bool,
+        via_gateway: bool,
+        /// 探测失败的稳定码；登录失效、网络等暂时性原因仍视为可用，由真实请求给出具体原因。
+        reason: Option<String>,
+    }
+
+    /// 错误里带的网关配音码（可能被上层加了前缀，按子串识别）。
+    pub(crate) fn error_code(error: &str) -> Option<&'static str> {
+        [AUTH, ENTITLEMENT, UPGRADE_REQUIRED, DAILY_QUOTA, NOT_CONFIGURED, REJECTED, UNAVAILABLE]
+            .into_iter()
+            .find(|code| error.contains(code))
+    }
+
+    /// Agent 失败上下文里给模型的事实与恢复说明；只有 unavailable 可重试。
+    pub(crate) fn failure_guidance(code: &str) -> (&'static str, &'static str) {
+        match code {
+            AUTH => ("The user's Voycut sign-in is missing or expired.", "Ask the user to sign in to Voycut again from the account menu."),
+            ENTITLEMENT => ("Voycut access is not active for this account.", "Tell the user their Voycut access is not active and point them to the account page."),
+            UPGRADE_REQUIRED => ("This Voycut version is no longer supported by the voice service.", "Ask the user to download the latest Voycut from the website."),
+            DAILY_QUOTA => ("Today's Voycut voiceover quota for this account is used up; it resets at 00:00 UTC.", "Do not retry voiceover today. Offer to continue without narration."),
+            NOT_CONFIGURED => ("The Voycut service does not offer voiceover right now.", "Do not retry voiceover. Offer to continue without narration."),
+            REJECTED => ("The Voycut voice service rejected this narration.", "Do not retry the same narration. Ask the user whether to shorten or rewrite it."),
+            _ => ("The Voycut voice service is temporarily unavailable.", "Voiceover may be retried once later if the user asks."),
+        }
+    }
+
+    /// 与模型网关同一站点：`https://<站点>/api/model` → `https://<站点>/api/voice/<path>`。
+    fn voice_url(path: &str) -> Result<Option<String>, String> {
+        let Some(base_url) = crate::fellowcut_account::gateway_base_url()? else {
+            return Ok(None);
+        };
+        let site = base_url.strip_suffix("/api/model").ok_or_else(|| {
+            "provider_gateway_not_configured: The Voycut model service address in this build is invalid."
+                .to_owned()
+        })?;
+        Ok(Some(format!("{site}/api/voice/{path}")))
+    }
+
+    /// 构建内置了网关时，配音只走网关（与模型访问同一顺序），不再读本机配音密钥。
+    pub(crate) fn enabled() -> Result<bool, String> {
+        Ok(crate::fellowcut_account::gateway_base_url()?.is_some())
+    }
+
+    fn failure(status: u16, body: &str) -> String {
+        let code = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|value| value.get("error").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_default();
+        match (status, code.as_str()) {
+            (401, _) => format!("{AUTH}: Voycut sign-in is missing or expired."),
+            (403, _) => format!("{ENTITLEMENT}: Voycut access is not active for this account."),
+            (426, _) => format!("{UPGRADE_REQUIRED}: This Voycut version is no longer supported by the voice service."),
+            (429, "daily_quota_exceeded") => {
+                format!("{DAILY_QUOTA}: Today's Voycut voiceover quota is used up; it resets at 00:00 UTC.")
+            }
+            // 旧网关没有配音接口（404），或服务端没配配音密钥。
+            (404, _) | (503, "voice_not_configured") => {
+                format!("{NOT_CONFIGURED}: The Voycut service does not offer voiceover right now.")
+            }
+            (400 | 413, _) => format!("{REJECTED}: The Voycut voice service rejected this narration (HTTP {status})."),
+            _ => format!("{UNAVAILABLE}: The Voycut voice service is unavailable (HTTP {status})."),
+        }
+    }
+
+    fn request(method: &str, path: &str, body: Option<Value>) -> Result<ureq::Response, String> {
+        let url = voice_url(path)?.ok_or_else(|| {
+            format!("{NOT_CONFIGURED}: This build has no Voycut service configured.")
+        })?;
+        let id_token = crate::fellowcut_account::fresh_id_token()
+            .map_err(|_| format!("{AUTH}: Voycut sign-in is missing or expired."))?;
+        let agent = crate::outbound_http::voice_agent();
+        let request = if method == "POST" { agent.post(&url) } else { agent.get(&url) }
+            .set("Authorization", &format!("Bearer {id_token}"))
+            .set("X-Voycut-Version", env!("CARGO_PKG_VERSION"))
+            .set("Accept", "application/json")
+            .timeout(crate::execution_deadline::timeout(TIMEOUT)?);
+        let result = match body {
+            Some(body) => request
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string()),
+            None => request.call(),
+        };
+        result.map_err(|error| match error {
+            ureq::Error::Status(status, response) => {
+                let mut body = String::new();
+                let _ = response.into_reader().take(4096).read_to_string(&mut body);
+                failure(status, &body)
+            }
+            ureq::Error::Transport(transport) => format!(
+                "{UNAVAILABLE}: {}",
+                crate::outbound_http::classify_voice_transport("Voycut voice service", &transport)
+            ),
+        })
+    }
+
+    /// 网关已把 Fish 音色整理成 `{ voices: [{ voice_id, name, category }] }`。
+    pub(crate) fn list_voices() -> Result<Value, String> {
+        let response = request("GET", "voices", None)?;
+        let payload: Value = serde_json::from_reader(response.into_reader().take(MAX_LIST_BYTES))
+            .map_err(|_| format!("{UNAVAILABLE}: The Voycut voice service returned an invalid voice list."))?;
+        if !payload.get("voices").is_some_and(Value::is_array) {
+            return Err(format!("{UNAVAILABLE}: The Voycut voice service returned an invalid voice list."));
+        }
+        Ok(payload)
+    }
+
+    pub(crate) fn synthesize(text: &str, reference_id: Option<&str>) -> Result<Value, String> {
+        let mut body = json!({ "text": text });
+        if let Some(reference_id) = reference_id.filter(|value| !value.trim().is_empty()) {
+            body["reference_id"] = json!(reference_id);
+        }
+        crate::music_provider::fish_audio::read_timestamp_stream(request("POST", "tts", Some(body))?)
+    }
+
+    fn availability() -> VoiceAvailability {
+        match enabled() {
+            Ok(true) => {}
+            // 未内置网关（开发构建）：沿用本机配音密钥，开关照常显示。
+            Ok(false) | Err(_) => {
+                return VoiceAvailability { available: true, via_gateway: false, reason: None };
+            }
+        }
+        match list_voices() {
+            Ok(_) => VoiceAvailability { available: true, via_gateway: true, reason: None },
+            Err(error) => {
+                let code = error.split_once(": ").map(|(code, _)| code.to_owned());
+                VoiceAvailability {
+                    available: code.as_deref() != Some(NOT_CONFIGURED),
+                    via_gateway: true,
+                    reason: code,
+                }
+            }
+        }
+    }
+
+    #[tauri::command]
+    pub async fn get_voice_availability() -> VoiceAvailability {
+        tauri::async_runtime::spawn_blocking(availability)
+            .await
+            .unwrap_or(VoiceAvailability {
+                available: true,
+                via_gateway: false,
+                reason: Some(UNAVAILABLE.to_owned()),
+            })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn gateway_statuses_map_to_stable_voice_codes() {
+            let cases = [
+                (429, r#"{"error":"daily_quota_exceeded"}"#, DAILY_QUOTA),
+                (429, r#"{"error":"voice_rate_limited"}"#, UNAVAILABLE),
+                (503, r#"{"error":"voice_not_configured"}"#, NOT_CONFIGURED),
+                (404, "Not Found", NOT_CONFIGURED),
+                (503, r#"{"error":"gateway_disabled"}"#, UNAVAILABLE),
+                (401, r#"{"error":"login_expired"}"#, AUTH),
+                (403, r#"{"error":"trial_inactive"}"#, ENTITLEMENT),
+                (426, r#"{"error":"upgrade_required"}"#, UPGRADE_REQUIRED),
+                (400, r#"{"error":"voice_rejected_request"}"#, REJECTED),
+            ];
+            for (status, body, code) in cases {
+                assert!(failure(status, body).starts_with(&format!("{code}: ")), "{status} {body}");
+            }
         }
     }
 }

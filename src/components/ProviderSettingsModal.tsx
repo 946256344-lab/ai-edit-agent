@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef } from 'react'
 import type { ProviderController } from '../hooks/useProviderController'
 import { useI18n } from '../lib/i18n'
 
-// 正式版模型只走 Voycut 网关：实验性 OpenAI OAuth（非官方集成）与自定义 API 仅在开发构建显示。
+// 正式版模型与配音只走 Voycut 网关：实验性 OpenAI OAuth（非官方集成）、自定义 API 与自带配音密钥仅在开发构建显示。
 const showDevModelAccess = import.meta.env.DEV
 
 type ProviderSettingsModalProps = {
@@ -52,6 +52,8 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
 
         <div className="provider-divider" />
         </>)}
+        {/* 正式版配音经 Voycut 网关，不需要也不使用本机配音密钥。 */}
+        {showDevModelAccess && (<>
         <div className="provider-option chosen">
           <span>
             <strong>{copy.fishTitle}</strong>
@@ -66,6 +68,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         </form>
         {model.fishAudioStatus.importable && <button className="outline-button modal-button" onClick={actions.importFishAudioKey} disabled={model.isSavingVoice}>{copy.importFish}</button>}
         {model.fishAudioStatus.keyStored && <button className="outline-button modal-button" onClick={actions.clearFishAudioKey}>{copy.clearFish}</button>}
+        </>)}
 
         {showDevModelAccess && (<>
         <div className="provider-divider" />
@@ -110,6 +113,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         )}
         </>)}
 
+        {showDevModelAccess && (<>
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span>
@@ -142,6 +146,7 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
         {model.elevenLabsStatus.keyStored && (
           <button className="outline-button modal-button" onClick={actions.clearElevenLabsKey}>{copy.clearEleven}</button>
         )}
+        </>)}
         <div className="provider-divider" />
         <div className="provider-option chosen">
           <span><strong>{copy.jamendoTitle}</strong><small>{copy.jamendoHint}</small></span>

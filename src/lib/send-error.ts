@@ -11,7 +11,7 @@ type ProviderFailure =
   | { kind: 'network' }
   | { kind: 'http'; status: number }
   | { kind: 'empty' }
-  | { kind: 'gateway'; reason: 'auth' | 'entitlement' | 'payloadTooLarge' | 'upgrade' }
+  | { kind: 'gateway'; reason: 'auth' | 'entitlement' | 'payloadTooLarge' | 'upgrade' | 'dailyQuota' }
 
 export function describeSendError(rawError: string, hasContext: boolean): string {
   const errorCopy = messages().app.errors
@@ -35,6 +35,7 @@ export function describeSendError(rawError: string, hasContext: boolean): string
         if (failure.reason === 'auth') return errorCopy.gatewayAuth
         if (failure.reason === 'entitlement') return errorCopy.gatewayEntitlement
         if (failure.reason === 'upgrade') return errorCopy.gatewayUpgrade
+        if (failure.reason === 'dailyQuota') return errorCopy.gatewayDailyQuota
         return errorCopy.gatewayPayloadTooLarge
       case 'http':
         if (failure.status === 401 || failure.status === 403) return errorCopy.providerAuth(failure.status)
@@ -57,6 +58,7 @@ function failureFromCode(code: string): ProviderFailure | null {
   if (code === 'provider_gateway_entitlement') return { kind: 'gateway', reason: 'entitlement' }
   if (code === 'provider_gateway_payload_too_large') return { kind: 'gateway', reason: 'payloadTooLarge' }
   if (code === 'provider_gateway_upgrade_required') return { kind: 'gateway', reason: 'upgrade' }
+  if (code === 'provider_gateway_daily_quota') return { kind: 'gateway', reason: 'dailyQuota' }
   const http = /^provider_http_(\d{3})$/.exec(code)
   return http ? { kind: 'http', status: Number(http[1]) } : null
 }

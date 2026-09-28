@@ -88,7 +88,7 @@ function App() {
   const [routeStatusDetail, setRouteStatusDetail] = useState<string | null>(null)
   const [routeStatusTone, setRouteStatusTone] = useState<'neutral' | 'info' | 'success' | 'warning'>('neutral')
   const [agentTasks, setAgentTasks] = useState<StoredAgentTask[]>([])
-  const composerMedia = useComposerMediaController(activeEditingSessionId, agentTasks)
+  const composerMedia = useComposerMediaController(activeEditingSessionId, agentTasks, desktopRuntime)
   const [storeState, setStoreState] = useState<'browser' | 'ready' | 'unavailable'>(desktopRuntime ? 'unavailable' : 'browser')
   const activeProjectRef = useRef<string | null>(null)
   const activeEditingSessionRef = useRef<string | null>(null)
@@ -643,6 +643,7 @@ function App() {
                 listenerReady: agentReconciliation.listenerReady,
                 composerNotice,
                 mediaOptions: composerMedia.options,
+                voiceAvailable: composerMedia.voiceAvailable,
                 outputEditorLabel: artifactWorkspace.model.selectedEditorLabel,
                 analysis: {
                   progress: analysisGate.progress ?? assetWorkspace.page.progress,

@@ -1,5 +1,9 @@
 # API 与工具契约
 
+## 2026-09-28：配音经 Voycut 网关
+
+新增 `get_voice_availability()`，返回 `{ available, viaGateway, reason }`：构建内置网关时探测网关配音（`/api/voice/voices`），只有网关明确没有配音能力（`voice_gateway_not_configured`）时 `available` 为 false，前端据此隐藏配音开关；未内置网关时恒为 true。内置网关时配音只经网关、不读本机配音密钥、不回退 ElevenLabs，失败带 `voice_gateway_auth`、`voice_gateway_entitlement`、`voice_gateway_upgrade_required`、`voice_gateway_daily_quota`、`voice_gateway_not_configured`、`voice_gateway_rejected`、`voice_gateway_unavailable` 码前缀，Agent 失败上下文同码（仅 `unavailable` 可重试）。模型网关新增 `provider_gateway_daily_quota`（网关 429 `daily_quota_exceeded`，不重试）。`VoiceoverApplyResult.provider` 经网关时仍为 `Fish Audio`。见 `docs/changes/2026-09-28-gateway-voice.md`。
+
 ## 2026-09-27：品牌卡、镜头转场与品牌套件
 
 新增 `get_brand_kit` / `set_brand_kit`。`TimelineVersion` 增加 `graphicOverlays`、`transitions`，旧版本读出为空。`EditorDeliveryResult` 与 `JianyingDraftResult` 增加 `notes[{ code, detail }]`。剪映适配器输入增加 `graphicOverlays`、`transitions`，格式版本不变。Native 工具新增 `add_title_cards`、`set_transitions`。`generate_storyboard` 的 `appliedMedia` 增加 `brandCards`、`transitions`，自动收尾失败时有 `brandCardsNotApplied`。见 `docs/changes/2026-09-27-brand-cards-and-transitions.md`。
@@ -303,7 +307,7 @@ Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 
 | `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message/messageKey/messageParams`（`status`=`ok|warn|fail`；`messageKey` 如 `diskSpace.low` 为稳定文案键，前端按界面语言翻译，未知键回落中文 `message`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
 | `get_runtime_model_status` | 无 | `RuntimeModelStatus { overall, currentId, message, messageKey, messageParams, artifacts[] }` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。`messageParams.model` 为产物 id，前端按界面语言显示模型名。 |
 | `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
-| `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
+| `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：内置网关时只经 Voycut 网关（Fish Audio），否则优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
 | `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
 | `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
 | `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 成功后自动串联 timeline、preview 与所选输出端口；`src/lib/local-store.ts` 不再封装此命令。 |
@@ -323,6 +327,7 @@ Provider 设置弹窗提供 Jamendo Client ID 输入框，保存后只显示凭�
 | `save_elevenlabs_api_key` | `{ apiKey }` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
 | `clear_elevenlabs_api_key` | 无 | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |
 | `import_elevenlabs_api_key_from_environment` | 无 | `ElevenLabsStatus` | 当凭据库未配置时，从本机 `ELEVENLABS_API_KEY` 导入一次；不在每次 HTTP 时偷读环境变量。 |
+| `get_voice_availability` | 无 | `VoiceAvailability` | 配音开关是否可用：内置网关时探测网关配音，只有网关明确没有配音能力时 `available=false`；不返回任何密钥。 |
 | `get_fish_audio_status` | 无 | `FishAudioStatus` | 返回 Fish Audio 密钥是否已存及音色列表是否可读；不返回 API Key。 |
 | `save_fish_audio_api_key` | `{ apiKey }` | `FishAudioStatus` | 将 Fish Audio API Key 写入 Windows Credential Manager，并用音色列表接口探活。配置后配音优先使用 Fish Audio；传输/超时/5xx/429 且 ElevenLabs 已配置时可回退（401/密钥错误不回退）。 |
 | `clear_fish_audio_api_key` | 无 | `FishAudioStatus` | 删除 Windows Credential Manager 中的 Fish Audio 密钥。 |

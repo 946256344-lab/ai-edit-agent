@@ -110,6 +110,7 @@ pub fn run() {
             fellowcut_account::sign_in_fellowcut,
             fellowcut_account::get_fellowcut_account_status,
             fellowcut_account::sign_out_fellowcut,
+            music_provider::gateway_voice::get_voice_availability,
             music_provider::get_jamendo_status,
             music_provider::save_jamendo_client_id,
             music_provider::get_elevenlabs_status,

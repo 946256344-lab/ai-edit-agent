@@ -148,11 +148,51 @@ impl VoiceTransport for FishAudioTransport {
         requested: Option<&str>,
         _voices: &[VoiceSummary],
     ) -> Result<(String, String), String> {
-        Ok(requested
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| (value.to_owned(), "Selected voice".to_owned()))
-            .unwrap_or_else(|| (String::new(), "Default".to_owned())))
+        resolve_fish_voice(requested)
+    }
+}
+
+fn resolve_fish_voice(requested: Option<&str>) -> Result<(String, String), String> {
+    Ok(requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| (value.to_owned(), "Selected voice".to_owned()))
+        .unwrap_or_else(|| (String::new(), "Default".to_owned())))
+}
+
+/// 经 Voycut 网关用开发者的 Fish Audio 密钥合成。上游、模型与音频格式和 Fish 直连相同，
+/// Provider 名与指纹参数保持一致，已缓存的配音、词级时间戳和草稿配音轨照旧可用。
+struct GatewayVoiceTransport;
+
+impl VoiceTransport for GatewayVoiceTransport {
+    fn get_json(&self, _path: &str) -> Result<Value, String> {
+        crate::music_provider::gateway_voice::list_voices()
+    }
+
+    fn post_json(&self, _path: &str, body: Value) -> Result<Value, String> {
+        let text = body.get("text").and_then(Value::as_str).unwrap_or("");
+        let voice_id = body.get("voice_id").and_then(Value::as_str);
+        crate::music_provider::gateway_voice::synthesize(text, voice_id)
+    }
+
+    fn provider_name(&self) -> &'static str {
+        FishAudioTransport.provider_name()
+    }
+    fn model_id(&self) -> &'static str {
+        FishAudioTransport.model_id()
+    }
+    fn voice_settings(&self) -> &'static str {
+        FishAudioTransport.voice_settings()
+    }
+    fn output_format(&self) -> &'static str {
+        FishAudioTransport.output_format()
+    }
+    fn resolve_voice(
+        &self,
+        requested: Option<&str>,
+        _voices: &[VoiceSummary],
+    ) -> Result<(String, String), String> {
+        resolve_fish_voice(requested)
     }
 }
 
@@ -161,9 +201,12 @@ fn default_provider_name() -> String {
 }
 
 fn active_transport() -> Result<&'static dyn VoiceTransport, String> {
+    static GATEWAY: GatewayVoiceTransport = GatewayVoiceTransport;
     static FISH: FishAudioTransport = FishAudioTransport;
     static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
-    if crate::music_provider::fish_audio::configured_for_snapshot()? {
+    if crate::music_provider::gateway_voice::enabled()? {
+        Ok(&GATEWAY)
+    } else if crate::music_provider::fish_audio::configured_for_snapshot()? {
         Ok(&FISH)
     } else if crate::music_provider::elevenlabs_configured_for_snapshot()? {
         Ok(&ELEVENLABS)
@@ -192,12 +235,16 @@ fn is_fallback_eligible_error(error: &str) -> bool {
         || lower.contains("api error 5")
 }
 
-/// 优先 Fish；传输类失败且 ElevenLabs 已配置时回退（回退时不用 Fish 音色 ID）。
+/// 内置网关时只走网关，失败如实返回，不回退到本机密钥。
+/// 否则优先 Fish；传输类失败且 ElevenLabs 已配置时回退（回退时不用 Fish 音色 ID）。
 pub(crate) fn synthesize_with_fallback(
     text: &str,
     requested_voice_id: Option<&str>,
     root: &Path,
 ) -> Result<(CachedVoiceover, Vec<u8>, Value, bool), String> {
+    if crate::music_provider::gateway_voice::enabled()? {
+        return synthesize_with_transport(&GatewayVoiceTransport, text, requested_voice_id, root);
+    }
     static FISH: FishAudioTransport = FishAudioTransport;
     static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
     let fish_ok = crate::music_provider::fish_audio::configured_for_snapshot()?;
@@ -1139,11 +1186,11 @@ pub fn synthesize_storyboard_voiceover(
     }
 }
 
+/// 网关模式下有没有配音能力由网关请求决定（没有时返回 `voice_gateway_not_configured`）。
 fn voice_provider_configured() -> Result<bool, String> {
-    Ok(
-        crate::music_provider::fish_audio::configured_for_snapshot()?
-            || crate::music_provider::elevenlabs_configured_for_snapshot()?,
-    )
+    Ok(crate::music_provider::gateway_voice::enabled()?
+        || crate::music_provider::fish_audio::configured_for_snapshot()?
+        || crate::music_provider::elevenlabs_configured_for_snapshot()?)
 }
 
 /// 时间线就绪后统一自动配音（Agent / 前端共用）。

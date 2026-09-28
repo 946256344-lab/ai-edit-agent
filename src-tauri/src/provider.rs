@@ -86,6 +86,7 @@ const GATEWAY_AUTH: &str = "provider_gateway_auth";
 const GATEWAY_ENTITLEMENT: &str = "provider_gateway_entitlement";
 const GATEWAY_PAYLOAD_TOO_LARGE: &str = "provider_gateway_payload_too_large";
 const GATEWAY_UPGRADE_REQUIRED: &str = "provider_gateway_upgrade_required";
+const GATEWAY_DAILY_QUOTA: &str = "provider_gateway_daily_quota";
 
 /// 重试也不会成功的模型失败：网关登录、资格、版本与请求体过大，以及除 408/429 外的 HTTP 4xx。
 /// 调用方遇到时应立即结束本步，不再按传输或语义预算重发，避免空耗时间和上游额度。
@@ -1156,9 +1157,23 @@ fn post_model_payload_with_custom_model(
             let sent = loop {
                 match request_builder.clone().send_string(&request_body) {
                     Err(ureq::Error::Status(429, response)) => {
+                        let retry_after = response.header("retry-after").map(str::to_owned);
+                        // 网关每日额度用尽要到第二天才恢复，重发只会继续被拒，直接结束。
+                        let response = if is_gateway {
+                            let body = response.into_string().unwrap_or_default();
+                            if body.contains("daily_quota_exceeded") {
+                                return Err(format!(
+                                    "{GATEWAY_DAILY_QUOTA}: Today's Voycut usage limit for this account is reached."
+                                ));
+                            }
+                            ureq::Response::new(429, "Too Many Requests", &body)
+                                .map_err(|_| "Voycut model service unavailable:HTTP 429".to_owned())?
+                        } else {
+                            response
+                        };
                         let wait = rate_limit_wait(
                             rate_limited_attempts,
-                            response.header("retry-after"),
+                            retry_after.as_deref(),
                             crate::execution_deadline::current(),
                             Instant::now(),
                         );
@@ -1747,6 +1762,7 @@ mod tests {
             "Voycut model service unavailable:HTTP 400",
             "Phase 3 beat 'b1': provider_gateway_entitlement: Voycut access is not active for this account.",
             "provider_gateway_upgrade_required: This Voycut version is no longer supported by the model service.",
+            "provider_gateway_daily_quota: Today's Voycut usage limit for this account is reached.",
             // 发送层已按 Retry-After 退避重试，仍限流就如实失败。
             "Voycut model service unavailable:HTTP 429",
         ] {
