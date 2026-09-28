@@ -1,4 +1,4 @@
-# Assembly Video Agent：Agent 入口
+# Voycut：Agent 入口
 
 本文件是代码修改的最小入口，先读当前任务和所在目录的说明，再按需补充其他文档。
 

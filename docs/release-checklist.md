@@ -220,7 +220,25 @@
 
 ## 附录 A：待桌面验收的改动
 
-这些改动已经写完代码、通过编译或单元测试，但还没在真实桌面回合里确认过。原来分散在 `TASKS.md`，09-26 并到这里。用 Release 包、英文界面跑 §1.4 主路径时逐条勾掉；不通过的写成 `TASKS.md` 待修项。
+这些改动已经写完代码、通过编译或单元测试，但还没在真实桌面回合里确认过。这里是唯一的待桌面确认清单，`TASKS.md` 不再重复列出。用 Release 包、英文界面跑 §1.4 主路径时逐条勾掉；不通过的写成 `TASKS.md` 待修项。
+
+**09-26 至 09-27 新增**
+
+- [ ] 内容决定镜头时长：无配音时每镜时长跟精修区间走（约 1.5–5 秒）、源区间与槽位等长、素材够就不复用、夜拍前不召回夜景（`docs/changes/2026-09-27-content-driven-shot-lengths.md`）
+- [ ] 音乐先行：导入时算节拍，配音关时按乐句选音乐窗口、切点吸附到拍上；配音开时切点只挪 ±120ms（`docs/changes/2026-09-27-music-first-editing.md`）
+- [ ] Agent 只按 `musicTiming` 说明是否卡点，缺失或未对齐时如实转述（无变更文档）
+- [ ] 品牌卡与转场：剪映 / CapCut 草稿里转场、品牌卡图片与渐显渐隐的实际效果（剪映闪黑 is_overlap=false，CapCut 为 true）；Resolve 导入 FCPXML 标题 / 图片 / 叠化与 OTIO 转场 / marker（`docs/changes/2026-09-27-brand-cards-and-transitions.md`）
+- [ ] 画幅补充：模型不再擅自改动输入框选择；播放器按成片比例显示（主体 09-27 已实测通过，`docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`）
+- [ ] 英文界面：素材卡状态完整显示、默认子库按语言显示、只读查询失败不再判「部分完成」、空对话引导语跟随输出编辑器、重复导入提示不再追加（`docs/changes/2026-09-27-english-ui-polish.md`）
+- [ ] 版本号按会话编号，新会话从 v1 开始（`docs/changes/2026-09-26-per-session-version-numbers.md`）
+- [ ] 英文字幕单词间有空格、按词换行；BGM 未落地时 Agent 不再声称已加（`docs/changes/2026-09-26-english-subtitles-applied-media.md`）
+- [ ] 429 退避后仍限流即失败、窗外区间取窗中央、预览时长不足即报错、字幕默认白字黑描边（`docs/changes/2026-09-26-rate-limit-and-degenerate-shots.md`）
+- [ ] 每个模型请求最多 4 张图，Token Plan key 下 Phase 3 不再报图片超限（`docs/changes/2026-09-26-four-images-per-request.md`）
+- [ ] 召回分拍：各拍候选不再雷同，已用 / 相似候选进选片前剔除，撞车只打回靠后镜头（`docs/changes/2026-09-26-shot-selection-distinct-pools.md`）
+- [ ] 时长冲突暂停后按用户回答续跑，不再空口回「已创建」（`docs/changes/2026-09-26-paused-storyboard-resume.md`）
+- [ ] 时长冲突时按实测语速给目标稿长，Agent 扩写到位（无变更文档）
+- [ ] 冷启动不再卡约 11 秒；webview 重载不再把运行中的任务判为中断（无变更文档）
+- [ ] Jamendo Client ID 配置入口与 API 失败反馈，需可用的自有 Client ID 验收真实搜索、下载与写轨（`docs/changes/2026-09-26-jamendo-config.md`）
 
 **界面**
 

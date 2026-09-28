@@ -50,26 +50,19 @@ Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无
 
 ## 文档
 
-- `CONTRIBUTING.md`：所有人类与编码 Agent 共用的分支、验证、提交和 PR 流程。
-- `docs/architecture.md`：现有架构、数据流和技术约束。
-- `docs/decisions.md`：当前仍有效的少量架构决策。
-- `docs/api.md`：已实现的 Tauri 命令和 Agent 工具契约。
-- `docs/roadmap.md`：里程碑和未实现能力。
-- `TASKS.md`：当前可执行任务与待决问题。
-- `docs/harness.md`：架构改动与文档同步的检查规则和简化后的检查说明。
-- `docs/audits/`：只读媒体事实审计报告（timeline、素材范围和 preview 渲染校验）。
-- `docs/codebase/`：面向 IDE 阅读和新成员上手的七份源码地图；建议从 `STRUCTURE.md` 和 `ARCHITECTURE.md` 开始。
+每份文档只回答一个问题：
 
-### AI Agent 接手顺序
+| 问题 | 文档 |
+|---|---|
+| 规则怎么守 | `AGENTS.md`（入口与产品底线）、`CONTRIBUTING.md`（协作、验证、提交） |
+| 现在做什么 | `TASKS.md`：只放未完成的事 |
+| 首发还差什么、哪些改动待桌面确认 | `docs/release-checklist.md` |
+| 为什么这么定 | `docs/decisions.md`：只放仍然有效的决定 |
+| 系统现在长什么样 | `docs/architecture.md`（产品链路）、`docs/api.md`（Tauri 命令与工具契约）、`docs/codebase/`（代码地图，从 `STRUCTURE.md` 开始） |
+| 过去发生了什么 | `docs/changes/`（按日期的变更记录）、`docs/audits/`（媒体事实审计）、git 记录 |
+| 检查怎么跑 | `docs/harness.md` |
 
-1. 读根 `AGENTS.md`、`CONTRIBUTING.md` 与 `TASKS.md` 的当前任务窗口。
-2. 修改前端时读 `src/AGENTS.md`；修改 Rust 时读 `src-tauri/src/AGENTS.md`。
-3. 从 `docs/codebase/STRUCTURE.md` 定位代码，再按根指令的路由只加载相关长期文档。
-4. 改了公开契约、harness 配置或长期文档时运行 `npm run harness:check`。
-
-Cursor、Claude Code 和 OpenCode 分别通过 `.cursor/rules/project-workflow.mdc`、`CLAUDE.md` 和 `opencode.json` 加载同一组权威文件；这些入口不保存第二份流程。默认在 `master` 提交并推送；并行任务才用独立分支和 worktree。完整命令见 `CONTRIBUTING.md`。
-
-这能让另一个编码 Agent 高可靠接手已提交、任务窗口明确的工作，但不是仅靠文档保证的“无缝记忆迁移”。交接时还必须保留干净或有说明的 Git 状态、准确的当前目标、未决问题、变更记录和可复现测试结果。
+编码 Agent 从根 `AGENTS.md` 进入；Cursor、Claude Code 和 OpenCode 分别通过 `.cursor/rules/project-workflow.mdc`、`CLAUDE.md` 和 `opencode.json` 加载同一组权威文件，这些入口不保存第二份流程。
 
 ## 文档同步 Harness
 
@@ -85,15 +78,3 @@ npm run harness:check
 所有手写 Rust、TypeScript/React、Node、Python、HTML、Shell 与 CSS 源码在文件顶部都有中文职责导航；权限、事务、恢复、外部进程和非直观算法再补就地中文解释。注释用于帮助在 IDE 中沿真实调用链学习，不逐行翻译明显语法，也不能代替类型、测试和后端校验。
 
 真实桌面前端回归可在以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 Tauri dev 后运行 `npm run tauri:verify`。脚本只切换工作区、开合目录和打开/关闭 Provider 弹窗，不发送 Agent 请求，不导入、生成或交付产物。
-
-维护记录（2026-08-15）：agentloop 与 taskrouter 路由验证新增 validate-then-correct 重试；fast_goal 降级为提示；Agent run 超时从 90 s 提升至 300 s。
-维护记录（2026-08-16）：移除后端 Rust 所有静默 fallback，错误路径改为输出真实原因；见 ADR-065 与 docs/changes/2026-08-16-remove-silent-fallbacks.md。
-维护记录（2026-08-17）：agentloop.rs 分层重构完成；路由/执行/提示/纯类型分入 agentloop/{runtime,skills,prompt,schema}.rs；check-agent-contracts.mjs 扩展扫描 runtime.rs。
-维护记录（2026-08-19）：Provider 原生工具调用统一为 ModelTurn/ModelOutputItem/FunctionCall，并由 NativeToolLoop 消费；非 Native 的 storyboard/视觉请求仍保留旧 JSON 提取接口。
-维护记录（2026-08-19）：NativeToolLoop 已移除前置对话 Router，统一处理普通聊天、澄清、项目事实和工具执行；原生 loop 提供观察、主链、文本、音乐与 Jianying 工具，RequestToolPolicy、确认门、作用域、超时和审计边界保持不变。
-维护记录（2026-08-19）：NativeToolLoop 已移除固定 LoopGoal 与 finish/done/no_action 控制动作；复合请求可跨多个授权工具，超时和步骤上限按真实 RunReceipt 保留部分产物。
-维护记录（2026-08-20）：修复会话隔离 bug（agentloop/prompt.rs 查询新增 editing_task_id 过滤，错误任务 ID 失败封闭），防止跨会话数据泄漏；见 docs/changes/2026-08-20-fix-session-isolation-message-history.md。
-维护记录（2026-08-20）：NativeToolLoop 为工具后的 Provider 总结请求增加安全失败分类与有界重试，每次 HTTP 只用剩余单步预算的一份，且不会重放本地工具；见 docs/changes/2026-08-20-native-provider-followup-recovery.md。
-维护记录（2026-08-20）：debug 构建可用 `NATIVE_PROVIDER_FULL_TRACE=1` 开启进程内完整 Provider INPUT/OUTPUT 检查器；见 docs/changes/2026-08-20-native-provider-full-trace.md。
-维护记录（2026-08-25）：NativeToolLoop 每轮注入并在写后刷新本地权威状态快照；快照成功作为本轮观察收据，观察工具退为细节补充。见 docs/changes/2026-08-24-native-state-snapshot.md。
-维护记录（2026-08-27）：Rust 后端 dead-code 警告清理；无命令、schema、工具白名单或 Provider 协议变化。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
