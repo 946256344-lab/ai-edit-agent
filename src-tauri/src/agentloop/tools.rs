@@ -151,7 +151,7 @@ pub(crate) fn native_function_tools_for_request(
         ),
         function_tool(
             LIST_VOICES,
-            "List voices available to the configured Fish Audio or ElevenLabs Provider without synthesizing audio.",
+            "List voices available for voiceover without synthesizing audio. With the Voycut service, the service decides the voice provider; otherwise the locally configured Fish Audio or ElevenLabs Provider is used.",
             json!({}),
             Vec::new(),
         ),
@@ -584,7 +584,7 @@ fn delivery_function_tools() -> Vec<Value> {
         ),
         function_tool(
             SYNTHESIZE_VOICEOVER,
-            "Synthesize narration with the configured voice Provider (Fish preferred; transport failures may fall back to ElevenLabs), fit picture duration to the voiceover, and best-effort replace generated subtitles using alignment. Pass narration text explicitly only for a new approved script; if this storyboard already has synthesized voiceover, pass text null and do not rewrite the spoken script. Do not speak on-screen titles. Treat voiceoverApplied=true as the only proof of narration; subtitleApplied may be false.",
+            "Synthesize narration (with the Voycut service, its chosen voice provider only, with no fallback; otherwise the locally configured Fish Audio or ElevenLabs Provider), fit picture duration to the voiceover, and best-effort replace generated subtitles using alignment. Pass narration text explicitly only for a new approved script; if this storyboard already has synthesized voiceover, pass text null and do not rewrite the spoken script. Do not speak on-screen titles. Treat voiceoverApplied=true as the only proof of narration; subtitleApplied may be false.",
             json!({
                 "text": {
                     "type": ["string", "null"],

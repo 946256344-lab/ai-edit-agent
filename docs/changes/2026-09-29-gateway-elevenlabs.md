@@ -8,6 +8,7 @@
 
 - `src-tauri/src/music_provider.rs` `gateway_voice`：音色列表解析出网关当前服务商（`provider`：`elevenlabs` / `fish`，不带即旧网关，按 Fish 处理；不认识的服务商报 `voice_gateway_upgrade_required`）、模型 `model_id` 与默认音色 `default_voice_id`。合成请求带 `provider`（网关换了服务商时返回 409，桌面按 `voice_gateway_unavailable` 处理，可重试）；ElevenLabs 按直连的 `{ audio_base64, alignment, normalized_alignment }` JSON 解析，Fish 仍复用 `fish_audio::read_timestamp_stream`。
 - `src-tauri/src/voice_provider.rs`：`GatewayVoiceTransport` 先取网关音色列表，再按服务商取与直连相同的 Provider 名、模型、音色设置与输出格式；ElevenLabs 默认音色取网关的 `default_voice_id`（缺省 Charlie）。缓存命中除指纹相同外还要求 manifest 的 Provider 名相同，Fish 的缓存不会被当成 ElevenLabs 用；经网关的 ElevenLabs 与直连 ElevenLabs 共用缓存。合成前不再重复请求音色列表。未内置网关（开发构建）的 Fish 优先、ElevenLabs 回退不变。
+- `src-tauri/src/agentloop/tools.rs`：`list_voices` / `synthesize_voiceover` 的工具描述改为按实际行为说明（经网关时由网关决定服务商、不回退；直连时沿用本机 Fish 优先、ElevenLabs 回退）。`src-tauri/src/agentloop/skills.rs`：内置网关时 `voice_provider_*` 失败的恢复说明改为如实说明网关暂无配音能力或本次未能生成，不引导用户填本机 key。
 - 前端无改动：网关明确没有配音能力（`voice_gateway_not_configured`）时仍隐藏配音开关；`voice_gateway_daily_quota`、`provider_gateway_daily_quota` 的提示保留，只在网关启用额度时出现。
 
 ## 改动

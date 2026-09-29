@@ -318,6 +318,30 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
     }
     if code.starts_with("voice_provider_") {
         let retryable = code == "voice_provider_error";
+        // 内置网关时配音只经网关，本机 key 不生效，不能引导用户去设置页填 key。
+        if crate::music_provider::gateway_voice::enabled().unwrap_or(false) {
+            let (fact, recovery) = if code == "voice_provider_unconfigured" {
+                (
+                    "The Voycut service does not offer voiceover right now.",
+                    "Do not retry voiceover. Offer to continue without narration.",
+                )
+            } else {
+                (
+                    "The Voycut voice service could not produce this voiceover.",
+                    "Voiceover may be retried once later if the user asks; otherwise offer to continue without narration.",
+                )
+            };
+            return json!({
+                "status": "failed",
+                "operation": tool,
+                "stage": "voice_provider",
+                "code": code,
+                "facts": [fact],
+                "retryable": retryable,
+                "recovery": recovery,
+                "responseInstruction": "Explain the voiceover failure reason from facts in the user's language. Do not claim narration was synthesized, and do not suggest adding a personal voice API key."
+            });
+        }
         let fact = match code {
             "voice_provider_unconfigured" => {
                 "Fish Audio / ElevenLabs 密钥均未写入 Credential Manager。"
