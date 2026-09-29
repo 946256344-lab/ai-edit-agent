@@ -23,7 +23,8 @@
 - [x] **D3 试用与付费：内测免费、资格整个内测期有效**（2026-09-28）。
   - 现状：`entitlements/{uid}` 由网站在邮箱验证后创建，`status: trial`，网关按 7 天判定有效（`../website/lib/model-gateway.js`），需改为内测期不过期；`paid` 状态客户端不能写。
   - 收费暂缓，等「策划 + 选镜」重做后成片过关、D4 有成本实测再定。届时海外收费建议用代收型支付（Merchant of Record，如 Paddle、Lemon Squeezy）。
-- [x] **D5 配音：经网关代理开发者自己的配音 key**（2026-09-28）。key 只放网关服务端环境变量，不打进安装包；代理上线前内测版隐藏配音开关。09-28 代码已写（分支 `feature/gateway-voice`，两个仓库）：网关 `/api/voice/*` 代理 Fish Audio，桌面内置网关时只走网关；网关未配 `FELLOWCUT_VOICE_API_KEY` 或旧网关时桌面隐藏配音开关（`docs/changes/2026-09-28-gateway-voice.md`），待部署与桌面确认。背景音乐（Jamendo）曲目的商业授权在收费前再处理。
+- [x] **不设每人额度**（2026-09-29 用户定）：内测用到上游 Token Plan 限额为止，网关按人计数默认关闭，只保留总开关；见 `docs/decisions.md`「首发」。§1.2「额度与限流」中按 uid 的每日上限因此不做。
+- [x] **D5 配音：经网关代理开发者自己的配音 key**（2026-09-28；09-29 服务商改为 ElevenLabs，Fish Audio 仅作可切换备选）。key 只放网关服务端环境变量，不打进安装包；代理上线前内测版隐藏配音开关。09-28 代码已写（分支 `feature/gateway-voice`，两个仓库）：网关 `/api/voice/*` 代理 Fish Audio，桌面内置网关时只走网关；网关未配 `FELLOWCUT_VOICE_API_KEY` 或旧网关时桌面隐藏配音开关（`docs/changes/2026-09-28-gateway-voice.md`），待部署与桌面确认。背景音乐（Jamendo）曲目的商业授权在收费前再处理。
 
 ### 待定
 - [ ] **D4 上游模型与单次成本**：
