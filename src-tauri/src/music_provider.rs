@@ -778,7 +778,8 @@ pub(crate) mod fish_audio {
 
 pub(crate) mod gateway_voice {
     // Voycut 网关配音：登录 Voycut 账号后经网站网关合成，配音密钥只在服务端，桌面不持有。
-    // 网关原样转发 Fish Audio 带时间戳的流，解析复用 `music_provider::fish_audio`；
+    // 服务商由网关决定（默认 ElevenLabs，可切 Fish），音色列表告知服务商与模型；网关原样转发
+    // 该服务商带时间戳的响应，解析与直连相同（ElevenLabs JSON / `fish_audio` 的流）。
     // 失败带 `voice_gateway_*` 稳定码前缀，由 Agent 失败上下文按码说明，不静默换 Provider。
 
     use serde::Serialize;
@@ -787,6 +788,33 @@ pub(crate) mod gateway_voice {
 
     const TIMEOUT: Duration = Duration::from_secs(90);
     const MAX_LIST_BYTES: u64 = 1024 * 1024;
+    /// ElevenLabs 带时间戳的 JSON：音频上限 16 MB 的 base64 加字符级时间戳。
+    const MAX_ELEVENLABS_BYTES: u64 = 32 * 1024 * 1024;
+
+    /// 网关当前使用的配音服务商；决定缓存指纹参数与响应解析方式。
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(crate) enum GatewayVoiceProvider {
+        ElevenLabs,
+        FishAudio,
+    }
+
+    impl GatewayVoiceProvider {
+        /// 与网关 `FELLOWCUT_VOICE_PROVIDER` 的取值一致；合成请求带上它，网关换了服务商时拒绝合成。
+        fn id(self) -> &'static str {
+            match self {
+                Self::ElevenLabs => "elevenlabs",
+                Self::FishAudio => "fish",
+            }
+        }
+    }
+
+    /// 网关音色列表：`{ provider, model_id, default_voice_id, voices: [{ voice_id, name, category }] }`。
+    pub(crate) struct GatewayVoices {
+        pub(crate) provider: GatewayVoiceProvider,
+        pub(crate) model_id: String,
+        pub(crate) default_voice_id: Option<String>,
+        pub(crate) payload: Value,
+    }
 
     pub(crate) const AUTH: &str = "voice_gateway_auth";
     pub(crate) const ENTITLEMENT: &str = "voice_gateway_entitlement";
@@ -860,6 +888,7 @@ pub(crate) mod gateway_voice {
                 format!("{NOT_CONFIGURED}: The Voycut service does not offer voiceover right now.")
             }
             (400 | 413, _) => format!("{REJECTED}: The Voycut voice service rejected this narration (HTTP {status})."),
+            // 409 voice_provider_changed：网关刚换了服务商，重新读音色列表后可重试。
             _ => format!("{UNAVAILABLE}: The Voycut voice service is unavailable (HTTP {status})."),
         }
     }
@@ -895,23 +924,69 @@ pub(crate) mod gateway_voice {
         })
     }
 
-    /// 网关已把 Fish 音色整理成 `{ voices: [{ voice_id, name, category }] }`。
-    pub(crate) fn list_voices() -> Result<Value, String> {
+    pub(crate) fn list_voices() -> Result<GatewayVoices, String> {
         let response = request("GET", "voices", None)?;
         let payload: Value = serde_json::from_reader(response.into_reader().take(MAX_LIST_BYTES))
             .map_err(|_| format!("{UNAVAILABLE}: The Voycut voice service returned an invalid voice list."))?;
+        parse_voice_list(payload)
+    }
+
+    /// 不带 provider 的是只支持 Fish 的旧网关；不认识的服务商说明本构建过旧。
+    fn parse_voice_list(payload: Value) -> Result<GatewayVoices, String> {
         if !payload.get("voices").is_some_and(Value::is_array) {
             return Err(format!("{UNAVAILABLE}: The Voycut voice service returned an invalid voice list."));
         }
-        Ok(payload)
+        let (provider, default_model) = match payload.get("provider").and_then(Value::as_str) {
+            Some("elevenlabs") => (GatewayVoiceProvider::ElevenLabs, "eleven_multilingual_v2"),
+            Some("fish") | None => (GatewayVoiceProvider::FishAudio, "s2.1-pro-free"),
+            Some(_) => {
+                return Err(format!(
+                    "{UPGRADE_REQUIRED}: The Voycut voice service uses a provider this version does not support."
+                ))
+            }
+        };
+        let text = |key: &str| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Ok(GatewayVoices {
+            provider,
+            model_id: text("model_id").unwrap_or_else(|| default_model.to_owned()),
+            default_voice_id: text("default_voice_id"),
+            payload,
+        })
     }
 
-    pub(crate) fn synthesize(text: &str, reference_id: Option<&str>) -> Result<Value, String> {
-        let mut body = json!({ "text": text });
-        if let Some(reference_id) = reference_id.filter(|value| !value.trim().is_empty()) {
-            body["reference_id"] = json!(reference_id);
+    /// 返回与直连时相同的 `{ audio_base64, alignment | normalized_alignment }`。
+    pub(crate) fn synthesize(
+        provider: GatewayVoiceProvider,
+        text: &str,
+        voice_id: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut body = json!({ "text": text, "provider": provider.id() });
+        if let Some(voice_id) = voice_id.filter(|value| !value.trim().is_empty()) {
+            // reference_id 是 Fish 的字段名，只支持 Fish 的旧网关也认。
+            let field = match provider {
+                GatewayVoiceProvider::ElevenLabs => "voice_id",
+                GatewayVoiceProvider::FishAudio => "reference_id",
+            };
+            body[field] = json!(voice_id);
         }
-        crate::music_provider::fish_audio::read_timestamp_stream(request("POST", "tts", Some(body))?)
+        let response = request("POST", "tts", Some(body))?;
+        match provider {
+            GatewayVoiceProvider::FishAudio => {
+                crate::music_provider::fish_audio::read_timestamp_stream(response)
+            }
+            GatewayVoiceProvider::ElevenLabs => {
+                serde_json::from_reader(response.into_reader().take(MAX_ELEVENLABS_BYTES)).map_err(
+                    |_| format!("{UNAVAILABLE}: The Voycut voice service returned an invalid voiceover response."),
+                )
+            }
+        }
     }
 
     fn availability() -> VoiceAvailability {
@@ -956,6 +1031,7 @@ pub(crate) mod gateway_voice {
                 (429, r#"{"error":"daily_quota_exceeded"}"#, DAILY_QUOTA),
                 (429, r#"{"error":"voice_rate_limited"}"#, UNAVAILABLE),
                 (503, r#"{"error":"voice_not_configured"}"#, NOT_CONFIGURED),
+                (409, r#"{"error":"voice_provider_changed"}"#, UNAVAILABLE),
                 (404, "Not Found", NOT_CONFIGURED),
                 (503, r#"{"error":"gateway_disabled"}"#, UNAVAILABLE),
                 (401, r#"{"error":"login_expired"}"#, AUTH),
@@ -966,6 +1042,26 @@ pub(crate) mod gateway_voice {
             for (status, body, code) in cases {
                 assert!(failure(status, body).starts_with(&format!("{code}: ")), "{status} {body}");
             }
+        }
+
+        #[test]
+        fn voice_list_names_the_provider_and_old_gateways_mean_fish() {
+            let eleven = parse_voice_list(json!({
+                "provider": "elevenlabs", "model_id": "eleven_v3", "default_voice_id": "voice_01", "voices": []
+            }))
+            .unwrap();
+            assert_eq!(eleven.provider, GatewayVoiceProvider::ElevenLabs);
+            assert_eq!(eleven.model_id, "eleven_v3");
+            assert_eq!(eleven.default_voice_id.as_deref(), Some("voice_01"));
+
+            let legacy = parse_voice_list(json!({ "voices": [] })).unwrap();
+            assert_eq!(legacy.provider, GatewayVoiceProvider::FishAudio);
+            assert_eq!(legacy.model_id, "s2.1-pro-free");
+            assert_eq!(legacy.default_voice_id, None);
+
+            let unknown = parse_voice_list(json!({ "provider": "other", "voices": [] })).err().unwrap();
+            assert!(unknown.starts_with(UPGRADE_REQUIRED));
+            assert!(parse_voice_list(json!({ "provider": "elevenlabs" })).is_err());
         }
     }
 }

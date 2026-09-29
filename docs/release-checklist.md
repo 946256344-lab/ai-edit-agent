@@ -24,7 +24,7 @@
   - 现状：`entitlements/{uid}` 由网站在邮箱验证后创建，`status: trial`，网关按 7 天判定有效（`../website/lib/model-gateway.js`），需改为内测期不过期；`paid` 状态客户端不能写。
   - 收费暂缓，等「策划 + 选镜」重做后成片过关、D4 有成本实测再定。届时海外收费建议用代收型支付（Merchant of Record，如 Paddle、Lemon Squeezy）。
 - [x] **不设每人额度**（2026-09-29 用户定）：内测用到上游 Token Plan 限额为止，网关按人计数默认关闭，只保留总开关；见 `docs/decisions.md`「首发」。§1.2「额度与限流」中按 uid 的每日上限因此不做。
-- [x] **D5 配音：经网关代理开发者自己的配音 key**（2026-09-28；09-29 服务商改为 ElevenLabs，Fish Audio 仅作可切换备选）。key 只放网关服务端环境变量，不打进安装包；代理上线前内测版隐藏配音开关。09-28 代码已写（分支 `feature/gateway-voice`，两个仓库）：网关 `/api/voice/*` 代理 Fish Audio，桌面内置网关时只走网关；网关未配 `FELLOWCUT_VOICE_API_KEY` 或旧网关时桌面隐藏配音开关（`docs/changes/2026-09-28-gateway-voice.md`），待部署与桌面确认。背景音乐（Jamendo）曲目的商业授权在收费前再处理。
+- [x] **D5 配音：经网关代理开发者自己的配音 key**（2026-09-28；09-29 服务商改为 ElevenLabs，Fish Audio 仅作可切换备选）。key 只放网关服务端环境变量，不打进安装包；代理上线前内测版隐藏配音开关。09-28 代码已合并：网关 `/api/voice/*` 代理配音，桌面内置网关时只走网关（`docs/changes/2026-09-28-gateway-voice.md`）。09-29 代码已写（分支 `feature/gateway-elevenlabs`，两个仓库）：网关默认代理 ElevenLabs（`FELLOWCUT_VOICE_PROVIDER=fish` 可切 Fish，不回退），网关未配所选服务商的 key 时桌面隐藏配音开关（`docs/changes/2026-09-29-gateway-elevenlabs.md`），待部署与桌面确认。背景音乐（Jamendo）曲目的商业授权在收费前再处理。
 
 ### 待定
 - [ ] **D4 上游模型与单次成本**：
@@ -56,7 +56,7 @@
 - [ ] **P0 请求体上限实测**。网关限制 4.3 MB（Vercel 函数上限 4.5 MB）。素材视觉批次、Phase 3 网格和 Phase 4（单批最多 40 张图）都可能超限，超限时桌面端只提示「画面分析数据过大」。现状：`待确认`，经网关的图像批量请求还没测过。
   - 验收：用 Release 包经生产网关，走完「导入 → 分析 → 生成 → 替换镜头」，记录最大请求体积和出现 413 的次数。超限就在桌面端按体积拆批，或给图片降分辨率。
 - [ ] **P0 函数最长执行时间**。网站仓库没有配置 `maxDuration`，默认值取决于 Vercel 套餐和 Fluid 设置。需要在控制台确认 ≥ 桌面单步上限 120 秒，否则长请求会被中途切断，桌面端看到的只是一个普通 5xx。
-- [ ] **P0 额度与限流**。现状：`部分`，09-26 网站仓库本地提交 `5a8040b` 已加总开关 `FELLOWCUT_GATEWAY_DISABLED=1` 与最低桌面版本 `FELLOWCUT_MIN_DESKTOP_VERSION`（返回 426，桌面提示升级），未部署；按 uid 的每日上限（09-28：D3 已定，不再等待；额度数值做成环境变量，D4 实测后调整）。09-28 代码已写、未部署（网站分支 `feature/gateway-voice`）：按 UTC 日记在 Firestore `usage/{uid}/days/{date}`，网关用用户自己的令牌原子自增、规则只允许增加，不需要服务端写权限；模型按请求数 `FELLOWCUT_DAILY_MODEL_REQUESTS`（默认 300）、配音按字符数 `FELLOWCUT_DAILY_VOICE_CHARS`（默认 10000），超限 429 `daily_quota_exceeded`，桌面显示中英文原因且不重试；内测资格 `FELLOWCUT_BETA_MODE=1`。上线需重新部署 Firestore 规则，否则记账失败、网关一律 503。原现状：`缺失`。试用期内不限次数也不限费用，一个用户就可能消耗大量上游额度。至少要做：按 uid 设每日请求或 token 上限；在上游服务商后台设置消费告警和硬上限；网关加一个总开关环境变量，出事时能一键停用。
+- [ ] **P0 额度与限流**。09-29：按人计数改为默认关闭（不设额度环境变量即不计数、不读写 Firestore 用量），只保留总开关与上游后台的消费上限，分支 `feature/gateway-elevenlabs`；以下为此前记录。现状：`部分`，09-26 网站仓库本地提交 `5a8040b` 已加总开关 `FELLOWCUT_GATEWAY_DISABLED=1` 与最低桌面版本 `FELLOWCUT_MIN_DESKTOP_VERSION`（返回 426，桌面提示升级），未部署；按 uid 的每日上限（09-28：D3 已定，不再等待；额度数值做成环境变量，D4 实测后调整）。09-28 代码已写、未部署（网站分支 `feature/gateway-voice`）：按 UTC 日记在 Firestore `usage/{uid}/days/{date}`，网关用用户自己的令牌原子自增、规则只允许增加，不需要服务端写权限；模型按请求数 `FELLOWCUT_DAILY_MODEL_REQUESTS`（默认 300）、配音按字符数 `FELLOWCUT_DAILY_VOICE_CHARS`（默认 10000），超限 429 `daily_quota_exceeded`，桌面显示中英文原因且不重试；内测资格 `FELLOWCUT_BETA_MODE=1`。上线需重新部署 Firestore 规则，否则记账失败、网关一律 503。原现状：`缺失`。试用期内不限次数也不限费用，一个用户就可能消耗大量上游额度。至少要做：按 uid 设每日请求或 token 上限；在上游服务商后台设置消费告警和硬上限；网关加一个总开关环境变量，出事时能一键停用。
 - [x] **P0 上游错误透传**。09-26 代码已改、待随网关部署：上游 429 透传、413 为 `request_too_large`、其他 4xx 为 400 `model_rejected_request`、401/403/5xx 为 502；桌面对 4xx（除 408/429）与网关登录、资格、版本、请求体过大错误不再重试（`is_final_model_failure`）。原现状：`缺失`。网关把上游所有非 2xx 都映射成 502 `model_unavailable`。上游 400（上下文超长、图片无效）会被桌面端当成可重试错误，重发 3 次，既浪费费用，提示也不准确。改法：上游 4xx 原样返回稳定错误码且不重试，上游 429/5xx 保持可重试。
 - [ ] **P0 注册全链路**：官网注册 → 收到验证邮件 → 验证 → 创建试用 → 桌面登录 → 发第一条消息。在 Gmail、Outlook、iCloud、Yahoo 各测一遍送达情况。Firebase 默认发件域容易进垃圾箱，需要配置自定义发件域和 SMTP，并设置 SPF / DKIM / DMARC。
 - [x] **P0 桌面登录框加网站链接**。09-26 已加「打开网站账号页」，地址由网关地址推出（`docs/changes/2026-09-26-account-page-link.md`），依赖正式构建注入网关地址。原现状：只写了「注册、验证邮箱和找回密码请在网站完成」，没有链接（`src/components/FellowCutAccountModal.tsx`）。
@@ -224,7 +224,7 @@
 
 **09-28 新增**
 
-- [ ] 配音经 Voycut 网关：登录后无需自己的 key 能配音，词级时间戳字幕与 CapCut / 剪映草稿配音轨与直连一致；网关未配配音 key 时输入框无配音开关、不卡住；额度用尽时中英文提示且不重试；8 天前的 trial 在内测模式下仍可用（`docs/changes/2026-09-28-gateway-voice.md`）
+- [ ] 配音经 Voycut 网关：登录后无需自己的 key 能配音（09-29 起网关默认 ElevenLabs），词级时间戳字幕与 CapCut / 剪映草稿配音轨与直连 ElevenLabs 一致，约 5000 字长旁白经网关不超时、不截断；网关未配 ElevenLabs key 时输入框无配音开关、不卡住；8 天前的 trial 在内测模式下仍可用；网关不设额度变量时不出现「额度用尽」提示，上游限流时如实提示（`docs/changes/2026-09-28-gateway-voice.md`、`docs/changes/2026-09-29-gateway-elevenlabs.md`）
 
 **09-26 至 09-27 新增**
 

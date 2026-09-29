@@ -88,7 +88,7 @@ pub(crate) trait VoiceTransport {
     fn provider_name(&self) -> &'static str {
         "ElevenLabs"
     }
-    fn model_id(&self) -> &'static str {
+    fn model_id(&self) -> &str {
         DEFAULT_MODEL_ID
     }
     fn voice_settings(&self) -> &'static str {
@@ -134,7 +134,7 @@ impl VoiceTransport for FishAudioTransport {
     fn provider_name(&self) -> &'static str {
         "Fish Audio"
     }
-    fn model_id(&self) -> &'static str {
+    fn model_id(&self) -> &str {
         "s2.1-pro-free"
     }
     fn voice_settings(&self) -> &'static str {
@@ -160,39 +160,67 @@ fn resolve_fish_voice(requested: Option<&str>) -> Result<(String, String), Strin
         .unwrap_or_else(|| (String::new(), "Default".to_owned())))
 }
 
-/// 经 Voycut 网关用开发者的 Fish Audio 密钥合成。上游、模型与音频格式和 Fish 直连相同，
-/// Provider 名与指纹参数保持一致，已缓存的配音、词级时间戳和草稿配音轨照旧可用。
-struct GatewayVoiceTransport;
+/// 经 Voycut 网关用开发者的配音密钥合成，服务商以网关音色列表为准（默认 ElevenLabs）。
+/// Provider 名、模型、音色设置与输出格式和直连该服务商相同，缓存指纹一致，
+/// 已缓存的配音、词级时间戳和草稿配音轨照旧复用；缓存命中还要求 Provider 名相同。
+struct GatewayVoiceTransport {
+    voices: crate::music_provider::gateway_voice::GatewayVoices,
+}
+
+impl GatewayVoiceTransport {
+    fn load() -> Result<Self, String> {
+        Ok(Self {
+            voices: crate::music_provider::gateway_voice::list_voices()?,
+        })
+    }
+
+    fn is_elevenlabs(&self) -> bool {
+        self.voices.provider == crate::music_provider::gateway_voice::GatewayVoiceProvider::ElevenLabs
+    }
+}
 
 impl VoiceTransport for GatewayVoiceTransport {
+    /// 音色列表在 `load` 时已取回，合成前不再请求第二次。
     fn get_json(&self, _path: &str) -> Result<Value, String> {
-        crate::music_provider::gateway_voice::list_voices()
+        Ok(self.voices.payload.clone())
     }
 
     fn post_json(&self, _path: &str, body: Value) -> Result<Value, String> {
         let text = body.get("text").and_then(Value::as_str).unwrap_or("");
         let voice_id = body.get("voice_id").and_then(Value::as_str);
-        crate::music_provider::gateway_voice::synthesize(text, voice_id)
+        crate::music_provider::gateway_voice::synthesize(self.voices.provider, text, voice_id)
     }
 
     fn provider_name(&self) -> &'static str {
-        FishAudioTransport.provider_name()
+        if self.is_elevenlabs() {
+            ElevenLabsTransport.provider_name()
+        } else {
+            FishAudioTransport.provider_name()
+        }
     }
-    fn model_id(&self) -> &'static str {
-        FishAudioTransport.model_id()
+    fn model_id(&self) -> &str {
+        &self.voices.model_id
     }
     fn voice_settings(&self) -> &'static str {
-        FishAudioTransport.voice_settings()
+        if self.is_elevenlabs() {
+            ElevenLabsTransport.voice_settings()
+        } else {
+            FishAudioTransport.voice_settings()
+        }
     }
     fn output_format(&self) -> &'static str {
-        FishAudioTransport.output_format()
+        OUTPUT_FORMAT
     }
     fn resolve_voice(
         &self,
         requested: Option<&str>,
-        _voices: &[VoiceSummary],
+        voices: &[VoiceSummary],
     ) -> Result<(String, String), String> {
-        resolve_fish_voice(requested)
+        if !self.is_elevenlabs() {
+            return resolve_fish_voice(requested);
+        }
+        let default_voice = self.voices.default_voice_id.as_deref().unwrap_or(DEFAULT_VOICE_ID);
+        resolve_voice_with_default(requested, voices, default_voice)
     }
 }
 
@@ -200,13 +228,11 @@ fn default_provider_name() -> String {
     "ElevenLabs".to_owned()
 }
 
+/// 未内置网关时的本机 Provider（网关模式见 `GatewayVoiceTransport::load`）。
 fn active_transport() -> Result<&'static dyn VoiceTransport, String> {
-    static GATEWAY: GatewayVoiceTransport = GatewayVoiceTransport;
     static FISH: FishAudioTransport = FishAudioTransport;
     static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
-    if crate::music_provider::gateway_voice::enabled()? {
-        Ok(&GATEWAY)
-    } else if crate::music_provider::fish_audio::configured_for_snapshot()? {
+    if crate::music_provider::fish_audio::configured_for_snapshot()? {
         Ok(&FISH)
     } else if crate::music_provider::elevenlabs_configured_for_snapshot()? {
         Ok(&ELEVENLABS)
@@ -243,7 +269,8 @@ pub(crate) fn synthesize_with_fallback(
     root: &Path,
 ) -> Result<(CachedVoiceover, Vec<u8>, Value, bool), String> {
     if crate::music_provider::gateway_voice::enabled()? {
-        return synthesize_with_transport(&GatewayVoiceTransport, text, requested_voice_id, root);
+        let transport = GatewayVoiceTransport::load()?;
+        return synthesize_with_transport(&transport, text, requested_voice_id, root);
     }
     static FISH: FishAudioTransport = FishAudioTransport;
     static ELEVENLABS: ElevenLabsTransport = ElevenLabsTransport;
@@ -362,6 +389,14 @@ pub(crate) fn resolve_voice_id(
     requested: Option<&str>,
     voices: &[VoiceSummary],
 ) -> Result<(String, String), String> {
+    resolve_voice_with_default(requested, voices, DEFAULT_VOICE_ID)
+}
+
+fn resolve_voice_with_default(
+    requested: Option<&str>,
+    voices: &[VoiceSummary],
+    default_voice: &str,
+) -> Result<(String, String), String> {
     let requested = requested.map(str::trim).filter(|value| !value.is_empty());
     if let Some(voice_id) = requested {
         let match_row = voices.iter().find(|voice| voice.voice_id == voice_id);
@@ -372,7 +407,7 @@ pub(crate) fn resolve_voice_id(
     }
     voices
         .iter()
-        .find(|voice| voice.voice_id == DEFAULT_VOICE_ID)
+        .find(|voice| voice.voice_id == default_voice)
         .map(|voice| (voice.voice_id.clone(), voice.name.clone()))
         .ok_or_else(|| unavailable_voice_message(voices))
 }
@@ -745,7 +780,12 @@ fn voiceover_root(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> 
     Ok(directory)
 }
 
-fn read_cached_generation(root: &Path, fingerprint: &str) -> Option<CachedVoiceover> {
+/// 指纹相同还要 Provider 相同才复用，避免把一家服务商的缓存当另一家的用。
+fn read_cached_generation(
+    root: &Path,
+    fingerprint: &str,
+    provider: &str,
+) -> Option<CachedVoiceover> {
     let entries = fs::read_dir(root).ok()?;
     for entry in entries.flatten() {
         let directory = entry.path();
@@ -762,6 +802,7 @@ fn read_cached_generation(root: &Path, fingerprint: &str) -> Option<CachedVoiceo
         };
         if manifest.status == "success"
             && manifest.fingerprint == fingerprint
+            && manifest.provider == provider
             && audio_path.is_file()
         {
             return Some(CachedVoiceover {
@@ -912,7 +953,7 @@ pub(crate) fn synthesize_with_transport(
         transport.voice_settings(),
         transport.output_format(),
     );
-    if let Some(cached) = read_cached_generation(root, &fingerprint) {
+    if let Some(cached) = read_cached_generation(root, &fingerprint, transport.provider_name()) {
         let audio = fs::read(cached.directory.join("voiceover.mp3"))
             .map_err(|_| "Cached voiceover audio is no longer available.".to_owned())?;
         let alignment = fs::read_to_string(cached.directory.join("alignment.json"))
@@ -977,6 +1018,11 @@ fn urlencoding_minimal(value: &str) -> String {
 }
 
 pub(crate) fn list_voices_for_agent() -> Result<Vec<VoiceSummary>, String> {
+    if crate::music_provider::gateway_voice::enabled()? {
+        return Ok(voices_from_payload(
+            &crate::music_provider::gateway_voice::list_voices()?.payload,
+        ));
+    }
     let transport = active_transport()?;
     Ok(voices_from_payload(&transport.get_json("/voices")?))
 }
@@ -1471,6 +1517,56 @@ mod tests {
         assert!(!first.3);
         assert!(second.3);
         assert_eq!(transport.posts.get(), 1);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// 同一组指纹参数、不同 Provider 名的传输。
+    struct RenamedTransport<'a>(&'a SequenceTransport, &'static str);
+
+    impl VoiceTransport for RenamedTransport<'_> {
+        fn get_json(&self, path: &str) -> Result<Value, String> {
+            self.0.get_json(path)
+        }
+        fn post_json(&self, path: &str, body: Value) -> Result<Value, String> {
+            self.0.post_json(path, body)
+        }
+        fn provider_name(&self) -> &'static str {
+            self.1
+        }
+    }
+
+    #[test]
+    fn cache_is_shared_with_gateway_elevenlabs_but_never_across_providers() {
+        use crate::music_provider::gateway_voice::{GatewayVoiceProvider, GatewayVoices};
+        let directory = std::env::temp_dir().join(format!("voice-provider-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temp");
+        let direct = SequenceTransport {
+            voices: charlie_voices(),
+            payloads: vec![tts_payload("Shared line."), tts_payload("Shared line.")],
+            posts: Cell::new(0),
+        };
+        let first = synthesize_with_transport(&direct, "Shared line.", None, &directory)
+            .expect("direct synthesis");
+        // 网关 ElevenLabs 与直连参数相同：命中缓存，不发请求。
+        let gateway = GatewayVoiceTransport {
+            voices: GatewayVoices {
+                provider: GatewayVoiceProvider::ElevenLabs,
+                model_id: DEFAULT_MODEL_ID.to_owned(),
+                default_voice_id: Some(DEFAULT_VOICE_ID.to_owned()),
+                payload: charlie_voices(),
+            },
+        };
+        let shared = synthesize_with_transport(&gateway, "Shared line.", None, &directory)
+            .expect("gateway reuses direct cache");
+        assert!(shared.3);
+        assert_eq!(shared.0.generation_id, first.0.generation_id);
+        // 指纹参数相同但 Provider 不同：不复用，重新合成。
+        let other = RenamedTransport(&direct, "Fish Audio");
+        let separate = synthesize_with_transport(&other, "Shared line.", None, &directory)
+            .expect("other provider synthesis");
+        assert!(!separate.3);
+        assert_eq!(separate.0.manifest.provider, "Fish Audio");
+        assert_eq!(direct.posts.get(), 2);
         let _ = fs::remove_dir_all(&directory);
     }
 
