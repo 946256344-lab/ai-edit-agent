@@ -1,0 +1,162 @@
+[
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "alloc-stdlib",
+    "version": "0.2.4",
+    "file": "supplements/alloc-stdlib@0.2.4-0.txt",
+    "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+    "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "profiling",
+    "version": "1.0.18",
+    "file": "supplements/profiling@1.0.18-0.txt",
+    "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "profiling",
+    "version": "1.0.18",
+    "file": "supplements/profiling@1.0.18-1.txt",
+    "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+    "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "pulp-wasm-simd-flag",
+    "version": "0.1.1",
+    "file": "supplements/pulp-wasm-simd-flag@0.1.1-0.txt",
+    "source": "https://raw.githubusercontent.com/sarah-quinones/pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+    "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "selectors",
+    "version": "0.36.1",
+    "file": "supplements/selectors@0.36.1-0.txt",
+    "source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+    "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "tiktoken-rs",
+    "version": "0.11.0",
+    "file": "supplements/tiktoken-rs@0.11.0-0.txt",
+    "source": "https://raw.githubusercontent.com/zurawiki/tiktoken-rs/b1151970e4ae250b01352a80281c097e4a1c0cc5/LICENSE",
+    "sha256": "f7c6ddf9d84fd7b8ad5917e4074d4c05e4c1dfb752a28a0058f06bd0f5e2edcc"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-char-property",
+    "version": "0.9.0",
+    "file": "supplements/unic-char-property@0.9.0-0.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-char-property",
+    "version": "0.9.0",
+    "file": "supplements/unic-char-property@0.9.0-1.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-char-range",
+    "version": "0.9.0",
+    "file": "supplements/unic-char-range@0.9.0-0.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-char-range",
+    "version": "0.9.0",
+    "file": "supplements/unic-char-range@0.9.0-1.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-common",
+    "version": "0.9.0",
+    "file": "supplements/unic-common@0.9.0-0.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-common",
+    "version": "0.9.0",
+    "file": "supplements/unic-common@0.9.0-1.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-ucd-ident",
+    "version": "0.9.0",
+    "file": "supplements/unic-ucd-ident@0.9.0-0.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-ucd-ident",
+    "version": "0.9.0",
+    "file": "supplements/unic-ucd-ident@0.9.0-1.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-ucd-version",
+    "version": "0.9.0",
+    "file": "supplements/unic-ucd-version@0.9.0-0.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+    "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "unic-ucd-version",
+    "version": "0.9.0",
+    "file": "supplements/unic-ucd-version@0.9.0-1.txt",
+    "source": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+    "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "webview2-com-sys",
+    "version": "0.38.2",
+    "file": "supplements/webview2-com-sys@0.38.2-0.txt",
+    "source": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+    "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "webview2-com",
+    "version": "0.38.2",
+    "file": "supplements/webview2-com@0.38.2-0.txt",
+    "source": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+    "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "zune-inflate",
+    "version": "0.2.54",
+    "file": "supplements/zune-inflate@0.2.54-0.txt",
+    "source": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE-ZLIB",
+    "sha256": "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352"
+  },
+  {
+    "ecosystem": "cargo-production-windows",
+    "name": "zune-inflate",
+    "version": "0.2.54",
+    "file": "supplements/zune-inflate@0.2.54-1.txt",
+    "source": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE.md",
+    "sha256": "e870d7fd7819a9f0453c62798cb52ae95d148a8c91dc2de1d983f997143c72de"
+  }
+]

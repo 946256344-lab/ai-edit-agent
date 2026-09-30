@@ -483,6 +483,12 @@ export const en: typeof zhCN = {
     transitionDip: 'Dip to black',
     transitionDuration: (ms: number) => `${(ms / 1000).toFixed(1)} s`,
   },
+  notices: {
+    title: 'Third-party notices',
+    intro: 'Notices and full license texts for bundled software, models and production dependencies. Original license texts retain their upstream language.',
+    readFailed: 'Bundled notices could not be read. Try again; if this continues, reinstall or contact support.',
+    retry: 'Try again',
+  },
   provider: {
     jamendoTitle: 'Background music (Jamendo)',
     jamendoHint: 'Create an app in the Jamendo developer portal, then enter its Client ID. It is stored only in Windows Credential Manager. Test search and preview after saving.',

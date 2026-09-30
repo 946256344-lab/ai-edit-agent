@@ -477,6 +477,12 @@ export const zhCN = {
     transitionDip: '黑场过渡',
     transitionDuration: (ms: number) => `${(ms / 1000).toFixed(1)} 秒`,
   },
+  notices: {
+    title: '第三方许可声明',
+    intro: '随包软件、模型及生产依赖的许可声明和全文。原始许可文本保留上游语言。',
+    readFailed: '暂时无法读取随包许可声明，请重试；若仍失败，请重新安装或联系支持。',
+    retry: '重新读取',
+  },
   provider: {
     jamendoTitle: '背景音乐（Jamendo）',
     jamendoHint: '在 Jamendo 开发者平台创建应用后填写 Client ID。仅保存在 Windows 凭据库；保存后再用一条剪辑测试搜索和预览。',

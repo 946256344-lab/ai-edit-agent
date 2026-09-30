@@ -1,5 +1,13 @@
 # API 与工具契约
 
+## 2026-09-30：第三方许可声明
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `get_third_party_notices` | 无 | string（随包许可声明全文） |
+
+新增只读异步命令 `get_third_party_notices()`，无参数，返回 UTF-8 字符串。正式版只读取安装资源目录的固定 `resources/third-party/ALL.txt`，开发版读取当前编译 worktree 的同一文件；不接受任意路径、不访问项目数据、不打开外部应用。磁盘读取在 blocking worker 执行，失败返回 `notices_unavailable`，不泄露本机路径。前端通过 `src/lib/local-store.ts` 的 `getThirdPartyNotices()` 调用，设置里按需显示纯文本，读取失败显示中英文安全提示并允许重试。资源目录进入基础 Tauri 配置，现有资源合并脚本继续追加 FFmpeg/Python/Tesseract/DirectML/完整模型资源。见 `docs/changes/2026-09-30-third-party-notices.md`。
+
 ## 2026-09-28：配音经 Voycut 网关
 
 新增 `get_voice_availability()`，返回 `{ available, viaGateway, reason }`：构建内置网关时探测网关配音（`/api/voice/voices`），只有网关明确没有配音能力（`voice_gateway_not_configured`）时 `available` 为 false，前端据此隐藏配音开关；未内置网关时恒为 true。内置网关时配音只经网关、不读本机配音密钥、不回退 ElevenLabs，失败带 `voice_gateway_auth`、`voice_gateway_entitlement`、`voice_gateway_upgrade_required`、`voice_gateway_daily_quota`、`voice_gateway_not_configured`、`voice_gateway_rejected`、`voice_gateway_unavailable` 码前缀，Agent 失败上下文同码（仅 `unavailable` 可重试）。模型网关新增 `provider_gateway_daily_quota`（网关 429 `daily_quota_exceeded`，不重试）。`VoiceoverApplyResult.provider` 经网关时仍为 `Fish Audio`。见 `docs/changes/2026-09-28-gateway-voice.md`。
