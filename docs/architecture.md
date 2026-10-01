@@ -1,428 +1,150 @@
 # 架构
 
-## 品牌卡与镜头转场（2026-09-27）
+本文描述当前 checkout 的实现，历史见 [changes/](changes/README.md)，契约见 [api.md](api.md)，决策见 [decisions.md](decisions.md)。本次为源码静态核实；真实媒体质量、桌面交互、远端服务和编辑器导入效果均**未核实**，待确认项见 [release-checklist.md](release-checklist.md)。
 
-文字按「创作者会不会改」分两路：
+## 产品链路与分层
 
-- 字幕、标题、下三分之一仍是原生文字轨，交付成各编辑器可编辑的文字。
-- logo、渐变字、卡片、片尾卡是品牌图层。`cards/` 用编译期嵌入的 HTML/CSS 模板，在独立线程的隐藏 WebView2 里截成透明 PNG。品牌图层在时间线里只存模板 id、短文案和品牌快照；预览时用 ffmpeg 叠加，交付时以图片放进草稿或导出文件旁，并标注文字不可编辑。
+Voycut 是 Windows 本地优先的策划与选镜 Agent 原型。当前仍按用户 brief 拆拍再召回/选镜；「先挑可用镜头再策划」和叙事/宣传/花絮体裁分流的产品方向不能当作已完成实现。
 
-镜头转场存为默认值加逐刀覆盖，以切点为中心，不改总时长：
-- 预览：用 `xfade` 拼接，余量优先取源素材。
-- 剪映 / CapCut：原生叠化 / 闪黑。
-- FCPXML / OTIO：只带叠化。
+```mermaid
+flowchart LR
+  Import[导入文件或文件夹] --> Analysis[技术分析 + 画面识别]
+  Analysis --> Evidence[(SQLite 素材与片段证据)]
+  User[请求与媒体选择] --> Route[Task Resolver / 单次 receipt]
+  Route --> Agent[NativeToolLoop / Function Tools]
+  Evidence --> Agent
+  Agent --> P1[Phase 1 策划拆拍]
+  P1 --> P2[Phase 2 本地召回]
+  P2 --> P3[Phase 3 看图选镜]
+  P3 --> P4[Phase 4 锁窗精修]
+  P4 --> P5[Phase 5 校验与落库]
+  P5 --> Timeline[内部时间线新版本]
+  Timeline --> Preview[FFmpeg preview / 质量检查]
+  Timeline --> Handoff[HandoffPlan / 编辑器输出]
+```
 
-每个新时间线版本由 `timeline_graphics::fit_graphics` 按当前镜头重新贴合图层与转场。项目品牌套件在 `brand_kit.rs`。见 `docs/changes/2026-09-27-brand-cards-and-transitions.md`。
+React 19 / TypeScript / Vite 运行于 Tauri 2 WebView。`App.tsx` 组合工作区，controllers 管状态与动作，components 展示，`src/lib/local-store.ts` 集中 invoke。Rust 校验作用域、访问 SQLite/媒体/凭据、请求模型、创建产物和审计。模型输出是提案；产物事实由数据库、文件与工具收据决定。代码地图见 [codebase/STRUCTURE.md](codebase/STRUCTURE.md)。
 
-## 音乐先行剪辑（2026-09-27）
+## 导入、共享范围与分析
 
-BGM 开时先选曲（素材库优先，其次 Jamendo），音频素材导入时已由 `assets/beats.rs` 算好节拍、小节、乐句与能量。配音关：Phase 1 后 `music_plan` 按目标时长选乐句对齐的音乐窗口，Phase 4 内容定长后 `storyboard/music_cuts` 把切点吸附到拍上、段落切换落在乐句边界，窗口存进分镜 `musicPlan`，配乐按同一起点偏移铺、结尾乐句处淡出。配音开：旁白仍是时钟，只在 ±120ms 内把切点挪到拍上。预览按绝对帧位出帧，FCPXML / OTIO / 剪映 / CapCut 按同一偏移写音乐。见 `docs/changes/2026-09-27-music-first-editing.md`。
-## CapCut 投放链接器（2026-09-18）
+### 媒体引用与素材库
 
-CapCut 与剪映平行：按本机注册表识别草稿库，只新建不覆盖。换设备后只要那台电脑打开过 CapCut，就能自己找到草稿目录。见 `docs/changes/2026-09-18-capcut-linker.md`。
+导入保存本地源引用，不修改原始媒体。文件夹递归登记支持的媒体并保留安全目录投影；列表返回根名、相对路径、目录键和持久化状态，不逐条扫描源文件，不暴露绝对源引用。显式详情入口可授权选中源媒体的受限 asset URL，播放能力仍取决于 WebView 解码支持。
 
-## 输出端口可选编辑器（2026-09-18）
+素材按导入根目录关联全局子库。`shared_libraries`、`project_libraries`、`shared_library_assets` 和 `project_asset_access` 统一访问范围，`assets.project_id` 是导入来源。新项目省略库列表时关联当时全部库，空列表不关联；后来出现的新库不自动加入，主动导入关联当前项目。复用素材 ID/分析结果，不复制媒体，重链路不改变库成员。
 
-项目记住输出编辑器。剪映 / CapCut 写草稿；FCPXML / OTIO 写出导入文件。内部时间线先投影为 `HandoffPlan`。见 `docs/changes/2026-09-18-editor-output-port.md`。
+重命名只改显示名；移除写 `metadata.libraryRemoved`、取消首次分析，不删资产行/原媒体/既有时间线引用，共享素材编辑影响引用它的项目。健康扫描是显式可取消的后台元数据检查。重链路先预览唯一匹配，再确认更新，可保留或重做分析。收集媒体创建新包，不覆盖、不改原引用。
 
-## 剪映草稿已在本机核验（2026-09-18）
+证据：`shared_library.rs`、`assets.rs`、`assets/{library,controls,health}.rs`。
 
-剪映链接器可在本机草稿库新建并注册。逐字口播字幕相邻 1ms 重叠由适配器收成互不重叠，真重叠仍失败。见 `docs/changes/2026-09-18-verify-jianying-draft.md`。
+### 技术分析与画面识别
 
-## 剪映是编辑器链接器（2026-09-18）
+FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧与硬切候选，CLIP 核验切点。无已验证硬切、CLIP 不可用或两侧仍相似时整条一段，不按秒均分。段内帧差运动曲线只收缩可用窗，当前 `analysisVersion=4`。技术 worker 为逻辑核数 1/4、夹到 2–8，FFmpeg 解码线程按核数分配；运动与段内样本尽量同次顺序解码，补抽有独立预算。OCR 只调用 Tesseract `eng`，不能宣称中文招牌识别可用。音频导入本地计算节拍、小节、乐句和能量，不为节拍分析上传音频。
 
-内部时间线是事实源。交付前投影为 `HandoffPlan`；剪映链接器只新建草稿。FCPXML / OTIO 由输出端口写出导入文件。旁白写入计划但不进剪映草稿。见 `docs/changes/2026-09-18-editor-linker.md`、`docs/changes/2026-09-18-editor-output-port.md`。
+首次画面识别按硬切段整段送审：约每 15 秒一张图、每张 5 帧，最多 4 张/20 帧，超过 60 秒均匀铺开。样本宽 960，每张为一张大图加四张小图，编号与源时间来自本地。每段全部图同一请求；模型返回可见主体/动作/场景、文案/叙事功能及变化、主体位置、焦点、文字/品牌、人群/展会、最佳区间等 `VisualEvidence.detail`。Rust 夹回真实段内，不用文件名替代媒体语义。
 
-## 源窗短于口播时放慢（2026-09-18）
+视觉任务最多含 6 段，最多 16 个任务并行、同一素材互斥；Provider 单请求最多 4 图。瞬时视觉失败最多补跑 3 次，技术超时最多 2 次；用户取消/跳过、不适用与永久错误不自动补跑，不自动换 Provider。
 
-成片时长跟口播时钟。选中片段可用窗不够长时放慢该镜头，不换更长的片。预览 `setpts` 拉长，剪映草稿按源窗对槽位变速。见 `docs/changes/2026-09-18-slow-clip-to-cover-narration.md`。
+`assets/progress.rs` 统一 ready/analyzing/queued/failed：视频/图片需技术与首次画面识别完成，音频等只需技术完成；readyVideo 另排除禁止使用和已知不可用源。取消持久化，启动不自动继续。发送前有可取消分析门：未完成时选择只用已分析素材，完成后可继续冻结请求；切换项目/会话取消待发送。素材页只在分析/扫描活动期间刷新，事件与动作唤醒查询。
 
-## 卡片让位于网格与 CLIP（2026-09-18）
+证据：`assets/{analysis,segments,motion,beats,visual,segment_visual,retry,progress}.rs`、`useAnalysisGateController.ts`、`useAssetWorkspaceController.ts`。
 
-第一次分析卡片可以写错。CLIP 可用时，没有片段图向量的候选（含整片）词面/语义只当弱提示。Phase 3 看网格，文字与画面冲突时以图为准。整片候选的 Phase 4 锁在 P3 源窗，不再 Pass A 按关键帧另切窗。见 `docs/changes/2026-09-18-grid-over-caption.md`。
+## Agent、策划与选镜
 
-## 拆拍过粗时软反馈再拆（2026-09-17）
+### 请求与工具循环
 
-一拍一镜后镜头时长等于该拍口播时长。Phase 1 在已知口播或目标时长时写入预计拍数；平均一拍明显长于约 4 秒则软反馈再拆一次，最后一次仍粗则收下。见 `docs/changes/2026-09-17-coarse-beat-retry.md`。
+`taskrouter.rs` 先绑定项目、editing task 和 conversation，只向归属模型提供当前活动任务，无活动任务则创建 task/conversation。确定后签发绑定完整请求的单次 receipt，user 消息占用它，提交消费后才创建 queued Agent task。
 
-## 素材分析进度与剪辑等待（2026-09-16）
+普通聊天、澄清、状态问答与执行统一进入 NativeToolLoop。完整 **33** 个 strict 工具 Schema 直接随每次 Provider 请求发送；Rust 复核白名单、参数形状、作用域与领域校验。普通请求不由关键词裁剪目录，品牌卡/转场仍有本轮明确意图守卫。项目/任务/会话由 LoopState 注入，模型不能传任意路径、SQL 或 FFmpeg 参数。
 
-`assets/progress.rs` 将技术分析和首次画面识别投影为四种互斥状态，为素材页筛选及项目级进度提供统一口径。导入弹窗保留 `AssetAnalysisProgress`；素材库把筛选与进度条收到列表标题区，有素材时始终显示进度条。侧栏「素材库」用状态点提示进行中或待处理。对话只在用户已发送且素材未分析完时弹出确认：是否只用已分析素材开始。可取消发送、去素材库，或在已有可用视频时继续。分析全部完成后自动开始，不再在输入框里排队等待。`useAssetWorkspaceController` 负责导入状态、筛选和失败重试，`useAnalysisGateController` 负责可取消的确认。发送时冻结文案与媒体选项，确认或分析完成后才启动原有任务路由。切换项目/会话取消这次发送，不跨范围发送。候选读取要求首次画面分析 ready，不使用失败素材的部分证据，不等待剪辑中的 Phase 4 精修。
+每轮注入安全权威状态快照，写工具后刷新；高层事实可直接用快照，详情另调观察工具。最多 10 步，单步 180 秒、整轮 1800 秒；40K token 触发压缩到 30K，60K 硬上限保护快照、当前请求和最近调用/结果对。同步 HTTP/配音/媒体使用剩余截止时间，ONNX 仅在阶段边界检查，不能强制中断。
 
-`assets/controls.rs` 持有首次分析取消/继续与素材库编辑。取消标志和移除标志存于现有 metadata JSON；任务提交同时检查任务状态，避免取消后迟到响应覆盖继续分析的结果。取消混合视觉批次时保留未选中素材并重新排队。移除为索引隐藏，不删除源文件和资产行；新库查询/选镜排除隐藏项，已有时间线仍能使用原始引用。重命名仅改显示名。
+工具结果按 call_id 交回模型；完成状态由 RunReceipt/真实产物裁决。后端同事务保存 task 终态、完成消息与 conversation 后才发 `agent-edit-completed`，前端事件/轮询重新读库对账。失败保留真实中间版本，可为 partially_completed；启动中断标 needs_review，不重放未知副作用。
 
-`useAssetAnalysisController` 与 `AssetAnalysisModal` 跟踪本次导入，提供按实际速度估算的剩余时间、后台分析和取消/继续。`useAssetLibraryEditController` 管理当前列表批量选择、重命名和移除确认；目录、状态筛选及项目切换清空选择。取消素材分析后，再次发送会弹出确认，需明确选择只用已分析素材或取消这次发送。
+证据：`taskrouter.rs`、`agent.rs`、`agentloop/{native,schema,snapshot,context,tools,skills}.rs`、`useAgentRunReconciliation.ts`。
 
-## 关配音不再强制 15 秒（2026-09-16）
+### 各 Phase 的当前行为
 
-没有配音不再等于必须做成 ≤15 秒短片。时长和镜头节奏由模型按用户要求和内容决定；用户没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。120 秒仍是处理上限。见 `docs/changes/2026-09-16-no-voiceover-not-15s.md`。
-
-## 配音开着必须配音，没有稿先问同意（2026-09-16）
-
-配音开关开着时本轮必须合成旁白。用户已给可念稿则照念生成；只有主题时 Agent 先写旁白稿并问同意，同意前不生成分镜。见 `docs/changes/2026-09-16-voiceover-script-consent.md`。
-
-## 选镜头：配音短 brief 与旧整片卡（2026-09-16）
-
-配音已把短 brief 锁成 `full_script` 时，Phase 1 不再用「必须 key_message」打回；15 秒时长帽仍在。段上没卡但素材级有旧整片卡时按整条进召回，不把整片标签抄到未打卡段。见 `docs/changes/2026-09-16-shot-selection-reliability.md`。
-
-## Phase 4 锁在选中片段（2026-09-16）
-
-有 `segmentId` 的镜头跳过 Pass A，精修窗停在该段运动可用区间。没有 `segmentId` 的整片候选也跳过 Pass A，锁在 P3 看见的源窗。片段短于镜头时长时不再并入下一段硬切。召回给出的双段 id 只并这两段。见 `docs/changes/2026-09-16-phase4-lock-selected-segment.md`、`docs/changes/2026-09-18-grid-over-caption.md`。
-
-## Phase 4 局部修复（2026-09-10，合入 clip-segment-recall 2026-09-11）
-
-Phase 4 外层修复循环持有当次调用的内存精修状态：完整镜头结果（含时间范围、`cropFocus`、文案）、每镜内容窗与 `uncertain`、Pass A/B/C 已完成与待处理镜头、当前修复集合。批次请求失败只重试失败批次；镜头校验失败只修复 `affected_shots` 及必要关联镜头（源区间重叠的参与镜、同一叙事段时长问题的段内镜）。成功镜头不再向模型重提。Pass B/C 只返回本批 `orderIndex` 的切点/构图（及确需改动的旁白/屏幕文案），由 Rust 保留素材身份与顺序并根据端点计算时长。漏镜、重镜或他批镜头不能把该批标为完成。Pass C 失败保持未完成，预算耗尽返回真实失败。结构问题（素材身份、镜头数、模式）不靠重跑 Phase 4。`fit_shots`、窗内消重叠与 normalize 只改写修复集合；无法定位的问题明确失败，不默认重做全部镜头。同一批次重试复用已生成图像，窗口或采样范围变化后才重抽。预算与截止时间仍是整段 Phase 4 共用的一套，不按批次放大。实现位于 `src-tauri/src/storyboard/phase4.rs`，外层循环在 `storyboard.rs::generate_storyboard_internal`。手动换镜仍调用 Phase 4，使用独立会话。
-
-## 剪辑失败修复（2026-09-10）
-
-Phase 3 只返回每个 beat 内的候选序号，由 Rust 取得真实素材、片段和时间范围；整素材卡片里的场景描述不是额外可选项。Phase 4 的素材来源按 assetId 去重，避免展开片段后错误触发来源数量检查。内部修正预算耗尽即返回不可重试失败，Native 同轮不再执行第二次整套分镜生成。
-
-`execution_deadline.rs` 为同步 Native 调用保存线程作用域截止时间，模型/配音 HTTP、媒体子进程和素材等待使用剩余预算；同步向量工作线程显式继承，后台分析保持独立。ONNX 推理和系统文件操作不能强制中断，阶段边界及分镜落库前再次检查。子进程 stdout/stderr 在进程运行时并行读取，避免大输出堵塞管道造成假超时；超时保留现有进程树回收行为。
-
-启动时将中断的片段视觉批次恢复到 queued，不清除已有证据。当前失败素材中包含局域网共享路径；读取延迟是单独的环境因素，不通过无限重试或统一放大超时掩盖。验证记录见 `docs/changes/2026-09-10-editing-failure-fixes.md`。
-
-## Phase 4 精修拆批（2026-09-07，Pass A/长窗收窄 2026-09-08，局部修复 2026-09-10）
-
-Pass A 按素材贪心拆批，每批最多 4 张窗中点帧；Pass B/C 保持每镜固定时间采样密度，将同镜多帧拼成网格后按最多 4 镜一批调用模型、各批并发（Agnes Token Plan 单请求最多 4 张图）。同镜窗内多帧优先一次 FFmpeg（`-ss` 窗首 + `select` 命中各目标时刻，文件名仍带真实 `time_ms`），批量失败再按帧回退。批结果必须完整覆盖本批 `orderIndex` 后才合并；Pass B/C 改为只返回本批修改，不再要求整份 Storyboard JSON。过短导入头窗（&lt;1.2s）向前并入后窗。Pass B 后若窗内帧间距 &gt;1.5s，Pass C 围绕精修子区间再加密收窄（uncertain 仍整窗加密）。重试从失败批次或受影响镜头继续，成功结果留在当次内存状态。Phase 3 每一拍为池内每条候选附带网格（弱匹配扩池到 12 条时也全附；按该条时间窗现拼，缺文件则现抽），卡片含可见描述并标 `keyframeGridAttached`。
-
-## 配音出站代理（2026-09-07）
-
-配音 HTTP 不走系统 WinINET 自动代理配置，只读进程环境中的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`。本机若只能经本地代理访问 `api.fish.audio`，旧版裸 `ureq` 直连会稳定超时；模型自定义 API 仍用独立 Agent，不受本次改动强制代理。
-
-## 剪辑流程优化（2026-09-07，配音先于拆拍 2026-09-17）
-
-配音开启时先按已确认旁白稿合成，再拆拍；语义/CLIP 编码在 Phase 1 之后、选片之前进行。Phase 2 独立建立各 beat 候选池，不把候选当作已使用镜头提前扣分，时长项按可用源窗是否容纳目标镜头评分。Phase 3 在原有一次请求里结合整条序列判断景别、完整动作、方向与首尾表达；Phase 4 附带真实配音时段并判断 `cropFocus`，裁剪焦点随分镜进入时间线、预览和 Jianying handoff。带焦点的镜头禁止整段 pack 到未检查源窗；Phase 4 钳窗后先在已选内容窗内机械消交叠，normalize 仍消交叠但仅清掉被挪源范围的 `cropFocus`。窗内仍无法拆开时才交校验回 Phase 4。
-
-预览仍来自持久化时间线，新增 `preview_cache.rs` 管理跨版本复用键，镜头、无字幕底片、文字/叠加画面三层缓存留在本地。只有成功生成的临时视频才进入缓存；源大小或修改时间、源范围、裁剪变化会失效对应层。文字和叠加画面一次合成，音轨单独混合，桌面命令在工作线程执行。`useAssetWorkspaceController` 仅在分析/扫描活动期间继续刷新，由动作和队列交接事件唤醒；返回的 `visualPending` 覆盖当前页之外的视觉分析。健康摘要轮询仅在计数或任务状态变化时连带刷新素材页。
-
-## 开发协作边界
-
-`CONTRIBUTING.md` 是验证与提交的唯一流程；`AGENTS.md`、`CLAUDE.md`、Cursor rule 和 `opencode.json` 只是薄入口。默认在 `master` 提交并推送。pre-commit 只拒绝 detached HEAD，并检查文档同步。多个 Agent 并行时才用独立分支和 worktree。
-
-## 状态
-
-仓库已实现 React/Tauri 桌面基础、SQLite 本地持久化、媒体分析、证据绑定 storyboard、内部时间线、preview 和实验性 Jianying draft 创建。本文件同时描述当前实现与仍待完成的生产能力；标记为 `TODO` 的项目尚未实现或尚未验证。
-
-2026-08-15 的素材前端重建保留后端目录投影、桌面命令、持久化 schema、Agent 工具、媒体处理和交付行为，只删除违背 Agent-first 边界的人工素材管理界面。
-
-| 能力 | 状态 | 备注 |
+| 阶段 | 行为与事实边界 | 源码 |
 |---|---|---|
-| React/Tauri 桌面壳、SQLite、迁移 | ✅ 已实现 | |
-| 媒体分析（FFprobe/FFmpeg/Tesseract/视觉批次）| ✅ 已实现 | |
-| 素材目录树、分页、健康扫描、重链路 | ✅ 已实现 | |
-| 证据绑定 storyboard | ✅ 已实现 | |
-| 版本化内部时间线（视频/文本/音乐轨）| ✅ 已实现 | |
-| FFmpeg preview（含文本轨 ASS / 音乐混音）| ✅ 已实现 | |
-| Jianying 仅视频 + 受限文本草稿 | ✅ 已实现（实验性）| |
-| Jamendo 在线音乐下载 | ✅ 已实现（实验性）| Jianying UI 试听待验收 |
-| ElevenLabs 文案转配音 | ✅ 已实现 | 密钥进 Credential Manager；旁白轨 + alignment 字幕 + preview 混音 |
-| Fish Audio 文案转配音 | ✅ 已实现 | `s2.1-pro-free` 时间戳流；优先 Fish，传输/5xx/超时类失败可回退已配置的 ElevenLabs（401/密钥错误不回退） |
-| Task Resolver + NativeToolLoop | ✅ 已实现 | Task Resolver 只绑定项目/任务/会话作用域；对话、澄清、事实问答和工具执行共用 NativeToolLoop |
-| 实验性 OAuth / 自定义 OpenAI 兼容 API | ✅ 已实现 | 官方 OAuth 机制待核实 |
-| 多步 Agent fixture 可执行运行器 | ⚠️ 部分实现 | scripted runner 待补 |
-| 视觉质量评分 / 文本语义召回 | ✅ 已实现 | 关键帧清晰度 + 本机中文向量（安装后下载或开发预置）；`visualKeywords` 跨语言词面；不可用时词面降级 |
-| 生产安装包运行时供应 | ✅ 已实现 | FFmpeg/FFprobe、Python/草稿 SDK、Tesseract/英文数据随包 |
-| Jianying 图片/完整字幕/logo 轨 | ❌ TODO | |
-| Voice API（ElevenLabs TTS） | ✅ 已实现 | 配音是时钟；字幕跟 alignment；超时不重试 |
-| Windows CI / 远端分支保护 | ❌ TODO | |
+| Phase 1 策划 / 拆拍 | 注入视觉/OCR 库存摘要，模型按 brief 写 narrative/beats；系统锁 scriptMode。配音开且有确认稿时先合成，真实口播为时钟；与点名时长差约 30% 则暂停问用户。配音关锁 key_message，默认不写屏幕字。粗拍有限软反馈，最后仍粗可收下。 | `storyboard.rs`、`storyboard/phases.rs` |
+| Phase 2 本地召回 | ready 视频展开真实段，每拍 9 条，同素材/相似各最多 2；BGE/词面、CLIP、质量/时长/新鲜度评分。前面池中未选段不预扣；综合分优先名额默认 5，余位混入分项高分。 | `storyboard/{phases,semantic,clip}.rs` |
+| Phase 3 看图选镜 | 各拍并发，候选源窗现拼网格，最多 4 张拼图/请求，弱匹配可扩 12 条。主选/替补限前 5，Rust 从候选序号映射真实 ID。默认一拍一镜，匹配且不相似才增至 2–3；撞车按拍序只修后拍，限制复用/相似/交叠。文字冲突以图为准。 | `storyboard/{phases,multimodal}.rs` |
+| Phase 4 锁窗精修 | 在选中片段精修入出点/cropFocus，不拼下一段硬切；整片锁在 P3 源窗。Pass B/C 多帧拼网格、最多 4 镜/批并发；session 保留成功镜头/批次/采样，只修失败集合，结构错误不反复重做。 | `storyboard/phase4.rs`、`storyboard.rs` |
+| Phase 5 校验 / 落库 | normalize 后校验源窗、覆盖、模式、时长、重复与结构；精修类可回 P4，硬限制直接失败。通过后保存故事版与 Top-12 推荐池；缺口返回 qualityWarnings，不冒充已覆盖。 | `storyboard.rs`、`shot_replacement.rs` |
 
-## 当前组成
+生成不等首次识别，只收 ready 段卡；段无卡但有旧整片卡时按整条进池，不把整片标签抄给未打卡段。库存提示仍不保证策划每段先绑定具体镜头，不能写成产品核心重做已完成。
+
+配音关时 P4 内容窗决定偏好时长，按目标比例缩放，优先让源窗/槽位等长（1 倍速），锁窗不足才放慢并写原因。BGM 开时先选曲（库内音频优先，其次 Jamendo）；稳定节拍可选乐句窗并卡点、保存 musicPlan/musicTiming，失败写原因后走内容时钟。配音开仍以口播为时钟，音乐切点仅在 ±120ms 移动。
+
+局部改镜用 `reselect_shots`（最多 5 拍，P2→P5）或 `refine_shot_ranges`（最多 10 镜，P4→P5）；不重跑 P1，不改已配音稿，冻结其他镜头与音文轨，派生故事版+时间线同事务保存。手动换镜先读/生成推荐、精修候选与静音预览，再经 `commit_studio_edits` 保存；试选不改时间线。
+
+证据：`storyboard/local_edit.rs`、`shot_replacement.rs`、`studio.rs`、`music_plan.rs`、`storyboard/music_cuts.rs`。
+
+## 时间线、预览与编辑器交付
+
+### 内部时间线
+
+内部 timeline 是事实源，保存视频主轨/叠加轨、真实源窗/槽位、cropFocus、文本/音乐/旁白、品牌图层与转场。改动写新版本和审计，不覆盖旧版本。Studio 命令仍注册，不能据此把主界面描述为完整精修编辑器。
+
+Agent `generate_storyboard` 同一调用自动时间线、媒体应用、preview 与所选编辑器交付；后续失败保留已保存版本，实际结果用 appliedMedia/mediaNotApplied、musicTiming、qualityWarnings。公开同名 Tauri 命令负责生成故事版，不等同 Agent 编排。
+
+文本时间/样式/布局/动态由后端校验，ASS preview 与编辑器原生文字分别判兼容。配音写独立旁白轨与 alignment 字幕，voiceoverApplied 才证明旁白落地，字幕失败不回滚旁白。`transcribe_asset` 当前只有 `local_stub_v1` 占位分句，没有真实 ASR。
+
+品牌套件为项目设置，logo/字体按内容哈希复制到 app_data/brand。模板编译期嵌入，独立线程隐藏 WebView2 本地渲染 PNG；模型给模板/短文案，Rust 算时间/样式。图片文字不可编辑。转场为默认+逐刀覆盖、切点居中、不改总时长；fit_graphics 随版本重新贴合。
+
+证据：`timeline.rs`、`timeline_voice.rs`、`agentloop/{auto_music,auto_graphics}.rs`、`brand_kit.rs`、`cards/`、`timeline_graphics.rs`、`subtitle.rs`。
+
+### 本地预览
+
+画幅来自故事版 mediaOptions，默认 9:16；画布为 540×960 / 960×540 / 720×720。FFmpeg 按源窗变速/cropFocus 裁切，合成 ASS、品牌 PNG、xfade 转场，旁白/BGM 单独混音，禁止 `-shortest` 截断口播。QC 检查黑帧、重复/相似源范围、节奏和文本安全区等，不是完整语义重复检测或最终视频导出。
+
+缓存按源大小/修改时间、源范围与画面参数哈希复用镜头/底片/文字叠加，成功结果才入缓存。项目中间缓存默认 2 GiB，成功渲染后淘汰旧文件；清缓存需 confirmed=true，不删最终 preview、库或素材。preview 没有统一用户取消入口。
+
+证据：`media_options.rs`、`preview.rs`、`preview_audio.rs`、`preview_graphics.rs`、`preview_cache.rs`。
+
+### 输出端口
+
+timeline 先投影 HandoffPlan，项目 settings_json.outputEditor 记选择；未选时检测优先 CapCut，仅有剪映则剪映，都无仍默认 CapCut，默认不写回。只新建、不覆盖、不回读、不反向同步。
+
+| 端口 | 代码能力与限制 |
+|---|---|
+| 剪映 / CapCut | 注册表识别草稿库，随包 Python/SDK 写新草稿；编辑器运行时可延迟首页注册。视频变速/裁剪、叠加、受限原生文字、音乐、旁白、品牌 PNG 有写入代码；普通静态图片主镜头在能力表仍 Unsupported，不能混同品牌图层。 |
+| FCPXML | 写本机 editor-handoffs 新文件，带媒体引用/音乐/旁白/品牌图；文本是可编辑 Basic Title，样式动画不带，变速/裁切受限。 |
+| OTIO | 写新文件，带时间线/媒体引用/音乐/旁白/品牌图；文本为 marker，不是可编辑文字轨。 |
+
+剪映/CapCut 要求 cue 通过后端兼容判定，默认描边/阴影字幕目前判定不一致，未在本次桌面验证。FCPXML/OTIO 只带叠化，黑场过渡保留硬切并写 notes；品牌渲染失败、文字降级与未验证转场也返回说明。写文件成功不证明编辑器正确打开，变速取窗、音轨、文字/裁切/转场仍须实测。
+
+证据：`handoff/{mod,deliver,fcpxml,otio}.rs`、`jianying.rs`、`capcut.rs`、`src-tauri/scripts/create_jianying_draft.py`。
+
+## 数据与作用域
 
 ```text
-React 19 + TypeScript + Vite
-|
-|- src/App.tsx            项目/会话/消息入口与顶层工作区组合
-|- src/hooks/             Provider、素材、成果交付与 Agent 终态对账 controller
-|- src/components/        互斥工作区和单一职责展示组件
-|- src/lib/local-store.ts Tauri 命令 TypeScript 桥接
-|- src/lib/agent-tools.ts Agent 内部技能名的 IDE 镜像
-`- src-tauri/             Rust 命令、SQLite、媒体工具与 OAuth 边界
-  |- src/agent.rs         自然语言编辑控制器
-  |- src/taskrouter.rs    项目内任务归属解析与任务状态快照
-  |- src/{projects,assets,storyboard,timeline,preview,handoff,jianying,audit}.rs  领域命令
-  |- src/db.rs + models.rs SQLite 迁移与领域类型
-  |- src/provider.rs      实验性模型请求封装
-  |- src/process.rs       无窗口外部命令
-  `- src/oauth.rs         实验性 OpenCode 兼容 OAuth/PKCE
+Project
+├── 共享素材库关联 / 项目原有素材
+├── 项目设置（编辑器、品牌、候选名额）
+└── Editing Task（UI 剪辑会话）
+    ├── Conversation → Messages / AgentTask / 审计
+    ├── Storyboard versions → 推荐池
+    └── Timeline versions（经 storyboard 归任务）
+        └── Preview / 编辑器交付
 ```
 
-面向源码学习的分层调用图、模块职责、集成、测试和风险清单位于 `docs/codebase/`。该目录只描述可从当前源码和终端验证的现实；本文继续承担长期产品架构和安全边界。全部手写源码模块顶部提供中文职责导航，Rust crate 的 `lib.rs` 提供模块索引；权限、事务、恢复和非直观算法只在关键位置补解释，不逐行复述语法。
+新建剪辑会话入口同事务创建 task/conversation；产物按 project/task 查询和新建，timeline 经 storyboard 归任务，不用 conversation 猜产物。状态快照/Agent 上下文只读当前任务，侧栏 summary 仅展示。
 
-`App.tsx` 在 Tauri 环境中通过 `local-store.ts` 加载项目、剪辑任务、会话和消息。剪辑任务是项目内的创作目标；会话、storyboard、timeline 和 preview 均被限制在该任务内，素材保持项目级复用。自然语言消息先经项目内 Task Resolver 选择已有任务、创建新任务或澄清，目标任务确定后才写入其 conversation；首次消息或导入仍会在需要时创建项目、任务和会话。
+version_number 保留项目唯一序号，schema v20 追加 task_version_number，UI/Agent 展示任务内 v1 起的新编号，旧空值回退旧序号，不回填。项目级共享素材、哈希预览中间缓存和选镜新鲜度（同项目最新时间线素材使用次数），不把兄弟任务产物当本任务事实。
 
-### 作用域架构
+SQLite WAL/busy timeout 与只追加迁移；task 快照、pending 路由、单次 receipt、pending 澄清保存归属/恢复。审计保存步骤/计数/安全码，不存模型全文或凭据。Rust 删除项目/会话要求 confirmed=true；会话删除保留项目素材、原媒体与外部草稿。前端 window.confirm 已登记可靠性问题，不能仅凭 Rust 参数声称确认 UI 有效。
 
-产物与会话的归属关系：
-
-```
-Project (项目)
-├── Assets (素材，项目级复用)
-└── Editing Tasks (剪辑任务 = UI「剪辑会话」)
-    ├── Conversation (对话，与剪辑任务一一对应)
-    │   └── Messages
-    ├── Storyboard Versions (故事板，直接归任务；版本号会话内从 v1 起)
-    ├── Timeline Versions (时间线，通过 storyboard 归任务；版本号同上)
-    └── Previews / 编辑器交付 (基于 timeline，归任务)
-```
-
-**每个会话完全独立，包括产物和版本号。** UI「剪辑会话」就是 editing task；新建会话时路由事务同时创建剪辑任务和它的 conversation，两者一一对应。storyboard、timeline、preview 与编辑器交付都只属于所在任务；产物的查询和创建按 `(project_id, editing_task_id)` 限定（时间线没有任务列，经 `storyboard_version_id` 关联到任务），不读取同项目其他会话的产物，也不依赖 `conversation_id`。版本号也按会话编号：每个会话的第一版故事版和时间线都是 v1；`reselect_shots` / `refine_shot_ranges` 的派生版本、工作台保存和各类改轨工具生成的新时间线，都在所属会话内累加。`version_number` 列受建表时 `UNIQUE(project_id, version_number)` 约束，只作项目内序号用于唯一和排序；界面与 Agent 看到的是 schema v20 追加的 `task_version_number`。旧版本该列为空时回退到原序号，不回填、不改历史编号，旧会话之后的新版本从该会话已有的最大号往后接。
-
-项目级只共享三样东西，都不算会话产物：素材；预览中间文件 `previews/cache/<project_id>`，按源文件、区间和画面参数的哈希复用，成片预览仍写在 `previews/<timeline_id>/`；选镜打分里的「新鲜度」，参考同项目各任务最新时间线用过的素材次数，只影响候选排序。这是有意保留的项目级规则，见 `docs/decisions.md`。编辑器草稿名为「项目名-随机后缀」，与时间线一一对应，不跨会话复用。`delete_editing_session` 在明确确认后级联删除该任务下的全部 conversation、消息、Agent 审计、storyboard/timeline 与本地 preview，不删除项目素材。
-
-**会话隔离**：`messages` 表通过 `conversation_id` 外键属于 `conversations`，`conversations` 通过 `editing_task_id` 外键属于 `editing_tasks`。Agent 加载历史消息时，必须同时验证 `conversation_id` 和 `editing_task_id`（通过 JOIN），确保严格的会话边界，防止跨会话数据泄漏。错误的 `editing_task_id` 必须失败封闭并返回空历史，不得回退到仅按 `conversation_id` 过滤。Task Resolver 只把当前激活剪辑任务的快照交给路由模型，不得读取或提示同一项目内其他任务的 title、brief 或 `active_subgoal`；语言不能切换到其他已有任务，用户在 UI 中激活另一任务后，后续消息按 `continue_current` 归属。
-
-Task Resolver 只负责把消息绑定到正确的项目、剪辑任务和会话并签发一次性 receipt；receipt 消费后，所有对话类型都直接进入同一个 NativeToolLoop。
-
-前端按”入口组合、领域 controller、展示组件”分层。`useProviderController` 独占模型连接状态和凭据入口；`useAssetWorkspaceController` 独占素材分页、轮询、导入、健康、重链路和证据状态；`useArtifactWorkspaceController` 独占 storyboard、timeline、preview 与输出端口交付；`useAgentRunReconciliation` 独占任务 ID、早到事件、终态轮询和持久化恢复对账。`App.tsx` 只协调项目/会话/消息作用域并组合这些 controller，不直接重新实现其副作用。粗剪工作台并排渲染 `AgentWorkspace` 与 `RoughCutPreview`，素材库以覆盖层打开；原先同时承载两个模式、拥有大量扁平 props 的 `ConversationWorkspace` 已删除。领域工作区只接受 `model/actions` 等一至两个顶层入口。素材目录的真实开合状态仍由 `AssetDirectoryTree` 局部拥有，不进入 controller 或 `App.tsx`。
-
-Tauri 2 后端提供 SQLite、本地文件/文件夹导入、媒体分析、storyboard、内部时间线、FFmpeg preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`tauri.conf.json` 使用受限 CSP，仅允许 Tauri IPC、作用域内的本地派生媒体协议、开发服务器和指定字体域。
+证据：`db.rs`、`projects.rs`、`taskrouter.rs`、`audit.rs`、`agentloop/snapshot.rs`。
 
 ## 系统边界
 
-```text
-Windows 桌面应用（Tauri + React）
-|
-|- 展示层（已实现）
-|  |- 粗剪工作台：对话与预览并排，顶栏选择输出编辑器
-|  |- Agent：会话、路由提示、可折叠执行任务卡与 composer
-|  |- 素材：覆盖层素材库、健康恢复与证据 Inspector
-|  |- 预览：粗剪播放、换镜与输出端口交付
-|  `- 项目与 Provider 状态
-|
-|- 本地 Agent 控制器（已实现基础）
- |  |- 受限工具选择与后端校验
- |  |- Task Resolver、会话/任务上下文
- |  `- 持久化调用状态、作用域查询与中断后待审阅恢复
-|
-|- 本地工具服务（部分实现）
-|  |- 导入、FFprobe/FFmpeg/Tesseract 分析、时间线、preview
-|  |- 编辑器链接器（剪映草稿 / FCPXML / OTIO）
-|  `- 音频、字幕、ElevenLabs 配音
-|
-|- 模型 Provider（部分实现）
-|  |- 实验性 OpenCode 兼容 OAuth/PKCE
-|  |- 自定义 OpenAI 兼容 API（Base URL + API Key + Model，chat/completions）
-|  `- 官方 OAuth 验证、本地模型 TODO
-|
-`- 本地存储（已实现基础）
-   |- SQLite：项目、任务状态快照、任务路由澄清、会话、素材、版本、Agent 调用、操作日志
-   `- Windows Credential Manager：实验性 OAuth 凭据与自定义 API 凭据
-```
-
-## 数据流
-
-```text
-导入本地文件或文件夹
-  -> SQLite 保存源文件引用
-  -> 后台 FFprobe 提取时长、尺寸、帧率和音频轨信息
-  -> FFmpeg 低分辨率场景检测硬切，CLIP 验切点真伪（相似或模型不可用则不切），每片段抽最多 8 帧并写帧差运动能量
-  -> Tesseract 提取图片/关键帧英文 OCR
-  -> 技术分析完成后，后台将最多六条素材的代表帧批量发送给实验性 Provider
-  -> 保存按素材 ID 与源时间校验的视觉建议；每批请求 30 秒超时，失败原因随素材证据返回
-  -> Provider 仅基于持久化证据生成 storyboard，后端验证素材与时间范围
-  -> storyboard 先把文案拆为信息点（beats），再为每个已覆盖信息点选择源时间绑定的镜头
-  -> 缺少真实画面证据的信息点只作为未覆盖项保存，绝不作为 `insufficient` 镜头写入时间线
-  -> 创建源时间绑定的内部时间线版本
-  -> FFmpeg 渲染 540 x 960 本地 preview 并执行质量检查
-  -> 内部时间线投影为 HandoffPlan，由剪映链接器新建唯一草稿
-```
-
-视觉建议是 AI 建议，不是经验证的媒体事实。文本语义召回和关键帧清晰度评分已经实现；跨镜头的多帧视觉重复检测仍为 `TODO`。
-
-storyboard 的每个镜头额外保存 `beatId` 和 `matchLevel`。`direct` 只用于模型明确认为已有证据直接支撑的信息点；`contextual` 只用于诚实的场景承载并在选片理由中说明限制。模型同时提出 `targetDurationMs` 与 `scriptMode`（完整文案或关键表达）；镜头数、信息点数和时长不再是固定创作规格，只保留 **100** 镜头/信息点、120 秒的本地处理安全上限。短目标默认偏关键表达与较短成片，避免把提纲扩成无必要的长旁白。生成校验拒绝 `insufficient`、未知/重复信息点、未覆盖且未声明缺失的信息点、跨镜头重叠复用的同一视频源范围。`full_script` 画面短于目标不作为硬失败，而是经 `voiceover_longer_than_picture` 等 `qualityWarnings` 走精炼补镜；`key_message` 则要求镜头总时长贴近 `targetDurationMs`。`uncoveredBeatIds` 是创作缺口，不进入内部时间线；界面会提示该缺口，用户可据此补充素材或接受现有上下文剪辑。
-
-## 数据所有权与安全
-
-- 源文件默认仅被引用。素材列表不对每条源路径做同步探测，避免失联盘符或网络路径拖住 UI；分析、storyboard、preview 和 Jianying draft 在实际使用前检测可用性。缺失素材会保留记录，但不能进入新的 storyboard 或 preview。
-- 用户可主动选择新的素材根目录触发两阶段重新定位：预览阶段只扫描候选目录并以唯一的旧相对路径和媒体类型匹配，不修改项目；人工素材工作区的确认阶段固定保留已有分析证据并只更新路径，避免恢复位置时意外触发重新分析。后端仍保留显式 `preserveAnalysis` 契约供受限 Agent/诊断流程使用。无法唯一验证的素材保持原引用，绝不按文件名猜测或自动错连。
-- 应用绝不修改源媒体。
-- 内部时间线是事实来源；编辑器交付物由链接器单向写出，不回读用户在目标编辑器中的修改。
-- OAuth 凭据只保存在 Windows Credential Manager，绝不进入 SQLite、浏览器存储、项目文件或日志。
-- 模型仅接收获批的精简提示、证据文本和低分辨率派生帧，绝不接收原始媒体或本机路径。
-
-## 当前实现细节
-
-### 素材库
-
-schema v12 将收藏、评分、备注、禁止使用、用户标签和素材集合保存在独立关系表中，不进入会被重新分析替换的 `assets.metadata_json`。这些能力保留为 Agent/诊断契约，不在人工素材工作区提供搜索、筛选、批量整理或集合管理入口。“禁止使用”仍从后续 storyboard 候选中硬排除，但不改写历史产物；既有数据、同项目校验和数量型审计均保持不变。
-
-Agent 通过受限只读 `search_assets` 做目标化候选发现，而不是把整个素材库注入模型。查询可组合媒体类型、时长、最低评分、收藏、标签、集合和游标，单页最多 20 条；结果按收藏、评分和更新时间稳定排序并给出固定命中原因码。工具自动排除用户禁止使用的素材，不返回源路径、用户备注正文、OCR 正文、媒体内容或完整视觉证据。`list_assets` 继续只用于紧凑状态盘点和分析排队前观察。
-
-素材浏览不访问源文件系统。schema v15 的 `asset_source_health` 独立保存大小、修改时间基线、最近观察结果和脱敏原因码，`messages` 同时允许原生 `assistant` 角色；只有用户显式启动可取消的 `scan_asset_health` 后台任务时才逐项读取文件元数据。新导入和确认重链路会建立新基线；列表只展示持久化的 `unchecked/online/missing/changed/unreadable` 状态。Agent 通过 `get_asset_health_summary` 读取项目级计数、扫描状态和安全原因码，不接收路径或原始系统错误。
-
-Agent 的片段发现通过 `search_asset_segments` 在已持久化的场景段内绑定 OCR/视觉证据，返回可直接用于剪辑工具的明确源时间范围。结果单页最多 20 条，保留 OCR 正文和本地路径的隐私边界，并排除用户禁止使用及健康状态明确异常的源文件。
-
-“收集项目素材”是用户显式确认的本地复制操作。预览阶段重新验证源文件并估算体积；执行阶段只在用户选择的目录下创建全新 UUID 包，文件名带素材 ID 短后缀避免碰撞，manifest 仅记录项目/素材 ID、显示名、包内相对路径和字节数，不记录原始路径。操作不会覆盖已有包、删除文件或改变项目当前引用。
-
-素材搜索、状态筛选、收藏、标签、集合、批量整理、任务明细和片段检索继续是受限的本地 Agent/诊断能力，不作为人工控件渲染。独立“素材”顶层模式只承担导入、目录浏览、整体分析摘要、源文件健康/异常恢复和派生证据检查。层级目录使用后端权威的安全目录投影：每个素材有直属 `directoryKey`，`list_asset_page` 返回完整项目的目录节点、父节点和直属素材计数；前端只组装父子关系，不再从当前最多 100 条结果猜整棵树，也不在 SQLite 已按目录筛选后再次过滤。安全导入根首次出现时自动展开，其他子目录默认折叠；行按钮的 `aria-expanded` 与条件渲染的子树一致，1.5 秒素材轮询不重置用户开合状态。选择目录会立即清空旧页，完成查询后只显示直属素材；“全部素材”显示当前有界页。旧记录的根引用若缺失或误存为不可展示根，后端先剥离并按普通/扩展盘符或 UNC server/share 隔离；单个安全卷组有共同父目录时以最末共同级为根，没有可公开共同父目录时以固定“导入素材”为根。多个可恢复卷组全部放入各自“导入素材 N”命名空间，防止同名相对树合并。不能安全解析的素材只让自身留在未归类，空目录和只含不支持文件的目录无法从素材记录恢复。任何响应都不包含盘符、server/share 或绝对路径。
-
-最多 200 条的批量操作、技术分析重试和视觉分析跳过继续保留后端作用域校验和操作审计，但不再由素材工作区直接暴露；显式视觉跳过仍优先于在途粗视觉批次结果，避免状态竞态。顶层模式与前端删减只影响展示组合，不扩大工具副作用或数据访问范围。
-
-运行时覆盖说明：显式 preview 或 Jianying draft 请求通常走受控直通工具；若请求含同一项目、剪辑任务内已验证的时间线但缺少 storyboard 上下文，后端不擅自选定渲染动作，而是把该受控事实交给模型技能循环决定直接渲染、先观察时间线或澄清。无论模型选择什么，文件、SQLite 与 FFmpeg 仍只能由通过作用域与范围校验的 Rust 工具执行。
-
-Rust 后端按职责拆分为独立模块：`db.rs` 负责 SQLite 与迁移，`models.rs` 定义领域类型，各领域模块承载受控命令。当前 schema version 为 14；v14 为源健康快照增加脱敏原因码。目录树恢复是读取时的加性安全投影，不修改 schema、素材引用或分析证据。v10/v11 的任务快照、待归属请求与一次性路由凭证继续保持既有职责。通用 Agent 调用步骤与诊断不包含模型原文、会话内容或媒体证据。迁移只增不删。
-
-`agentloop` 已完成分层拆分（2026-08-17）：`agentloop/policy.rs` 只拥有工具白名单、请求负向约束、目标解析和产物完成门；`agentloop/schema.rs` 为纯类型与常量；`agentloop/prompt.rs` 负责提示构建与历史加载；`agentloop/skills.rs` 为技能执行器；`agentloop/runtime.rs` 为路由决策与主循环；父 `agentloop.rs` 收缩为薄 re-export 层加测试。`assets.rs` 的素材库查询职责已提取为 `assets/library.rs`，技术/视觉分析提取为 `assets/analysis.rs` 与 `assets/visual.rs`，源健康提取为 `assets/health.rs`；`assets.rs` 收缩为薄协调层（2026-08-17）。热点均受只降不升预算保护，下一步按 `docs/codebase/CONCERNS.md` §6 的顺序渐进拆分。全过程保持 Tauri 命令名、SQLite schema、版本/审计语义和 Agent fixture 不变。
-
-仓库包含两类开发期硬检查。`.harness/doc-sync-policy.json` 将高影响的桌面命令、持久化、Provider/凭据安全和运行时配置路径映射到必须同步的长期 Markdown 文档；`.harness/architecture-budgets.json` 对前端入口、组件、controller、命令桥接和当前 Rust 热点设置只能下降的复杂度预算，并禁止已删除的旧边界与跨层调用返回。结构预算检查字符总量、最长单行、hooks 和 props；受 props 预算保护的组件签名无法解析或使用 rest props 时直接失败。检查会与 Git `HEAD` 比较，拒绝提高已有数值、移除指标或撤掉禁止项；受保护文件迁移必须留下永久 `budgetReplacements` 映射、新目标预算和旧路径禁用记录，新目标还必须以不放宽的值继承全部数值指标与原路径跨层禁止规则，目录预算即使为空也不能删除。代码文件/目录行数不再是架构预算指标。`harness:check` 同时运行架构预算和文档同步检查，`.githooks/pre-commit` 对暂存内容执行相同门；`docs/changes/` 保存可审计的架构变更记录。预算不是质量证明：超过预算时必须拆分职责；真正替换边界时删除旧文件、建立新预算并记录 ADR。对于触发文档规则的工作，独立上下文 Agent 会审查代码 diff、变更记录和文档语义，并在最多三轮修复后给出结果。详见 `docs/harness.md`。
-
-### 媒体分析队列
-
-导入后，每个素材会创建 `analyze_asset` 持久化任务。启动时会恢复未完成分析、取消同一素材的重复任务，补齐孤立的 `queued`/`analyzing` 行，并把仍可补跑的失败画面识别重新入队（含不足 6 段的尾巴）。技术分析超时最多自动补 2 次。分析队列以有界批次推进避免打满 CPU：技术分析同时跑的条数为本机逻辑核数的 1/4、限制在 2–8（`max_technical_analysis_workers`），每个 FFmpeg 解码线程为核数平分给各条（`analysis_ffmpeg_threads`），合并抽帧的每个输入单线程，启动恢复先领取两倍于此的任务（`analysis_claim_batch`），其余保持 `queued`，待用户查看某项目时由 `list_assets` 轮询每次再领取同样数量。同一条素材的切点核实帧与各段抽样帧合并为每进程最多 12 帧的 FFmpeg 调用（每帧一个 `-ss` 输入），失败或缺帧时逐帧补抽。FFprobe、缩略图、场景扫描、回退抽帧与 Tesseract 分别有 20、30、60、20、20 秒硬超时；FFprobe 超时仍使该素材失败，缩略图或单帧抽帧超时则跳过该步并继续，OCR 正常完成但未识别文字仍不失败。Windows 超时会以无窗口的 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用不会无限等待，因此不能保证该进程树已退出。启动把中断的本地 `running` 任务重排为 `queued`。`list_assets` 只返回持久化的分析状态，不再对所有源路径同步 `stat`；实际分析和交付工具才校验文件，避免大批量失联素材令 1.5 秒轮询阻塞。场景检测：一律先扫关键帧。全帧补扫仅用于本机、≤60 秒、且关键帧切点 ≤1 的片子；共享盘、长片或关键帧已切开则不再整段解码。超时保留已有关键帧切点。视频 OCR 只处理前 2 张；视觉分析独立在后台批次完成。SQLite 连接启用 WAL 与 5 秒 busy_timeout（`db.rs::open_connection`），消除并发写导致的 `database is locked`。前端轮询活动项目素材状态；侧栏素材库入口用状态点提示进行中或待处理，素材库列表标题展示进度与筛选。不展示源路径。生成的缩略图与关键帧位于应用数据目录，通过作用域 Tauri asset 协议展示；UI 不接收或展示原始源路径。Windows 上所有外部命令均通过 `process::hidden_command` 使用无控制台窗口标志执行，避免媒体分析或 Jianying 适配器闪现命令行。
-
-### 视觉分析
-
-当前视觉分析：`analyze_asset` 只执行 FFprobe、缩略图、真实硬切分段、运动能量可用窗与 OCR，完成后即为技术 `ready`。素材级 `analyze_asset_visual_batch` 按硬切段整段识别：每 15 秒一张图、每张 5 帧（均分取中点、按 960 宽抽；最多 4 张 20 帧），每张为中间帧大图 960×540 在左、其余 4 帧小图在右（竖拍为竖向大图 + 2×2 小图），每帧标编号与源时间，一段的全部图同一请求，任务最多 6 段，最后不足 6 段也立即送审；队列最多 16 个任务同时执行（同一素材的任务不并行），每段一个请求、各段并发，避免描述挂到别的段或素材上；除共同描述外，结果含随时间的变化与高光、主体左右边界与竖屏可裁性、开头结尾是否干净、主体与镜头运动方向、焦点、光线色调、人物与防护装备、画面文字/品牌标识/人群/展会、抽象概念与氛围、最佳可用区间（`VisualEvidence.detail`）；变化、高光、概念与氛围进入召回文本，全部进入 Phase 3 候选卡；模型自拟叙事功能短语和一句可见描述，Rust 只对上 `assetId+segmentId` 并软解析 JSON，对不上的单卡丢弃，回写时写入片段向量。瞬时失败（超时、网络、Provider 暂不可用）自动补跑，每条最多 3 次，用户跳过与不适用不补。不抬 `visualAnalysisVersion`。选片不再等待片段模型加深；第二次分析是选中镜头的 Phase 4 多帧精修。历史 `analyze_asset_segments_batch` 仅收尾已入队任务。单一 worker 共用熔断；粗识别任务 payload 含 `assetIds` 与 `segments`。storyboard 候选入口只允许技术 `ready`、类型为视频、未被排除且源文件可访问的素材。
-
-### Agent 编程上下文架构
-
-仓库把“给编码 Agent 的说明”分成三层，避免一份巨大 Markdown 同时承担所有领域细节：
-
-```text
-AGENTS.md                         全局产品、安全规则与读取路由
-├─ src/AGENTS.md                 React 状态、IPC 与恢复边界
-└─ src-tauri/src/AGENTS.md       Rust 可信执行、事务与外部集成边界
-
-TASKS.md / ACTIVE_TASKS          当前任务、完成门与下一个已授权动作
-docs/codebase/                   七份可验证的当前源码地图
-docs/{architecture,api,...}.md   按需读取的长期事实和历史决策
-.harness/agent-context.json      机器可读清单、作用域与允许列表
-```
-
-支持分层 `AGENTS.md` 的编码 Agent 会按目标路径获得就近约束；其他 Agent 必须手动读取根入口、当前任务窗口和目标目录指令。`scripts/check-agent-contracts.mjs` 在工作区和暂存区验证：上下文文件及七份代码地图完整、当前任务窗口有界、全部受控手写源码顶部存在中文职责导航；React 只能经 `local-store.ts` 调用 Tauri，公开命令在 bridge/`lib.rs`/`docs/api.md` 间可对账；外部进程、Credential Manager、HTTP/网络传输与 Agent 工具目录不能跨越既定所有者。它不尝试用正则证明注释或业务语义正确，语义仍由类型、Rust 校验、测试、真实桌面验收和独立审查负责。
-
-这套结构把接手成本收敛为“先定位，再按风险加载”。清单与 Git `HEAD` 比较，只允许缩小任务窗口和可信允许范围；pre-commit 直接运行并要求 staged 检查器/配置与 working tree 一致。它仍不承诺仅阅读文档即可无状态地续写任何未提交工作；可靠交接还要求工作区干净、当前任务窗口准确、变更记录和测试结果可复现。
-
-### Provider 认证
-
-实验性 OAuth 使用系统浏览器 loopback PKCE 流程，回调校验 state，并通过原生 Windows `keyring` 后端保存凭据。该流程只用于个人测试，不是官方通用 OpenAI 第三方 OAuth。前端通过 Tauri 事件接收状态，并以轮询作为恢复路径；模型弹窗在已连接状态下可调用 `clear_experimental_openai_oauth` 删除凭据并退出登录。同时支持自定义 OpenAI 兼容 API：用户在模型弹窗填写 Base URL、Model 与 API Key，`save_custom_api` 把三者一并保存到 Windows Credential Manager（`clear_custom_api` 可清除）。`ModelAccess::resolve()` 在自定义 API 已配置时优先使用它，否则回退到实验性 OAuth；自定义 API 经 `{baseUrl}/chat/completions` 以 Bearer API Key 鉴权，Rust 侧把 Responses 风格载荷转换为 chat/completions 的 `messages`/`response_format`。API Key 与 OAuth 令牌一律不进 SQLite、浏览器存储、日志或工具结果。视觉分析请求带 30 秒超时，失败或未连接时以 `visualAnalysisNote` 随素材证据返回原因，避免分析线程无限阻塞。
-
-### Agent 循环与请求策略
-
-自然语言编辑控制器（`agent.rs`）在消费一次性 receipt 后统一进入 `run_native_tool_loop`。循环从 SQLite 按时间顺序加载当前 conversation/editing task 的全部真实 user/assistant 消息，并按“静态系统提示与完整工具名称/一句话目录 → 本轮权威状态快照 → 会话历史 → 当前用户消息”的固定顺序构建 Provider input；Provider 返回的 message、function_call 和 function_call_output 作为原生 item 继续下一步。初始 Provider 请求只注册常驻 `load_tools`；模型每次从完整目录选择 1–5 个业务工具并替换已加载集合，下一步才收到这些工具的完整 schema。目录可见性不代表执行授权；Rust 在执行前同时复核全局白名单、请求策略和该 Provider 请求实际暴露的集合。同一响应中刚加载但尚未暴露的调用会被拒绝。有 function_call 时逐项执行并继续；没有 function_call 且有自然语言时结束本轮。`load_tools` 与诊断性的 `read_logs` 不满足项目事实观察门，真实产物和确认门仍由 Rust 完成。模型最多 10 步，受 300 秒总预算、120 秒单步预算和取消检查约束。
-
-`agentloop/snapshot.rs` 在每轮开始从当前 project/editing task 作用域读取任务 brief 与最近终态（暂停等用户决定时附暂停于哪个工具和错误码）、素材 kind/技术分析/视觉分析/源健康计数、最新 storyboard 与其最新 timeline 的版本和轨道计数、磁盘实际 preview、Jianying 创建/注册状态，以及模型、配音和 Jamendo 的本机配置布尔值。快照首行固定声明其本轮数据库事实来源，固定字段顺序且最多 1200 字符；只使用 `v3`、`v5` 等版本号，不输出 UUID、路径、文件名、素材备注、OCR/视觉证据、会话原文、Base URL、模型名或任何凭据值。任务 brief 只允许不会伪装字段定界符的保守字符集；含路径、点号、ASCII 字母、字段分隔符或内部标识时整体隐藏，普通超长 brief 有界截断。凭据所有者模块只向快照返回布尔状态，读取异常使快照构建失败并封闭终止本轮，不伪装成未配置。
-
-每个非观察写工具真实返回 `ok`、`queued` 或 `needs_confirmation` 后，Rust 在下一次 Provider 请求前重新读取并原位替换唯一快照，使新 storyboard/timeline/preview/注册状态立即可见；刷新失败同样封闭终止。上下文按完整 Provider payload 的 o200k token 计量，不再按固定消息数或字符数裁剪：40K 以上启动模型自主压缩，目标低于 30K，60K 为发送硬上限。压缩必须保留用户目标、明确约束、偏好、已作决定及原因和未解决问题；当前用户消息、唯一权威快照、近期原文及最近 function_call/function_call_output 对原样保护。
-
-每个普通自然语言请求不再生成基于关键词的 `RequestToolPolicy`。工具目录默认完整开放，意图由模型选择工具；Rust 以全局白名单、作用域、参数与领域副作用校验为边界，不以“只/only/不要…”等请求文本收缩执行集。
-
-交互 Agent 的模型决策共享 90 秒协作式总预算，每次 Provider 请求取 120 秒单步上限与剩余预算的较小值；达到预算后不启动新的模型调用或副作用，但不会强杀已经开始的 FFmpeg、下载、preview 或 Jianying 副作用。安全诊断只记录固定数字耗时与错误码。Provider 调度在请求边界让交互模型调用优先于尚未开始的粗视觉调用；粗视觉连续三次失败后熔断 60 秒，期间批次保持 `queued`，冷却后只允许一个半开探测并恢复 worker。已经开始的视觉请求允许完成，避免取消未知网络状态。
-
-“剪好了吗”“完成了吗”等精确状态问题也作为 NativeToolLoop 的只读请求处理；`get_edit_status` 在同一项目、剪辑任务和会话内读取上一条 Agent task 的运行终态，同时以当前 task 的最新 storyboard、该 storyboard 的最新时间线状态和磁盘中实际存在的 preview 文件作为产物事实。查询不绕过统一 loop，也不接受模型文本替代持久化产物事实。
-
-### 会话路由与持久化
-
-`submit_conversation_turn` 先消费与项目、剪辑任务、会话和完整请求绑定的一次性 receipt，再为所有普通聊天、澄清、项目事实问题和工具执行创建同一种 Agent task；它不调用对话分类模型、不解析 route/goal JSON，也不选择首个工具。NativeToolLoop 负责自然语言回复、原生工具调用、观察完成门、确认门和有界终态；`execute_agent_edit` 保留为兼容入口但同样进入 NativeToolLoop。
-
-Task Resolver 仍负责作用域归属：`resolve_conversation_task` 只读取当前激活剪辑任务的结构化快照，输出 `continue_current`、`create_new` 或 `clarify`，并以一次性 receipt 绑定确切 task、conversation 和完整请求。没有激活任务时直接创建新任务。模型不得按名称切换其他已有任务；`switch_existing` 若仍被模型返回且目标不在当前任务内，失败封闭。任何模型自动归属都要求至少 0.85 置信度；低于门槛时保存项目级 pending，并只询问继续当前任务还是创建新任务，不列举其他任务名称。Task Resolver 不选择工具、不决定回复/执行 route；receipt 消费后由 NativeToolLoop 统一处理请求。
-
-Agent run 完成时，`finalize_agent_task` 在同一 SQLite 事务中写入 task 终态、可选产物审计、以任务 ID 派生的确定性最终回复和 conversation 终态；事务提交后才发出 `agent-edit-completed`。事件只是低延迟通知，不再是最终回复的唯一载体。`submit_conversation_turn` 的 `run` 分支以 `{ kind: "run", agentTaskId }` 返回真实任务 ID；Rust enum 字段显式序列化为 camelCase，前端收到空 ID 会失败封闭，不能建立不可对账的 pending ref。前端仍缓存任务 ID 返回前的早到事件，同时在 composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时轮询 `agent_tasks` 终态；一次任务列表暂缺或 task 从 active 变 terminal 都不能结束轮询。没有内存 pending 时，持久化 `working` 本身允许前端对最新同作用域 terminal task 做一次恢复对账，覆盖首次快照已经 terminal 的窗口。事件丢失、窗口切换或快速完成时，会从 SQLite 重载原会话消息、storyboard、时间线和 preview。启动恢复若发现 `working` conversation 的最新 task 已终态却缺少 `agent-task-result-{agentTaskId}`，会把任务标为 `needs_review`、写入固定恢复消息并将会话改为 `review`，绝不猜测已经丢失的模型回答。只有活动项目和剪辑会话与任务作用域一致时才更新当前可见产物。模型响应解析失败只记录固定阶段和响应长度，不记录响应原文。`ModelAccess` 只有在确认自定义凭据不存在时才回退 OAuth，凭据读取错误会阻止请求。Agent loop 超时、解析失败或耗尽步数且未满足目标时，无中间产物持久化为 `failed`，已有真实中间产物为 `partially_completed`；`ask_user` 为 `needs_clarification`。终态状态重新读取失败仍采用 `failed` 的封闭结果。`change_clip_duration` 同时校验已验证源窗口的上下界，并令视频 `sourceEndMs` 精确等于新 `sourceStartMs + newDurationMs`。
-
-Agent loop 的工具失败会在 Provider 边界前转换为临时、脱敏的结构化诊断，只含操作、阶段、安全码、计数事实、可重试性和恢复建议。完整路径、原始日志、媒体证据及用户内容不进入该上下文，也不新增持久化 payload。模型可据此自然解释失败，但任务终态和产物存在性仍由后端决定；模型不可用时继续使用确定性诚实降级。
-
-NativeToolLoop 在可重试写失败后最多两次拦截模型的提前自然语言收工，要求调整参数、补齐前置条件或改用另一项可用工具；质量警告同样最多触发两次精炼续步。观察或无关前置工具成功不会清除原失败，编辑工具成功也不会清除另一产物的质量警告，只有原工具的新结果才能闭合对应事实。相同工具与语义相同的 JSON 参数首次返回 `invalid_arguments` 后，后端不再重复执行；参数会先规范化，不能靠空白或键顺序绕过。第二次返回不可重试的重复参数诊断，第三次原样调用有界终止；两次拦截仍各自写入 payload-free 的失败步骤审计。preview 成功收据绑定其 timeline 版本；后续时间线写入产生新版本或未返回可验证版本时，旧 preview 立即失效，终态不得把它计为最新产物已完成。
-
-NativeToolLoop 是当前唯一的对话模型入口。它按 SQLite 时间顺序读取真实 user/assistant 会话消息，在静态系统提示后注入本轮权威状态快照，保留完整 Responses output 或 Chat 适配后的原生 item，并以 `store:false`、`parallel_tool_calls:false` 继续 function_call/function_call_output。系统提示始终携带完整工具名称与简短用途目录；完整 schema 默认注册。意图由模型选择工具；Rust 以白名单、作用域与领域校验守边界，不以请求关键词判定只读/禁止。模型文本仍不能自证任务完成。
-
-```text
-真实会话 input
-  -> Provider 返回 message 或 function_call
-  -> 有 function_call：Rust 校验并执行 apply_skill（一次）
-  -> 追加原始 function_call + 结构化 function_call_output
-  -> 下一逻辑模型步骤请求 Provider
-       -> 瞬时 429/408/425/部分 5xx、超时、网络中断或空响应：
-          在同一 120 秒单步和 300 秒总预算内最多三次尝试；
-          每次 HTTP 只用剩余预算的一份，避免一次挂起占满 120 秒
-       -> 永久 4xx/未知错误：不重试
-  -> Provider 返回自然语言
-  -> RunReceipt + 持久化事实裁决终态，assistant 回复写入 SQLite
-```
-
-Provider 重试位于工具执行之后的独立模型请求边界，只重发同一 payload，不重新进入 `execute_native_tool`，因此不能重复本地副作用。每次尝试前及退避等待期间都会重新查询任务取消状态；取消后不再发下一次 Provider 请求。诊断仅保存 `provider_http_<status>`、`provider_timeout`、`provider_network`、`provider_empty_response` 或 `provider_unknown` 及尝试次数；Base URL、模型名、凭据、响应正文和传输详情不得进入 Agent 诊断。若重试仍失败，已有真实产物按 RunReceipt 保留，UI 才使用确定性诚实恢复文案。
-
-完整请求/响应排查不放宽生产日志、SQLite 或前端状态边界。debug 构建只有在 `NATIVE_PROVIDER_FULL_TRACE=1` 时，才把 NativeToolLoop 每次真实 HTTP 尝试实际发送的完整 JSON 和 Provider 响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。该文件只存在于 gitignored 的 `target/` 目录，供本机调试读取，不进入 WebView、Tauri 命令、SQLite 或普通产品日志。写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识和自定义 Base URL；请求头从不进入文件。网络层没有收到响应时不伪造 OUTPUT。进程首次开启时截断旧文件；release 构建即使设置同名环境变量也强制关闭。`npm run tauri:dev` 会设置该开关。
-
-Native 工具 `read_logs` 是普通只读诊断能力，模型可在需要判断故障和修改方向时自主加载；用户明确禁止读取日志时 Rust 执行门拒绝。Rust 固定读取 `tauri-plugin-log` 在 `app_log_dir` 中的当前活动应用日志，模型不能提交路径或读取轮转历史。参数为 nullable 的 1-based `startLine`/`endLine`，两者均空时返回末尾最多 100 行，显式闭区间同样最多 100 行；结果受 3500 字符预算、单行 500 字符预算并提供下一页行号。包含凭据形态、URL、UNC 或完整 Windows 路径的行整体遮蔽，其他真实错误和阶段信息保持可读。该工具不读取 `target/native-provider-full-trace.jsonl`，不满足项目事实观察门，也不新增日志持久化。
-
-剪映链接器先把内部时间线投影为 `HandoffPlan`，在 Rust 中预校验源引用，再把剪映专用 JSON 写到应用数据目录交给 Python 适配器，执行后删除输入文件。适配器只支持源时间绑定的视频片段，创建唯一目录，跨进程串行化注册表写入，并在 Jianying Pro 运行或注册表快照变化时中止。唯一 draft 名必须解析为草稿根目录内的单层目录；目录创建后，若轨道构建、保存或注册失败，Python 适配器会回滚本次新建且尚未成功交付的目录，避免失败结果遗留孤立 draft 或重试生成重复产物；既有 draft 从不进入该回滚范围。旁白轨进入 HandoffPlan，当前不写入剪映草稿。
-
-Agent loop 每轮调用模型前会从数据库和当前内存产物重建紧凑 `AgentStateSnapshot`，以当前项目/任务/会话、素材分析可用性、真实产物存在性、已执行步骤、剩余步数与未满足条件作为权威状态；确定性前置条件提示只约束真实依赖，不强制所有合法编辑经过 storyboard。循环技能和显式直通技能均持久化步骤开始/终态；应用中断后运行进入 `needs_review`，未完成步骤标记为 `interrupted_requires_review`，但不自动重放。
-
-对话区会把当前作用域最近一次 `agent_tasks` 调用显示为可折叠执行卡。卡片轮询同项目、剪辑任务和 Agent 调用下的 payload-free `agent_run_steps`；父级对话状态同时轮询 `agent_tasks` 终态，避免步骤已结束而卡片仍沿用旧的 `running` 快照。固定工具名会映射为用户可读动作，模型澄清或自然语言总结不会被误写成副作用；卡片显示步骤状态、已完成数量、运行时长与后端已记录的安全产物类型。模型推理、工具参数、错误原文、本机路径和媒体证据不会进入该卡片；后台媒体分析进度在素材库和侧栏，避免与当前对话任务混淆。
-
-### 当前 Agent runtime 覆盖说明
-
-当前实现覆盖上文保留的历史 6 步描述：模型拥有 10 步顶层编排预算，storyboard 另有 3 次内存修订预算。模型可调用 `request_asset_analysis` 对项目内已导入、未分析或分析失败的素材排队；文件、SQLite 和 FFprobe/FFmpeg/Tesseract 一直由 Rust 受控执行。模型可以生成解释性回复，但产物完成事实只能来自工具返回的后端验证摘要，不能被模型总结覆盖；固定降级仅用于 Provider 不可用等无模型回复场景。
-
-### 文本轨
-
-文本轨的第一项受限编辑工具为 `replace_text_tracks`：模型可提交当前作用域时间线的完整文本轨，Rust 会校验时间、样式/布局范围、受限动画与唯一 ID，并按已验证矩阵分配剪映兼容性。已启用文本轨会编译为 ASS 并通过本地 FFmpeg/libass 叠加在 preview；`jianying_default` 字体的静态、淡入/淡出、向上滑入、向下滑入和弹入 cue 可写入 Jianying draft。文本适配器把嵌套文本 JSON 写为 Unicode 转义而非裸 UTF-8，已在当前剪映 11.2 实机验证中文正确显示；其余文本请求仍会明确拒绝，绝不静默丢弃。
-
-模型在制作或改写文本轨前必须先观察目标 `get_timeline` 与 `get_text_capabilities`；若时间线未足以说明画面语义，再观察 `get_storyboard`。每个文本预设提供 `selectionHint`：`subtitle_safe` 用于对白/旁白，`headline_rise` 用于递进或开场揭示，`headline_pop` 用于反差、意外或关键结果，`headline_drop` 用于结论、规则或警示；`callout_card` 与 `cta_card` 仅在用户明确接受 local preview 时可用。同一视觉 beat 至多一个 headline，headline 不得代替普通字幕或与另一 headline 重叠，后端也拒绝跨轨 headline 重叠。`replace_text_tracks` 对阅读密度、超过两行、动画占比和相邻重复文案返回非阻断 `qualityWarnings`，供模型在下一步自主修正；因尚无主体定位证据，它不虚构“文字遮挡人物”的判断。预设由 Rust 边界解析成完整且可审计的样式、布局和动画配方，任何冲突的模型字段都会被覆盖。已验证字幕和标题预设同时固定淡出，避免模型以模板制作入场后遗漏出场；`headline_drop` 使用已验收的向下滑入。目录同时标记每项为可交付 Jianying 或仅 local preview，避免模型把未验证能力当作已交付。
-
-前端会在 Agent 对话工作区展示当前时间线文本 cue 的文案、时间、已解析文本预设、字体、入场和出场模板与 Jianying 兼容状态，供用户审阅模型实际落地的文本设计，而不读取或同步其他 Jianying 草稿。
-
-文本轨的 `layer` 是可交付的叠放语义：local preview 把它写入 ASS event layer，Jianying adapter 按 layer 创建独立且命名的文本轨。一个文本轨内不允许 cue 时间重叠，以匹配 Jianying 轨道段的约束；不同 layer 可以重叠并按层级显示。
-
-## 配音（Fish Audio / ElevenLabs，2026-09-07）
-
-分镜完成后，若 storyboard 为 `full_script`、有旁白、语音 Provider 已配置、且时间线尚无旁白轨，则 **自动合成配音**：Agent `generate_storyboard` 调用 `auto_synthesize_storyboard_voiceover`（文本优先 beats）。**`key_message` 不自动配音**，默认不写屏幕标记字幕。合成失败只提示，不挡预览；`voiceover_longer_than_picture` 写入 `qualityWarnings`；已有旁白轨则跳过。有大段可朗读文案时 Phase1 **之前**由系统锁定 `full_script`（模型不得改选），并走 audio-first：配音开启时先按已确认 brief 合成，失败则不生成；时间戳优先词级，没有则句内按字数插值。其后自动配音因已有轨而跳过。
-
-显式 `synthesize_voiceover` / `synthesize_storyboard_voiceover` 仍可用。文案只来自请求 `text` 或 storyboard `narrationText`，不得把 `onScreenText` 当旁白。密钥在 Credential Manager。**优先 Fish Audio**；传输不可用/超时/5xx/429 且 ElevenLabs 已配置时可回退（401/密钥错误不回退）。配音时长是时钟：旁白 cue 等于完整音频，画面不得短于口播（禁止冻帧垫片）。**旁白轨必写**；字幕只使用 TTS alignment 且尽力提交，失败保留旁白并记 warning。快照用 `voiceoverCues` 与 `配音能力` 区分「已写入」与「已配置」。preview 把旁白与可选 BGM 混到画面时长，禁止 `-shortest`。
-
-## 本地音乐轨（2026-08-12）
-
-版本化 `TimelineContent` 增加 `musicTracks`。每个 cue 绑定已分析的本地音频素材和明确源/时间线范围，可设置循环、音量与淡入淡出。preview 通过 FFmpeg 本地处理和混音，源媒体保持不变。Jianying 适配器现在通过本机 `pyJianYingDraft` 的 `AudioMaterial`/`AudioSegment` 创建独立音频轨，并映射源范围、循环拆段、音量和首尾淡入淡出；已用合成素材创建并注册新的草稿、检查到 1 条音频轨、1 个素材和 3 个循环片段。该结果尚未在 Jianying UI 中试听，所有音乐 draft 均为实验性且需要用户复核，绝不覆盖既有 draft。
-
-Jamendo 是首个可替换线上音乐 Provider。其 `client_id` 仅存 Windows Credential Manager；`search_music` 仅返回 API 明示可下载且为 CC0/CC-BY 的曲目，CC-BY 的曲名、作者和许可 URL 会随 music cue 保存。`download_music` 才按需将单曲写入当前 local project 并交给既有本地分析队列；`use_online_music` 在一个具名、受限且可审计的调用内下载一首、等待分析完成并新建含循环背景音乐的时间线版本。每个下载副本使用唯一文件名，绝不覆盖既有本地副本。不会抓取网页、批量缓存曲库或把未验证的远程 URL 写入时间线/Jianying draft。
-
-场景检测：一律先扫关键帧。全帧补扫仅用于本机、≤60 秒、且关键帧切点 ≤1 的片子；共享盘、长片或关键帧已切开则不再整段解码。FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)`。CLIP 对切点前后各一帧做相似度验真（阈值与 Phase 2 去似相同 0.92）；两侧仍像同一画面、抽帧失败或 CLIP 不可用则丢掉该切。无已验证硬切时整条一段，禁止按秒均分，不为凑数量把真切点合成 24 段。每段抽帧取首/中/尾并按约 4s 加密，上限 8 帧。硬切确定后对每段抽灰度序列算帧差能量，只收缩静止开头和已收敛结尾；对比不够、手持/流水线或抽帧失败则保持硬切两端。`TechnicalMetadata.analysisVersion=4`；version&lt;3 的就绪视频由 `reanalyze_asset_segments` 整段重切，version=3 只补运动曲线且不改视觉。保持 `ready`、不自动排队视觉。Phase 4 锁定片段时窗口用运动可用区间，曲线拿不准才标 `uncertain` 加密 Pass C。关键帧网格改为片段中点帧拼图。
-
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只把纯数字 priority 写入 queued 视觉批次，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回使用已打上第一次卡的段，段上没卡但素材级有旧整片卡时按整条进池，未打卡段不借用整片标签。配音已把短 brief 锁成 `full_script` 时不再用「必须 key_message」打回。关配音不再强制 15 秒；时长由模型按用户要求或内容决定，没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。配音开着必须配音；没有可念稿时 Agent 先写稿问同意，同意前不生成。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉请求，但仍可作为明确标注的本地提取文字证据进入 storyboard，不能冒充画面语义。
-
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`）。配音开启时先按已确认 brief 合成旁白，再用真实口播时长拆拍；合成失败不生成。用户给了成片秒数且与口播相差超过约 30% 时先问用户。再注入本地库视觉/OCR 库存摘要约束 `requiredVisual`/`visualKeywords`（禁止编造库中没有的主体；时长由模型按用户要求或内容决定，120 秒为安全上限；`key_message` 默认不写 `onScreenText`；不再用 8 秒或最少拍数硬打回；已知时长时写入预计拍数，平均一拍明显长于约 4 秒则软反馈再拆一次，最后一次仍粗则收下；每 beat 另产英文 `visualKeywords` 供本地召回）。Phase 2 **本地按段召回**：就绪视频全部展开为已打卡硬切段（无硬切、或段上没卡但有旧整片卡则整条 1 段）→ 补第一次段卡的本地片段向量（不等待模型加深）→ 每个 beat 取 9 段（同片最多 2，相似最多 2；有 1 条就能覆盖；后面 beat 不因前面池子里没用上的相似段被预删）。词面匹配不计英文虚词、只按词首命中，出现在多数拍查询里的通用词降权；CLIP 分按本拍全库余弦中位数到最高值相对换算。Phase 3 **各拍同时发请求**（上下文只含修复轮保留或局部重选冻结的镜头；返回后按拍序分配，撞上前面拍已选片段的拍剔除已用候选后再同时补发，直到没有撞车），看池内每条候选的网格（弱匹配扩池到 12 条时也全附；按该条候选时间窗现拼，缺文件则现抽），卡片含可见描述；用 `candidateIndexes` 默认选 **1 候选**（Rust 解析 asset/segment/源范围；序号必须 0–4；同一 beat 禁止同 `assetId`；跨 beat 允许同一素材的不同、不重叠、不相似片段，含相邻；已用片段相似画面硬拒，且进入选片前 Rust 已从池中剔除与已选镜头交叠/相似或素材复用已到上限的候选；撞车时只打回靠后的镜头；每镜约 2–3 秒，一拍一镜，两条不相似且对得上才加第 2 镜，不垫时长；40% 上限按素材）。选片先对网格画面（卡片文字与画面冲突时以图为准），旁白不单独决定选哪条。某一拍失败只重试该拍。整条选不出镜头则 `storyboard_needs_user_decision`。选出后 Rust 对照该拍 `narrationMs` 与候选 `usableMs`（运动可用窗）；不够长则保留已选镜头并放慢，不换片、不补第 2 镜、不拼下一段硬切。Phase 4 **是选中镜头的第二次视觉分析**：有片段锁定则跳过 Pass A，窗口=该片段的运动可用区间（无曲线则用硬切两端），不够长也不拼下一段硬切，也不再要求模型把窗拉过可用上限；网格多帧判断动作是否做完、后半截有无新信息并改 `sourceStart/End`。没有 segmentId 的整片也锁在 P3 源窗，不再 Pass A 另切窗。Phase 5 Rust `normalize` 自修后硬校验（保留 P1/audio-first 的 `targetDurationMs` 与 `scriptMode`；画面短于旁白不回 Phase 4 拉窗；精修类失败回 Phase 4 且只改受影响镜头，结构/硬上限与 diversity/相似片段失败不空转 Phase 4）。单步重试分离传输/语义预算；`previousShots` 只作提示快照，真实精修进度在 `Phase4Session`。耗尽错误含 `partialCandidateSummary`。收尾缺口走 `qualityWarnings` + `insert_clips`，禁止为补镜改 brief 重开；时间线有可播镜头时同一调用内自动预览并新建剪映草稿，缺口不挡预览。已有配音后禁止改旁白。实现位于 `src-tauri/src/storyboard/phases.rs`、`phase4.rs` 与 `step_retry.rs` / `provider_trace.rs`，主流程位于 `storyboard.rs::generate_storyboard_internal`。
-
-storyboard 生成会记录详细日志：入口参数、素材库存、Phase 1 完成、Phase 2 每 beat 的 `poolSize`/`libraryExhausted`、Phase 3 `selected[assetIds]|uncovered`、Phase 4/5 attempt 与 issue kind、归一化与验证结果。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时另写 `src-tauri/target/storyboard-provider-trace.jsonl`（phase/attempt/direction/遮蔽 body）。模型传输复用进程级 `ureq::Agent`；自定义 API 可配置独立粗视觉 Model。
-
-关键帧统一缩放到 320px 宽后计算拉普拉斯方差，取归一化中位数作为素材质量分；旧素材在首次 storyboard 前从既有关键帧补齐。视觉 evidence 写入后生成 512 维文本向量；向量与模型名、维度、版本、证据文本 SHA-256 一起保存在素材 `metadata_json`。旧素材按项目批量补齐，条件更新避免覆盖并发视觉分析；向量只供 Rust 排序，不进入 Provider payload。历史使用次数来自每个剪辑任务最新时间线，同一任务重复镜头只计一次。
-
-## 技术约束
-
-历史“未限定草稿直接指 Jianying draft”的说明已废止。只有明确“创建剪映草稿”才是直通命令；未限定草稿及普通交付请求交给模型工具循环。preview/Jianying draft 必须使用模型已显式选择或已有的作用域时间线，后端绝不暗中创建时间线版本。
-
-素材分析请求进入 NativeToolLoop 的受限工具集合；模型可在成功观察后选择 `request_asset_analysis` 或自然澄清，Rust 仍验证当前项目的素材证据和参数，不存在前置分类模型或关键词直通执行。
-
-已明确文案的 storyboard 请求若因非前置条件校验失败，循环会把真实失败事实回读给模型继续决策；不得再向用户重复索要主题、风格或时长。顶层 Agent 编排预算为最多 10 步，后续 storyboard 草案修订使用独立的有界预算，避免耗尽创建时间线或 preview 的步骤。模型可基于既有文案重试有效 storyboard 或生成自然语言解释，只有缺少已分析素材等真实前置条件时才允许 `ask_user`。
-
-- `bge-small-zh-v1.5` 与 CLIP ViT-B/32 的 **ONNX 大文件**默认不进安装包：启动后若缺失则后台下载到 `app_data/runtime-models/`，SHA-256 校验后加载；小配置/tokenizer 仍随包。下载先走 HuggingFace 官方，失败则换国内镜像并断点续传、自动重试；不阻塞工作台。缺失时 Phase 2 分别降级为词面或跳过 CLIP 加权。发行可选完整包捆绑 ONNX（`tauri:build:full`）。开发机可用 `npm run models:fetch` 预拉。**FFmpeg/FFprobe 随生产安装包分发**（Gyan 8.1.2 full_build，含 `ass` 滤镜）。**Python 3.12 embeddable 与 pyJianYingDraft/pycapcut 随生产安装包分发**；适配器走 `python_program()`，启动子进程时把随包 FFmpeg 目录加入 PATH。**Tesseract 5.4.0 与英文 `eng` 数据随生产安装包分发**，OCR 与发行就绪检查优先使用随包副本。
-- Jianying Pro 8.0 的视频草稿与最小文本矩阵（默认字体的静态、淡入、向上滑入）已人工验证能在首页出现并以完整片段打开；图片和音频轨道尚不支持。内部时间线内容使用版本化 `textTracks`，旧时间线安全读取为空；文本 preview、受限文本工具和小范围剪映文本映射已实现。适配器可写入描边、背景、阴影和若干剪映内置字体资源，但在每项经过实机视觉验收前，仍不得将它们表述为可交付能力。
-- `App.tsx` 仍较大；在新增可复用领域功能时应继续将类型、组件和服务拆出。
-
-项目事实问答证据门不新增顶层 route：NativeToolLoop 记录本轮是否要求观察以及是否成功观察；至少一次观察成功后才能结束回答。循环提示明确要求：观察结果已经包含用户所问的数量、状态或事实时，直接基于该结果回答，不调用语义重叠的观察工具只为重复确认；只有明确缺少被问事实时才继续观察。纠正或观察仍失败时封闭失败，不展示模型猜测。
-
-维护记录（2026-08-15）： 的 FFmpeg `-t` 参数改为 `min(source_range, timeline_slot)`，防止源素材短于时间线槽位时生成黑帧。测试模块提取为独立 `preview_tests.rs`，`preview.rs` 预算从 1015 降至 608 行。
-
-
-维护记录（2026-08-15）：render_timeline_clip 的 FFmpeg -t 参数改为 min(source_range, timeline_slot)，防止源素材短于时间线槽位时生成黑帧；测试模块提取为独立 preview_tests.rs，preview.rs 预算从 1015 降至 608 行。
-维护记录（2026-08-15）：agentloop.rs::decide_conversation_route 和 taskrouter.rs::resolve_conversation_task 新增 validate-then-correct 重试逻辑；路由验证失败时把错误原因反馈给模型后重试一次，不改变公开命令或运行时边界。
-维护记录（2026-08-16）：移除 agent.rs、agentloop.rs、assets.rs 中所有静默 fallback（遇错返回硬编码合成值），补全被丢弃的真实错误日志；降级路径仍封闭失败，不伪造成功结果，公开命令与运行时边界不变。
-维护记录（2026-08-18）：agentloop/runtime.rs::decide_conversation_route 新增三处诊断日志（首次路由决策、纠偏后修正值、验证失败上下文），记录模型返回的原始 route/goal/isQuestion/tool 和 backend 识别的 pinnedGoal，用于诊断路由验证失败的根本原因（fast_goal 关键词识别遗漏、模型返回不合法 goal 值、还是 prompt 指令不清晰），不改变执行逻辑或公开命令。
-维护记录（2026-08-18）：实现四阶段 storyboard 选镜优化系统。models.rs 新增 visual_quality_score 和 scene_duration_ms 字段（Option 类型向后兼容）；新增 storyboard/scoring.rs 独立评分模块（质量/时长/语义/多样性/新鲜度综合评分），request_storyboard 只向模型提供 top-5 候选；新增多样性硬门（连续禁止、同素材≤40%）；新增 storyboard/semantic.rs 和 validation.rs 架构层（接口定义，实现体 TODO）。公开命令与 schema 不变。
-维护记录（2026-08-18）：新增 storyboard/multimodal.rs 多模态选镜架构层。定义关键帧网格配置（4-8 帧拼成 2x2/2x4 网格）、generate_keyframe_grid（FFmpeg I 帧提取 + image crate 拼图）和 build_multimodal_content（base64 编码图像块）接口。request_storyboard 检测 keyframe_grid_path 并构建多模态输入，让模型直接从关键帧画面判断语义匹配度。当前阶段接口定义完成，FFmpeg 和 base64 实现体 TODO。公开命令与 schema 不变。
-维护记录（2026-08-18）：修复素材 relink 和分析回写时 kind 字段未同步更新的数据一致性问题。confirm_asset_relink 在两个 UPDATE 分支（preserve_analysis = true/false）中新增 kind = ? 字段更新，从新 source_reference 重新计算 kind；update_analysis_status 在分析结果回写时同步重新计算并更新 kind 字段。修复后，用户将图片素材替换为视频并 relink 时，数据库 kind 字段会正确同步为 "video"，避免 storyboard 生成日志显示的素材类型与文件系统不一致。公开命令行为不变（仅内部实现修复），SQLite schema 不变。
-维护记录（2026-08-18）：agentloop/runtime.rs::decide_conversation_route 的路由决策 prompt 明确列举 5 个合法 goal 枚举值（question, storyboard, timeline, preview, jianying）和对应推荐工具，修复模型漏填 goal 字段或返回不合法值（如 "storyboard_generation"）导致的路由验证失败。Prompt 从模糊描述（"Include goal"）改为明确枚举列表 + 工具映射，降低模型猜测错误的概率。不改变 ConversationRouteResponse schema、公开命令或运行时边界。
-维护记录（2026-08-18）：storyboard/phases.rs::phase3_fine_edit 的 Phase 3 prompt 补充 matchLevel 枚举约束。Phase 3 是独立模型调用，原 prompt 只说 "Each shot must contain: ... matchLevel" 未列举合法值；现补充 "matchLevel must be 'direct' (evidence visibly supports the beat) or 'contextual' (honest scene-setting)"，与 Phase 2 prompt 保持一致，防止模型返回其他字符串（如 "high"、"medium"）导致验证失败。不改变 StoryboardContent schema、公开命令或运行时边界。
-维护记录（2026-08-19）：为诊断启动卡顿问题，在 projects.rs::initialize_local_store（10 处）、assets/analysis.rs::resume_incomplete_analysis（7 处）、assets/visual.rs::recover_interrupted_visual_batches（3 处）和 backfill_queued_visual_batches（6 处）添加 [PERF] 前缀的性能日志，测量数据库连接、清理中断任务、恢复分析批次、启动后台 worker 等关键步骤的实际耗时。所有日志使用 log::info! 级别，使用 std::time::Instant 计时。只添加诊断日志，不改变执行逻辑、公开命令或 SQLite schema。
-维护记录（2026-08-19）：优化 projects.rs::recover_missing_agent_completion_messages 查询性能。用窗口函数（ROW_NUMBER() OVER PARTITION BY）+ CTE 替代相关子查询，避免对每行外部结果重新执行一次子查询的 O(N²) 复杂度。原查询在有几百条任务记录时耗时 ~300ms（占启动时间 80%），优化后预期降至 <20ms。查询语义完全等价（最新任务判定逻辑、NOT EXISTS 判定逻辑保持不变），不影响公开命令或 SQLite schema。SQLite 3.25+ 支持窗口函数，Tauri 自带 SQLite 3.45+ 满足要求。
-维护记录（2026-08-19）：Provider 新增协议无关的 ModelTurn/ModelOutputItem/FunctionCall。Responses 完整 response.output、Responses SSE item、Chat Completions 普通响应与 SSE tool-call 增量均可解析；自定义 Chat 适配器保留 tools/tool_choice/parallel_tool_calls，并将函数调用历史映射为 assistant.tool_calls 与 tool_call_id。Legacy Runtime、Router、LoopGoal 和副作用流程不变，store:false 不影响 output item 保留。
-维护记录（2026-08-27）：`agentloop/tools.rs` 集中维护完整工具目录（含常驻控制工具 `load_tools` 与普通只读诊断工具 `read_logs`）、主链及交付工具；Provider 每轮只接收 `load_tools` 与最多 5 个已加载业务 schema。每项使用 strict JSON Schema 与 additionalProperties=false；严格 schema 的所有属性都列入 required，语义可选值使用 nullable 类型并由 Native loop 再次校验长度、范围和枚举。模型不携带 projectId、conversationId 或本地路径；领域执行仍由既有 apply_skill 负责，许可证、文字兼容矩阵、确认门与领域算法不移入工具适配层。
-维护记录（2026-08-27）：Rust 后端 dead-code 警告清理；删除旧单阶段 `request_storyboard` 与场景检测遗留代码，三阶段 storyboard 生产链路不变。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
-维护记录（2026-09-03）：Storyboard 改为五阶段选片/精修分离，单步重试与 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
-维护记录（2026-09-03）：安全上限 100 镜/beat；短 brief 时长收敛；Phase5 路由。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
-维护记录（2026-09-04）：`key_message` 默认 ≤15s（8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
-维护记录（2026-09-04）：可念稿强制 full_script+audio-first；旁白去重与硬门。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
-维护记录（2026-09-15）：素材切段只认已验证硬切，无切不切。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
-维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
-维护记录（2026-09-16）：素材详情展示片段运动能量曲线。见 `docs/changes/2026-09-16-motion-energy-detail.md`。
-维护记录（2026-09-18）：技术分析先扫关键帧，缩略图/抽帧超时不整条失败。见 `docs/changes/2026-09-18-faster-asset-analysis.md`。
+- 原始媒体/项目/产物默认本地，但画面识别与选镜图片、文本/配音请求会发当前 Provider 或网关；本地优先不等于全离线。向量/OCR/节拍与媒体处理在本机。
+- 内置网关构建仅走 Voycut 登录与服务，失败不回退本机模型/配音 key。无网关开发构建用自定义兼容 API 或实验性 OAuth；无网关配音仍有受限 Fish→ElevenLabs 传输失败回退。凭据走 Windows Credential Manager，界面语言偏好等非秘密便利状态才进前端存储。
+- Provider 单请求最多 4 图、429 有界退避；登录/资格/版本/请求体过大等错误真实返回。网关生产配置/账号资格及官方 OAuth 支持范围**未核实**。
+- process.rs 集中无窗口媒体子进程/超时/进程树回收。构建脚本捆绑 FFmpeg/FFprobe、embeddable Python/草稿 SDK、Tesseract/eng、DirectML 和模型小配置；默认 ONNX 权重后台下载至 app_data/runtime-models 校验，完整包可带权重。BGE 缺失降级词面，CLIP 缺失加权 0，DirectML 建会话/试算失败回退 CPU。
+- read_logs 固定有界读取并遮蔽路径/凭据；debug 完整 Provider 转储为显式开发诊断，release 关闭。模型文字不能自证产物存在或编辑器可用。
+- 最终视频导出未实现；preview 与编辑器交付不是最终导出。确认 UI 与真实桌面效果按 release-checklist 验收，静态对照不替代它。
+
+证据：`provider.rs`、`fellowcut_account.rs`、`music_provider.rs`、`voice_provider.rs`、`oauth.rs`、`custom_api.rs`、`process.rs`、`runtime_models.rs`、`onnx_device.rs`、`scripts/run-tauri.mjs`。协作/检查入口为 CONTRIBUTING.md 和 [harness.md](harness.md)。

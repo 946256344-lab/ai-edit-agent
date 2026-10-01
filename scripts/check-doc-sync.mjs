@@ -31,7 +31,7 @@ function globMatches(filePath, pattern) {
 }
 
 function runGit(args) {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 }
 
 function currentFiles() {
@@ -97,7 +97,8 @@ export function evaluateDocSync(files, policy, recordContents) {
     (filePath) =>
       filePath.startsWith(`${policy.changeRecordDirectory}/`) &&
       filePath.endsWith('.md') &&
-      !filePath.endsWith('/README.md'),
+      !filePath.endsWith('/README.md') &&
+      recordContents.has(filePath),
   )
 
   if (records.length === 0) {
@@ -124,7 +125,20 @@ function main() {
       continue
     }
 
-    const content = options.staged ? stagedFileContent(filePath) : readFileSync(resolve(root, filePath), 'utf8')
+    let content
+    if (options.staged) {
+      content = stagedFileContent(filePath)
+    } else {
+      try {
+        content = readFileSync(resolve(root, filePath), 'utf8')
+      } catch (error) {
+        // 删除的记录仍属于变更集，但不能读取，也不能充当有效的同步记录。
+        if (error.code === 'ENOENT') {
+          continue
+        }
+        throw error
+      }
+    }
     if (content !== undefined) {
       recordContents.set(filePath, content)
     }

@@ -1,587 +1,256 @@
 # API 与工具契约
 
-## 2026-09-30：第三方许可声明
+本文只描述当前 checkout 的注册契约。历史见 [changes/](changes/README.md)，产品链路见 [architecture.md](architecture.md)。本次以源码静态核实；真实媒体、网关、编辑器效果均**未核实**。
+
+## 桌面命令边界
+
+命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **101** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。
+
+### 账号、模型与外部服务
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `get_experimental_openai_oauth_status` | `无` | `OAuthStatus` | 仅从 Windows Credential Manager 读取连接状态。 |
+| `start_experimental_openai_oauth` | `无` | `Result<OAuthStart, String>` | 启动五分钟 loopback PKCE 回调并返回浏览器授权 URL；仅个人测试。 |
+| `clear_experimental_openai_oauth` | `无` | `OAuthStatus` | 删除 Windows Credential Manager 中的实验性凭据并重置连接状态。 |
+| `get_custom_api_status` | `无` | `CustomApiStatus` | 仅返回自定义 API 的 Base URL、主 Model、可选粗视觉 Model；不返回 API Key。 |
+| `save_custom_api` | `baseUrl: String, model: String, coarseVisualModel: Option<String>, apiKey: String` | `CustomApiStatus` | 保存于 Windows Credential Manager；粗视觉 Model 为空时沿用主 Model。 |
+| `clear_custom_api` | `无` | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
+| `sign_in_fellowcut` | `email: String, password: String` | `Result<FellowCutAccountStatus, String>` | 邮箱/密码换取 Firebase 会话，仅系统凭据库保存登录；返回账号与只读资格，不返回 token。 |
+| `get_fellowcut_account_status` | `无` | `Result<FellowCutAccountStatus, String>` | 读取/刷新本机登录与网关资格投影；不进行模型调用，不返回 token。 |
+| `sign_out_fellowcut` | `无` | `Result<FellowCutAccountStatus, String>` | 清除本机登录凭据，不删除云端账号或项目。 |
+| `get_voice_availability` | `无` | `VoiceAvailability` | 配音开关是否可用：内置网关时探测网关配音，只有网关明确没有配音能力时 `available=false`；不返回任何密钥。 |
+| `get_jamendo_status` | `无` | `JamendoStatus` | 只检查 Windows Credential Manager 中是否存在可读取的 Jamendo client ID，返回 `connected` 或 `disconnected`。 |
+| `save_jamendo_client_id` | `clientId: String` | `JamendoStatus` | 将非空 Jamendo client ID 写入 Windows Credential Manager；失败时只返回 `failed`，不回传凭据。 |
+| `get_elevenlabs_status` | `无` | `ElevenLabsStatus` | 返回密钥是否已存、音色列表是否可读、可空的 TTS 授权探测和安全错误码；不返回 API Key。 |
+| `save_elevenlabs_api_key` | `apiKey: String` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
+| `clear_elevenlabs_api_key` | `无` | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |
+| `import_elevenlabs_api_key_from_environment` | `无` | `ElevenLabsStatus` | 当凭据库未配置时，从本机 `ELEVENLABS_API_KEY` 导入一次；不在每次 HTTP 时偷读环境变量。 |
+| `get_fish_audio_status` | `无` | `FishAudioStatus` | 返回 Fish Audio 密钥是否已存及音色列表是否可读；不返回 API Key。 |
+| `save_fish_audio_api_key` | `apiKey: String` | `FishAudioStatus` | 将 Fish Audio API Key 写入 Windows Credential Manager，并用音色列表接口探活。配置后配音优先使用 Fish Audio；传输/超时/5xx/429 且 ElevenLabs 已配置时可回退（401/密钥错误不回退）。 |
+| `clear_fish_audio_api_key` | `无` | `FishAudioStatus` | 删除 Windows Credential Manager 中的 Fish Audio 密钥。 |
+| `import_fish_audio_api_key_from_environment` | `无` | `FishAudioStatus` | 从本机 `FISH_API_KEY` 导入一次。 |
+
+### 项目、共享库与会话
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `initialize_local_store` | `无` | `Result<StoreStatus, String>` | 创建数据目录、SQLite WAL 与只追加迁移；恢复中断分析与会话，不自动重放未知 Agent 副作用；缺权重时启动后台下载。 |
+| `create_project` | `name: String, libraryIds: Option<Vec<String>>` | `Result<Project, String>` | 省略库列表默认全选，空数组不选库。 |
+| `rename_project` | `projectId: String, name: String` | `Result<Project, String>` | 修改项目名称并更新时间，拒绝空名称。 |
+| `delete_project` | `projectId: String, confirmed: bool` | `Result<(), String>` | 删除项目及其素材索引、分析派生文件、会话和本地预览；保留原始媒体与外部剪映草稿。必须 `confirmed=true`。 |
+| `list_shared_libraries` | `无` | `Result<Vec<SharedLibrary>, String>` | 全局子素材库名称、素材数量与默认子库标记 `unfiled`。 |
+| `list_projects` | `无` | `Result<Vec<Project>, String>` | 按最后更新时间倒序。 |
+| `get_candidate_score_first_slots` | `projectId: String` | `Result<usize, String>` | 读取项目每拍 9 条候选中按综合分优先选入的名额，默认 5。 |
+| `set_candidate_score_first_slots` | `projectId: String, scoreFirstSlots: usize` | `Result<usize, String>` | 保存项目候选名额；设置界面提供 3～9 条。其余名额轮流从 CLIP 画面、语义、关键词分项高分候选中选入，仍遵守同素材和相似画面限制；下次生成生效。 |
+| `create_editing_session` | `projectId: String, title: String` | `Result<EditingSession, String>` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
+| `list_editing_sessions` | `projectId: String` | `Result<Vec<EditingSession>, String>` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |
+| `rename_editing_session` | `projectId: String, editingTaskId: String, title: String` | `Result<(), String>` | 同步修改 editing task 及其 conversation 标题，拒绝空名称。 |
+| `delete_editing_session` | `projectId: String, editingTaskId: String, confirmed: bool` | `Result<(), String>` | 删除剪辑会话（editing task）及其对话消息、Agent 记录、storyboard/timeline 与本地 preview 目录；项目级素材保留。必须 `confirmed=true`；进行中的 Agent 任务先标为 `cancelled`。不删除用户 Jianying 草稿目录中的外部草稿。 |
+| `create_editing_task` | `projectId: String, title: String` | `Result<EditingTask, String>` | 在既有项目内创建作用域化创作目标。 |
+| `list_editing_tasks` | `projectId: String` | `Result<Vec<EditingTask>, String>` | 按最后更新时间倒序。 |
+| `update_editing_task_brief` | `editingTaskId: String, brief: String` | `Result<(), String>` | 保存非空 brief；首次请求会为未命名任务定名。 |
+| `create_conversation` | `projectId: String, editingTaskId: String, title: String` | `Result<Conversation, String>` | 任务必须属于指定项目，拒绝空标题。 |
+| `list_conversations` | `projectId: String, editingTaskId: Option<String>` | `Result<Vec<Conversation>, String>` | 按最后更新时间倒序；可按任务过滤。 |
+| `create_message` | `conversationId: String, role: String, content: String, routeReceipt: Option<String>` | `Result<Message, String>` | 保存消息并更新时间；`role` 可为 `user`、`assistant`、`agent`、`tool` 或 `system`。`role=user` 必须提供与目标 conversation 和完整 content 匹配、仍未消费的 route receipt，其他角色不需要。`role=agent` 且会话最后一条正是内容相同的 agent 消息时不再插入，直接返回那条消息（如重复导入提示）。 |
+| `set_conversation_status` | `conversationId: String, status: String` | `Result<(), String>` | 状态为 `ready`、`working` 或 `review`。 |
+| `list_messages` | `conversationId: String` | `Result<Vec<Message>, String>` | 按时间正序。 |
+| `resolve_conversation_task` | `projectId: String, activeEditingTaskId: Option<String>, request: String` | `Result<TaskRouteResult, String>` | 在消息持久化前解析当前激活任务的归属；候选仅为仍属于该项目的显式活动任务，不把兄弟任务的 title/brief/`active_subgoal` 交给路由模型。返回继续当前任务、原子创建新任务或澄清（继续或新建，不列举其他任务）。没有激活任务时直接创建新任务。确定目标时签发一次性 route receipt；只选择任务，不选择 Agent 工具。 |
+
+### 导入、分析与素材库
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `import_assets` | `projectId: String, sourceReferences: Vec<String>` | `Result<Vec<Asset>, String>` | 校验本地文件、保存引用并排队分析。 |
+| `import_asset_folder` | `projectId: String, sourceDirectory: String` | `Result<Vec<Asset>, String>` | 递归登记支持的媒体，并记录文件夹层级根。 |
+| `preview_asset_relink` | `projectId: String, sourceDirectory: String` | `Result<AssetRelinkPreview, String>` | 扫描用户选定的新根目录，仅按唯一的原相对路径与媒体类型给出可确认匹配；不修改项目。 |
+| `confirm_asset_relink` | `projectId: String, sourceDirectory: String, assetIds: Vec<String>, preserveAnalysis: bool` | `Result<AssetRelinkResult, String>` | 重新计算已预览的唯一匹配后，才更新所选素材源引用。`preserveAnalysis=true` 仅更新路径并保留已有分析证据；`false` 时清除旧分析证据、取消旧 active 分析任务并按有界批次重排分析。 |
+| `preview_collect_project_media` | `projectId: String` | `Result<CollectProjectMediaPreview, String>` | 用户发起收集前逐项复核源文件并估算复制量；不写文件。 |
+| `collect_project_media` | `projectId: String, destinationDirectory: String` | `Result<CollectProjectMediaResult, String>` | 在用户选择目录下创建 UUID 命名的新包，复制当前可读源文件并写无原路径 manifest；不覆盖已有文件、不改写项目引用，操作日志只记录计数。 |
+| `list_assets` | `projectId: String` | `Result<Vec<Asset>, String>` | 安全素材投影，含技术/视觉状态与证据计数；源引用不进入列表。遗留入口可顺带推进排队分析，Agent 同名观察工具只读。 |
+| `list_asset_page` | `projectId: String, search: Option<String>, kind: Option<String>, analysisStatus: Option<String>, analysisState: Option<String>, visualStatus: Option<String>, directoryKey: Option<String>, userFilter: Option<String>, collectionId: Option<String>, offset: usize, limit: usize` | `Result<AssetPage, String>` | SQLite 有界分页（limit 1–200）；支持 search/kind/analysisStatus/visualStatus/analysisState/directoryKey；返回 items、counts、完整目录树、unfiledCount、全库 progress。 |
+| `get_asset_task_center` | `projectId: String` | `Result<AssetTaskCenter, String>` | 返回项目级技术/视觉任务的排队、运行、失败、跳过计数，以及最多 50 条只含安全原因码的最近失败；不返回后台错误原文、路径或媒体证据。 |
+| `get_asset_analysis_progress` | `projectId: String, assetIds: Option<Vec<String>>` | `Result<AssetAnalysisProgress, String>` | AssetAnalysisProgress |
+| `cancel_asset_analysis` | `projectId: String, assetIds: Option<Vec<String>>` | `Result<usize, String>` | 取消数量 |
+| `resume_asset_analysis` | `projectId: String, assetIds: Option<Vec<String>>` | `Result<usize, String>` | 继续数量 |
+| `rename_library_asset` | `projectId: String, assetId: String, name: String` | `Result<(), String>` | void |
+| `remove_library_assets` | `projectId: String, assetIds: Vec<String>` | `Result<BatchAssetActionResult, String>` | BatchAssetActionResult |
+| `start_asset_health_scan` | `projectId: String` | `Result<AssetHealthScanStart, String>` | 显式启动可取消的后台源文件元数据检查；已有活动扫描时返回同一任务。 |
+| `cancel_asset_health_scan` | `projectId: String, taskId: String` | `Result<(), String>` | 取消当前项目仍在排队或运行的健康扫描。 |
+| `get_asset_health_scan_summary` | `projectId: String` | `Result<AssetHealthScanSummary, String>` | 读取持久化健康计数与活动任务进度，不访问源文件。 |
+| `retry_asset_analysis_batch` | `projectId: String, assetIds: Vec<String>` | `Result<BatchAssetActionResult, String>` | 用户批量重试技术分析，每次最多 200 条；只处理当前项目、源文件仍可用且未 ready/active 的素材，活动任务不重复创建，并写入用户操作审计。 |
+| `skip_asset_visual_analysis_batch` | `projectId: String, assetIds: Vec<String>` | `Result<BatchAssetActionResult, String>` | 用户明确确认后批量跳过视觉分析，每次最多 200 条；仅修改当前项目技术 `ready` 的图片/视频，保留技术证据、清除视觉标签并写入用户操作审计。在途视觉批次不得覆盖显式用户跳过。 |
+| `update_asset_user_metadata_batch` | `projectId: String, assetIds: Vec<String>, favorite: Option<bool>, rating: Option<i64>, note: Option<String>, excluded: Option<bool>` | `Result<BatchAssetActionResult, String>` | 批量设置收藏、0–5 评分、最多 2000 字符备注和禁止使用；用户字段与分析证据分表保存，审计不保存正文。 |
+| `add_asset_tag_batch` | `projectId: String, assetIds: Vec<String>, tag: String` | `Result<BatchAssetActionResult, String>` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
+| `remove_asset_tag_batch` | `projectId: String, assetIds: Vec<String>, tag: String` | `Result<BatchAssetActionResult, String>` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
+| `create_asset_collection` | `projectId: String, name: String` | `Result<AssetCollection, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
+| `list_asset_collections` | `projectId: String` | `Result<Vec<AssetCollection>, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
+| `add_assets_to_collection` | `projectId: String, collectionId: String, assetIds: Vec<String>` | `Result<BatchAssetActionResult, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
+| `get_asset_evidence` | `assetId: String` | `Result<AssetEvidence, String>` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
+
+### 故事版、时间线与镜头编辑
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `generate_storyboard` | `projectId: String, editingTaskId: String, brief: String, voiceId: Option<String>` | `Result<StoryboardVersion, String>` | 公开命令以 brief 创建经过 P1–P5 校验的任务内故事版；配音/媒体快照与自动 preview/交付编排属于 Agent 同名工具，见下表。 |
+| `get_latest_storyboard` | `projectId: String, editingTaskId: String` | `Result<Option<StoryboardVersion>, String>` | 加载所选任务的最新 storyboard。 |
+| `list_storyboard_versions` | `projectId: String, editingTaskId: String` | `Result<Vec<StoryboardVersion>, String>` | 返回该剪辑任务内全部故事版，按创建先后倒序。`versionNumber` 是会话内版本号，每个剪辑任务从 1 开始，局部编辑派生版本同样在任务内累加；schema v20 之前的旧版本保留原项目内编号。 |
+| `get_storyboard_version` | `projectId: String, editingTaskId: String, storyboardVersionId: String` | `Result<StoryboardVersion, String>` | 读取指定故事版；必须属于当前项目和剪辑任务。 |
+| `create_timeline_draft` | `projectId: String, storyboardVersionId: String` | `Result<TimelineVersion, String>` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
+| `get_latest_timeline` | `projectId: String, storyboardVersionId: String` | `Result<Option<LatestTimeline>, String>` | 仅加载该 storyboard 的最新时间线及其 preview。 |
+| `list_timeline_versions` | `projectId: String, editingTaskId: String, storyboardVersionId: String` | `Result<Vec<TimelineVersion>, String>` | 返回同一项目、剪辑任务与 storyboard 内的时间线版本，按创建先后倒序。`versionNumber` 按 storyboard 所属剪辑任务编号，每个任务从 1 开始，规则同故事版。 |
+| `commit_studio_edits` | `payload: StudioCommitPayload` | `Result<StudioCommitResult, String>` | 校验 StudioCommitPayload 后以 user 身份原子创建时间线新版本与审计；支持源片替换/构图、主轨与叠加轨编辑、文本/音乐/旁白轨。preview 另行渲染。 |
+| `list_shot_recommendations` | `projectId: String, editingTaskId: String, timelineVersionId: String, shotIndex: i64` | `Result<ShotRecommendations, String>` | 只读已保存候选，返回 `saved, beatPurpose, candidates`。候选含唯一 `candidateId`（素材＋片段）、素材 ID、源起止、名称、片段缩略图、时长、当前/已使用标记及不可用原因；最多 12 个，不补假数据。 |
+| `generate_shot_recommendations` | `projectId: String, editingTaskId: String, timelineVersionId: String, shotIndex: i64` | `Result<ShotRecommendations, String>` | 老版本用户主动生成；复用已分析证据的本地排序并保存候选，不改粗剪、不重新识别素材。 |
+| `prepare_shot_replacement` | `projectId: String, editingTaskId: String, timelineVersionId: String, shotIndex: i64, candidateId: String` | `Result<PreparedShotReplacement, String>` | 为一个候选复用 Phase 4 精修并渲染静音画面，返回原版本 ID、镜头索引、素材 ID、源起止、`cropFocus`、`previewPath`；不写时间线。依赖已配置模型，失败直接返回。 |
+
+### 预览、品牌与运行时
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `get_third_party_notices` | `无` | `Result<String, String>` | 固定 UTF-8 声明全文；release 只读 resources/third-party/ALL.txt，debug 读当前 worktree 固定文件，不接受路径参数；blocking worker 失败返回 notices_unavailable，不读项目或调用外部应用。 |
+| `render_preview` | `timelineVersionId: String` | `Result<PreviewResult, String>` | 从持久化时间线生成三画幅 H.264 本地 preview，混入文本、音乐、旁白；返回质量检查与产物引用。 |
+| `get_brand_kit` | `projectId: String` | `Result<BrandKitView, String>` | 读取项目品牌套件与默认转场。`logoPreview` 是 data URL，`logoFile`/`fontFile` 只是应用数据目录内的文件名，不含本机路径。 |
+| `set_brand_kit` | `projectId: String, input: BrandKitInput` | `Result<BrandKitView, String>` | 校验长度与颜色（`#RRGGBB` 或空），把 logo（png/jpg/webp/svg，≤5 MB）和字体（ttf/otf/woff/woff2，≤20 MB）按内容哈希复制进 `app_data/brand/<projectId>/`，写 `settings_json.brandKit` 与 `defaultTransition`（`none \| crossfade \| dip_to_black`，200–1000 ms）。下次生成生效，不改已有时间线。 |
+| `get_preview_cache_status` | `projectId: String` | `Result<PreviewCacheStatus, String>` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
+| `clear_preview_cache` | `projectId: String, confirmed: bool` | `Result<PreviewCacheStatus, String>` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
+| `get_release_readiness` | `无` | `Result<ReleaseReadinessReport, String>` | 启动/发行就绪检查。`overall`=`ready\|degraded\|blocked`；每项 `id/title/status/message/messageKey/messageParams`（`status`=`ok\|warn\|fail`；`messageKey` 如 `diskSpace.low` 为稳定文案键，前端按界面语言翻译，未知键回落中文 `message`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
+| `get_runtime_model_status` | `无` | `Result<RuntimeModelStatus, String>` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。`messageParams.model` 为产物 id，前端按界面语言显示模型名。 |
+| `start_runtime_model_download` | `无` | `Result<RuntimeModelStatus, String>` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
+
+### Agent 生命周期、审计与配音
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `list_agent_tasks` | `projectId: String, editingTaskId: String, conversationId: Option<String>` | `Result<Vec<AgentTask>, String>` | 返回作用域内的持久化 Agent 调用，按更新时间倒序。 |
+| `list_agent_run_steps` | `projectId: String, editingTaskId: String, agentTaskId: String` | `Result<Vec<AgentRunStep>, String>` | 仅在项目、剪辑任务和调用三重作用域匹配时返回步骤；不包含参数、模型原文、对话或媒体证据。 |
+| `list_agent_diagnostics` | `projectId: String, editingTaskId: String, agentTaskId: String` | `Result<Vec<AgentDiagnostic>, String>` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
+| `list_operation_logs` | `projectId: String, editingTaskId: String, agentTaskId: Option<String>` | `Result<Vec<OperationLog>, String>` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
+| `submit_conversation_turn` | `projectId: String, editingTaskId: String, conversationId: String, storyboardVersionId: Option<String>, timelineVersionId: Option<String>, request: String, routeReceipt: String, mediaOptions: Option<crate::media_options::MediaOptions>, uiLocale: Option<String>` | `Result<ConversationTurnResult, String>` | `uiLocale`=`zh-CN\|en`（其余或缺省按 `zh-CN`）写入 `agent_tasks.input_json.uiLocale`，只决定 Agent 回复与系统兜底文案语言，不决定旁白/字幕语言。后端先消费一次性 route receipt，随后普通聊天、澄清、项目事实和工具执行统一创建 Agent task 并进入 NativeToolLoop；不调用对话分类模型、不返回 route/goal decision，也不预选首个工具。异步终态先幂等写入原 conversation，再发出 `agent-edit-completed`。 |
+| `execute_agent_edit` | `projectId: String, editingTaskId: String, conversationId: String, storyboardVersionId: Option<String>, timelineVersionId: Option<String>, request: String, routeReceipt: String` | `Result<String, String>` | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
+| `cancel_agent_edit` | `projectId: String, editingTaskId: String, conversationId: String, agentTaskId: String` | `Result<(), String>` | 将作用域内仍为 `queued`/`running` 的 Agent 任务标为 `cancelled`；NativeToolLoop 在下一步检查点停止并写入取消终态与回复。已是 `cancelled` 视为成功；其他终态不可取消。 |
+| `confirm_storyboard_and_preview` | `projectId: String, editingTaskId: String, conversationId: String, storyboardVersionId: String` | `Result<String, String>` | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 成功后自动串联 timeline、preview 与所选输出端口；`src/lib/local-store.ts` 不再封装此命令。 |
+| `synthesize_storyboard_voiceover` | `projectId: String, editingTaskId: String, conversationId: String, timelineVersionId: String` | `Result<VoiceoverApplyResult, String>` | storyboard 完成后自动合成整段配音：内置网关时只经 Voycut 网关（服务商由网关决定，默认 ElevenLabs），否则优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
+
+### 编辑器输出端口
+
+| 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
+|---|---|---|---|
+| `create_jianying_draft` | `timelineVersionId: String` | `Result<JianyingDraftResult, String>` | 强制新建剪映草稿；支持视频、叠加、受限原生文字、音乐、旁白、品牌图片与转场。主镜头图片在能力表为 Unsupported，不能把品牌 PNG 支持等同于静态素材镜头交付。 |
+| `get_jianying_registration_status` | `timelineVersionId: String` | `Result<Option<JianyingRegistrationStatus>, String>` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
+| `list_editor_linkers` | `projectId: String` | `Result<EditorLinkerCatalog, String>` | 列出输出端口（剪映 / CapCut / FCPXML / OTIO）及当前项目选择。 |
+| `set_output_editor` | `projectId: String, editorId: String` | `Result<EditorLinkerCatalog, String>` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
+| `deliver_to_editor` | `timelineVersionId: String, editorId: Option<String>` | `Result<EditorDeliveryResult, String>` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。品牌卡先本地渲染成 PNG 并复制进草稿或导出文件旁；`notes` 如实列出图片交付、未渲染的卡、未带入或待确认的转场、文字降级（code：`brand_cards_as_images`、`brand_cards_failed`、`transitions_unverified`、`transition_not_delivered`、`text_basic_titles`、`text_as_markers`）。 |
 
-| 命令 | 参数 | 返回 |
-| --- | --- | --- |
-| `get_third_party_notices` | 无 | string（随包许可声明全文） |
+## Agent Function Tool 契约
 
-新增只读异步命令 `get_third_party_notices()`，无参数，返回 UTF-8 字符串。正式版只读取安装资源目录的固定 `resources/third-party/ALL.txt`，开发版读取当前编译 worktree 的同一文件；不接受任意路径、不访问项目数据、不打开外部应用。磁盘读取在 blocking worker 执行，失败返回 `notices_unavailable`，不泄露本机路径。前端通过 `src/lib/local-store.ts` 的 `getThirdPartyNotices()` 调用，设置里按需显示纯文本，读取失败显示中英文安全提示并允许重试。资源目录进入基础 Tauri 配置，现有资源合并脚本继续追加 FFmpeg/Python/Tesseract/DirectML/完整模型资源。见 `docs/changes/2026-09-30-third-party-notices.md`。
+共 **33** 个工具，`tools.rs` 的完整目录与 `policy.rs` 观察/编辑数组、`native.rs::NATIVE_TOOL_NAMES`、`src/lib/agent-tools.ts` 逐一一致。每次 Provider 请求直接携带完整 strict Schema。模型不传 project/task/conversation、路径或 FFmpeg 参数；Rust 从 LoopState 注入并校验作用域。
 
-## 2026-09-29：网关配音改用 ElevenLabs
+以下是模型参数 Schema：顶层属性均必须出现，空值写 `null`；嵌套对象只按其 required 声明要求字段（mediaOptions.aspectRatio 可省略）。所有对象 `additionalProperties=false`；`integer` 与 `number` 区分保留，方括号是 Schema 声明的数值/字符/数组项约束。解析入口做协议形状检查，领域执行继续校验真实范围、槽位、样式与授权；Schema 描述与真实执行不同处以下表行为栏为准。
 
-命令签名不变。内置网关时配音服务商以网关音色列表 `{ provider, model_id, default_voice_id, voices }` 为准（默认 `elevenlabs`，可切 `fish`；不带 `provider` 的旧网关按 Fish 处理，不认识的服务商报 `voice_gateway_upgrade_required`），合成请求带 `provider`，网关换了服务商时返回 409，桌面按 `voice_gateway_unavailable` 处理。Provider 名、模型与音色设置与直连该服务商相同：经网关 ElevenLabs 时 `VoiceoverApplyResult.provider` 为 `ElevenLabs`，与直连 ElevenLabs 共用缓存；缓存命中还要求 Provider 名相同。网关默认不按人限额，`voice_gateway_daily_quota` / `provider_gateway_daily_quota` 只在网关启用额度时出现。见 `docs/changes/2026-09-29-gateway-elevenlabs.md`。
+### 观察与查询
 
-## 2026-09-28：配音经 Voycut 网关
+| 工具 | 参数 Schema | 结果与执行边界 |
+|---|---|---|
+| `get_edit_status` | `{  }` | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
+| `get_asset_health_summary` | `{  }` | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
+| `list_assets` | `{  }` | 安全素材投影，含技术/视觉状态与证据计数；源引用不进入列表。遗留入口可顺带推进排队分析，Agent 同名观察工具只读。 |
+| `get_library_visual_overview` | `{  }` | 已实现的只读 Agent 观察工具：聚合当前项目全部就绪素材的持久化视觉证据，返回频繁出现的主体、动作、场景、示例字幕及叙事角色；适合在写文案或规划分镜前了解实际画面内容。不访问源文件，不返回路径。 |
+| `get_asset_visual_detail` | `{ assetId: string [字符:1..200] }` | 已实现的只读 Agent 观察工具：返回当前项目单条已就绪素材的完整片段级视觉证据，包括场景、主体、动作、字幕、叙事角色、镜头类型、摄像机运动及可用时间范围；`assetId` 须为当前项目素材。不返回路径或原始错误。 |
+| `search_assets` | `{ query: string \| null [字符:1..200], kind: "video" \| "image" \| "audio" \| "other" \| null, minDurationMs: integer \| null [值:0..*], maxDurationMs: integer \| null [值:0..*], minRating: integer \| null [值:0..5], favoriteOnly: boolean, tag: string \| null [字符:1..200], collectionId: string \| null [字符:1..200], offset: integer [值:0..10000], limit: integer [值:1..20] }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
+| `search_asset_segments` | `{ query: string [字符:1..200], assetId: string \| null [字符:1..200], offset: integer [值:0..10000], limit: integer [值:1..20] }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `segmentId`、`sourceStartMs/sourceEndMs`、`shotType`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。用第一次段卡检索，不触发模型加深；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
+| `list_voices` | `{  }` | 内置网关时由服务端决定配音服务；无网关时用本机 Fish Audio/ElevenLabs 配置。只列音色，不合成。 |
+| `search_music` | `{ query: string [字符:1..200] }` | 查询已配置 Jamendo；只允许可下载 CC0/CC-BY 曲目，返回许可和署名；HTTP 200 的 catalog failed 仍按真实失败处理。 |
+| `get_storyboard` | `{  }` | 读取当前打开的任务内故事版，不强制最新版本。 |
+| `get_timeline` | `{ timelineVersionId: string \| null }` | 读取所选作用域时间线；null 选择当前版本，不跨任务。 |
+| `get_text_capabilities` | `{  }` | 返回本地文字字体/动态/预设及后端兼容矩阵；代码标 verified 不等于本次桌面验证（默认描边/阴影判定差异见关注点）。 |
+| `transcribe_asset` | `{ assetId: string [字符:1..200], language: string \| null [字符:1..20] }` | 只校验就绪素材与真实时长，然后返回 local_stub_v1 占位分句（最多 40 段）、固定 confidence=0.55 与 warnings；language=null 实际默认 zh。没有真实 ASR 或模型自动升级路径。 |
+| `read_logs` | `{ startLine: integer \| null [值:1..1000000], endLine: integer \| null [值:1..1000000] }` | 固定应用当前日志；null/null 读末尾最多 100 行，正数/正数为闭区间且最多 100 行；单行 500 字符、总预算 3500，输出行号、分页与遮蔽结果；日志不是产物事实。 |
 
-新增 `get_voice_availability()`，返回 `{ available, viaGateway, reason }`：构建内置网关时探测网关配音（`/api/voice/voices`），只有网关明确没有配音能力（`voice_gateway_not_configured`）时 `available` 为 false，前端据此隐藏配音开关；未内置网关时恒为 true。内置网关时配音只经网关、不读本机配音密钥、不回退 ElevenLabs，失败带 `voice_gateway_auth`、`voice_gateway_entitlement`、`voice_gateway_upgrade_required`、`voice_gateway_daily_quota`、`voice_gateway_not_configured`、`voice_gateway_rejected`、`voice_gateway_unavailable` 码前缀，Agent 失败上下文同码（仅 `unavailable` 可重试）。模型网关新增 `provider_gateway_daily_quota`（网关 429 `daily_quota_exceeded`，不重试）。`VoiceoverApplyResult.provider` 经网关时仍为 `Fish Audio`。见 `docs/changes/2026-09-28-gateway-voice.md`。
+### 分析、创作与交付
 
-## 2026-09-27：品牌卡、镜头转场与品牌套件
+| 工具 | 参数 Schema | 结果与执行边界 |
+|---|---|---|
+| `render_preview` | `{ timelineVersionId: string \| null }` | 从持久化时间线生成三画幅 H.264 本地 preview，混入文本、音乐、旁白；返回质量检查与产物引用。 |
+| `request_asset_analysis` | `{ assetIds: Array<string [字符:1..200]> [项:1..100] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
+| `retry_failed_asset_analysis` | `{ stage: "technical" \| "visual" \| "both" \| null, assetIds: Array<string [字符:1..200]> \| null [项:0..1000], limit: integer \| null [值:1..1000] }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 或空数组时自动收集最多 `limit`（默认 1000）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。视觉批次入队时自动按 worker 批次上限拆分。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
+| `generate_storyboard` | `{ brief: string \| null [字符:1..4000], voiceId: string \| null [字符:1..200], mediaOptions: { voiceover: boolean, subtitles: boolean, bgm: boolean, aspectRatio?: "9:16" \| "16:9" \| "1:1" } \| null, requestedDurationMs: integer \| null [值:1..120000] }` | brief=null 复用任务 brief；只用已 ready 的真实视频证据。配音先于拆拍；合成失败返回 storyboard_voiceover_failed；口播与点名时长相差约 30% 返回 storyboard_needs_user_decision 并保存 brief/暂停工具，下一轮可续跑。P1→P5 后保存故事版/候选，自动时间线、配音/BGM/品牌卡、preview 和所选编辑器交付；子产物失败保留已有版本并如实返回。结果含 appliedMedia、mediaNotApplied、musicTiming、qualityWarnings；不得由开关推断实际轨道。已有旁白禁止改稿；素材不足/选片耗尽提供真实失败或待决定信息。 |
+| `create_timeline_draft` | `{  }` | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
+| `replace_clips` | `{ timelineVersionId: string \| null, shots: Array<{ shotIndex: integer [值:0..*], assetId: string [字符:1..200], sourceStartMs: integer [值:0..*], sourceEndMs: integer [值:0..*] }> [项:1..100] }` | 已实现，批量替换既有镜头并保持对应时间线时长；素材证据与源范围仍由 Rust 复核。 |
+| `insert_clips` | `{ timelineVersionId: string \| null, clips: Array<{ assetId: string [字符:1..200], sourceStartMs: integer [值:0..*], sourceEndMs: integer [值:0..*], durationMs: integer \| null [值:1..*], insertAfterShotIndex: integer \| null [值:0..*] }> [项:1..100] }` | 已实现，在既有时间线插入已验证素材以补足画面时长；`insertAfterShotIndex` 为 null 插到开头。禁止用冻结帧垫时长；配音长于画面时应先搜段再插入，然后重试 `synthesize_voiceover`。 |
+| `change_clip_duration` | `{ timelineVersionId: string \| null, adjustments: Array<{ shotIndex: integer [值:0..*], newDurationMs: integer \| null [值:1..*], newSourceStartMs: integer \| null [值:0..*] }> [项:1..100] }` | 已实现，在已验证源范围内重定时长与起止点。 |
+| `reselect_shots` | `{ timelineVersionId: string \| null, shotIndexes: Array<integer [值:1..*]> \| null [项:1..5], beatIds: Array<string [字符:1..200]> \| null [项:1..5], instruction: string \| null [字符:*..500], keepCurrent: boolean \| null }` | 已实现：`shotIndexes` 与 `beatIds` 二选一，最多 5 拍。只为这些拍重跑 P2 召回（默认排除当前素材、相邻镜头素材、与冻结镜头相似或重叠的片段、已达复用上限的素材）→ P3 看图选镜 → P4 锁窗精修 → P5 全片校验；新镜头必须正好填满原拍槽位，冻结镜头的素材/源范围/时长/构图须逐字不变，否则不写入。同一拍一轮只能重选一次。池耗尽返回 `storyboard_local_reselect_failed`，不退回整条重跑。结果含每拍 `changes[{ beatId, before, after, matchLevel, remainingAlternates }]`。 |
+| `refine_shot_ranges` | `{ timelineVersionId: string \| null, shotIndexes: Array<integer [值:1..*]> [项:1..10], instruction: string \| null [字符:*..500] }` | 已实现：最多 10 个镜头，只跑 P4→P5，素材与片段锁死，时间线时长锁回原槽位，只改入出点与构图。手动插入的 clip 不能精修。 |
+| `reorder_clips` | `{ timelineVersionId: string \| null, order: Array<integer [值:0..*]> [项:1..100] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
+| `replace_text_tracks` | `{ timelineVersionId: string \| null [字符:1..200], textTracks: Array<text_track> [项:0..21] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
+| `download_music` | `{ trackId: string [字符:1..200] }` | 复核曲目资格后有界下载、保留署名/许可，登记当前项目并排队本地分析；不自动放进时间线。 |
+| `use_online_music` | `{ trackId: string [字符:1..200], timelineVersionId: string \| null [字符:1..200] }` | 下载合格曲目、完成本地分析并创建带音乐的新时间线；随后需实际 render_preview 才能证明混音产物存在。 |
+| `add_title_cards` | `{ timelineVersionId: string \| null [字符:1..200], cards: Array<title_card> [项:0..4], removeTemplateIds: Array<"opening_title" \| "end_card" \| "corner_logo" \| "info_card"> [项:0..4] }` | 仅在本轮明确请求标题/卡片/logo/片尾时允许；Rust 决定时间/样式和截断文案，结果含 cards、copyAdjustments、notPlaced、editableInEditor=false；写新版本。 |
+| `set_transitions` | `{ timelineVersionId: string \| null [字符:1..200], kind: "none" \| "crossfade" \| "dip_to_black", durationMs: integer \| null [值:200..1000], afterShotIndices: Array<integer [值:0..*]> \| null [项:1..100] }` | 仅本轮明确请求转场时允许；null afterShotIndices 改默认并清逐刀覆盖，列表只改所列切点；返回 resolvedTransitions 并创建新版本。 |
+| `replace_music_tracks` | `{ timelineVersionId: string \| null [字符:1..200], musicTracks: Array<music_track> [项:0..100] }` | 仅用当前项目 ready 音频，校验源窗/槽位、循环、音量与淡入淡出；替换完整音乐轨并创建新版本。 |
+| `synthesize_voiceover` | `{ text: string \| null [字符:1..5000], voiceId: string \| null [字符:1..200], includeSubtitles: boolean \| null, timelineVersionId: string \| null [字符:1..200] }` | 已实现：内置网关时只经网关（默认 ElevenLabs）；否则优先 Fish Audio，传输类失败可回退 ElevenLabs。用户没给文案时由 storyboard 撰写 `narrationText`（`key_message` 通常无旁白，需显式提供 `text` 或 beat `narration`）。禁止朗读 `onScreenText`。真实音频时长写入 `voiceoverTracks`（旁白必成）；alignment 字幕尽力，失败不回滚旁白。结果含 `voiceoverApplied`/`subtitleApplied`/`providerUsed`。相同指纹复用缓存。 |
+| `create_jianying_draft` | `{ timelineVersionId: string \| null [字符:1..200] }` | 强制新建剪映草稿；支持视频、叠加、受限原生文字、音乐、旁白、品牌图片与转场。主镜头图片在能力表为 Unsupported，不能把品牌 PNG 支持等同于静态素材镜头交付。 |
 
-新增 `get_brand_kit` / `set_brand_kit`。`TimelineVersion` 增加 `graphicOverlays`、`transitions`，旧版本读出为空。`EditorDeliveryResult` 与 `JianyingDraftResult` 增加 `notes[{ code, detail }]`。剪映适配器输入增加 `graphicOverlays`、`transitions`，格式版本不变。Native 工具新增 `add_title_cards`、`set_transitions`。`generate_storyboard` 的 `appliedMedia` 增加 `brandCards`、`transitions`，自动收尾失败时有 `brandCardsNotApplied`。见 `docs/changes/2026-09-27-brand-cards-and-transitions.md`。
+### 复用的嵌套 Schema
 
-## 2026-09-27：音乐先行剪辑
+下列名称仅是本页缩写，与 `tools.rs` helper 一致。text cue 的 nullable 样式/布局/动态可交 null 使用默认；有模板时由 Rust 解析配方，不能让模型宣称编辑器兼容性。
 
-公开 Tauri 命令不变。音频素材技术分析新增 `metadata.beatAnalysis`（`version`、`durationMs`、`tempoBpm`、`confidence`、`beatsMs`、`downbeatsMs`、`phraseStartsMs`、`barEnergy`），旧素材在被选为 BGM 时按需补算。BGM 开时 Native `generate_storyboard` 先选曲再生成分镜；配音关时分镜 `content_json.musicPlan` 保存音乐窗口（`assetId`、`sourceStartMs`、`durationMs`、`tempoBpm`、`endsOnPhrase`、淡入淡出与窗口内网格），不能卡点时 `content_json.musicPlanNote` 写原因。工具结果新增 `musicTiming`（`mode`、`tempoBpm`、`musicStartMs`、`endsOnPhrase`、`cutsOnBeat`、`cuts`、`note`）。FCPXML 的旁白 / 音乐改为挂在第一镜下的连接片段，OTIO 旁白与音乐分轨并用 Gap 定位。见 `docs/changes/2026-09-27-music-first-editing.md`。
-## 2026-09-27：画幅选择与 BGM 自动配乐
+- `title_card` = `{ templateId: "opening_title" | "end_card" | "corner_logo" | "info_card", shotIndex: integer | null [值:0..*], headline: string | null [字符:*..120], subline: string | null [字符:*..120], cta: string | null [字符:*..80] }`
 
-`submit_conversation_turn` 的 `mediaOptions` 增加可选 `aspectRatio: '9:16' | '16:9' | '1:1'`（缺省 9:16），前端字幕随配音发送。Native `generate_storyboard` 的 `mediaOptions` 同样接受 `aspectRatio`，漏传时沿用输入框选择。`render_preview`、试选镜头预览和剪映 / CapCut / FCPXML 交付按时间线所属分镜的画幅出画布（540×960 / 960×540 / 720×720）；剪映适配器输入新增 `canvas: { width, height }`，旧输入缺省竖屏。BGM 开启时 `generate_storyboard` 直接配乐（素材库音频优先，其次 Jamendo 器乐），不可用时 `mediaNotApplied.bgm` 写明原因。见 `docs/changes/2026-09-27-aspect-ratio-and-auto-bgm.md`。
+- `text_track` = `{ id: string [字符:1..200], role: "subtitle" | "headline" | "callout" | "cta" | "label", layer: integer [值:0..20], enabled: boolean, cues: Array<text_cue> [项:0..100] }`
 
-## 2026-09-26：本地选镜模型优先用显卡
+- `text_cue` = `{ id: string [字符:1..200], templateId: "subtitle_safe" | "headline_rise" | "headline_pop" | "headline_drop" | "callout_card" | "cta_card" | null, startMs: integer [值:0..*], endMs: integer [值:1..*], text: string [字符:1..280], style: nullable_text_style, layout: nullable_text_layout, entrance: nullable_text_animation, exit: nullable_text_animation, loopAnimation: nullable_text_animation }`
 
-公开命令与 `RuntimeModelStatus` 不变。BGE/CLIP 推理先用随包 DirectML 在显卡上建会话并试算，失败回退 CPU，日志写明设备；同一模型推理串行。见 `docs/changes/2026-09-26-local-models-on-gpu.md`。
+- `nullable_text_style` = `{ fontKey: string [字符:1..200], fontSize: number [值:0.01..0.3], bold: boolean, color: string [pattern=^#[0-9A-Fa-f]{6}$], strokeColor: string | null [pattern=^#[0-9A-Fa-f]{6}$], strokeWidth: number [值:0.0..10.0], shadow: boolean, backgroundColor: string | null [pattern=^#[0-9A-Fa-f]{6}$], alignment: "left" | "center" | "right", letterSpacing: integer [值:-100..100], lineSpacing: integer [值:-100..100] } | null`
 
-## 2026-09-26：generate_storyboard 返回实际落地的媒体
+- `nullable_text_layout` = `{ anchor: "top" | "center" | "bottom", x: number [值:0.0..1.0], y: number [值:0.0..1.0], maxWidth: number [值:0.2..1.0], safeArea: "title_safe" | "action_safe" } | null`
 
-公开 Tauri 命令不变。Native `generate_storyboard` 输出新增 `appliedMedia`（`voiceover` / `subtitles` / `bgm`，按时间线上启用且非空的轨道判断）和 `timelineVersionNumber`；`requestedMedia` 只回显要求。要求了却没落地的媒体列在 `mediaNotApplied`，`bgm` 附恢复方式（该工具从不加音乐）。英文逐词 alignment 字幕保留词间空格，只在空格处换行。见 `docs/changes/2026-09-26-english-subtitles-applied-media.md`。
+- `nullable_text_animation` = `{ templateId: "fade" | "slide_up" | "slide_down" | "pop" | "wipe", durationMs: integer [值:0..*], intensity: number [值:0.0..1.0] } | null`
 
-## 2026-09-25：选镜局部编辑工具
+- `music_track` = `{ id: string [字符:1..200], enabled: boolean, cues: Array<music_cue> [项:0..100] }`
 
-新增 Native 工具 `reselect_shots` 与 `refine_shot_ranges`，只改指定 beat / 镜头，其余镜头、配音、字幕、音乐原样保留，拍时长取当前时间线。两者都写派生 storyboard 版本（`derivedFromVersionId`、`changedBeatIds`）加新时间线并渲染预览，不新建剪映草稿。`StoryboardVersion` 的这两个字段对整条生成的版本为 `null` / `[]`。见 `docs/changes/2026-09-25-storyboard-edit-primitives.md`。
+- `music_cue` = `{ id: string [字符:1..200], assetId: string [字符:1..200], sourceStartMs: integer [值:0..*], sourceEndMs: integer [值:1..*], timelineStartMs: integer [值:0..*], timelineEndMs: integer [值:1..*], loopEnabled: boolean | null, volume: number [值:0.0..2.0], fadeInMs: integer | null [值:0..*], fadeOutMs: integer | null [值:0..*] }`
 
-## 2026-09-25：Voycut 桌面账号展示
+## 桌面复合参数与状态 DTO
 
-新增 `sign_in_fellowcut(email, password)`、`get_fellowcut_account_status()`、`sign_out_fellowcut()`。返回 `{ state, email, entitlement, trialStartedAt, accountPageUrl }`；`accountPageUrl` 由内置网关地址推出网站 `account.html`，未配置网关时为 `null`；`state` 为 `signedOut`、`unverified` 或 `verified`。失败时错误带 `account_*: ` 码前缀，前端按码显示当前语言（见 `docs/changes/2026-09-26-account-error-codes.md`）。账号使用网站同一个 Firebase Authentication 项目；已验证账号只读 Firestore `entitlements/{uid}`，缺失时返回空资格。桌面不创建或续期试用。刷新令牌只存 Windows 凭据库 `AssemblyVideoAgent/fellowcut-firebase-refresh-token`，密码与 ID token 不持久化。公开构建的模型请求通过内置 `FELLOWCUT_GATEWAY_BASE_URL` 指向账号网关，每次刷新 ID token 并由服务端复核资格，并带 `X-Voycut-Version` 请求头；网关失败返回 `provider_gateway_auth`、`provider_gateway_entitlement`、`provider_gateway_payload_too_large`、`provider_gateway_upgrade_required` 码前缀或 `:HTTP {status}` 结尾的英文原文；这些旧内部标识保留以兼容已登录用户。见 `docs/changes/2026-09-25-fellowcut-desktop-account.md`、`docs/changes/2026-09-25-fellowcut-model-gateway.md`。
+- `FellowCutAccountStatus`：state、email、entitlement、trialStartedAt、accountPageUrl；后四项可空，accountPageUrl 由内置网关地址推出。token 不回前端；资格读取只读，模型授权由服务端请求校验，账号错误带 account_* 稳定码。
+- `PreviewResult`：timelineVersionId、previewPath、qualityReport；`LatestTimeline`：timeline 和可空 preview。`JianyingDraftResult`：draftDirectory、draftContentPath、registrationStatus、notes；`JianyingRegistrationStatus`：timelineVersionId、draftName、status。路径仅供本地桌面读取，不记普通日志或浏览器存储，不证明编辑器已经打开。
+- `StoryboardVersion`：id/projectId/editingTaskId/versionNumber/brief/title/summary/targetDurationMs/scriptMode/beats/uncoveredBeatIds/shots/createdAt，加性平铺派生字段见后文。`TimelineVersion`：id/projectId/storyboardVersionId/versionNumber/clips/textTracks/musicTracks/voiceoverTracks/overlayClips/qualityReport/createdAt；品牌 graphicOverlays/transitions 平铺，不另造产品模型。
 
-| 命令 | 参数 | 返回 |
-| --- | --- | --- |
-| `sign_in_fellowcut` | email, password | FellowCutAccountStatus |
-| `get_fellowcut_account_status` | 无 | FellowCutAccountStatus |
-| `sign_out_fellowcut` | 无 | FellowCutAccountStatus |
+- `BrandKitInput`：name、handle、cta、primaryColor、accentColor 必填字符串，logoSourcePath/fontSourcePath 可空，clearLogo/clearFont 默认 false；defaultTransition 为 `{kind,durationMs}`。BrandKitView 平铺 name/handle/cta/colors、logoFile/fontFile（应用内文件名）、logoPreview（data URL）、fontName 和 defaultTransition，不回传源路径。
+- `AssetAnalysisProgress`/AssetPage.progress：total、ready、analyzing、queued、failed、readyVideo、cancelled；分析数量不受分页筛选影响。取消/继续返回处理数量，rename_library_asset 返回 void，remove_library_assets 返回 requested/updated/skipped 批量计数。
+- `EditorLinkerCatalog`：selectedId、linkers（id/label/summary/implemented/available/deliveryKind）；注册表发现草稿库决定 dropInDraft 可用性，importFile 可用性来自实现能力。set_output_editor 保存选择，不修改当前时间线。
+- `ReleaseReadinessReport`：overall 与 checks；每项 id/title/status/message/messageKey/messageParams 为展示投影。`RuntimeModelStatus`：overall/currentId/message/messageKey/messageParams/artifacts；runtime-model-progress 发同结构。`PreviewCacheStatus`：projectId/bytesUsed/limitBytes/fileCount。具体可空值与扩展字段以对应 Rust/bridge 类型为准。
+- `AgentEditResult`：agentTaskId、message、storyboard、timeline、preview、jianyingDraft（产物可空）；完成事件另带 status。错误码、质量警告与实际轨道是事实，message 不单独证明成功。
 
-## 2026-09-18：CapCut 投放链接器
+## 会话、Provider 与产物返回规则
 
-`deliver_to_editor` 可选 CapCut。草稿库从该设备 `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\root_meta_info.json` 读取 `draft_root_path`，不写死盘符。未打开过 CapCut 则拒绝。见 `docs/changes/2026-09-18-capcut-linker.md`。
+- Task Resolver 只处理任务归属，不选择工具；候选仅为活动任务，无活动任务则创建 task + conversation。`TaskRouteResult` 包含 action、taskId、conversationId、confidence、question、suggestedTitle、reasonCode、deferredRequest、routeReceipt。任务确定前不写消息；user 消息须占用绑定完整请求的 receipt，提交时只消费一次。
 
-## 2026-09-18：去掉输出端口落地后的旧残留
+- `submit_conversation_turn` 返回 `{kind:"run",agentTaskId}`；类型保留 `{kind:"immediate",status:"response"|"clarification",message}` 兼容变体。后台原子保存终态、固定 ID 完成消息和会话状态后才发 `agent-edit-completed`。前端缓存最多 20 个早到事件，并以 1.2 秒轮询/重新读库恢复；切换作用域不应用旧产物。任务状态包括 queued/running/completed/partially_completed/failed/needs_clarification/cancelled，启动中断变为 needs_review，不重放未知副作用。
 
-前端不再封装 `create_jianying_draft` / `generate_storyboard` / `synthesize_storyboard_voiceover`。工作台交付只走 `deliver_to_editor`。公开 Tauri 命令保留。见 `docs/changes/2026-09-18-remove-legacy-editor-remnants.md`。
+- NativeLoop 最多 10 步，单步上限 **180 秒**、整轮 **1800 秒**；storyboard 独立模型请求上限 **120 秒**。剩余整轮截止时间约束同步 HTTP/配音/媒体进程；ONNX 只能在阶段边界检查。模型 function_call 输出按 call_id 对齐，传输重试不重复已执行工具；产物完成由 RunReceipt 与持久化事实裁决。
 
-## 2026-09-18：输出端口可选编辑器
+- 每轮先注入当前作用域的安全状态快照，写工具后刷新；完整请求超过 40K token 压缩到 30K，硬上限 60K，保护快照、当前用户消息与最近调用/结果对。快照本身可提供成功观察，高层事实问答不必强制另调工具。
 
-新增 `list_editor_linkers`、`set_output_editor`、`deliver_to_editor`。项目 `settings_json.outputEditor` 记住选择。剪映 / CapCut 写草稿；FCPXML / OTIO 写出导入文件。`create_jianying_draft` 仍可强制交付剪映。自动预览后的交付走当前选择。见 `docs/changes/2026-09-18-editor-output-port.md`、`docs/changes/2026-09-18-capcut-linker.md`。
+- 内置网关构建只走 Voycut 服务，失败不回退本机 Provider/配音 key。无网关构建由 ModelAccess 选择自定义 OpenAI 兼容 API（可另设粗视觉 model）或实验性 OAuth；凭据读取错误封闭失败。Chat/Responses 适配保留原生工具、tool_call_id、stream 与响应 output。单请求最多 4 张图；429 按 Retry-After 退避最多 4 次、单次最多 30 秒，耗尽返回真实失败。网关登录/资格/版本/413 等 `provider_gateway_*` 为终止错误。
 
-## 2026-09-18：剪映改为编辑器链接器
+- 无网关的配音仍优先 Fish Audio，仅传输/5xx/超时类失败可回退已配置 ElevenLabs，认证失败不回退；内置网关由服务端决定 ElevenLabs 或备选 Fish，不自动回退。`VoiceAvailability` 公开返回 `{available,viaGateway,reason}`，暂时性探测失败仍保持开关可用；`GatewayVoices` 的内部 provider/modelId/defaultVoiceId 用于合成解析和缓存指纹，不混同这两个契约。
 
-公开命令仍是 `create_jianying_draft`。内部时间线先投影为 `HandoffPlan`，剪映链接器再写成现有 Python 适配器 JSON。主镜头补 `sourceEndMs`。旁白轨进入计划但不写入剪映草稿。见 `docs/changes/2026-09-18-editor-linker.md`。
+- `StoryboardVersion` 的 beatId、matchLevel（direct/contextual）、beats、uncoveredBeatIds、derivedFromVersionId、changedBeatIds 为加性字段；旧版本使用空集合/空值与 contextual 回落。uncovered 不映射 clip，也不能宣称已被画面覆盖。当前快照保存 mediaOptions、音乐 musicPlan；实际落地以 appliedMedia/mediaNotApplied 为准。
 
-## 2026-09-18：源窗短于口播时放慢
+- 版本号由 task_version_number 供 UI/Agent 展示，旧版本空值回退项目内 version_number；新 task 从 v1，旧任务继续自己的最大号。所有写工具保留原版本；局部选镜写派生故事版+时间线同事务，冻结其他镜头与音文轨。
 
-公开命令不变。选中片段可用窗短于该拍旁白时，成片时长仍跟口播时钟，预览和剪映按源窗放慢，不再换片或问用户。见 `docs/changes/2026-09-18-slow-clip-to-cover-narration.md`。
+- `StudioCommitPayload` 外层是 `{payload: ...}`；项目/task/timeline 与 clipReplacements 的显式 serde 名为 camelCase，text_tracks、deleted_shot_indices、overlay_inserted、overlay_deleted_shot_indices、overlay_adjustments、overlay_reorder、music_tracks、voiceover_tracks 按 Rust 字段名发送（bridge 负责映射）。子项字段以 studio.rs 声明为准；它不是任意 JSON/SQL 写入口。
 
-## 2026-09-18：卡片让位于网格与 CLIP
+- `AssetEvidence` 含 durationMs、analysisVersion、visualAnalysisStatus、visualAnalysisNote、关键帧/OCR/视觉证据与真实 segments；运动可用窗/曲线及 `VisualEvidence.detail` 是可选加性字段。仅显式素材详情预览入口把选中源媒体转换成受限 asset URL，库列表不暴露原始路径。
 
-公开命令不变。CLIP 可用但候选没有片段图向量时，词面/语义各最多 5 分。Phase 3 以网格为准；整片候选 Phase 4 锁在 P3 源窗，不再 Pass A 另切窗。见 `docs/changes/2026-09-18-grid-over-caption.md`。
+- 文本轨 cue 在 timeline 内保存角色/layer、时间、样式/布局/动态与兼容判定；ASS preview 与编辑器原生文字能力分别校验。品牌图片文字不可编辑。转场时长夹到相邻较短镜头 40%，默认硬切；FCPXML/OTIO 黑场过渡保留硬切并返回说明。
 
-## 2026-09-17：Phase 3 按可见证据选片并现拼网格
+- `EditorDeliveryResult` 含 editorId、deliveryKind（dropInDraft/importFile）、status、displayName、message、outputPath、jianying、notes；剪映/CapCut 草稿注册可能 pending，文件输出到 editor-handoffs。四端口均有旁白音轨写入代码；剪映/CapCut 主轨静态图片在能力表 Unsupported，品牌图片为独立叠加。交付仅新建、不覆盖、不反向同步；本次编辑器打开效果未核实。
 
-公开命令不变。Phase 3 卡片含可见描述；选片以该拍 `requiredVisual` 与网格为准，卡片与画面冲突时看图。旁白不单独决定选片。网格按该条候选时间窗现拼，缺文件则现抽。见 `docs/changes/2026-09-17-p3-visible-select.md`。
+- `runtime-model-progress`、`assets-changed`（项目 ID）、`agent-edit-completed` 是通知；持久化查询仍是恢复事实。debug 的 Native Provider 完整转储只在显式开关/tauri:dev 下写 gitignored target，release 强制关闭，不能通过 read_logs 读取。
 
-## 2026-09-17：debug 落盘 P2 九条与 P3 所选
+## 源码核对入口
 
-公开命令不变。debug 构建默认写入 `src-tauri/target/storyboard-pool-trace.jsonl`，记录每拍九条候选与所选序号，便于复测召回/选片。见 `docs/changes/2026-09-17-pool-selection-trace.md`。
-
-## 2026-09-17：拆拍过粗时软反馈再拆
-
-公开命令不变。Phase 1 在已知口播/目标时长时写入预计拍数；平均一拍明显长于约 4 秒则软反馈再拆一次，最后一次仍粗则收下，不整单失败。见 `docs/changes/2026-09-17-coarse-beat-retry.md`。
-
-## 2026-09-17：列出并打开故事版版本
-
-新增只读命令 `list_storyboard_versions` 与 `get_storyboard_version`。工作台记住当前打开的故事版；Agent 快照和 `get_storyboard` 使用该版本，不是永远最新一版。`generate_storyboard` 仍始终新建版本并切到新版。见 `docs/changes/2026-09-17-storyboard-versions.md`。
-
-`StoryboardVersion` 加性可选字段 `derivedFromVersionId?: string | null`（局部改镜所依据的故事版 id）与 `changedBeatIds?: string[]`（改动的拍）。旧版本与普通生成版本缺省或为 null；前端版本切换据此显示「v5（改自 v4，第 3 拍）」，来源不在已加载列表时省略来源，拍位置解析不到时只报数量。见 `docs/changes/2026-09-25-derived-storyboard-version-label.md`。
-
-## 2026-09-17：生成后自动预览并新建剪映草稿
-
-公开 Tauri 命令不变。Agent `generate_storyboard` 在时间线有可播镜头时自动 `render_preview` 并 `create_jianying_draft`（只新建、不覆盖）。`qualityWarnings` 不再推迟预览。已有配音后禁止改旁白。见 `docs/changes/2026-09-17-auto-preview-jianying.md`。
-
-## 2026-09-17：Phase 3 每拍单独看 9 图
-
-公开 Tauri 命令不变。Phase 3 每一拍单独看最多 9 张候选图，主选/替补只允许序号 0–4。失败只重试该拍。整条选不出镜头时返回 `storyboard_needs_user_decision`。见 `docs/changes/2026-09-17-per-beat-p3.md`。
-
-## 2026-09-17：细拍默认一镜，关配音不写屏幕字
-
-公开 Tauri 命令不变。Phase 1 按语义拆成约 2–3 秒一拍，不再用 8 秒或最少拍数硬打回；平均一拍明显长于约 4 秒则软反馈再拆一次。Phase 3 默认一镜；两条不相似且对得上才加第 2 镜。关配音默认不写 `onScreenText`。见 `docs/changes/2026-09-17-fine-beats-one-shot.md`、`docs/changes/2026-09-17-coarse-beat-retry.md`。
-
-## 2026-09-17：配音先于拆拍
-
-公开 Tauri `generate_storyboard` 参数不变。Native 工具增加可选 `requestedDurationMs`。配音开启时先按已确认 brief 合成旁白，再拆拍；合成失败返回 `storyboard_voiceover_failed`，不落库。口播时长与用户说的成片秒数相差超过约 30% 时返回 `storyboard_needs_user_decision`。时间戳优先用词级 alignment，没有则把句级片段按字数插值。见 `docs/changes/2026-09-17-tts-before-phase1.md`。
-
-## 2026-09-16：素材分析进度与剪辑等待
-
-新增命令：
-
-| 命令 | 参数 | 返回 |
-| --- | --- | --- |
-| `get_asset_analysis_progress` | projectId, assetIds? | AssetAnalysisProgress |
-| `cancel_asset_analysis` | projectId, assetIds? | 取消数量 |
-| `resume_asset_analysis` | projectId, assetIds? | 继续数量 |
-| `rename_library_asset` | projectId, assetId, name | void |
-| `remove_library_assets` | projectId, assetIds | BatchAssetActionResult |
-
-- `get_asset_analysis_progress`（projectId, assetIds?）：轻量读取项目或本次导入进度；省略 ID 集合为整个项目。
-- `cancel_asset_analysis` / `resume_asset_analysis`（projectId, assetIds?）：取消/继续首次分析，返回处理数量；已完成结果保留。取消持久化为 `metadata.analysisCancelled`，计入 queued 和 cancelled；活动数为 analyzing + queued - cancelled。取消的任务不在启动时恢复，当前外部调用允许结束，但不可回写或继续后续阶段。
-- `rename_library_asset`（projectId, assetId, name）：仅改显示名，不改本地文件名。
-- `remove_library_assets`（projectId, assetIds）：返回批量操作计数，先取消未完成首次分析，再标记 `metadata.libraryRemoved`；库列表、统计、搜索与新剪辑候选不再读取它，保留资产行、源文件和已有时间线引用。共享素材的编辑作用于该素材及引用它的所有项目，前端移除确认说明此范围。
-
-导入弹窗跟踪本次导入的 ID，预计剩余时间按本批次实际完成速度估算，尚无完成项时显示“正在估算”。“后台分析”仅关闭弹窗；弱化的“取消分析”取消该批次。素材库列表标题提供项目级取消/继续/重试；对话等待提示不再承担分析控制。
-
-
-`list_asset_page` 增加可选 `analysisState: 'ready' | 'analyzing' | 'queued' | 'failed'`，与目录等现有筛选组合。新增返回 `progress: { total, ready, analyzing, queued, failed, readyVideo, cancelled }`，按当前项目的共享素材范围去重统计，不受分页或筛选影响；旧 `counts` 保持原义。
-
-首次分析状态同时考虑技术分析和画面识别，视频/图片只有两者完成才为 ready；音频/其他类型只需技术分析。技术失败、画面失败或已跳过画面识别归入 failed（详情保留已跳过说明），queued/running 不算已完成。`readyVideo` 另排除手动排除、缺失、变化和不可读的视频。`retry_asset_analysis_batch` 复用两阶段失败重试，最多 200 项，仅重试失败步骤，返回原有 requested/updated/skipped 计数。
-
-对话入口在调用任务路由和 `submit_conversation_turn` 前检查当前项目首次分析。素材未全部完成时弹出确认，询问是否只用已分析素材；取消则保留输入框文案。分析全部完成后自动继续。文案和媒体选项按点击提交时快照保留。确认仅存在当前应用页面，取消、切换项目/会话会取消这次发送；重启不会自动续发。素材导入及重试入队期间不自动放行。`storyboard_sources` 只接收技术和首次画面分析均 ready 的视频，失败素材上的部分段卡不参与召回；Phase 4 精修仍在剪辑中执行。
-
-## 2026-09-16：关配音不再强制 15 秒
-
-公开 Tauri 命令不变。没有配音不再等于必须 ≤15 秒。`key_message` 仍是屏幕字；时长和 beat 数由模型按用户要求和内容决定，用户没说时长时建议 15–45 秒，每个镜头大约 2–3 秒。120 秒仍是处理上限。见 `docs/changes/2026-09-16-no-voiceover-not-15s.md`。
-
-## 2026-09-16：配音开着必须配音，没有稿先问同意
-
-公开 Tauri 命令不变。配音开关开着必须合成旁白。已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并问用户同意，同意前不调用 `generate_storyboard`。见 `docs/changes/2026-09-16-voiceover-script-consent.md`。
-
-## 2026-09-16：Phase 4 不拼下一段硬切
-
-公开 Tauri 命令不变。有 `segmentId` 的镜头把精修窗锁在该段；时长不够也不并入下一段硬切。召回双段 `s001+s002` 仍按这两段并窗。见 `docs/changes/2026-09-16-phase4-lock-selected-segment.md`。
-
-## 2026-09-16：选镜头不再被短 brief 与旧整片卡卡住
-
-公开 Tauri 命令不变。配音已把短 brief 锁成 `full_script` 时，Phase 1 不再要求改回 `key_message`，15 秒时长帽仍在。有硬切但段上没卡、素材级有旧整片卡时按整条进召回，不把整片标签抄到未打卡段。见 `docs/changes/2026-09-16-shot-selection-reliability.md`。
-
-## 2026-09-16：生成不等第一次分析
-
-公开 Tauri 命令不变。生成分镜不再空等 queued/running 的第一次视觉批次。桌面入口仍可给 pending 批次提高优先级。召回只收已打上第一次卡的段；没卡的不借用整条素材标签。一张卡都没有时返回 `storyboard_visual_evidence_unavailable`。见 `docs/changes/2026-09-16-no-visual-wait.md`。
-
-## 2026-09-16：Phase 2 直接按段取 9 条
-
-公开 Tauri 命令不变。Phase 2 把就绪视频全部展开为硬切段（无硬切则整条 1 段），每个 beat 取 9 段；同片最多 2 段，相似最多 2 条。有 1 条就能覆盖。后面 beat 不再预删前面池子里没用上的相似段。见 `docs/changes/2026-09-16-phase2-segment-pool.md`。
-
-## 2026-09-16：覆盖 beat 允许一镜
-
-公开 Tauri 命令不变。Phase 3 覆盖 beat 允许 1 镜；有第二条不相似且对得上的池内素材才加到 2–3。不再发出 `beat_below_min_shots`。收尾 `qualityWarnings` 仍报告 uncovered、无镜头的覆盖 beat、画面短于旁白。每 beat 仍最多 3 镜。见 `docs/changes/2026-09-16-beat-one-shot-ok.md`。
-
-## 2026-09-16：共享子素材库与新建项目
-
-`list_shared_libraries` 无参数，返回 `{ id, name, assetCount, unfiled }[]`，不暴露源目录；`unfiled` 标出无导入根目录的默认子库，存储名仍为「未归类素材」，前端按界面语言显示。`create_project` 接受 `{ name, libraryIds?: string[] }`：省略时选取当前全部子素材库，空数组不关联素材库；名称与库关联在同一事务提交。前端先弹出表单并默认全选。
-
-Schema 18/19 增加 `shared_libraries`、`project_libraries`、`shared_library_assets` 和 `project_asset_access` 视图。按已有导入根目录建立子库，无目录素材归入“未归类素材”；成员通过素材 ID 关联，重链路不丢失库归属。源文件及分析结果不复制，旧项目保留原有素材访问。新导入自动关联当前项目；浏览、搜索、选片、替换、预览与交付统一使用共享范围。`assets.project_id` 保留为导入来源，不再是素材读取的唯一范围。
-
-## 2026-09-15：对话媒体开关
-
-`submit_conversation_turn` 增加可选 `mediaOptions: { voiceover: boolean, subtitles: boolean, bgm: boolean, aspectRatio?: '9:16' | '16:9' | '1:1' }`（2026-09-27 起前端以画幅选择替代字幕开关，`subtitles` 随 `voiceover` 发送）。前端新会话默认全开，选中显示勾选标志；发送时冻结选择，`agent_tasks.input_json` 保存 `mediaOptions` 和 receipt 对应的 `userMessageId`。会话恢复读取最近一次发送设置，消息摘要按 `userMessageId` 关联。关闭项不自动新增轨道，不表示删除已有轨道；本轮明确的自然语言指令优先，普通问答不触发编辑。
-
-Native `generate_storyboard` 增加 `mediaOptions`（null 沿用本轮选择，非 null 为模型按明确文字要求合并后的选择）和 `requestedDurationMs`（用户点名的成片毫秒，null 表示没说）；`synthesize_voiceover` 增加 `includeSubtitles`（null 沿用本轮字幕选择）。严格工具 Schema 包含这些 nullable 参数，旧的内部调用省略时仍使用默认路径。
-
-分镜 `content_json.mediaOptions` 保存生成快照，无新增表或列。关闭配音跳过 audio-first 与后续自动配音；关闭字幕跳过分镜字幕和配音对齐字幕写入。配音开启时必须配音：已有可念稿则照念生成；只有主题时 Agent 先写旁白稿并征求同意，同意后再生成并合成。完整文案仍照稿念。BGM 由 `generate_storyboard` 在配音之后直接写入（2026-09-27 起；素材库用户音频优先，其次 Jamendo 器乐，都不可用时在 `mediaNotApplied.bgm` 说明原因），有旁白时音量为 0.15，无旁白为 0.35；许可与剪映交付限制沿用现有音乐能力。旧分镜无快照时保持既有行为。见 `docs/changes/2026-09-15-composer-media-options.md`、`docs/changes/2026-09-16-voiceover-script-consent.md`。
-
-## 2026-09-10：剪辑失败修复
-
-公开 Tauri 命令、SQLite schema 与前端参数不变。Phase 3 内部模型响应改为 `selections:[{beatId,candidateIndexes:[0,1],uncovered:false}]`，序号仅在对应 beat 的候选池内有效；Rust 映射素材、片段与源时间范围，模型不再填写 ID。Phase 4 按素材 ID 去重候选来源，片段选择仍由镜头自身携带。
-
-`storyboard_selection_failed` 返回 `retryable:false`，已有分阶段修正耗尽后不再要求或执行本轮整套重做。Native 的 30 分钟总预算传递到同步模型/配音请求、媒体子进程和等待步骤；离线推理仅在调用前后检查，不能强制中断正在执行的 ONNX 运算。
-
-启动恢复包括 `analyze_asset_segments_batch` 的中断任务，保留已有素材/片段分析。素材视觉失败使用现有 Provider 安全错误码区分请求失败，返回内容无法解析使用 `visual_response_invalid`。见 `docs/changes/2026-09-10-editing-failure-fixes.md`。
-
-## 2026-09-09：粗剪推荐与手动换镜
-
-新增命令（前端统一经 `src/lib/local-store.ts`）：
-
-| 命令 | 参数 | 返回与副作用 |
-| --- | --- | --- |
-| `list_shot_recommendations` | `projectId, editingTaskId, timelineVersionId, shotIndex` | 只读已保存候选，返回 `saved, beatPurpose, candidates`。候选含唯一 `candidateId`（素材＋片段）、素材 ID、源起止、名称、片段缩略图、时长、当前/已使用标记及不可用原因；最多 12 个，不补假数据。 |
-| `generate_shot_recommendations` | 同上 | 老版本用户主动生成；复用已分析证据的本地排序并保存候选，不改粗剪、不重新识别素材。 |
-| `prepare_shot_replacement` | 同上及 `candidateId` | 为一个候选复用 Phase 4 精修并渲染静音画面，返回原版本 ID、镜头索引、素材 ID、源起止、`cropFocus`、`previewPath`；不写时间线。依赖已配置模型，失败直接返回。 |
-
-Schema 17 新增 `storyboard_recommendations`，随 storyboard 原子保存 Top-12，删除原 storyboard 时级联删除。候选池按 beat 保存，当前镜头经 `derivedFromShotIndex` 关联原始分镜。
-
-「保存修改」复用 `commit_studio_edits`，`clipReplacements[]` 新增可选 `cropFocus`；只替换源镜头及构图，槽位时长、其他镜头与音文轨道不变。时间线与操作记录原子提交。随后 `render_preview` 更新整片预览，失败仍保留已保存版本和旧预览；`create_jianying_draft` 使用最新已保存时间线。手动撤销/重做创建新版本，切换会话或 Agent 产生其他版本后清空手动历史。
-
-交互与验证记录见 `docs/changes/2026-09-09-light-workspace-shot-replacement.md`。
-
-## 2026-09-17：运行时下载本地选镜模型
-
-安装包不再捆绑 BGE/CLIP 的三个 `model.onnx`。新增：
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `get_runtime_model_status` | 无 | `RuntimeModelStatus` | 三项权重状态与总体 `idle/pending/downloading/ready/failed`；不写副作用。 |
-| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 幂等启动后台下载到 `app_data/runtime-models/`；已在下或已齐则返回当前状态。官方失败后换国内镜像，断点续传并自动重试。 |
-
-事件 `runtime-model-progress` 推送同结构进度。`initialize_local_store` 在缺权重时自动开下，不阻塞。路径解析优先 `app_data`，其次安装包/开发目录。完整安装包可用 `npm run tauri:build:full` 捆绑 ONNX。见 `docs/changes/2026-09-19-runtime-model-download-resilience.md`。
-
-## 2026-09-09：发行就绪检查
-
-新增 `get_release_readiness`：启动时检查 FFmpeg/FFprobe、Tesseract 与英文数据（均优先安装包资源）、本地数据目录可写、磁盘空间、AI 模型连接、剪映草稿位置、随包 Python/草稿 SDK/适配器脚本、本地语义模型资源。返回 `overall=ready|degraded|blocked` 与用户可读检查项；不写副作用。见 `docs/changes/2026-09-09-release-readiness-check.md`、`docs/changes/2026-09-20-bundle-ffmpeg.md`、`docs/changes/2026-09-20-bundle-python.md`、`docs/changes/2026-09-23-bundle-tesseract.md`。
-
-## 2026-09-09：预览缓存上限与清理
-
-- 单项目 `previews/cache/<projectId>` 默认上限 2 GiB；`render_preview` 成功后按修改时间淘汰最旧中间文件。
-- 新增 `get_preview_cache_status` / `clear_preview_cache`；启动时清掉已不存在项目的孤儿缓存目录。
-- 当前无删除整个项目的命令；清理入口在「项目设置」。见 `docs/changes/2026-09-09-preview-cache-limit.md`。
-
-## 2026-09-10：Phase 2 锁片段与跨 beat 同片不同段
-
-Phase 2 每 beat 召回 9 条互不相似整片并展开真实场景段，Top-12 且同片最多 2 段；有场景段时不因视觉超时退回整条。Phase 3 同一 beat 仍禁同 `assetId`；跨 beat 允许不同、不重叠、不相似片段（含相邻）。相似硬拒（预览同款 24×24 灰度均差 < 12，以及标签/向量）。不够则少镜或 uncovered。40% 素材占比保留。不新增 Tauri 命令。见 `docs/changes/2026-09-10-phase2-segment-shortlist.md`。
-
-## 2026-09-08：Phase 3 相邻同片硬拒
-
-~~最终播放序相邻镜头不得共用同一 `assetId`（含跨 beat）。~~ 已被 2026-09-10 片段相似/交叠硬拒取代；非相邻复用仍受 40% 上限。见 `docs/changes/2026-09-08-phase3-consecutive-asset-ban.md`。
-
-## 2026-09-07：Phase 4/normalize 窗内消交叠
-
-同素材源范围交叠时，Phase 4 在已选内容窗内机械拆开；normalize 仍消交叠但不对带 `cropFocus` 的素材做整段 pack，被挪切点的镜头清构图。不新增 Tauri 命令。见 `docs/changes/2026-09-07-phase4-overlap-resolve.md`。
-
-## 2026-09-07：Phase 4 精修拆批
-
-Phase 4 Pass B/C 不减少每镜抽帧数；同一镜定时帧拼成一张网格，按最多 4 镜一批请求、各批并发，合并时锁定 `assetId`。不新增 Tauri 命令。见 `docs/changes/2026-09-07-phase4-refine-batch.md`。
-
-## 2026-09-07：配音出站代理
-
-Fish Audio / ElevenLabs 配音请求改为共用进程级 `ureq` Agent，读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`（与本机用户环境一致）。不新增 Tauri 命令；设置页区分「已连接」与「密钥已存·未探通」。传输失败会把中文 Windows 连接超时（os error 10060）归类为 timed out，并写日志细节。实现见 `docs/changes/2026-09-07-voice-http-proxy.md`。
-
-## 2026-09-07：剪辑流程与预览复用
-
-- `list_asset_page.counts.visualPending` 返回项目内视觉分析 `queued/running` 素材数，与技术分析计数共同决定前端是否继续刷新。`assets-changed` 事件的 payload 为项目 ID，在技术分析向视觉队列交接的事务提交后发出；空闲不再持续轮询素材或健康摘要，导入、重链路、健康扫描动作与 Agent 终态会主动刷新。健康摘要轮询仅在计数或活动任务状态变化时连带刷新素材页，首次观察与空闲重复摘要不触发。
-- Storyboard shot 与 `TimelineClipDto` 增加可选 `cropFocus: [x, y] | null`，坐标为源画面归一化主体中心。旧版本缺省居中；分镜生成时由已有视觉精修请求判断，创建时间线时保留，替换源片段时清除。预览按主体中心裁剪至分镜画幅（默认 9:16），Jianying handoff 将焦点转换成现有 ClipSettings；不新增编辑命令。
-- `render_preview` 命令的参数和返回值不变，桌面调用通过阻塞工作线程运行媒体任务，Agent/确认流水线共用 `render_preview_inner`。源文件版本、源区间、画面参数确定镜头缓存；底片和文字/叠加画面分层复用，音轨修改不重新编码未变化的视频层。缓存位于本机 `previews/cache/<projectId>`，失败中的临时文件不会作为可复用结果。
-- 完整旁白模式在拆拍前合成配音。优先词级时间戳；只有句级片段时按字数比例插值到字符边界，使拍可以切在句中。文案对不上则不用这段对齐。合成失败不开始生成。
-
-实现与验证记录：`docs/changes/2026-09-07-smooth-editing-pipeline.md`。
-
-## 状态
-
-桌面后端已实现本地持久化、素材导入与证据、实验性 OAuth、媒体分析、源时间绑定 storyboard、内部时间线、批量片段替换、改时长、排序、澄清反问、preview 和实验性 Jianying Pro 8.0 仅视频草稿创建。`src/lib/agent-tools.ts` 仅镜像当前内部 Agent 技能名称，前端通过 `src/lib/local-store.ts` 调用公开 Tauri 命令。
-
-素材库查询命令（`list_assets`、`list_asset_page`、`update_asset_user_metadata_batch`、`add_asset_tag_batch`、`remove_asset_tag_batch`、`create_asset_collection`、`list_asset_collections`、`add_assets_to_collection`、`get_asset_evidence`）已于 2026-08-17 从 `assets.rs` 迁移至 `assets/library.rs` 子模块，命令名称、参数和返回值完全不变。同批提取 `assets/analysis.rs`（技术与视觉分析）、`assets/health.rs`（源文件健康）、`assets/visual.rs`（视觉批次）三个子模块；`assets.rs` 收缩为薄协调层。
-
-2026-08-14 的恢复基线没有新增、删除或修改 Tauri 命令及工具输入/输出；相关 Rust 改动仅为 `rustfmt` 标准格式化。
-
-## 已实现的 Tauri 命令
-
-| 命令 | 输入 | 结果 | 说明 |
-| --- | --- | --- | --- |
-| `initialize_local_store` | 无 | `StoreStatus` | 创建应用数据目录、打开 SQLite（WAL + busy_timeout）、执行迁移；中断且存在未完成通用 Agent 调用的会话恢复为 `review`。若 `working` 会话的最新 Agent task 已终态但缺少 `agent-task-result-{agentTaskId}`，任务改为 `needs_review`、写入固定恢复消息且会话改为 `review`，不猜测丢失回答；其余 `working` 会话恢复为 `ready`。每进程还恢复一次未完成分析任务（只立即处理前 4 条，其余保持 `queued`），并对状态为 `queued`/`analyzing` 但没有对应 `analyze_asset` 任务的孤立素材补建并排队分析。 |
-| `create_project` | `{ name, libraryIds? }` | `StoredProject` | 省略库列表默认全选，空数组不选库。 |
-| `rename_project` | `{ projectId, name }` | `StoredProject` | 修改项目名称并更新时间，拒绝空名称。 |
-| `delete_project` | `{ projectId, confirmed }` | `void` | 删除项目及其素材索引、分析派生文件、会话和本地预览；保留原始媒体与外部剪映草稿。必须 `confirmed=true`。 |
-| `list_shared_libraries` | 无 | `SharedLibrary[]` | 全局子素材库名称、素材数量与默认子库标记 `unfiled`。 |
-| `list_projects` | 无 | `StoredProject[]` | 按最后更新时间倒序。 |
-| `create_editing_session` | `{ projectId, title }` | `StoredEditingSession` | 兼容入口；在同一事务内创建 editing task 与首个 conversation，拒绝空标题。 |
-| `list_editing_sessions` | `{ projectId }` | `StoredEditingSession[]` | 返回项目内 task 与最近 conversation 的兼容聚合投影。 |
-| `rename_editing_session` | `{ projectId, editingTaskId, title }` | `void` | 同步修改 editing task 及其 conversation 标题，拒绝空名称。 |
-| `delete_editing_session` | `{ projectId, editingTaskId, confirmed }` | `void` | 删除剪辑会话（editing task）及其对话消息、Agent 记录、storyboard/timeline 与本地 preview 目录；项目级素材保留。必须 `confirmed=true`；进行中的 Agent 任务先标为 `cancelled`。不删除用户 Jianying 草稿目录中的外部草稿。 |
-| `create_editing_task` | `{ projectId, title }` | `StoredEditingTask` | 在既有项目内创建作用域化创作目标。 |
-| `list_editing_tasks` | `{ projectId }` | `StoredEditingTask[]` | 按最后更新时间倒序。 |
-| `update_editing_task_brief` | `{ editingTaskId, brief }` | `void` | 保存非空 brief；首次请求会为未命名任务定名。 |
-| `create_conversation` | `{ projectId, editingTaskId, title }` | `StoredConversation` | 任务必须属于指定项目，拒绝空标题。 |
-| `list_conversations` | `{ projectId, editingTaskId? }` | `StoredConversation[]` | 按最后更新时间倒序；可按任务过滤。 |
-| `create_message` | `{ conversationId, role, content, routeReceipt? }` | `StoredMessage` | 保存消息并更新时间；`role` 可为 `user`、`assistant`、`agent`、`tool` 或 `system`。`role=user` 必须提供与目标 conversation 和完整 content 匹配、仍未消费的 route receipt，其他角色不需要。`role=agent` 且会话最后一条正是内容相同的 agent 消息时不再插入，直接返回那条消息（如重复导入提示）。 |
-| `set_conversation_status` | `{ conversationId, status }` | `void` | 状态为 `ready`、`working` 或 `review`。 |
-| `list_messages` | `{ conversationId }` | `StoredMessage[]` | 按时间正序。 |
-| `resolve_conversation_task` | `{ projectId, activeEditingTaskId?, request }` | `TaskRouteResult` | 在消息持久化前解析当前激活任务的归属；候选仅为仍属于该项目的显式活动任务，不把兄弟任务的 title/brief/`active_subgoal` 交给路由模型。返回继续当前任务、原子创建新任务或澄清（继续或新建，不列举其他任务）。没有激活任务时直接创建新任务。确定目标时签发一次性 route receipt；只选择任务，不选择 Agent 工具。 |
-| `import_assets` | `{ projectId, sourceReferences }` | `StoredAsset[]` | 校验本地文件、保存引用并排队分析。 |
-| `import_asset_folder` | `{ projectId, sourceDirectory }` | `StoredAsset[]` | 递归登记支持的媒体，并记录文件夹层级根。 |
-| `preview_asset_relink` | `{ projectId, sourceDirectory }` | `{ matches, unmatchedCount }` | 扫描用户选定的新根目录，仅按唯一的原相对路径与媒体类型给出可确认匹配；不修改项目。 |
-| `confirm_asset_relink` | `{ projectId, sourceDirectory, assetIds, preserveAnalysis }` | `{ relinkedCount }` | 重新计算已预览的唯一匹配后，才更新所选素材源引用。`preserveAnalysis=true` 仅更新路径并保留已有分析证据；`false` 时清除旧分析证据、取消旧 active 分析任务并按有界批次重排分析。 |
-| `start_asset_health_scan` | `{ projectId }` | `{ taskId }` | 显式启动可取消的后台源文件元数据检查；已有活动扫描时返回同一任务。 |
-| `cancel_asset_health_scan` | `{ projectId, taskId }` | `void` | 取消当前项目仍在排队或运行的健康扫描。 |
-| `get_asset_health_scan_summary` | `{ projectId }` | `AssetHealthScanSummary` | 读取持久化健康计数与活动任务进度，不访问源文件。 |
-| `preview_collect_project_media` | `{ projectId }` | `{ collectableCount, unavailableCount, totalBytes }` | 用户发起收集前逐项复核源文件并估算复制量；不写文件。 |
-| `collect_project_media` | `{ projectId, destinationDirectory }` | `{ copiedCount, unavailableCount, outputDirectory }` | 在用户选择目录下创建 UUID 命名的新包，复制当前可读源文件并写无原路径 manifest；不覆盖已有文件、不改写项目引用，操作日志只记录计数。 |
-| `list_assets` | `{ projectId }` | `StoredAsset[]` | 返回文件夹名、相对路径、技术分析状态、独立视觉分析状态和安全证据计数，不向 UI 暴露源引用或即时源文件探测结果；若该项目仍有 `queued` 分析任务且没有正在运行的分析 worker，顺带排空至多 4 条。实际分析和交付工具使用素材前会验证源文件。 |
-| `list_asset_page` | `{ projectId, search?, kind?, analysisStatus?, visualStatus?, directoryKey?, offset, limit }` | `AssetPage` | 面向素材库 UI 的有界分页查询，`limit` 强制为 1–200；搜索、类型、技术状态、视觉状态、storyboard 可用性和直属目录条件在 SQLite 执行。每个 item 返回安全 `directoryKey`，页面同时返回权威 `directories: { key, name, parentKey, directAssetCount }[]` 与 `unfiledCount`；目录节点来自完整项目投影，不依赖当前页且不返回源引用、盘符或绝对路径。 |
-| `get_asset_task_center` | `{ projectId }` | `AssetTaskCenter` | 返回项目级技术/视觉任务的排队、运行、失败、跳过计数，以及最多 50 条只含安全原因码的最近失败；不返回后台错误原文、路径或媒体证据。 |
-| `retry_asset_analysis_batch` | `{ projectId, assetIds }` | `BatchAssetActionResult` | 用户批量重试技术分析，每次最多 200 条；只处理当前项目、源文件仍可用且未 ready/active 的素材，活动任务不重复创建，并写入用户操作审计。 |
-| `skip_asset_visual_analysis_batch` | `{ projectId, assetIds }` | `BatchAssetActionResult` | 用户明确确认后批量跳过视觉分析，每次最多 200 条；仅修改当前项目技术 `ready` 的图片/视频，保留技术证据、清除视觉标签并写入用户操作审计。在途视觉批次不得覆盖显式用户跳过。 |
-| `update_asset_user_metadata_batch` | `{ projectId, assetIds, favorite?, rating?, note?, excluded? }` | `BatchAssetActionResult` | 批量设置收藏、0–5 评分、最多 2000 字符备注和禁止使用；用户字段与分析证据分表保存，审计不保存正文。 |
-| `add_asset_tag_batch` / `remove_asset_tag_batch` | `{ projectId, assetIds, tag }` | `BatchAssetActionResult` | 增删项目内不区分大小写的 1–64 字符用户标签。 |
-| `create_asset_collection` / `list_asset_collections` / `add_assets_to_collection` | 项目、集合及素材标识 | `AssetCollection` / `AssetCollection[]` / `BatchAssetActionResult` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
-| `get_asset_evidence` | `{ assetId }` | `AssetEvidence` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
-| `generate_storyboard` | `{ projectId, editingTaskId, brief }` | `StoryboardVersion` | 候选入口只接受技术分析 `ready`、类型为 `video`、未被排除且源文件可访问的素材；Rust 以本地语义向量或词面降级为每个 beat 从段里取最多 9 个候选，模型从池中选出 1–3 个互异素材（有第二条不相似且对得上才加镜）后再精修源时间范围，本地校验后创建任务内版本。 |
-| `get_candidate_score_first_slots` | `{ projectId }` | `number` | 读取项目每拍 9 条候选中按综合分优先选入的名额，默认 5。 |
-| `get_brand_kit` | `{ projectId }` | `BrandKit { name, handle, cta, primaryColor, accentColor, logoFile, fontFile, logoPreview, fontName, defaultTransition }` | 读取项目品牌套件与默认转场。`logoPreview` 是 data URL，`logoFile`/`fontFile` 只是应用数据目录内的文件名，不含本机路径。 |
-| `set_brand_kit` | `{ projectId, input: { name, handle, cta, primaryColor, accentColor, logoSourcePath, clearLogo, fontSourcePath, clearFont, defaultTransition: { kind, durationMs } } }` | `BrandKit` | 校验长度与颜色（`#RRGGBB` 或空），把 logo（png/jpg/webp/svg，≤5 MB）和字体（ttf/otf/woff/woff2，≤20 MB）按内容哈希复制进 `app_data/brand/<projectId>/`，写 `settings_json.brandKit` 与 `defaultTransition`（`none | crossfade | dip_to_black`，200–1000 ms）。下次生成生效，不改已有时间线。 |
-| `set_candidate_score_first_slots` | `{ projectId, scoreFirstSlots }` | `number` | 保存项目候选名额；设置界面提供 3～9 条。其余名额轮流从 CLIP 画面、语义、关键词分项高分候选中选入，仍遵守同素材和相似画面限制；下次生成生效。 |
-| `get_latest_storyboard` | `{ projectId, editingTaskId }` | `StoryboardVersion \| null` | 加载所选任务的最新 storyboard。 |
-| `list_storyboard_versions` | `{ projectId, editingTaskId }` | `StoryboardVersion[]` | 返回该剪辑任务内全部故事版，按创建先后倒序。`versionNumber` 是会话内版本号，每个剪辑任务从 1 开始，局部编辑派生版本同样在任务内累加；schema v20 之前的旧版本保留原项目内编号。 |
-| `get_storyboard_version` | `{ projectId, editingTaskId, storyboardVersionId }` | `StoryboardVersion` | 读取指定故事版；必须属于当前项目和剪辑任务。 |
-| `create_timeline_draft` | `{ projectId, storyboardVersionId }` | `TimelineVersion` | 从经验证的 storyboard 创建源时间绑定内部时间线。 |
-| `get_latest_timeline` | `{ projectId, storyboardVersionId }` | `LatestTimeline \| null` | 仅加载该 storyboard 的最新时间线及其 preview。 |
-| `list_timeline_versions` | `{ projectId, editingTaskId, storyboardVersionId }` | `TimelineVersion[]` | 返回同一项目、剪辑任务与 storyboard 内的时间线版本，按创建先后倒序。`versionNumber` 按 storyboard 所属剪辑任务编号，每个任务从 1 开始，规则同故事版。 |
-| `list_agent_tasks` | `{ projectId, editingTaskId, conversationId? }` | `AgentTask[]` | 返回作用域内的持久化 Agent 调用，按更新时间倒序。 |
-| `list_agent_run_steps` | `{ projectId, editingTaskId, agentTaskId }` | `AgentRunStep[]` | 仅在项目、剪辑任务和调用三重作用域匹配时返回步骤；不包含参数、模型原文、对话或媒体证据。 |
-| `list_agent_diagnostics` | `{ projectId, editingTaskId, agentTaskId }` | `AgentDiagnostic[]` | 返回同一作用域的本地安全诊断标记；不包含模型原文、会话、路径、凭据或媒体证据。 |
-| `list_operation_logs` | `{ projectId, editingTaskId, agentTaskId? }` | `OperationLog[]` | 返回作用域内的副作用审计记录，按创建时间倒序。 |
-| `render_preview` | `{ timelineVersionId }` | `PreviewResult` | 用 FFmpeg 本地渲染 MP4，画布按分镜画幅：540 x 960 / 960 x 540 / 720 x 720。成功写入后对 `previews/cache/<projectId>` 执行单项目上限淘汰（默认 2 GiB，按修改时间删最旧中间文件）。 |
-| `get_preview_cache_status` | `{ projectId }` | `PreviewCacheStatus { projectId, bytesUsed, limitBytes, fileCount }` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
-| `clear_preview_cache` | `{ projectId, confirmed }` | `PreviewCacheStatus` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
-| `get_release_readiness` | 无 | `ReleaseReadinessReport { overall, checks[] }` | 启动/发行就绪检查。`overall`=`ready|degraded|blocked`；每项 `id/title/status/message/messageKey/messageParams`（`status`=`ok|warn|fail`；`messageKey` 如 `diskSpace.low` 为稳定文案键，前端按界面语言翻译，未知键回落中文 `message`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
-| `get_runtime_model_status` | 无 | `RuntimeModelStatus { overall, currentId, message, messageKey, messageParams, artifacts[] }` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。`messageParams.model` 为产物 id，前端按界面语言显示模型名。 |
-| `start_runtime_model_download` | 无 | `RuntimeModelStatus` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
-| `synthesize_storyboard_voiceover` | `{ projectId, editingTaskId, conversationId, timelineVersionId }` | `VoiceoverApplyResult` | storyboard 完成后自动合成整段配音：内置网关时只经 Voycut 网关（服务商由网关决定，默认 ElevenLabs），否则优先 Fish Audio 时间戳流，传输类失败可回退 ElevenLabs；旁白轨必写，alignment 字幕尽力。返回 `voiceoverApplied` / `subtitleApplied` / `provider`。 |
-| `commit_studio_edits` | `{ payload: { projectId, editingTaskId, timelineVersionId, reorder?: number[], adjustments?: { shotIndex, newDurationMs, newSourceStartMs }[], textTracks?: TextTrack[] } }` | `StudioCommitResult { timeline: TimelineVersion, applied: string[] }` | Studio 工作台把前端 mash diff 落库为新的 timeline version；在已验证源范围内校验重排/时长/字幕（复用 `timeline.rs` 规则），写入 `user/studio_commit` 审计并返回新版本；预览需另行 `render_preview`。 |
-| `execute_agent_edit` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt }` | `String`（任务 ID） | 兼容入口；必须消费与项目、task、conversation、请求完全匹配的一次性 route receipt，随后才可启动异步 Agent run。 |
-| `confirm_storyboard_and_preview` | `{ projectId, editingTaskId, conversationId, storyboardVersionId }` | `String`（任务 ID） | **兼容保留**：历史上在用户确认 storyboard 后异步执行 `create_timeline_draft` + `render_preview` 并返回后台任务 ID。主路径已改为 Agent `generate_storyboard` 成功后自动串联 timeline、preview 与所选输出端口；`src/lib/local-store.ts` 不再封装此命令。 |
-| `submit_conversation_turn` | `{ projectId, editingTaskId, conversationId, storyboardVersionId, timelineVersionId, request, routeReceipt, mediaOptions?, uiLocale? }` | `{ kind: 'run', agentTaskId }`（保留 `immediate` 兼容变体） | `uiLocale`=`zh-CN|en`（其余或缺省按 `zh-CN`）写入 `agent_tasks.input_json.uiLocale`，只决定 Agent 回复与系统兜底文案语言，不决定旁白/字幕语言。后端先消费一次性 route receipt，随后普通聊天、澄清、项目事实和工具执行统一创建 Agent task 并进入 NativeToolLoop；不调用对话分类模型、不返回 route/goal decision，也不预选首个工具。异步终态先幂等写入原 conversation，再发出 `agent-edit-completed`。 |
-| `cancel_agent_edit` | `{ projectId, editingTaskId, conversationId, agentTaskId }` | `void` | 将作用域内仍为 `queued`/`running` 的 Agent 任务标为 `cancelled`；NativeToolLoop 在下一步检查点停止并写入取消终态与回复。已是 `cancelled` 视为成功；其他终态不可取消。 |
-| `get_experimental_openai_oauth_status` | 无 | `ExperimentalOAuthStatus` | 仅从 Windows Credential Manager 读取连接状态。 |
-| `start_experimental_openai_oauth` | 无 | `ExperimentalOAuthStart` | 启动五分钟 loopback PKCE 回调并返回浏览器授权 URL；仅个人测试。 |
-| `clear_experimental_openai_oauth` | 无 | `ExperimentalOAuthStatus` | 删除 Windows Credential Manager 中的实验性凭据并重置连接状态。 |
-| `get_custom_api_status` | 无 | `CustomApiStatus` | 仅返回自定义 API 的 Base URL、主 Model、可选粗视觉 Model；不返回 API Key。 |
-| `save_custom_api` | `{ baseUrl, model, coarseVisualModel?, apiKey }` | `CustomApiStatus` | 保存于 Windows Credential Manager；粗视觉 Model 为空时沿用主 Model。 |
-| `clear_custom_api` | 无 | `CustomApiStatus` | 删除 Windows Credential Manager 中的自定义 API 凭据并重置状态。 |
-| `get_jamendo_status` | 无 | `JamendoStatus` | 只检查 Windows Credential Manager 中是否存在可读取的 Jamendo client ID，返回 `connected` 或 `disconnected`。 |
-| `save_jamendo_client_id` | `{ clientId }` | `JamendoStatus` | 将非空 Jamendo client ID 写入 Windows Credential Manager；失败时只返回 `failed`，不回传凭据。 |
-
-Provider 设置弹窗提供 Jamendo Client ID 输入框，保存后只显示凭据已存；是否可用仍需实际搜索验证。Jamendo API 即使返回 HTTP 200，搜索与单曲复查仍检查 JSON `headers.status`，失败时返回 API 错误码，不能误报为空曲库。
-| `get_elevenlabs_status` | 无 | `ElevenLabsStatus` | 返回密钥是否已存、音色列表是否可读、可空的 TTS 授权探测和安全错误码；不返回 API Key。 |
-| `save_elevenlabs_api_key` | `{ apiKey }` | `ElevenLabsStatus` | 将非空 ElevenLabs API Key 写入 Windows Credential Manager，并只 `GET /v1/voices` 探活。 |
-| `clear_elevenlabs_api_key` | 无 | `ElevenLabsStatus` | 删除 Windows Credential Manager 中的 ElevenLabs 密钥。 |
-| `import_elevenlabs_api_key_from_environment` | 无 | `ElevenLabsStatus` | 当凭据库未配置时，从本机 `ELEVENLABS_API_KEY` 导入一次；不在每次 HTTP 时偷读环境变量。 |
-| `get_voice_availability` | 无 | `VoiceAvailability` | 配音开关是否可用：内置网关时探测网关配音，只有网关明确没有配音能力时 `available=false`；不返回任何密钥。 |
-| `get_fish_audio_status` | 无 | `FishAudioStatus` | 返回 Fish Audio 密钥是否已存及音色列表是否可读；不返回 API Key。 |
-| `save_fish_audio_api_key` | `{ apiKey }` | `FishAudioStatus` | 将 Fish Audio API Key 写入 Windows Credential Manager，并用音色列表接口探活。配置后配音优先使用 Fish Audio；传输/超时/5xx/429 且 ElevenLabs 已配置时可回退（401/密钥错误不回退）。 |
-| `clear_fish_audio_api_key` | 无 | `FishAudioStatus` | 删除 Windows Credential Manager 中的 Fish Audio 密钥。 |
-| `import_fish_audio_api_key_from_environment` | 无 | `FishAudioStatus` | 从本机 `FISH_API_KEY` 导入一次。 |
-| `create_jianying_draft` | `{ timelineVersionId }` | `JianyingDraftResult` | 在当前用户配置的 Jianying Pro 8.0 草稿库创建并注册唯一的仅视频草稿。 |
-| `get_jianying_registration_status` | `{ timelineVersionId }` | `JianyingRegistrationStatus \| null` | 读取该时间线最近一次延迟注册任务的 `pending`、`registered` 或 `failed` 投影。 |
-| `list_editor_linkers` | `{ projectId }` | `EditorLinkerCatalog` | 列出输出端口（剪映 / CapCut / FCPXML / OTIO）及当前项目选择。 |
-| `set_output_editor` | `{ projectId, editorId }` | `EditorLinkerCatalog` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
-| `deliver_to_editor` | `{ timelineVersionId, editorId? }` | `EditorDeliveryResult` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。品牌卡先本地渲染成 PNG 并复制进草稿或导出文件旁；`notes` 如实列出图片交付、未渲染的卡、未带入或待确认的转场、文字降级（code：`brand_cards_as_images`、`brand_cards_failed`、`transitions_unverified`、`transition_not_delivered`、`text_basic_titles`、`text_as_markers`）。 |
-
-`agent-edit-completed` 事件包含持久化的 `agentTaskId`、`status`（`completed`、`partially_completed`、`failed`、`cancelled` 或 `needs_clarification`）和 `result`；其中 `AgentEditResult` 包含同一 `agentTaskId`、模型对真实工具结果的自然语言消息及可空的 `storyboard`、`timeline`、`preview` 与 `jianyingDraft`。`execute_agent_edit` 立即返回任务 ID：后端插入 `queued` 调用后在后台线程执行 NativeToolLoop。`finalize_agent_task` 在同一事务中提交 task 终态、可选产物审计、`agent-task-result-{agentTaskId}` 回复及 conversation 终态，提交成功后才发事件。前端把事件作为低延迟通知，同时轮询 `list_agent_tasks`；事件丢失时从持久化消息和领域表恢复任务卡、回复及产物，不会重复插入 Agent 回复。完整工具目录默认可用，由模型按意图选择下一步；指定时间线不属于当前任务时仍会被拒绝。`needs_clarification` 不创建产物，只返回可恢复的确认状态；`partially_completed` 保留并列出真实中间产物，但不声称最终目标完成。`cancelled` 表示用户主动停止；已由工具确认的中间产物保留，未确认步骤不标记成功。
-
-Agent 工具失败后，循环可把不含路径和原始错误的结构化诊断临时回读模型，由模型生成自然失败说明；持久化步骤仍只保存安全码。即使模型给出说明，`status` 仍保持后端判定的 `failed` 或 `partially_completed`，消息不能替代真实产物。只读查询本机项目事实的工具（`search_assets`、`list_assets`、`get_storyboard` 等，不含 `search_music`、`list_voices`、`transcribe_asset`）失败且本轮另有成功工具时，不把整轮降为 `partially_completed`；失败步骤仍记录在运行步骤中，任务卡另列失败步数。
-
-debug 构建且 `NATIVE_PROVIDER_FULL_TRACE=1` 时，NativeToolLoop 每次真实 HTTP 尝试把实际发送的完整 JSON 和服务器响应正文追加到 `src-tauri/target/native-provider-full-trace.jsonl`。每行是 `{ recordId, stepNumber, attemptNumber, direction, adapter, httpStatus, body, createdAt }`。响应正文在写入前精确遮蔽当前 Provider 的 API Key、OAuth token、账户标识与自定义 Base URL；请求头从不进入该文件。网络层没有收到响应时只有 request，不伪造 response。该文件在 gitignored 的 `target/` 内，进程首次开启时截断，不进入 SQLite、浏览器存储、Tauri 命令或前端。`npm run tauri:dev` 会设置该开关；release 构建即使设置同名变量也强制关闭。
-
-Tauri 命令以适合展示的字符串错误返回，但不得在错误中暴露凭据或完整媒体路径。
-
-“剪好了吗”“完成了吗”等精确状态问题也走 NativeToolLoop 的只读 `get_edit_status`，不绕过统一 Agent task。它读取同一项目、剪辑任务和会话的上一条 Agent task 状态，并以当前 task 最新 storyboard、该 storyboard 最新时间线状态及磁盘实际 preview 文件作为产物事实；不会把后台视觉分析任务或较旧 task result 当作当前剪辑完成状态。
-
-## 会话生命周期
-
-运行时覆盖：未限定的“创建草稿”、澄清、事实问答和普通聊天均进入 NativeToolLoop。完整可逆本地工具目录默认可用，意图由模型选择工具；Rust 不再用请求文本关键词收缩执行集，仍以全局白名单、作用域、参数与领域校验为边界。模型不能通过文本自证产物已经完成。
-
-schema v11 的 `task_state_snapshots` 仍保存每个任务的目标、当前子目标、真实 storyboard/时间线/preview 阶段与标识、完成项和任务状态；每次任务收到已路由请求时更新当前子目标，事实字段在解析前从领域表重建。Task Resolver 只把当前激活任务的快照交给路由模型，不读取同一项目内其他任务的 title、brief 或 `active_subgoal`。v11 会为缺少 `active_subgoal` 的早期任务快照表补齐该列。`conversations.summary` 仍只是侧栏预览，不能作为任务记忆。`pending_task_routes` 在项目级保存未归属请求、候选任务 ID、问题及 `pending/resolved/superseded` 生命周期；`task_route_receipts` 保存绑定项目、目标 task、目标 conversation、完整请求、唯一 user message 与可选 pending 记录的一次性授权。存在激活任务时，模型自动归属低于各动作门槛（continue 0.70、switch 0.85、create_new 0.95）默认回落为 `continue_current`，不再因低置信度打断用户；只有模型显式返回且通过校验的 `clarify` 才会提问。任务内 `pending_clarifications` 继续按项目、剪辑任务和会话保存 `router`/`agent_run` 澄清。这些表都不保存模型响应原文、媒体证据、凭据或路径。
-
-桌面应用直接进入 Agent 会话。自然语言消息先调用 `resolve_conversation_task` 绑定项目/任务/会话；新任务与 conversation 由路由事务原子创建，已有任务则由后端校验项目作用域。前端激活返回的目标、保存用户消息后，将同一请求和 `routeReceipt` 交给 `submit_conversation_turn`；保存 user message 会在同一事务中唯一占用凭证，receipt 消费成功后直接进入 NativeToolLoop。若多个凭证引用同一 pending，胜出者消费时会原子删除其余未消费 sibling，且消息占用也要求 pending 仍有效。若保存或提交前中断，项目级 pending 请求仍保持可恢复；若提交失败发生在消费之后，用户消息已经存在于目标 conversation。
-
-`TaskRouteResult` 包含 `action`、可空 `taskId`/`conversationId`、`confidence`、可空 `question`/`suggestedTitle`、安全 `reasonCode`、可空 `deferredRequest` 与可空 `routeReceipt`。只有 `clarify` 不返回凭证；其余结果均返回已绑定确切 task 的一次性凭证。`deferredRequest` 只在用户解决项目级任务归属问题时返回，前端按固定格式把原始请求和归属补充组合后提交，该完整请求也受凭证约束。
-
-## 模型 Provider 决策
-
-模型请求统一经 `ModelAccess::resolve()` 选择活动 Provider：若已配置自定义 API 则优先生效，否则回退到实验性 OpenAI OAuth。自定义 API 走 OpenAI 兼容的 `{baseUrl}/chat/completions` 端点（凭 `Authorization: Bearer <apiKey>`），在 Rust 侧把 Responses 风格的 `input`/`text.format` 载荷转换为 chat/completions 的 `messages`/`response_format`，并替换为配置的 Model 名；OAuth 仍走实验性 Responses 端点。转换会保留原生 `tools`、`tool_choice`、`parallel_tool_calls` 和 `stream`，并将 Responses 的 `function_call`/`function_call_output` 映射为 Chat 的 assistant `tool_calls` 与带 `tool_call_id` 的 tool 消息。前端透过 `CustomApiStatus` 展示连接状态与配置的 Model，API Key 从不回传前端。`agent.rs`、`storyboard.rs`、`assets.rs` 的模型请求均改用该决策层。
-
-模型传输复用一个进程级 `ureq::Agent`，同时保留每次请求自身的超时和凭据边界。NativeToolLoop 的每个逻辑模型步骤对 HTTP 408/425/429/500/502/503/504、超时、网络传输中断和空响应最多尝试三次；重试共享该步骤剩余的 120 秒上限与 300 秒总预算，每次 HTTP 只使用剩余预算除以剩余次数的份额，只重发 Provider payload，不重新执行已经完成的工具。每次尝试前和最多 700ms 的退避等待期间都重新检查任务取消，取消后不再发下一请求。永久 4xx 与未知错误不重试。自定义 API 与网关的 429 先在发送层按 `Retry-After`（缺省 2/4/8/16 秒，单次最多 30 秒）重试最多 4 次，不超过本次调用截止时间；仍限流时 storyboard 直接失败，不把某一拍留空。每个模型请求最多 4 张图，超出时发送前即返回 `provider_request_too_many_images`（终态失败）。Agent 诊断只保存稳定安全码和尝试次数，不保存 URL、模型名、响应正文或底层传输详情。交互 Agent 模型请求优先于尚未开始的粗视觉请求；粗视觉连续三次失败后熔断 60 秒，期间对应任务保持 `queued`，冷却后只允许一个半开探测。自定义 API 的批量视觉请求可使用可选 `coarseVisualModel`；storyboard 与 Agent 仍使用主 Model。OAuth 没有经验证的替代模型，继续使用既有请求模型。
-
-生成 storyboard 前，brief 仅在本地与素材显示名、文件夹组织 hint 和 OCR 做词汇重合排序；只为 queued 视觉批次持久化纯数字 priority，相同分数按创建时间和任务 ID 稳定排序。生成不等待第一次视觉分析；召回使用已打上第一次卡的段，段上没卡但素材级有旧整片卡时按整条进池，未打卡段不借用整片标签。文件名、文件夹和路径不进入 Provider；OCR 不进入粗视觉 Provider payload，但仍作为明确标注的本地提取文字证据提供给 storyboard，不能冒充画面语义。
-
-## 实验性 OAuth
-
-OAuth 命令兼容当前 OpenCode 实现，但不是官方 OpenAI 第三方集成。浏览器回调会在交换令牌前校验 PKCE state。访问和刷新凭据仅保存于 Windows Credential Manager，绝不返回前端、不写入 SQLite、项目文件、日志或工具结果。
-
-实验性 Responses 请求设置 `store: false` 与 `stream: true`。Provider 以协议无关的 `ModelTurn`/`ModelOutputItem`/`FunctionCall` 保留完整 `response.output`，包括 message、function call 及未知 output item；Chat Completions 的普通响应和 SSE 增量也转换为同一结构。旧的 `model_response_json_text` 接口仍供 storyboard/视觉等非 Native 请求使用，不参与对话 loop。回调成功、失败或超时后，后端发出 `experimental-openai-oauth-status` 事件；前端同时轮询状态作为恢复路径。
-
-NativeToolLoop 是当前统一对话入口。它按 SQLite 时间顺序读取真实 user/assistant 消息，以原生 role/content item 发送，不拼接“用户/助手/工具”标签 Prompt；设置 `store: false`、`parallel_tool_calls: false`，并将完整 Responses output（或 Chat 适配后的 assistant/function call 项）与 `function_call_output` 追加到下一轮。上下文预算只丢弃旧消息，最新 function_call 与对应 function_call_output 始终作为完整配对保留，即使结果很大也不拆散；最终自然语言回复以 assistant 消息保存。有 function_call 就执行并继续；没有 function_call 且有自然语言就结束本轮，不再声明固定 LoopGoal 或调用 finish/done/no_action。普通 message、澄清、项目事实问答和工具执行均经过同一 loop；完整工具目录默认向模型开放，模型以 `tool_choice:auto` 按意图调用；Rust 不以关键词判定只读/禁止项，而以全局白名单、作用域与领域校验守边界。项目事实通过权威状态快照与只读观察工具取得，搜索参数和主链参数由严格 schema 与 Rust 边界共同限制。工具失败只回传安全结构化错误，模型仍可解释或调整。循环受步数、总预算、单步超时和任务取消检查约束。
-
-可重试写失败和成功产物的 `qualityWarnings` 会分别触发最多两次恢复/精炼续步；无关观察或前置调用不能清除仍未闭合的失败/警告。默认工具可见性不等于完成清单；请求中明确要求的最低产物集合只用于 RunReceipt 终态验真，不参与工具暴露或路径选择。`render_preview` 的成功收据绑定返回的 `timelineVersionId`；任何后续时间线写工具若返回不同版本或缺少可验证版本，旧 preview 收据即失效，必须重新渲染才能满足 preview 完成门。
-
-内部 `analyze_asset` 只执行本地技术分析，同时运行的 worker 数为本机逻辑核数的 1/4（2–8），各 FFmpeg 解码线程合计不超过核数：完成后素材成为技术 `ready`。场景检测用 FFmpeg `fps=3,scale=160` + `select=gt(scene,0.30)` 找硬切，CLIP 对切点前后帧验真（相似、抽帧失败或 CLIP 不可用则不切）；无已验证硬切则整条一段，禁止按秒均分。硬切确定后对每段抽灰度序列算帧差能量，只收缩静止开头和已收敛结尾；对比不够则不切。`analysisVersion=4`；version&lt;3 由 `reanalyze_asset_segments` 整段重切，version=3 只补运动曲线、不改视觉、不自动排队视觉。FFprobe、缩略图、场景扫描、回退抽帧和 OCR 分别设有 20、30、60、20、20 秒硬超时；FFprobe 超时仍将该素材标记失败，缩略图或单帧抽帧超时则跳过该步并继续，OCR 正常完成但无文字结果仍不失败。场景检测：一律先扫关键帧。全帧补扫仅用于本机、≤60 秒、且关键帧切点 ≤1 的片子；共享盘、长片或关键帧已切开则不再整段解码，超时保留已有切点。Windows 超时以无窗口 `taskkill /T /F` 请求终止子进程树，并在短时退出窗口内回收直接子进程；若终止请求或确认失败，调用会安全返回，不保证进程树已经退出。启动会将中断的本地 `running` 任务重新排队。后台 `analyze_asset_visual_batch` 按硬切段整段识别：每 15 秒一张图、每张 5 帧（960 宽；最多 4 张 20 帧，超过 60 秒的段均匀铺开），每张为中间帧大图 960×540 在左、其余 4 帧小图在右，每帧标编号（整段连续）与源时间，一段的全部图放在同一个请求，任务最多 6 段，最后不足 6 段也立即送审；队列最多 16 个任务同时执行、同一素材的任务不并行；每段一个请求、各段并发，只采用本段结果；结果另存 `VisualEvidence.detail`（`changes`、`highlights`、`subjectSpans`、`subjectPositions`、`verticalCropFit`、`cleanStart`/`cleanEnd`/`edgeNote`、`subjectDirection`/`cameraDirection`、`focus`、`onScreenText`、`textLanguages`、`brandLogos`、`crowd`、`exhibition`、`peopleCount`、`facesVisible`、`safetyGear`、`setting`、`timeOfDay`、`colorTone`、`brightness`、`concepts`、`mood`、`bestRange`，时间为源毫秒，边界为画面宽度比例）；标签含素材 ID、片段 ID 与源时间；无硬切段时退回整条代表帧。瞬时失败自动补跑，每条最多 3 次，用户跳过与不适用不补。模型应回 `narrativeRole`（自拟短语，非枚举）和一句可见 `caption`，以及现有短标签；未知字段忽略，空字段允许。按 `assetId+segmentId` 对上后收下该卡（源时间以本地帧为准），对不上或单卡无法解析则丢弃该卡，不因一张废整批。回写时写入片段向量。选片与片段检索不等待 `analyze_asset_segments_batch`；第二次视觉分析是选中镜头的 Phase 4 多帧精修。该任务的持久化 payload 不含路径或媒体内容，结果只记录数量、安全错误码和从任务创建到终态的安全 `durationMs`。每批视觉分析请求带 30 秒超时；Provider 不可用、帧不可读或整批 JSON 无法解析不影响技术 `ready`。连续 Provider 失败会熔断并令尚未开始的批次保持 `queued`。Windows 连接 `10060` 归为 `provider_timeout`。启动时有效的中断批次会恢复为 `queued`，仍可补跑的失败项重新入队，无效 payload 则封闭为失败。storyboard 候选只使用技术 `ready` 的可访问视频；已有视觉证据、OCR、场景段和关键帧网格参与排序或模型复选。前端模型弹窗在已连接状态下提供退出登录按钮，调用 `clear_experimental_openai_oauth` 删除凭据并重置状态。
-
-首次场景检测滤镜为 `fps=3,scale=160` + `select=gt(scene,0.30)`，一律先解关键帧；仅本机短片且关键帧几乎没切到时才全帧补扫。源时间以 `pts_time` 为准。
-
-新分析的视频会从统一为 320px 宽的关键帧计算拉普拉斯方差，取归一化中位数写入 `visualQualityScore`；已有技术就绪视频在首次 storyboard 前用既有关键帧补齐。视觉 evidence 写入后，本地内置模型生成证据文本向量；旧素材同样在首次 storyboard 前批量补齐，失败只关闭语义路径，不影响词面排序。
-
-## 素材证据与 storyboard
-
-Agent 的内部工具集中包含 `request_asset_analysis`：模型先通过 Agent 专用的无调度 `list_assets` 快照观察项目素材，只能对该项目中已经导入且状态为 `queued` 或 `failed` 的素材请求本地分析。Agent `list_assets` 不排空待分析队列；Agent `generate_storyboard` 只消费已就绪分析证据，不会提权、启动或等待视觉分析。桌面素材浏览器的公开 `list_assets` 命令保留既有后台队列推进语义，与 Agent 观察入口分离。分析工具不向模型暴露路径，也不授予它文件、SQLite、FFmpeg、FFprobe 或 Tesseract 的直接访问权。storyboard 响应含 `targetDurationMs` 与 `scriptMode`（`full_script` 或 `key_message`）；**`scriptMode` 由 Rust 在 Phase 1 前按 brief 朗读估算锁定**，模型不得自选。**100** 个镜头/信息点和 120 秒是本地处理安全边界，不是成片创作规格。短 brief（无大段可朗读文案）默认 `key_message`，时长由模型按用户要求或内容决定；没说时长时建议 15–45 秒、每个镜头大约 2–3 秒，不再硬帽 15s。
-
-**Storyboard 五阶段生成流程**：Phase 1 **先由 Rust 按 brief 朗读估算锁定 `scriptMode`**（≥约 20s 可念稿 → `full_script`，否则 `key_message`）。配音开启时先按已确认 brief 合成旁白，再用真实口播时长拆拍；合成失败不生成。已知时长时写入预计拍数；平均一拍明显长于约 4 秒则软反馈再拆一次，最后一次仍粗则收下。用户给了成片秒数且与口播相差超过约 30% 时先问用户。再注入本地库视觉/OCR 库存摘要（高频 tags/scenes/OCR，约 3500 字符帽），让模型只在该模式下拆 beats，且 `requiredVisual`/`visualKeywords` 须贴近库存、禁止编造库中没有的主体（时长由模型按用户要求或内容决定，120 秒为安全上限；`key_message` 默认不写 `onScreenText`、`narration` 留空）。Phase 2 **仅本地**：硬过滤就绪视频后按段排序，每个 beat 取 9 段（同片最多 2，相似最多 2）；有 1 条就能覆盖，0 条才 uncovered；`key_message` 按目标时长做节奏计划。Phase 3 **各拍同时发请求**（返回后按拍序分配，撞上前面拍已选片段的拍剔除已用候选后再同时补发）：每一拍单独看候选 2×2 网格（池内每条一张，弱匹配扩池到 12 条时也全附），默认选出 **1 个 assetId**（有第二条不相似且对得上才加镜；序号必须 0–4）。某一拍失败只重试该拍；可诚实 uncovered。整条选不出可播镜头则 `storyboard_needs_user_decision`。不过关本步重试；选片后对照 `usableMs` 与 `narrationMs`，短了则放慢已选镜头，不换片、不补第 2 镜。Phase 4 **是选中镜头的第二次视觉分析**：有 `segmentId` 则跳过 Pass A，窗口锁在该段运动可用区间，不够长也不拼下一段硬切，也不再要求模型把窗拉过可用上限；网格多帧判断动作是否做完并改 `sourceStart/End`。无 `segmentId` 的整片候选也锁在 P3 源窗，不再 Pass A 按关键帧另切窗。`full_script` 旁白托底 / `key_message` 节奏 fit，**禁止换片**。Phase 5 Rust `normalize` 机械自修后 `validate_storyboard`（保留 P1/audio-first 的 `targetDurationMs`/`scriptMode`；`full_script` 仅 lead 回填旁白且只拦画面过长，画面不足走 `qualityWarnings`，短窗不再回 Phase 4 拉窗；`key_message` lead 写 beat 标记且对称校验总时长）；精修类失败回 Phase 4，镜头数/结构硬边界不再空转 Phase 4。传输/解析失败与语义失败分预算；语义失败携带 `previousShots`。耗尽时错误串含 `partialCandidateSummary`（lastPhase/shotCount/uncovered/lastIssue），或 `storyboard_needs_user_decision`（短窗问用户）。成功后收尾检查 uncovered / 无镜头的覆盖 beat / 画面相对旁白缺口，以 `qualityWarnings` 触发精炼续步（`search_asset_segments` + `insert_clips`，禁止为补 uncovered 重跑或改短 brief）。debug 且 `STORYBOARD_PROVIDER_TRACE=1` 时写入 `src-tauri/target/storyboard-provider-trace.jsonl`。
-
-`storyboard/scoring.rs` 的语义分为 0–50：有效的 512 维 `bge-small-zh-v1.5` 向量与词面命中各最多 25 分（缺一侧时另一侧放大到 50）；另加 CLIP 图文 0–25（beat 的 `visualKeywords`/`requiredVisual` ↔ 片段代表帧，模型为 `Qdrant/clip-ViT-B-32-*`，缺失时为 0；有 CLIP 查询但候选没有片段图向量时，词面/语义各最多 5 分）。词面查询优先使用 Phase 1 产出的英文 `visualKeywords`，并与素材英文标签对齐；中文双字仅在证据含 CJK 时参与。另加画面质量 0–10、时长匹配 0–10、当前 Storyboard 每次复用惩罚 -15、连续复用额外惩罚 -30 和新鲜度 0–5。无视觉证据且无有效 OCR 的素材排在有证据候选之后（CLIP 查询可用时改按总分排）。OCR 乱码在向量文本、词面 blob 与相似去重中过滤。质量分来自 320px 关键帧拉普拉斯方差的归一化中位数；旧素材在首次 storyboard 前从既有关键帧补齐。新鲜度只统计每个剪辑任务最新时间线，并在任务内按素材去重，使用越多得分越低。Phase 2 对排序结果取最多 9 段（同片最多 2，相似最多 2），候选池携带分数分解（含 `clip`）；Phase 3 池卡片含 `requiredVisual`/`visualKeywords`/`narration`/`onScreenText` 与 `retrievalScore`，池内每条都附网格（弱匹配扩池到 12 条时也全附）；从该池默认选 1 个互异 `assetId`（诚实加第 2 镜时序号仍须 0–4），且最终播放序相邻镜不得同片（含跨 beat）；Phase 4 只精修源范围与旁白。40% 次数上限按已经实际选中的镜头数动态计算。文本向量连同模型名、维度、版本和证据文本 SHA-256 保存在本地 `metadata_json`；CLIP 图像向量写入 `asset_segment_embeddings`（model=`Qdrant/clip-ViT-B-32-vision`），不序列化进 Provider payload。CLIP ONNX 权重由安装后应用内下载到 `app_data/runtime-models/`（或开发机用 `scripts/fetch-clip-models.ps1` 预拉）；因体积不进 git 与安装包。
-
-`get_asset_evidence` 只返回派生证据：关键帧缓存路径、可选 `timeMs` 的 OCR 文本和视觉建议。它绝不返回 `source_reference` 或 `folder_reference`；UI 将派生图片路径转换为受限的 Tauri asset URL。
-
-生成 storyboard 必须提交非空的用户 brief。候选必须是技术分析 `ready` 的可访问视频；模型输入仅有紧凑的持久化证据：素材 ID、已验证时长、场景片段、视觉标签和可用关键帧网格。生成镜头必须含素材 ID 和源范围，范围必须在已验证视频时长内。校验失败不会保存版本。
-
-## Agent 内部技能契约
-
-`src/lib/agent-tools.ts` 是供 IDE 导航的 TypeScript 工具名称镜像，真正执行授权属于 Rust `agentloop/policy.rs`；它不声明前端可直接调用这些内部技能，也不参与运行时授权。原生 Function Tool 定义集中在 `src-tauri/src/agentloop/tools.rs`；观察工具、主链工具以及文本、音乐和 Jianying 工具都使用 strict 闭合 JSON Schema（`additionalProperties: false`，所有属性列入 `required`）。`parse_native_arguments` 入口只做协议形状校验（顶层对象、字段存在性/数量、类型 `string/int/bool/null`、数组非空、`coerce_blank_strings_to_null` 兼容）；`brief` 长度、`valid_hex_color`、`text style/layout`、`bounded_number`、`kind` 枚举、`offset/limit` 范围等业务语义校验已从入口移除，改由 `skills::apply_skill → timeline.rs/storyboard.rs` 真正执行时按领域规则校验并以 `invalid_arguments` 等码返回。模型不提供项目/会话/路径作用域参数，Rust 从当前 LoopState 补齐并复核。工具目录不包含 `ask_user`、`finish`、`done` 或 `no_action` 控制协议；澄清和终态由 NativeToolLoop 的自然语言消息、确认门与持久化状态表达。
-
-通用 Agent 运行状态由 `AgentTask`、`AgentRunStep`、`OperationLog` 和 `AgentEditResult` 分别表达，不存在一个供前端直接执行任意内部技能的通用 `ToolInvocation` 接口。通过作用域校验后，`execute_agent_edit` 会先创建持久化调用，再记录模型选择的允许工具、经脱敏的成功结果或安全失败结果；终态 `completed` 与 `failed` 可包含 `result`，`failed` 的结果仅含工具名、状态和失败代码，`error` 不得含凭据或不必要的本机路径。命令先同步插入 `queued` 调用并立即返回任务 ID，完整流水线在后台线程执行，终态经 `agent-edit-completed` 事件（携带 `AgentEditResult`）回传前端。工具或循环失败时不把技术校验错误直接交给 UI：技能循环内失败只回读安全失败代码供模型继续决策，不会自动重放失败工具；瞬时 Provider 故障只在当前模型步骤内重试，Provider 持续不可用、响应不可解析或循环最终无法结束时，后端保存相同结构的安全失败结果并返回固定诚实降级回复。Agent 单步与 storyboard 模型请求保留 120 秒上限，Agent 循环以 300 秒总预算收紧每步实际超时；不再存在独立意图分类请求。启动时仍为 `queued` 或 `running` 的通用调用会变为 `needs_review`，用户可重新发起请求，但系统不会自动重放未知副作用。
-
-`submit_conversation_turn` 的公开判别式返回值为：
-
-```ts
-type ConversationTurnResult =
-  | { kind: 'immediate'; status: 'response' | 'clarification'; message: string }
-  | { kind: 'run'; agentTaskId: string }
-```
-
-`run` 的任务字段固定为 camelCase `agentTaskId`，不得返回内部 Rust/SQLite 命名 `agent_task_id`。前端必须拒绝空任务 ID，不得把 `undefined` 写入 pending/observed task 状态。
-
-前端会缓存最多 20 个先于命令返回到达的 `agent-edit-completed` 事件，并在取得任务 ID 后立即对账；composer 仍归当前请求所有或持久化 conversation 仍为 `working` 时，还会以 1.2 秒周期读取持久化任务终态。一次列表快照尚未出现新任务、或任务由 `queued/running` 变为 terminal，都不得清空 pending 或停止轮询。没有内存 pending 且 conversation 仍为 `working` 时，最新同作用域 terminal task 也必须触发一次恢复对账，不要求前端先观察到其 active 状态。后端完成消息是权威来源，事件只是通知；任一通道先确认终态后，前端按项目、task、conversation 作用域重载消息和产物。仅当任务的 `projectId`/`editingTaskId` 仍等于当前活动作用域时才应用可见产物。模型超时、响应解析失败或循环耗尽且目标仍未满足时，无中间产物为 `failed`，已有真实中间产物为 `partially_completed`，两者结果代码均为 `agent_goal_not_reached`；中间版本保留并接受审计，但回复不得声称最终目标完成。
-
-Agent 请求统一经 `agentloop.rs` 的封闭、有界 NativeToolLoop 处理；它加载真实 SQLite 会话消息，并在静态系统提示之后、历史之前注入本轮从当前 project/editing task 作用域重建的权威状态快照，再直接消费 Provider 的 message/function_call/function_call_output。不再调用前置对话分类模型、要求 JSON decision、预选首个工具或锁定单一 LoopGoal。快照成功即在 RunReceipt 中记为来源 `state_snapshot` 的成功观察，因此高层项目事实可直接回答；观察工具仍用于完整 storyboard/timeline、素材搜索等细节。完整工具目录默认开放，意图由模型选择；Rust 以白名单、作用域与领域校验守边界，不以请求关键词收缩执行集。真实产物和确认状态由 Rust 与持久化事实裁决。自然语言可以结束模型循环，但只有具名成功工具和持久化产物能形成 completed/partially_completed。
-
-普通自然语言请求不再做请求级关键词只读/禁止判定。完整目录始终可见且默认可执行；是否调用写工具由模型按用户意图决定。项目事实以成功状态快照或观察工具收据为准。
-
-NativeToolLoop 中，`render_preview` 作为可逆的低清本地产物默认开放。它的 strict schema 仅接受 nullable `timelineVersionId`；project、conversation、本机路径和 FFmpeg 参数不属于模型契约。Rust 在执行前重新校验参数，并从当前项目作用域选择时间线。成功的 `function_call_output` 只返回产物类型、时间线版本和质量检查计数；失败只返回安全错误码及恢复建议。无论成功或失败，loop 都再次调用模型，最终消息采用模型对真实结果的自然语言总结，同时任务终态仍持有后端验证的 preview 产物引用。
-
-每轮开始，`agentloop/snapshot.rs` 从 SQLite 重建固定顺序、最多 1200 字符的状态块：任务 brief/最近 Agent 终态时间（终态为 `needs_clarification` 时附 `暂停于=工具名(错误码)`，只放行小写字母、数字、下划线），素材 kind、技术/视觉分析与源健康计数，最新 storyboard 的版本/镜头/uncovered/待确认状态，其最新 timeline 的版本和 clips/text/music/voiceover 计数，磁盘真实 preview，Jianying 创建/注册状态，以及模型、ElevenLabs、Jamendo 是否配置。身份只用会话内版本号，不返回 UUID；路径、文件名、用户备注、OCR/视觉证据正文、会话原文、Base URL、模型名和凭据值禁止进入快照。brief 只允许不会伪装字段分隔符的保守字符集；含本地引用、ASCII 字母、点号、分隔符或内部标识时整体隐藏，超长安全文本才截断。非观察写工具返回 `ok`/`queued`/`needs_confirmation` 后，下一次 Provider 请求前原位刷新唯一快照。初始构建或刷新失败均封闭终止；完整 payload 超过 40K token 时自主压缩到 30K 内，60K 硬上限不得移除快照、当前用户消息或最近工具调用/结果对。完整 storyboard/时间线和素材候选细节仍通过观察工具读取。
-
-| 工具 | 当前契约 | 实现状态 |
-| --- | --- | --- |
-| `get_edit_status` | 无 | 已实现：读取当前 task 的最新真实 storyboard、timeline 和磁盘 preview，不用最近 Agent task 替代产物事实。 |
-| `request_asset_analysis` | Native `{ assetIds: string[] }` | 已实现：仅重新排队当前项目内已导入、源文件仍可用且尚未 ready/active 的素材分析。 |
-| `retry_failed_asset_analysis` | Native `{ stage: "technical"\|"visual"\|"both"\|null, assetIds: string[]\|null, limit: number\|null }` | 已实现：重试当前项目内失败的技术和/或视觉分析。`assetIds=null` 或空数组时自动收集最多 `limit`（默认 1000）条失败素材；显式 `assetIds` 只重试其中仍处失败状态的项。视觉批次入队时自动按 worker 批次上限拆分。返回 `technicalQueued`、`visualQueued`、`skippedCount` 与最多 10 条 `sample`。 |
-| `get_asset_health_summary` | 无 | 已实现的只读 Agent 观察工具：返回当前项目持久化的健康计数、活动扫描状态、最近检查时间、脱敏原因码计数以及已解释/未解释失败数量；不访问源文件，不返回路径或原始系统错误。只有全部失败均有原因码时 `reasonEvidenceAvailable=true`。 |
-| `list_assets` | 无 | 已实现：只读取当前项目持久化的安全素材快照，不推进分析队列。返回全库 `total`、`countsByKind`、`countsByAnalysisStatus` 和最多 20 条样本；筛选走 `search_assets` / `search_asset_segments`，`generate_storyboard` 对全部就绪素材排序，不限于该样本。 |
-| `get_library_visual_overview` | 无 | 已实现的只读 Agent 观察工具：聚合当前项目全部就绪素材的持久化视觉证据，返回频繁出现的主体、动作、场景、示例字幕及叙事角色；适合在写文案或规划分镜前了解实际画面内容。不访问源文件，不返回路径。 |
-| `get_asset_visual_detail` | `{ assetId }` | 已实现的只读 Agent 观察工具：返回当前项目单条已就绪素材的完整片段级视觉证据，包括场景、主体、动作、字幕、叙事角色、镜头类型、摄像机运动及可用时间范围；`assetId` 须为当前项目素材。不返回路径或原始错误。 |
-| `search_assets` | `{ query?, kind?, minDurationMs?, maxDurationMs?, minRating?, favoriteOnly?, tag?, collectionId?, offset?, limit? }` | 已实现的只读 Agent 观察工具：按当前项目检索素材，单页最多 20 条并返回 `nextOffset`；空字符串的 `query`/`kind`/`tag`/`collectionId` 视为 null。自动排除禁止使用素材，只返回安全摘要和固定命中原因码，不返回路径、备注/OCR 正文、媒体内容或完整分析证据。 |
-| `search_asset_segments` | `{ query, assetId?, offset?, limit? }` | 已实现的片段级只读观察工具：在当前项目已分析的视频/图片中返回明确 `segmentId`、`sourceStartMs/sourceEndMs`、`shotType`、安全视觉标签、固定命中原因和游标；空字符串 `assetId` 视为 null。用第一次段卡检索，不触发模型加深；排除禁止使用及已知缺失、变化或不可读源，不返回路径或 OCR 正文。 |
-| `get_storyboard` / `get_timeline` | 无 | 已实现：读取当前打开的作用域化产物详情，不是永远最新一版。 |
-| `get_text_capabilities` | 无 | 已实现：返回可用于 local preview 的字体/动态，以及已验证可交付 Jianying 的最小文本矩阵和文本预设。每个预设包含机器可读的 `selectionHint`，使模型按字幕、递进/揭示、反差/结果、结论/警示或 CTA 的语义选择配方。 |
-| `list_voices` | 无 | 已实现：列出已配置 ElevenLabs 账号的音色，不合成、不扣 TTS 费用。密钥未配置或被拒绝时返回 `voice_provider_*` 安全码，不让模型靠搜素材空转。 |
-| `generate_storyboard` | Native `{ brief: string|null, voiceId?, mediaOptions?, requestedDurationMs? }` | 已实现：`null` brief 使用当前任务 brief，只消费已就绪素材证据。配音开启时先按 brief 合成旁白再拆拍；合成失败返回 `storyboard_voiceover_failed`。用户给了成片秒数则传入 `requestedDurationMs`，与口播相差超过约 30% 时返回 `storyboard_needs_user_decision`，facts 附当前稿长、单位（中文按字、否则按词）和按本次实测语速换算的 `targetScriptLength`。任一 `storyboard_needs_user_decision` 暂停都把本次 brief 存为任务 brief，下一轮 `brief=null` 即按原稿续跑并复用配音缓存。内部 Phase2 本地 9 段短名单 → Phase3 每拍看最多 9 图默认一镜（替补限前 5）→ 源窗短于旁白则放慢已选镜头 → Phase4 精修时间段 → Phase5 校验。素材不够时 `storyboard_needs_user_decision`。成功后同一调用内自动执行时间线；**`full_script` 有旁白且配音 Provider 已配置时自动合成旁白**（audio-first 已写入则跳过；失败只提示不挡预览）。**`key_message` 不自动配音**，默认不写屏幕标记。时间线有可播镜头时自动渲染预览并按项目输出端口交付（剪映新建草稿，或写出 FCPXML/OTIO；不覆盖旧草稿）；预览或交付失败不回滚故事版。若存在 uncovered / 无镜头的覆盖 beat 等缺口，结果仍为 `status=ok` 但带 `qualityWarnings`，**不推迟 preview**，由精炼续步补画面。已有配音后禁止改旁白。其他选片耗尽仍带 `partialCandidateSummary`。不再返回 `needs_confirmation`。 |
-| `create_timeline_draft` | Native `{}`；作用域由当前 LoopState 补齐 | 已实现，支持经验证的图片/视频 storyboard 镜头。 |
-| `render_preview` | `renderPreview(timelineVersionId)` | 已实现，本地 H.264 preview，画布按分镜画幅（默认 540 x 960）。 |
-| `create_jianying_draft` | `{ timelineVersionId }` | 已实现，创建并注册唯一的 Jianying Pro 8.0 仅视频草稿。 |
-| `replace_clips` | Native `{ timelineVersionId: string|null, shots: [{ shotIndex, assetId, sourceStartMs, sourceEndMs }] }` | 已实现，批量替换既有镜头并保持对应时间线时长；素材证据与源范围仍由 Rust 复核。 |
-| `insert_clips` | Native `{ timelineVersionId: string|null, clips: [{ assetId, sourceStartMs, sourceEndMs, durationMs: number|null, insertAfterShotIndex: number|null }] }` | 已实现，在既有时间线插入已验证素材以补足画面时长；`insertAfterShotIndex` 为 null 插到开头。禁止用冻结帧垫时长；配音长于画面时应先搜段再插入，然后重试 `synthesize_voiceover`。 |
-| `change_clip_duration` | Native `{ timelineVersionId: string|null, adjustments: [{ shotIndex, newDurationMs: number|null, newSourceStartMs: number|null }] }` | 已实现，在已验证源范围内重定时长与起止点。 |
-| `reselect_shots` | Native `{ timelineVersionId: string|null, shotIndexes: number[]|null, beatIds: string[]|null, instruction: string|null, keepCurrent: boolean|null }` | 已实现：`shotIndexes` 与 `beatIds` 二选一，最多 5 拍。只为这些拍重跑 P2 召回（默认排除当前素材、相邻镜头素材、与冻结镜头相似或重叠的片段、已达复用上限的素材）→ P3 看图选镜 → P4 锁窗精修 → P5 全片校验；新镜头必须正好填满原拍槽位，冻结镜头的素材/源范围/时长/构图须逐字不变，否则不写入。同一拍一轮只能重选一次。池耗尽返回 `storyboard_local_reselect_failed`，不退回整条重跑。结果含每拍 `changes[{ beatId, before, after, matchLevel, remainingAlternates }]`。 |
-| `refine_shot_ranges` | Native `{ timelineVersionId: string|null, shotIndexes: number[], instruction: string|null }` | 已实现：最多 10 个镜头，只跑 P4→P5，素材与片段锁死，时间线时长锁回原槽位，只改入出点与构图。手动插入的 clip 不能精修。 |
-| `reorder_clips` | Native `{ timelineVersionId: string|null, order: number[] }` | 已实现，要求 `order` 为全部既有 `shotIndex` 的完整排列。 |
-| `replace_text_tracks` | `{ timelineVersionId?, textTracks: TextTrack[] }` | 已实现：Agent 可替换当前作用域时间线的完整文本轨；cue 只需提供 ID、时间和文案，省略的样式/布局使用安全默认值。成功结果包含非阻断 `qualityWarnings`（阅读密度、超过两行、动画占比和相邻重复文案）。cue 可带可选 `templateId`，后端将其解析成完整且可审计的样式/布局/动态配方，并覆盖冲突字段。交付级 `subtitle_safe`、`headline_rise`、`headline_pop` 与 `headline_drop` 都包含已验证的淡出；后者使用向下滑入。后端校验 cue 时间、颜色、样式/布局、受限动画及唯一 ID，并拒绝跨文本轨的 headline 重叠，且不会接受模型自证 Jianying 兼容性。 |
-| `synthesize_voiceover` | `{ text, voiceId, timelineVersionId }` 均可空；空 `text` 用 storyboard `narrationText` | 已实现：内置网关时只经网关（默认 ElevenLabs）；否则优先 Fish Audio，传输类失败可回退 ElevenLabs。用户没给文案时由 storyboard 撰写 `narrationText`（`key_message` 通常无旁白，需显式提供 `text` 或 beat `narration`）。禁止朗读 `onScreenText`。真实音频时长写入 `voiceoverTracks`（旁白必成）；alignment 字幕尽力，失败不回滚旁白。结果含 `voiceoverApplied`/`subtitleApplied`/`providerUsed`。相同指纹复用缓存。 |
-“分析素材”“重新分析视频/图片/媒体文件”等请求由 NativeToolLoop 在请求级权限允许时自主选择观察或分析工具；没有独立对话 Router 替模型决定首个工具。澄清通过模型自然语言和持久化确认状态表达，不使用 `ask_user`/`finish` 控制动作。
-
-### `add_title_cards`
-
-`{ timelineVersionId: string|null, cards: [{ templateId, shotIndex: number|null, headline: string|null, subline: string|null, cta: string|null }], removeTemplateIds: string[] }`，最多 4 张。
-
-- 模板只能是 `opening_title`、`end_card`、`corner_logo`、`info_card`。
-- 用户本轮原话没提到标题 / 卡片 / logo / 片尾时拒绝。
-- Rust 按模板 manifest 校验槽位，去掉换行、控制字符和 emoji，中文按字数、拉丁文按词数截断（标题 6 词 / 14 字，副标题与信息卡 10 词 / 20 字，CTA 6 词 / 12 字）。
-- `end_card` 缺文案时用品牌套件的名称、账号和 CTA；`corner_logo` 需要 logo；`info_card` 需要 `shotIndex`。
-- 时间由后端按锚点算：开场 / 片尾 / 全程 / 某镜头。
-- 结果含 `cards`（实际时间）、`copyAdjustments`、`editableInEditor: false`；放不下的卡列在 `notPlaced`。
-- 每次成功写新时间线版本。
-
-### `set_transitions`
-
-`{ timelineVersionId: string|null, kind: 'none'|'crossfade'|'dip_to_black', durationMs: number|null, afterShotIndices: number[]|null }`。
-
-- 用户本轮原话没提到转场 / 叠化 / 硬切时拒绝。
-- `afterShotIndices` 为 null 时改默认转场并清掉逐刀设置；给出列表时只改这些镜头之后的切点。
-- 时长夹到 200–1000 ms，解析时再夹到相邻较短镜头的 40%，过短则硬切。转场以切点为中心，不改总时长。
-- 结果含 `resolvedTransitions`。
-
-### `replace_music_tracks`
-
-`{ timelineVersionId?, musicTracks: MusicTrack[] }`：Agent 只可使用当前 local project 内分析完成的音频素材；cue 带源/时间线范围、可选循环、0–2 音量和淡入淡出。每次替换创建内部时间线新版本及审计；FFmpeg preview 在本地混入音乐且不改写源媒体。`create_jianying_draft` 会为音乐轨创建新的实验性 Jianying draft：仅使用当前项目 ready audio asset，并映射裁剪、循环、音量与淡入淡出；不得覆盖既有 draft，且生成后必须在 Jianying 中复核播放效果。
-
-### `search_music` / `download_music` / `use_online_music`
-
-`search_music({ query })` 只检索已配置的 Jamendo Provider，返回 API 明示 `audiodownload_allowed` 且为 CC0 或 CC-BY 的曲目；CC-BY 曲目的归属信息会随 music cue 持久化。`download_music({ trackId })` 仅下载该单曲到当前 local project 的受控目录，再进入现有媒体分析队列；下载完成不等于可编辑，音乐轨仍只接受分析为 `ready` 的音频 asset。`use_online_music({ trackId, timelineVersionId? })` 则在同一受限工具调用内下载单曲、等待本地分析完成并创建新的音乐时间线版本，默认按整条 timeline 循环和安全背景音量写入；它不会最终导出或覆盖既有 Jianying draft。Provider 凭据不进入工具结果、SQLite 或日志。
-
-## 当前 Agent runtime 覆盖说明
-
-本节历史表述中任何“未限定的创建草稿”归为 Jianying 的规则已废止：未限定草稿、preview/Jianying draft 缺少时间线、以及其他普通自然语言请求均进入 NativeToolLoop；模型必须显式选择已授权的工具，交付工具不会隐式创建时间线。
-
-以下规则覆盖本文中保留的历史“6 步”表述：当前 NativeToolLoop 最多 10 步，模型在最后一步可对真实产物或部分完成项作总结；成功产物仍由后端验证，`AgentEditResult.message` 中的完成事实不能只靠模型文本成立。可用技能还包括 `request_asset_analysis`，用于对当前项目内已导入、`queued` 或 `failed` 的素材排队本地分析；项目事实问答必须先完成成功只读观察。工具调用失败时模型可基于安全结构化结果解释或调整，但终态仍由后端事实决定。
-
-### 原生工具目录与 `read_logs`
-
-NativeToolLoop 每轮直接向 Provider 注册全部 25 个工具的完整 strict schema，模型无需先调用 `load_tools` 选择子集。系统提示同时携带工具名称与一句话用途；执行前 Rust 复核全局白名单与作用域，不以请求关键词收缩执行集。
-
-`read_logs({ startLine, endLine })` 始终列在目录中，可由模型按任务需要自主调用；用户明确禁止读取日志时 Rust 执行门拒绝。后端固定解析当前 `app_log_dir/<productName>.log`（单文件上限 10 MB，另保留最近 5 份轮转文件），模型不能提交路径，也不能读取轮转文件或 `native-provider-full-trace.jsonl`。两个参数都必须出现：均为 `null` 时读取末尾最多 100 行；均为正整数时表示 1-based 闭区间，跨度最多 100 行。结果返回 `totalLines`、实际 `startLine`/`endLine`、带行号的 `lines`、`truncated` 与 `nextStartLine`，总文本预算为 3500 字符，单行最多 500 字符。包含凭据形态、URL、UNC 或完整 Windows 路径的行会整体遮蔽；普通错误、阶段信息、素材 ID 和诊断码保持可读，使模型可以依据真实运行日志判断后续修改。该工具只用于排障，不能作为项目/产物完成事实来源。
-
-开发诊断阶段可通过 `list_agent_diagnostics({ projectId, editingTaskId, agentTaskId })` 读取本地诊断记录。它只包含同一作用域内的受控阶段标记、响应长度和安全错误码，用于定位模型请求、响应解析、工具或管线在哪一步失败；绝不保存模型原文、会话内容、媒体证据、凭据或本机路径。
-
-## 导入、时间线与 preview 规则
-
-文件夹导入会递归记录支持的视频、图片和音频引用，不复制或修改源文件。`StoredAsset` 暴露安全的导入根名 `folderName`、根内 `relativePath` 和素材直属目录 `directoryKey`，不暴露绝对源路径或盘符。新文件夹导入直接从保存的根引用生成这些字段；旧记录若根引用缺失或误存为无法展示的根，只能在至少两条源引用具有同一安全卷标识（普通/扩展盘符或 UNC server/share）时，以路径结构确定性重建安全相对树，不能按文件名或媒体内容猜测。回退先剥离卷标识再分组，卷标识本身不进入公开目录键；单组有共同父目录时以其最末级作为导入根，没有可公开共同父目录时使用固定“导入素材”根。存在多个可恢复卷组时，每组都强制进入独立的“导入素材 N”命名空间，避免同名相对树碰撞。某条无法安全解析的记录只让自身留在“未归类素材”，不会阻止其他安全记录恢复。同时返回 `analysisStatus` 与 `visualAnalysisStatus`，使 UI 能按真实技术/视觉状态筛选。分析会写入时长、尺寸、帧率、音频、缩略图、关键帧、场景、OCR 和视觉标签计数。资产响应将活动分析任务映射为 `queued` 或 `analyzing`；初始化会恢复未完成任务、取消同一素材的重复任务，并为状态为 `queued`/`analyzing` 但没有任何对应分析任务的孤立素材补建并排队分析。桌面 UI 轮询 `list_assets`，在右下角展示活动分析数量和最多三个显示名，任务完成后自动移除；该提示不增加新的 Tauri 命令。
-
-`change_clip_duration` 对视频保存实际使用的源窗口：`sourceEndMs = sourceStartMs + timelineDurationMs`；图片仍使用零源范围。新起点不得早于变更前已验证窗口的 `sourceStartMs`，新结束点不得晚于其 `sourceEndMs` 或素材技术时长，因此缩短或移动镜头不会越出已验证范围。
-
-`create_timeline_draft` 的成功结果是按 storyboard 镜头顺序映射的内部时间线版本。若同一 storyboard 已有旁白轨，新版本继承旁白与对齐字幕，避免重建时丢掉配音。版本化 `TimelineContent` 已预留 `textTracks`，旧版本读取为 `[]`；模型可经 `replace_text_tracks` 提交完整文本轨，后端校验 cue 时间、颜色、布局/样式范围、受限动画及唯一 ID，并按后端的已验证矩阵写入兼容性，绝不接受模型自证兼容。多轨音频、字幕、变换和自动化仍为 `TODO`。时间线变更目前只可经 `execute_agent_edit` 调用，决策严格限制在关闭工具集内：`replace_clips` 可一次替换多个既有 `shot_index`（每个保持对应时间线时长，视频源范围须已验证且严格等于该时长，图片源范围为零）；`insert_clips` 可在任意位置插入新镜头以延长画面（视频源范围须已验证，时长等于源窗口；图片须零源范围并提供正 `durationMs`）；`change_clip_duration` 在不超出已验证源范围的前提下重定时长与起止点；`reorder_clips` 的 `order` 必须是全部既有 `shot_index` 的完整排列。每次变更都会创建新 `TimelineVersion` 并记录前后变化；`ask_user` 仅返回澄清问题，不创建任何产物。`synthesize_voiceover` 在画面短于配音时返回可恢复错误 `voiceover_longer_than_picture`，禁止写入 `freeze_frame`；模型应 `insert_clips`/`change_clip_duration`/`replace_clips` 补足后再重试。`full_script` 故事板在配音 Provider 可用时走音频优先：Phase 1 **前**系统锁定 `full_script`，再合成旁白，用真实时长驱动 Phase 2/3，并尽量落一条带配音的时间线。**仅 `full_script`** 在时间线就绪后自动配音（朗读文本优先取 beats）；**`key_message` 不自动配音**，`create_timeline_draft` 为每个 beat 写一条跨该 beat 镜头的标记字幕 cue（`beat-<id>-marker`）。已有旁白轨则跳过；`voiceover_longer_than_picture` 按口播时钟判断（不含 audio-first 混音尾），写入可见警告，失败不挡预览。
-
-`render_preview` 会把已启用的 `textTracks` 编译为 ASS，再通过 FFmpeg/libass 叠加；已验证的最小 Jianying 文本矩阵包含 Unicode 文案。适配器对每条文本素材的嵌套 `content` JSON 使用 Unicode 转义，已在当前剪映 11.2 实机验收中文正确显示。适配器也可写入描边、背景、阴影及五个剪映内置字体资源，但这些字段在实机视觉验收前仍不是可交付能力。
-
-前端 `TimelineVersion` 投影包含完整 `textTracks`。它仅用于显示当前本地时间线的文本 cue 与兼容性状态，不暴露或读取其他 Jianying 草稿。
-
-`StoryboardVersion` 的 `shots` 响应新增 `beatId` 与 `matchLevel`（`direct` 或 `contextual`）；同时新增 `beats`（`id`、`purpose`、`requiredVisual`，可选 `narration` / `onScreenText`）和 `uncoveredBeatIds`。这是加性契约：旧 storyboard 读取时返回空的 `beats`/`uncoveredBeatIds`，旧镜头的 `matchLevel` 回退为 `contextual`，旧 beat 缺少 `onScreenText` 时读为空串。`uncoveredBeatIds` 不会映射成时间线 clip；调用方不得将其表述为已经被素材画面覆盖。
-
-preview 渲染使用归一化图片/视频片段和内部 concat 序列，生成本地 H.264 MP4（画布按分镜画幅，默认 540 x 960）。存在已启用 `textTracks` 时，后端会生成 ASS 并以 FFmpeg/libass 叠加文本；当前允许 `sans_bold`、`sans_clean`、`serif_editorial`、`mono_tech` 字体 key 及 `fade`、`slide_up`、`slide_down`、`pop`、`wipe` 基础动态。结果包含黑帧扫描、精确重复源范围、低分辨率视觉相似候选、节奏异常与文本安全区/可读时长检查。当前不混音、不做多帧语义重复检测，也不提供取消语义。
-
-## Jianying draft 创建规则
-
-内部时间线先投影为编辑器无关的 `HandoffPlan`（源窗、槽位、裁剪、文本、音乐、旁白）。输出端口按项目选择交付：剪映 / CapCut 链接器写成草稿；FCPXML/OTIO 写出导入文件。旁白轨当前不写入剪映或 CapCut 草稿（预览仍混音）。`create_jianying_draft` 仍可强制交付剪映。草稿库从该设备注册表识别，不写死盘符。
-
-`JianyingDraftResult` 会返回草稿目录和内容文件路径，仅供本地桌面流程使用，调用方不得将其记录到日志、浏览器存储或文档。
-
-- 仅创建新目标目录，绝不覆盖已有 Jianying 项目。
-- 成功前验证所有媒体引用。
-- 更新首页注册表期间 Jianying Pro 必须关闭。
-- Assembly Video Agent 跨进程串行化注册表写入；替换前若注册表变化则中止。
-- 源文件或配置的草稿库不可用时返回结构化失败。
-- 不自动执行最终视频导出。
-- 时间线含有 `textTracks` 时，当前版本会拒绝创建 Jianying draft，避免将尚未经 Jianying Pro 8.0 视觉验证的文本静默丢失；用户仍可创建含文本的 local preview。
-- 运行时覆盖说明：已在 Jianying Pro 8.0 中验收的最小文本矩阵为 `jianying_default` 字体下的静态文本、`fade` 入场或出场、`slide_up` 入场、`slide_down` 入场和 `pop` 入场。后端仅当 cue 不含描边、阴影、背景或循环动画，且仅使用上述出入场组合时，将它标记为 `verified` 并随新 Jianying draft 写入；其余 cue 保持 `local_preview_only`，创建草稿会明确拒绝。
-
-## 外部契约待定
-
-已提供非空文案并要求剪辑的调用，如果 storyboard 生成因非前置条件校验失败，模型会收到该事实并继续决定重试或自然语言解释，而不会退化成“请描述成片目标”。只有缺少已分析素材等真实前置条件时才能返回 `needs_clarification`。
-
-- 官方 OpenAI OAuth 的授权 URL、scope、令牌刷新和支持的模型能力。
-
-## 维护记录
-
-2026-08-19：为诊断用户报告的应用启动卡顿问题，在 `projects.rs::initialize_local_store`、`assets/analysis.rs::resume_incomplete_analysis`、`assets/visual.rs::recover_interrupted_visual_batches` 和 `backfill_queued_visual_batches` 添加性能诊断日志（26 处 [PERF] 标记点），测量数据库连接、清理中断任务、恢复分析批次、启动后台 worker 等关键步骤的实际耗时。所有日志使用 `log::info!` 级别，使用 `std::time::Instant` 计时。只添加诊断日志，不改变执行逻辑、公开命令签名或 SQLite schema。
-
-2026-08-19：优化 `projects.rs::recover_missing_agent_completion_messages` 查询性能。用窗口函数（`ROW_NUMBER() OVER PARTITION BY`）+ CTE 替代相关子查询，将查询复杂度从 O(N²) 降至 O(N log N)。原查询在有几百条任务记录时耗时 ~300ms（占启动总时间 80%），优化后预期降至 <20ms。查询语义完全等价，不影响公开命令或 SQLite schema。
-- 除 OpenAI 兼容 chat/completions 外，其他模型 Provider 适配器 schema。
-- 用户提供的 voice API 鉴权、请求体、音色选择、响应和异步任务处理。（首个 ElevenLabs 适配器已落地；其他 Voice Provider 契约仍待定。）
-
-## 开发期文档同步 Harness
-
-`npm run harness:check` 不属于桌面应用 API；它是仓库开发期的 Git 变更集检查。规则定义在 `.harness/doc-sync-policy.json`，检查高影响 Tauri 命令、持久化、OAuth/安全和运行时配置变动是否同步更新本文档及其他要求的 Markdown。触发规则时，变更集还必须包含一份 `docs/changes/` 记录。详细的执行与 Agent 审查 loop 见 `docs/harness.md`。
-
-
-维护记录（2026-08-15）：preview render_preview 命令不变；render_timeline_clip 内部实现修复 -t 参数截断，不影响公开 API。
-维护记录（2026-08-15）：公开 Tauri 命令不变；agentloop/taskrouter 内部路由验证新增 validate-then-correct 重试，不影响命令签名或 schema。
-维护记录（2026-08-16）：公开命令签名与 schema 不变；内部错误路径改为输出真实错误日志而非静默 fallback，调用方可观察到更准确的失败状态与错误码。
-维护记录（2026-08-18）：公开 Tauri 命令不变；storyboard 生成内部新增详细日志输出（入口参数、素材库存统计、素材样本、候选排序、多模态内容构建、模型请求/响应、重试进度、归一化修正、验证结果等），覆盖 `generate_storyboard_internal`、`request_storyboard` 和 `normalize_storyboard_candidate` 共 15 处日志点，用于诊断选镜与验证失败及数据库分类与文件系统不一致等异常，不影响公开 API 签名或返回值结构。
-维护记录（2026-08-18）：修复素材 relink 和分析回写时 kind 字段未同步更新的数据一致性问题。confirm_asset_relink 命令签名不变，内部行为变化为：relink 时从新 source_reference 重新计算 kind 字段并同步更新到数据库；update_analysis_status 在分析结果回写时也会同步验证并更新 kind。修复后，用户将图片素材替换为视频并 relink 时，数据库 kind 字段会正确从 "image" 更新为 "video"，避免数据库分类与文件系统不一致。公开命令参数、返回值和 SQLite schema 不变，纯内部实现修复。
-维护记录（2026-08-18）：公开 Tauri 命令不变；agentloop/runtime.rs 路由决策新增三处诊断日志（首次决策、纠偏修正、验证失败），记录模型原始 route/goal/isQuestion/tool 值和 backend 的 pinnedGoal，不改变命令签名或 ConversationRouteResponse schema。
-维护记录（2026-08-18）：公开 Tauri 命令不变；agentloop/runtime.rs::decide_conversation_route 的路由决策 prompt 明确列举 5 个合法 goal 枚举值（question, storyboard, timeline, preview, jianying）和对应推荐工具，修复模型漏填 goal 字段或返回不合法值导致的路由验证失败。Prompt 改进不改变 ConversationRouteResponse schema、命令签名或工具白名单。
-维护记录（2026-08-18）：公开 Tauri 命令不变；storyboard/phases.rs::phase3_fine_edit 的 Phase 3 prompt 补充 matchLevel 枚举约束（"matchLevel must be 'direct' or 'contextual'"），与 Phase 2 保持一致，防止独立模型调用返回其他字符串导致验证失败。Prompt 改进不改变 StoryboardContent schema、命令签名或工具白名单。
-维护记录（2026-08-20）：公开 Tauri 命令不变；agentloop/prompt.rs::load_native_message_history 内部函数新增 `editing_task_id` 参数，查询改为 JOIN `conversations` 表并同时验证 `conversation_id` 和 `editing_task_id`，确保严格会话隔离，防止跨会话数据泄漏。负向回归：conversation 与 editing_task 不匹配时历史必须为空。修改仅影响 Rust 内部 API，不改变任何 Tauri 命令签名或前端接口。
-维护记录（2026-08-20）：`resolve_conversation_task` 命令签名不变；候选从最近 12 个任务改为仅当前激活任务，路由模型不再接收兄弟任务的 title/brief/`active_subgoal`，也不再按名称切换已有任务。没有激活任务时直接创建新任务。澄清文案不再列举其他任务名称。
-维护记录（2026-08-27）：公开 Tauri 命令、参数、返回值与 SQLite schema 不变；Rust 后端 dead-code 清理删除未使用的旧 storyboard 入口与 Provider 包装函数，不影响 Provider 协议或 Agent 工具白名单。见 docs/changes/2026-08-27-cleanup-rust-warnings.md。
-维护记录（2026-08-31）：Agent `generate_storyboard` 成功后自动串联 timeline 与 preview；前端移除 storyboard 确认 UI 与 `confirmStoryboardAndPreview` invoke。Task Resolver 低置信度默认继续当前任务。`confirm_storyboard_and_preview` Tauri 命令保留兼容。见 docs/changes/2026-08-31-streamline-storyboard-to-preview.md。
-维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；storyboard Phase 3 改为「模型全局主创 + Rust 结构化修复包回传」。`enforce_phase3_scope` 重写为 `collect_phase3_issues`，一次收集候选的全部结构性问题（beat 乱序、越池素材、beat 内重复素材、首镜头被换、uncovered beat 被补镜头等）并附 `allowedChanges`，`needs_model_decision=false` 的问题（请求失败、可机械修正的字段）不入模型、其余打包成 `RepairPacket` JSON 注入下一轮 Phase 3 prompt，模型只修被点名的镜头、不重写整条 storyboard；纯机械的子镜头字段标准化仍在 Rust 内无条件执行。主要失败信息归一到修复包第一条 issue 的 message，供任务终态与日志使用。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
-维护记录（2026-09-01）：公开 Tauri 命令与 SQLite schema 不变；RepairPacket 升级为 agent repair loop 的完整上下文：① `frozenShots`——未被问题点名的镜头视为已确认正确，prompt 明确「保持不动，除非修复其他问题确需改动」；② `previousShots`——模型每次 Phase 3 是独立请求无对话上下文，修复包携带上一轮候选的精简快照（序号/beat/asset/时长/源范围），模型据此"接着改"而不是重写全局；③ `repairHistory`——记录每轮修过什么问题类型、涉及哪些镜头、是否已解决，提示模型不要回退已修复内容；prompt 措辞为"你是编辑、规则是边界不是微指令"，避免限制模型发挥。见 docs/changes/2026-09-01-phase3-repair-packet-loop.md。
-维护记录（2026-09-03）：公开契约不变；Storyboard 改为五阶段（本地 Top-12 去重补位 → 选 2–3 → 精修时间段 → 校验），单步重试分传输/语义预算，失败带 `partialCandidateSummary`，debug 可开 `STORYBOARD_PROVIDER_TRACE`。见 `docs/changes/2026-09-03-storyboard-select-then-refine.md`。
-维护记录（2026-09-03）：本地安全上限抬至 100 镜/beat；短 brief 偏 key_message；Phase5 结构失败不回 Phase4。见 `docs/changes/2026-09-03-storyboard-shot-cap-and-short-brief.md`。
-维护记录（2026-09-04）：`key_message` 收敛为 ≤15s 短视频（默认 8–15s、2–5 beat）。见 `docs/changes/2026-09-04-key-message-15s-cap.md`。
-维护记录（2026-09-04）：Phase 3 附带关键帧网格选片；Phase 4 用导入关键帧建粗窗再段内精修（不确定加密 + 旁白时长托底；修窗尾 clamp panic）。见 `docs/changes/2026-09-04-phase3-4-keyframe-inspect.md`。
-维护记录（2026-09-04）：可念稿强制 full_script+audio-first；normalize/join 去重旁白；key_message 旁白硬门。见 `docs/changes/2026-09-04-voiceover-narration-contract.md`。
-
-# 素材详情预览补充（2026-09-14）
-
-`get_asset_evidence(assetId)` 的 `AssetEvidence` 增加 `kind`（video/image/audio/other）和 `mediaPath`（本地源媒体路径）。命令从当前素材记录读取路径，仅将该文件加入本次应用进程的 asset protocol scope；全局目录 scope 不变，不复制、转码或修改源文件。前端路径只用于 `convertFileSrc`，不显示为用户文案。
-
-素材详情以原片预览、源场景片段、视觉分析、折叠 OCR 的顺序展示。有场景分段时仍展示素材级 `visualEvidence`，不将素材级描述冒充某个片段的分析。视频片段使用 `startMs/endMs` 定位和停止播放；若有运动可用窗则播放 `usableStartMs/usableEndMs`。每个片段可展示 `motionEnergy[]` 曲线，色带标出可用窗；点击曲线可定位预览。原格式是否可播放取决于 WebView 的媒体解码支持，失败显示不可播放状态。
-
-维护记录（2026-09-15）：素材切段只认 FFmpeg 硬切并用 CLIP 验真；无已验证硬切则整条一段。`analysisVersion=3`。见 `docs/changes/2026-09-15-hard-cut-segments.md`。
-维护记录（2026-09-15）：硬切片段内用帧差运动能量收缩可用窗。`analysisVersion=4`。见 `docs/changes/2026-09-15-motion-energy-trim.md`。
-维护记录（2026-09-16）：素材详情展示片段运动能量曲线与可用窗。见 `docs/changes/2026-09-16-motion-energy-detail.md`。
-
-维护记录（2026-09-26）：片段视觉证据带 `detail`（导入时整段识别）时，素材详情在该片段下展示「识别细节」：变化、高光、最佳区间、主体位置、竖屏裁切、开头结尾、运动方向、焦点、场景光线、人物、画面文字、品牌标识、人群/展会、抽象概念、氛围；枚举值按界面语言显示，模型自由文本保持原文，空项不显示。前端类型为 `local-store.ts` 的 `ShotDetail`，命令返回值不变。见 `docs/changes/2026-09-26-shot-detail-in-asset-panel.md`。
-维护记录（2026-09-18）：技术分析先扫关键帧，缩略图/抽帧超时不整条失败。见 `docs/changes/2026-09-18-faster-asset-analysis.md`。
+`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（33 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
