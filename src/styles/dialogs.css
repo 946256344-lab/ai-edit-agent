@@ -42,6 +42,9 @@
 .custom-api-form .modal-button { justify-self: start; margin-top: 2px; }
 
 /* 项目设置：品牌套件与默认转场 */
+.third-party-notices summary { cursor: pointer; color: var(--text); font-size: var(--text-sm); font-weight: 600; }
+.third-party-notices pre { max-height: 50dvh; overflow: auto; margin: 12px 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg-sunken); color: var(--text); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .brand-kit { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .brand-kit-head { margin-bottom: 12px; }
 .brand-kit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-bottom: 12px; }

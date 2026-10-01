@@ -2,6 +2,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { ProviderController } from '../hooks/useProviderController'
 import { useI18n } from '../lib/i18n'
+import { ThirdPartyNotices } from './ThirdPartyNotices'
 
 // 正式版模型与配音只走 Voycut 网关：实验性 OpenAI OAuth（非官方集成）、自定义 API 与自带配音密钥仅在开发构建显示。
 const showDevModelAccess = import.meta.env.DEV
@@ -158,6 +159,8 @@ export function ProviderSettingsModal({ controller }: ProviderSettingsModalProps
           <button className="primary-button modal-button" type="submit" disabled={model.isSavingJamendo || !model.form.jamendoClientId.trim()}>{model.isSavingJamendo ? t.common.saving : copy.saveJamendo}</button>
         </form>
         <button className="outline-button modal-button" onClick={actions.openJamendoPortal}>{copy.openJamendoPortal}</button>
+        <div className="provider-divider" />
+        <ThirdPartyNotices />
         <button className="outline-button modal-button" onClick={() => { dialog.current?.close(); actions.close() }}>{t.common.close}</button>
       </section>
     </dialog>

@@ -1,0 +1,57 @@
+[
+  {
+    "file": "licenses/FFmpeg-GPL-3.0.txt",
+    "source": "Fetched runtime: ffmpeg/LICENSE; version and SHA-256 in scripts/fetch-*.ps1",
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  {
+    "file": "licenses/Python-3.12.10.txt",
+    "source": "Fetched runtime: python/LICENSE.txt; version and SHA-256 in scripts/fetch-*.ps1",
+    "sha256": "f6fa51e9cc3f0a1ffad26fadc951585b6d0235677e5766ecc2de1aa4ef7ebac5"
+  },
+  {
+    "file": "licenses/Tesseract.txt",
+    "source": "Fetched runtime: tesseract/LICENSE; version and SHA-256 in scripts/fetch-*.ps1",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "licenses/DirectML-LICENSE.txt",
+    "source": "Fetched runtime: directml/LICENSE.txt; version and SHA-256 in scripts/fetch-*.ps1",
+    "sha256": "54dd0ae48fd1c6e948fa651b9dbd309adb55fa339e608549d0a7058e9f6e59ad"
+  },
+  {
+    "file": "licenses/DirectML-ThirdPartyNotices.txt",
+    "source": "Fetched runtime: directml/ThirdPartyNotices.txt; version and SHA-256 in scripts/fetch-*.ps1",
+    "sha256": "93fa06040ce5557126783ac6f3481a5472043f76dbfe213e1c6d17be3db643da"
+  },
+  {
+    "file": "licenses/BGE-MIT.txt",
+    "source": "Repository model LICENSE; upstream BAAI/bge-small-zh-v1.5",
+    "sha256": "587a673933425dbc36ec61268d3b954051b2d3ef3c9b322ede357976055ffdd5"
+  },
+  {
+    "file": "licenses/Apache-2.0.txt",
+    "source": "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.4.0/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "licenses/CLIP-MIT.txt",
+    "source": "https://raw.githubusercontent.com/openai/CLIP/main/LICENSE",
+    "sha256": "893951b3bf94db8df1b13e05da5cdeb499400960e4d44a3962a8b33ed0b4f28e"
+  },
+  {
+    "file": "licenses/MediaInfo-24.12.txt",
+    "source": "https://raw.githubusercontent.com/MediaArea/MediaInfoLib/v24.12/License.html",
+    "sha256": "5cce9a103b5f59459847658f50f03c5a3774c51fbaef7d1278b855b475a28a44"
+  },
+  {
+    "file": "licenses/ONNXRuntime-1.20.0.txt",
+    "source": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.20.0/LICENSE",
+    "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+  },
+  {
+    "file": "licenses/ONNXRuntime-ThirdPartyNotices.txt",
+    "source": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.20.0/ThirdPartyNotices.txt",
+    "sha256": "cf7342f7ba482ef715ae58f5f497a8d3564fa255164175aea324cd293c5701a0"
+  }
+]

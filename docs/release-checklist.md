@@ -92,7 +92,7 @@
   - 使用年龄门槛（通常 13 岁以上，欧盟部分国家 16 岁以上）。
   - 服务条款写明：试用规则、服务可用性不作保证、用户对所用素材的版权负责、责任上限、适用法律。
 - [ ] **P0 账号与数据删除渠道**。现状：`缺失`，网站没有删除账号的功能。首发可以先提供一个邮箱，手工删除 Firebase 用户和 `entitlements/{uid}`（GDPR 要求一个月内响应），但隐私政策里要写明这个渠道。
-- [ ] **P0 第三方许可声明**，放在安装目录和应用「About」页。现状：`缺失`，没有汇总声明，应用里也没有入口。至少包括：
+- [ ] **P0 第三方许可声明**，放在安装目录和应用设置页。现状：`部分`（09-30）：汇总声明、生产依赖生成清单、随包资源与中英文设置入口已实现，见 `THIRD_PARTY_NOTICES.md`、`docs/changes/2026-09-30-third-party-notices.md`；真实桌面显示和正式安装包未验。pycapcut、Tesseract 配套 DLL / VC runtime 条款、FFmpeg 外部静态库声明与确切对应源码仍需确认，不能关闭本项。包括：
   - FFmpeg 8.1.2 full_build（**GPLv3**）：附许可证全文和对应源码的获取方式（链接或书面承诺）；H.264 / HEVC 编解码器的专利许可需要法务确认。
   - Python 3.12（PSF）、Tesseract 5.4.0（Apache-2.0）、pyJianYingDraft 0.3.0（Apache-2.0）、pycapcut 0.0.3（许可证`待确认`，包元数据里没有写）。
   - Microsoft DirectML 1.15.4（随包 `LICENSE.txt`，允许随 Windows 应用分发）与 `ThirdPartyNotices.txt`。

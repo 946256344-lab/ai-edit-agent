@@ -4,6 +4,7 @@
   "version": "0.1.2",
   "type": "module",
   "scripts": {
+    "notices:generate": "node scripts/generate-third-party-notices.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint src",

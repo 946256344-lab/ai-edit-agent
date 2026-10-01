@@ -142,11 +142,27 @@ function ensureGatewayForBuild() {
   console.log(`安装包：模型网关 ${gateway}`)
 }
 
+// 拉取 runtime 后刷新许可，间接 Python 依赖快照以本次安装包为准；全文缓存随仓库提供。
+function ensureThirdPartyNoticesForBuild() {
+  if (tauriArgs[0] !== 'build') return
+  for (const script of ['collect-runtime-notices.mjs', 'generate-third-party-notices.mjs']) {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', script)], {
+      stdio: 'inherit', cwd: repoRoot, env,
+    })
+    if (result.status !== 0) {
+      console.error('无法生成第三方许可声明，请检查已获取的 runtime、生产依赖和 Cargo 离线缓存。')
+      process.exit(1)
+    }
+  }
+  console.log('安装包：第三方许可声明已更新')
+}
+
 ensureGatewayForBuild()
 ensureFfmpegForBuild()
 ensurePythonForBuild()
 ensureTesseractForBuild()
 ensureDirectmlForRun()
+ensureThirdPartyNoticesForBuild()
 if (fullModelsFlag) {
   const requiredOnnx = [
     'src-tauri/resources/models/bge-small-zh-v1.5/onnx/model.onnx',

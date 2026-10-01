@@ -64,6 +64,8 @@ mod release_readiness;
 /// 发行后本地选镜模型（BGE/CLIP ONNX）下载、校验与路径解析。
 mod runtime_models;
 mod shared_library;
+/// 固定随包第三方许可声明的异步只读入口。
+mod third_party_notices;
 /// 粗剪镜头的持久化推荐池与单候选试选预览。
 mod shot_replacement;
 /// 基于证据的 storyboard 提案、校验、版本与查询。
@@ -101,6 +103,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            third_party_notices::get_third_party_notices,
             oauth::get_experimental_openai_oauth_status,
             oauth::start_experimental_openai_oauth,
             oauth::clear_experimental_openai_oauth,

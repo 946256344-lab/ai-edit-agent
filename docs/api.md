@@ -1,5 +1,13 @@
 # API 与工具契约
 
+## 2026-09-30：第三方许可声明
+
+| 命令 | 参数 | 返回 |
+| --- | --- | --- |
+| `get_third_party_notices` | 无 | string（随包许可声明全文） |
+
+新增只读异步命令 `get_third_party_notices()`，无参数，返回 UTF-8 字符串。正式版只读取安装资源目录的固定 `resources/third-party/ALL.txt`，开发版读取当前编译 worktree 的同一文件；不接受任意路径、不访问项目数据、不打开外部应用。磁盘读取在 blocking worker 执行，失败返回 `notices_unavailable`，不泄露本机路径。前端通过 `src/lib/local-store.ts` 的 `getThirdPartyNotices()` 调用，设置里按需显示纯文本，读取失败显示中英文安全提示并允许重试。资源目录进入基础 Tauri 配置，现有资源合并脚本继续追加 FFmpeg/Python/Tesseract/DirectML/完整模型资源。见 `docs/changes/2026-09-30-third-party-notices.md`。
+
 ## 2026-09-29：网关配音改用 ElevenLabs
 
 命令签名不变。内置网关时配音服务商以网关音色列表 `{ provider, model_id, default_voice_id, voices }` 为准（默认 `elevenlabs`，可切 `fish`；不带 `provider` 的旧网关按 Fish 处理，不认识的服务商报 `voice_gateway_upgrade_required`），合成请求带 `provider`，网关换了服务商时返回 409，桌面按 `voice_gateway_unavailable` 处理。Provider 名、模型与音色设置与直连该服务商相同：经网关 ElevenLabs 时 `VoiceoverApplyResult.provider` 为 `ElevenLabs`，与直连 ElevenLabs 共用缓存；缓存命中还要求 Provider 名相同。网关默认不按人限额，`voice_gateway_daily_quota` / `provider_gateway_daily_quota` 只在网关启用额度时出现。见 `docs/changes/2026-09-29-gateway-elevenlabs.md`。

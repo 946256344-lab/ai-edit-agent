@@ -1,6 +1,10 @@
 // 前端唯一 Tauri command bridge：公开类型与静态命令名，不承载UI状态。
 import { invoke } from '@tauri-apps/api/core'
 
+export function getThirdPartyNotices(): Promise<string> {
+  return invoke('get_third_party_notices')
+}
+
 export type StoreStatus = { databaseReady: boolean; schemaVersion: number }
 export type ExperimentalOAuthStatus = {
   state: 'disconnected' | 'pending' | 'connected' | 'failed'
