@@ -2,6 +2,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { EditingSessionView } from '../components/workspace-types'
 import {
+  confirmUserAction,
   deleteProject,
   renameEditingSession,
   renameProject,
@@ -35,11 +36,11 @@ export function useNavigationEditController(options: NavigationEditControllerOpt
 
   async function deleteProjectWorkspace(projectId: string) {
     const project = options.projects.find((candidate) => candidate.id === projectId)
-    const confirmed = window.confirm(
-      messages().app.deleteProjectConfirm(project?.name ?? messages().app.projectFallback),
-    )
-    if (!confirmed) return
     try {
+      const confirmed = await confirmUserAction(
+        messages().app.deleteProjectConfirm(project?.name ?? messages().app.projectFallback),
+      )
+      if (!confirmed) return
       await deleteProject(projectId, true)
     } catch {
       window.alert(messages().app.deleteProjectFailed)

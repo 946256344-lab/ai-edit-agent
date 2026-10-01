@@ -1,5 +1,19 @@
 // 前端唯一 Tauri command bridge：公开类型与静态命令名，不承载UI状态。
 import { invoke } from '@tauri-apps/api/core'
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { messages } from './i18n'
+
+// 必须 await；不用 WebView 注入的 window.confirm（旧命令可能不存在）。失败向调用方抛出，禁止继续副作用。
+export async function confirmUserAction(message: string): Promise<boolean> {
+  requireDesktopRuntime()
+  const copy = messages().common
+  return (await confirmDialog(message, {
+    title: copy.confirmationTitle,
+    kind: 'warning',
+    okLabel: copy.confirm,
+    cancelLabel: copy.cancel,
+  })) === true
+}
 
 export function getThirdPartyNotices(): Promise<string> {
   return invoke('get_third_party_notices')

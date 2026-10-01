@@ -1,5 +1,11 @@
 # API 与工具契约
 
+## 操作确认入口
+
+前端的会话删除、项目删除与预览缓存清理统一调用 `src/lib/local-store.ts` 的 `await confirmUserAction(message): Promise<boolean>`。入口要求桌面运行时，使用 `@tauri-apps/plugin-dialog` 的 `confirm()`，实际 IPC 为 `plugin:dialog|message`，只将明确的 `true` 视为授权；取消返回 false，插件失败抛出并由调用方显示已有的安全失败提示，两者均不执行后续副作用。正文以及确认框标题、确认/取消按钮取自 `src/lib/i18n` 中英词典。
+
+`src-tauri/capabilities/default.json` 对 `main` 窗口显式声明 `dialog:allow-message`，开发版与正式版共用该配置；保留既有 `dialog:default` 的文件选择等权限。插件已在 Rust 注册，不新增后端命令，不修改删除或缓存清理命令的签名和逻辑。禁止用 `window.confirm`：插件 2.7.2 的注入函数返回 Promise，并调用未注册的旧 `plugin:dialog|confirm` 命令。见 `docs/changes/2026-10-01-confirm-dialog.md`。
+
 ## 2026-09-30：第三方许可声明
 
 | 命令 | 参数 | 返回 |
