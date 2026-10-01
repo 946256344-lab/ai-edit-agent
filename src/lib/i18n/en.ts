@@ -18,6 +18,8 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`) {
 
 export const en: typeof zhCN = {
   common: {
+    confirmationTitle: 'Confirm action',
+    confirm: 'Confirm',
     cancel: 'Cancel',
     close: 'Close',
     save: 'Save',

@@ -34,6 +34,7 @@ import { useAnalysisGateController } from './hooks/useAnalysisGateController'
 import { useProviderController } from './hooks/useProviderController'
 import { useNavigationEditController } from './hooks/useNavigationEditController'
 import {
+  confirmUserAction,
   createConversation as createStoredConversation,
   createEditingSession as createStoredEditingSession,
   createMessage as createStoredMessage,
@@ -278,10 +279,10 @@ function App() {
     if (!desktopRuntime || !activeProjectId) return
     const session = editingSessions.find((candidate) => candidate.id === sessionId)
     const title = session?.title ?? uiMessages().app.sessionFallback
-    const confirmed = window.confirm(uiMessages().app.deleteSessionConfirm(title))
-    if (!confirmed) return
     const projectId = activeProjectId
     try {
+      const confirmed = await confirmUserAction(uiMessages().app.deleteSessionConfirm(title))
+      if (!confirmed) return
       await deleteStoredEditingSession(projectId, sessionId, true)
     } catch {
       window.alert(uiMessages().app.deleteFailed)

@@ -12,6 +12,8 @@ const sourceName = (id: string) => SOURCE_NAMES[id] ?? id
 
 export const zhCN = {
   common: {
+    confirmationTitle: '确认操作',
+    confirm: '确认',
     cancel: '取消',
     close: '关闭',
     save: '保存',

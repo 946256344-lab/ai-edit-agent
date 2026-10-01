@@ -142,6 +142,12 @@
 | `set_output_editor` | `projectId: String, editorId: String` | `Result<EditorLinkerCatalog, String>` | 记住项目输出编辑器；未实现的选择会被拒绝。 |
 | `deliver_to_editor` | `timelineVersionId: String, editorId: Option<String>` | `Result<EditorDeliveryResult, String>` | 按选择交付：剪映 / CapCut 新建草稿，FCPXML/OTIO 写出导入文件。`editorId` 为空时用项目已选端口。品牌卡先本地渲染成 PNG 并复制进草稿或导出文件旁；`notes` 如实列出图片交付、未渲染的卡、未带入或待确认的转场、文字降级（code：`brand_cards_as_images`、`brand_cards_failed`、`transitions_unverified`、`transition_not_delivered`、`text_basic_titles`、`text_as_markers`）。 |
 
+## 操作确认入口
+
+前端的会话删除、项目删除与预览缓存清理统一调用 `src/lib/local-store.ts` 的 `await confirmUserAction(message): Promise<boolean>`。入口要求桌面运行时，使用 `@tauri-apps/plugin-dialog` 的 `confirm()`，实际 IPC 为 `plugin:dialog|message`，只将明确的 `true` 视为授权；取消返回 false，插件失败抛出并由调用方显示已有的安全失败提示，两者均不执行后续副作用。正文以及确认框标题、确认/取消按钮取自 `src/lib/i18n` 中英词典。
+
+`src-tauri/capabilities/default.json` 对 `main` 窗口显式声明 `dialog:allow-message`，开发版与正式版共用该配置；保留既有 `dialog:default` 的文件选择等权限。插件已在 Rust 注册，不新增后端命令，不修改删除或缓存清理命令的签名和逻辑。禁止用 `window.confirm`：插件 2.7.2 的注入函数返回 Promise，并调用未注册的旧 `plugin:dialog|confirm` 命令。见 `docs/changes/2026-10-01-confirm-dialog.md`。
+
 ## Agent Function Tool 契约
 
 共 **33** 个工具，`tools.rs` 的完整目录与 `policy.rs` 观察/编辑数组、`native.rs::NATIVE_TOOL_NAMES`、`src/lib/agent-tools.ts` 逐一一致。每次 Provider 请求直接携带完整 strict Schema。模型不传 project/task/conversation、路径或 FFmpeg 参数；Rust 从 LoopState 注入并校验作用域。

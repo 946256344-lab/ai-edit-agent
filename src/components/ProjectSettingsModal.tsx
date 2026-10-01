@@ -1,6 +1,6 @@
 // 当前项目设置：品牌套件与默认转场、候选召回比例、预览缓存维护。
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { clearPreviewCache, getCandidateScoreFirstSlots, getPreviewCacheStatus, setCandidateScoreFirstSlots } from '../lib/local-store'
+import { clearPreviewCache, confirmUserAction, getCandidateScoreFirstSlots, getPreviewCacheStatus, setCandidateScoreFirstSlots } from '../lib/local-store'
 import type { PreviewCacheStatus } from '../lib/local-store'
 import { messages, useI18n } from '../lib/i18n'
 import { useBrandKitController } from '../hooks/useBrandKitController'
@@ -67,11 +67,11 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
 
   async function handleClear() {
     if (!projectId || busy) return
-    const confirmed = window.confirm(copy.clearConfirm)
-    if (!confirmed) return
     setBusy(true)
     setError(null)
     try {
+      const confirmed = await confirmUserAction(copy.clearConfirm)
+      if (!confirmed) return
       const next = await clearPreviewCache(projectId, true)
       setStatus(next)
     } catch {
