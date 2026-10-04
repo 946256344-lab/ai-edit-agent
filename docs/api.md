@@ -2,6 +2,8 @@
 
 本文只描述当前 checkout 的注册契约。历史见 [changes/](changes/README.md)，产品链路见 [architecture.md](architecture.md)。本次以源码静态核实；真实媒体、网关、编辑器效果均**未核实**。
 
+选镜 / 策划评测运行器是 `footage-eval` feature 下的独立 CLI 二进制，不新增也不修改任何 Tauri IPC 命令或 Agent 工具；用法见 [docs/evaluation/README.md](evaluation/README.md)。
+
 ## 桌面命令边界
 
 命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **101** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。
