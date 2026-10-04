@@ -1212,6 +1212,7 @@ mod tests {
             .map(|index| {
                 let mut item = source(&format!("asset-{index}"));
                 item.visual_evidence = vec![crate::models::VisualEvidence {
+                    provenance: None,
                     time_ms: Some(0),
                     subjects: if index < 12 {
                         vec!["same-cabinet".to_owned()]
@@ -1399,6 +1400,7 @@ mod tests {
     fn library_inventory_summary_prefers_frequent_visual_tags() {
         let mut certificate = source("cert");
         certificate.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["framed certificates".to_owned(), "presenter".to_owned()],
             scene: Some("certificate wall display".to_owned()),
@@ -1414,6 +1416,7 @@ mod tests {
         }];
         let mut factory = source("factory");
         factory.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["battery modules".to_owned()],
             scene: Some("factory production line".to_owned()),
@@ -1952,6 +1955,7 @@ mod tests {
         shot_d.beat_id = "beat-2".to_owned();
         let mut look_a = source_segment("look-a", "s001", 0, 2_000);
         look_a.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["cabinet-interior".to_owned()],
             scene: Some("factory cabinet".to_owned()),
@@ -2605,6 +2609,7 @@ mod tests {
     fn phase3_pool_cards_include_visible_caption() {
         let mut candidate = source("a0");
         candidate.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["packed units".to_owned()],
             scene: Some("warehouse aisle".to_owned()),

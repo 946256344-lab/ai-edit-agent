@@ -4,6 +4,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from evidence_metrics import evidence_summary, read_rows
 
 
 def overlap(a, b):
@@ -41,7 +42,7 @@ def read_csv(path):
         return list(csv.DictReader(stream))
 
 
-def score(run, snapshot, case, gold_path=None):
+def score(run, snapshot, case, gold_path=None, evidence_gold_path=None):
     result_file = run / "result.json"
     result = json.loads(result_file.read_text(encoding="utf-8")) if result_file.exists() else {}
     evidence_path = run / "evidence.json"
@@ -185,6 +186,10 @@ def score(run, snapshot, case, gold_path=None):
         "similarVisualReuseGold": None, "enoughQualifiedFootageGold": None,
         "riskSamples": risk_samples, "audioClocks": clocks, "response": reply,
         "goldStatus": "预标，待用户纠正" if not confirmed else "部分或全部已纠正，见覆盖率"}
+    contracts_file = run / "segment-evidence.json"
+    if contracts_file.exists():
+        contracts = json.loads(contracts_file.read_text(encoding="utf-8"))
+        metrics["evidenceContract"] = evidence_summary(contracts, labels, read_rows(evidence_gold_path or snapshot / "evidence-gold.csv"))
     audio_first = []
     for manifest_path in (run / "appdata" / "voiceovers").rglob("manifest.json"):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

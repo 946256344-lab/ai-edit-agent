@@ -103,3 +103,22 @@ git diff --check
 ```
 
 未改前端，不要求 lint。评测新 fixture 的计分测试验证空产物不能得满分、策划引用与最终选镜分开、越窗不算覆盖、音频 cue 时钟、粘连轨迹恢复、风险/最佳金标独立覆盖及最差值方向，共 7 项，不铺生产算法测试。
+
+
+## 证据契约评测与冻结规则回放（任务 2）
+
+真实生成运行结束后会用同一 Rust 适配器从运行副本只读导出 `segment-evidence.json`。每例 `metrics.json.evidenceContract` 和报告追加逐片风险三态、来源、非未知风险覆盖率、未知比例（全部 11 项和核心 7 项）、旧机器正向预标覆盖率。分母是片段×风险，不是图片或最终入选数；旧预标包含宽泛关键词，覆盖率是两种预标的对照，不能冒充召回率。
+
+仅重跑冻结分析适配、历史产物计分与现行 P5 校验（输出必须为新目录）：
+
+```powershell
+python scripts/footage-eval/run.py --contract-replay D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\baseline-final-2026-10-01 --snapshot D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01 --output .footage-eval/contract-replay-2026-10-05
+```
+
+输出 `contract-replay-report.json`、两次字节相同的契约导出、30 例旧核心指标比较、各例 `p5-replay.json`，并核对冻结数据库/分析/gold 哈希。只读源 worktree，不修改其中任何文件。`liveGeneration=false` 明确这是保存产物的规则回放；产物与指标不变不能证明真实模型重新生成仍选同一组镜头。真实模型全套复跑仍使用原 `--snapshot` 命令。
+
+原始风险事实金标单独用 CSV：`asset_id,segment_id,risk,state,start_ms,end_ms`，`risk` 用 API 中 11 项名称，`state` 只填 `hit/not_hit`；时段为空按整片段。回放生成空白 `evidence-gold-template.csv`，填完传 `--evidence-gold <CSV>`，或放在输出快照 `evidence-gold.csv`。不写源快照。体裁 `gold_risks=none` 只说明对应体裁没有硬风险，不能用作所有原始风险的阴性金标。
+
+指标分别报告金标阳性漏检（未知也记未检出，并单列未知数）与金标阴性误报率；误报是后续误杀风险的代理，本任务没有淘汰逻辑，不能声称测了真正的体裁误杀率。没有明确金标或相应分母为零就报 N/A；未知阴性样本不计为已证实 true negative。
+
+补核验的隔离评测可创建 `job.json`，字段为 `mode=verify-evidence`、`projectId` 和 `candidates[]`（见 API 的 `EvidenceVerificationRequest`），把冻结 SQLite 复制到同目录的 `appdata/assembly-video-agent.sqlite3` 后调用 `src-tauri/target/debug/footage-eval.exe <job.json>`。不会创建窗口、调用生成链或修改原分析，只在该次副本追加核验表与 cache。结果在 `verification-result.json`，真实模型身份在 `provider.json`，均不含凭据。相同输入再次执行时已知项不再发请求；缺帧、错项目或过期快照均如实报错。

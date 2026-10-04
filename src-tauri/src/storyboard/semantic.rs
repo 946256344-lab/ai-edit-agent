@@ -560,6 +560,7 @@ mod tests {
     fn evidence_text_drops_garbage_ocr() {
         let metadata = TechnicalMetadata {
             visual_evidence: vec![crate::models::VisualEvidence {
+                provenance: None,
                 time_ms: Some(0),
                 subjects: vec!["forklift".to_owned()],
                 scene: Some("loading dock".to_owned()),

@@ -88,7 +88,7 @@
 | `create_asset_collection` | `projectId: String, name: String` | `Result<AssetCollection, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `list_asset_collections` | `projectId: String` | `Result<Vec<AssetCollection>, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
 | `add_assets_to_collection` | `projectId: String, collectionId: String, assetIds: Vec<String>` | `Result<BatchAssetActionResult, String>` | 创建并查询项目内集合、将最多 200 条当前项目素材加入集合；集合不移动源媒体。 |
-| `get_asset_evidence` | `assetId: String` | `Result<AssetEvidence, String>` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。 |
+| `get_asset_evidence` | `assetId: String` | `Result<AssetEvidence, String>` | 返回派生关键帧、OCR、视觉证据、`durationMs`、`analysisVersion`、独立 `visualAnalysisStatus`，以及 `segments[]`（真实场景片段的帧、可选视觉标签，以及可选 `usableStartMs`/`usableEndMs`/`motionTailSettled`/`motionUncertain`/`motionEnergy[]`）；视觉分析失败或跳过时返回 `visualAnalysisNote` 说明原因。另追加 `segmentEvidence[]` 结构化证据（schema v1，见下文），不移除原字段。 |
 
 ### 故事版、时间线与镜头编辑
 
@@ -262,3 +262,26 @@
 ## 源码核对入口
 
 `src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（33 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
+
+
+## 片段证据契约 v1（2026-10-05）
+
+`get_asset_evidence` 的 `AssetEvidence` 追加 `segmentEvidence: SegmentEvidence[]`。不新增 IPC 或 Agent 工具，不改变当前生成/导入默认路径。Rust 类型由 `models.rs` 拥有，适配与读取在 `assets/evidence_contract.rs`，补核验在 `assets/evidence_verification.rs`。
+
+| 类型 | 字段 / 语义 |
+|---|---|
+| `SegmentEvidence` | `schemaVersion=1`、`id`、`analysisSnapshotId`、`assetId`、`segmentId`、`range`、`source`、`risks[]`、`visualEvidence[]`、`relations`、`motionProfile`、`caption`、`narrativeRole` |
+| `RiskEvidence` | 内容寻址 `id`、`risk`、`state=hit/not_hit/unknown`、`source`、半开源窗 `range={startMs,endMs}`、`confidence: number/null`、`value`（可见标签、严重程度、说明） |
+| `EvidenceSource` | `analysisId`、`model: string/null`、`method`、`analysisVersion`；旧分析模型无法恢复时明确为 null，不用当前模型配置冒充旧来源 |
+| 风险名称 | `brand_logo/exhibition/out_of_focus/shake/clutter/on_screen_text/crowd/motion_blur/staged/advertising/empty_shot`；风险事实不等于体裁过滤，不做人为素材分类 |
+| 关系证据 | `relations` 原样保留 `ShotDetail` 的主体位置与左右边界、主体/相机方向、开头结尾是否干净、最佳源窗、高光时点、变化等；`visualEvidence[]` 也保留原始描述与 detail；无轴线/人物一致性证据时不声称可裁决跳轴/连续性 |
+
+旧正向标签保留 `hit`，无时段按整段；缺字段、无卡、旧空数组/false/锐利等否定标签及 `None.` 占位都为 `unknown`。旧置信度不编造；新 `not_hit` 必须有置信度，只能证明自身覆盖的源窗；段内其他时段仍未知。补核验结果追加保存，旧命中不被新阴性覆盖；冲突按命中优先、未知不放行。`risk_state_for_window` 返回给定最终源窗的三态，不把其他时段的阳性挪到当前窗，也不把几个零散阴性拼成安全。
+
+Rust 内部 `verify_candidates(app, projectId, &[EvidenceVerificationRequest])` 输入 `assetId/segmentId/analysisSnapshotId/risks[]` 与可选 `range`（默认整段，必须位于基础片段内），复核项目可访问性、ready、排除与健康状态，只向模型询问候选未知项。每段最多四张时间网格；请求通过统一 Provider 按需并发，传输层仅 429 按 Retry-After 退避，不自动切换模型。逐候选返回真实结果或错误，缺项保持未知，越窗/未请求字段拒绝；回写事务重新核对基础快照，分析已更新则拒绝。该能力供任务 3/4 接入，本任务不自动调用它。
+
+## 新故事版预留事实元数据
+
+`StoryboardEvidenceMetadata` 包含 `pipelineVersion: string|null`、`genre: narrative/promotion/bts|null`、`recipeVersion: string|null`、`evidenceSnapshot: SegmentEvidence[]`、`evidenceReferences: EvidenceReference[]`。引用包括 `evidenceId/assetId/segmentId/range/supports`。
+
+schema v21 只追加 `storyboard_evidence_metadata(storyboard_version_id,metadata_json)` 与 `asset_evidence_verifications`，不重建表、不回填旧行。新故事版在创建事务中调用 `write_storyboard_metadata`，校验版本、快照内容 ID 和引用范围，已有记录不可覆盖；`read_storyboard_metadata` 对无附加行的历史版本返回三个 null 和两个空数组，历史版本不能因此获得新管线合格标签。现行 `StoryboardContent/StoryboardVersion` 及写库不变；预留 `StoryboardVersionWithEvidence` 与 `project_storyboard_version` 加性投影（既有版本字段与附加字段在 JSON 根平铺），任务 6 负责将这份冻结的附加契约接入新生成、读取与派生结果，任务 7 可消费类型，无需再改公共字段定义。

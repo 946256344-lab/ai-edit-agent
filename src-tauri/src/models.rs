@@ -282,6 +282,8 @@ pub struct AssetEvidence {
     pub visual_analysis_note: Option<String>,
     #[serde(default)]
     pub segments: Vec<AssetEvidenceSegment>,
+    /// 新证据契约；原 segments/visualEvidence 保持兼容。
+    pub segment_evidence: Vec<SegmentEvidence>,
 }
 
 #[derive(Serialize)]
@@ -1170,14 +1172,14 @@ pub struct SceneSegment {
     pub(crate) motion_profile: Option<MotionProfile>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionEnergySample {
     pub time_ms: i64,
     pub energy: f64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MotionProfile {
     pub energy: Vec<MotionEnergySample>,
@@ -1195,9 +1197,12 @@ pub struct OcrEvidence {
     pub(crate) text: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VisualEvidence {
+    /// 新分析记录可追溯来源；旧快照缺失时由证据适配器明确标为 legacy。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provenance: Option<EvidenceSource>,
     pub(crate) time_ms: Option<i64>,
     #[serde(default)]
     pub(crate) subjects: Vec<String>,
@@ -1226,6 +1231,138 @@ pub struct VisualEvidence {
     /// 导入时整段 6 帧识别得到的时间维度信息；旧证据与单帧识别为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) detail: Option<ShotDetail>,
+}
+
+/// 片段证据公共契约。未知不能当作未命中；风险事实不等于体裁淘汰规则。
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceState {
+    Hit,
+    NotHit,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskKind {
+    BrandLogo,
+    Exhibition,
+    OutOfFocus,
+    Shake,
+    Clutter,
+    OnScreenText,
+    Crowd,
+    MotionBlur,
+    Staged,
+    Advertising,
+    EmptyShot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceSource {
+    pub analysis_id: String,
+    /// 旧数据无法恢复模型身份，不从当前配置推断。
+    pub model: Option<String>,
+    pub method: String,
+    pub analysis_version: u32,
+}
+
+/// 半开源时间范围 [startMs, endMs)，不是成片时间。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceRange {
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RiskEvidence {
+    pub id: String,
+    pub risk: RiskKind,
+    pub state: EvidenceState,
+    pub source: EvidenceSource,
+    pub range: EvidenceRange,
+    pub confidence: Option<f64>,
+    /// 标识文字、严重程度和判定说明；仅保留模型可见事实，不猜项目品牌。
+    #[serde(default)]
+    pub value: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentEvidence {
+    pub schema_version: u32,
+    pub id: String,
+    /// 基础分析内容寻址；补核验不改变它，用于防止结果附到更新后的分析上。
+    pub analysis_snapshot_id: String,
+    pub asset_id: String,
+    pub segment_id: String,
+    pub range: EvidenceRange,
+    pub source: EvidenceSource,
+    pub risks: Vec<RiskEvidence>,
+    /// 可见主体、动作、产品、场景、景别、运镜及原始 detail，不遗漏旧整片多帧证据。
+    pub visual_evidence: Vec<VisualEvidence>,
+    /// 完整保留主体边界、方向、干净切点、变化、高光与最佳区间；缺项仍为 None/空。
+    pub relations: Option<ShotDetail>,
+    /// 运动能量仅为技术事实，不能解释为抖动检测或轴线证据。
+    pub motion_profile: Option<MotionProfile>,
+    pub caption: Option<String>,
+    pub narrative_role: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Genre {
+    Narrative,
+    Promotion,
+    Bts,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceReference {
+    pub evidence_id: String,
+    pub asset_id: String,
+    pub segment_id: String,
+    pub range: EvidenceRange,
+    /// 支持的具体表达，不把合法 ID 当作语义证明。
+    pub supports: String,
+}
+
+/// 新故事版的附加事实；独立追加表保存，历史无行读为默认，不回填/重编号。
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StoryboardEvidenceMetadata {
+    pub pipeline_version: Option<String>,
+    pub genre: Option<Genre>,
+    pub recipe_version: Option<String>,
+    pub evidence_snapshot: Vec<SegmentEvidence>,
+    pub evidence_references: Vec<EvidenceReference>,
+}
+
+/// 任务 6 的加性读取投影：公共类型已预留，现行命令尚不改返回形状。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryboardVersionWithEvidence {
+    #[serde(flatten)]
+    pub version: StoryboardVersion,
+    #[serde(flatten)]
+    pub evidence: StoryboardEvidenceMetadata,
+}
+
+/// 调用方必须传入本次候选与基础快照；后端复查项目范围，只请求其中未知项。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceVerificationRequest {
+    pub asset_id: String,
+    pub segment_id: String,
+    pub analysis_snapshot_id: String,
+    pub risks: Vec<RiskKind>,
+    /// 可选候选源窗；缺省为整片段，必须位于基础片段内。
+    #[serde(default)]
+    pub range: Option<EvidenceRange>,
 }
 
 impl VisualEvidence {
@@ -1366,6 +1503,7 @@ mod tests {
     #[test]
     fn asset_evidence_exposes_the_frontend_media_contract() {
         let serialized = serde_json::to_value(AssetEvidence {
+            segment_evidence: Vec::new(),
             id: "asset-1".to_owned(),
             display_name: "素材.mp4".to_owned(),
             kind: "video".to_owned(),

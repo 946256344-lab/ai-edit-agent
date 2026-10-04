@@ -47,7 +47,11 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 
 `assets/progress.rs` 统一 ready/analyzing/queued/failed：视频/图片需技术与首次画面识别完成，音频等只需技术完成；readyVideo 另排除禁止使用和已知不可用源。取消持久化，启动不自动继续。发送前有可取消分析门：未完成时选择只用已分析素材，完成后可继续冻结请求；切换项目/会话取消待发送。素材页只在分析/扫描活动期间刷新，事件与动作唤醒查询。
 
-证据：`assets/{analysis,segments,motion,beats,visual,segment_visual,retry,progress}.rs`、`useAnalysisGateController.ts`、`useAssetWorkspaceController.ts`。
+片段证据契约 v1 由 `models.rs` 定形、`assets/evidence_contract.rs` 从冻结分析纯适配并生成内容寻址 ID。`get_asset_evidence.segmentEvidence` 完整暴露风险三态、分析/模型/方法来源、源窗、置信度，以及主体边界/方向/切点/高光等原始关系证据。旧正向风险按整段保留，旧否定/缺失无置信度时为未知；帧差运动能量不证明抖动，方向不证明轴线。
+
+`assets/evidence_verification.rs` 只接收本次候选与缺项，验证项目范围后每段用至多四张时间网格并发请求统一 Provider，失败如实返回，仅 429 由传输层退避。补核验追加到 `asset_evidence_verifications`，按基础快照绑定并在回写事务重查，既不改旧分析，也不重跑全库。新旧事实冲突时保留全部，未知不变安全。本任务未把该能力接入现行导入/生成/Agent 默认行为，也未实现体裁底线和评分。
+
+证据：`assets/{analysis,segments,motion,beats,visual,segment_visual,retry,progress,evidence_contract,evidence_verification}.rs`、`models.rs`、`useAnalysisGateController.ts`、`useAssetWorkspaceController.ts`。
 
 ## Agent、策划与选镜
 
@@ -133,6 +137,8 @@ Project
 新建剪辑会话入口同事务创建 task/conversation；产物按 project/task 查询和新建，timeline 经 storyboard 归任务，不用 conversation 猜产物。状态快照/Agent 上下文只读当前任务，侧栏 summary 仅展示。
 
 version_number 保留项目唯一序号，schema v20 追加 task_version_number，UI/Agent 展示任务内 v1 起的新编号，旧空值回退旧序号，不回填。项目级共享素材、哈希预览中间缓存和选镜新鲜度（同项目最新时间线素材使用次数），不把兄弟任务产物当本任务事实。
+
+schema v21 仅追加证据核验表和新故事版附加事实表 `storyboard_evidence_metadata`。后者存 `pipelineVersion/genre/recipeVersion/evidenceSnapshot/evidenceReferences`，新创建事务写一次，旧记录无行读为 null/空数组，不回填、不重编号；现行生成尚不填这些字段，读取/派生集成归任务 6。
 
 SQLite WAL/busy timeout 与只追加迁移；task 快照、pending 路由、单次 receipt、pending 澄清保存归属/恢复。审计保存步骤/计数/安全码，不存模型全文或凭据。Rust 删除项目/会话要求 confirmed=true；会话删除保留项目素材、原媒体与外部草稿。前端 window.confirm 已登记可靠性问题，不能仅凭 Rust 参数声称确认 UI 有效。
 

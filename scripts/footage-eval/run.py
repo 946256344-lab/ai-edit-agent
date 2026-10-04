@@ -47,6 +47,11 @@ def export_evidence(run):
     return evidence
 
 
+def export_segment_contracts(executable, database, output):
+    subprocess.run([str(executable), "--export-evidence", str(database), str(output)], cwd=ROOT, check=True)
+
+
+
 def add_task(run, project, case, phase, storyboard=None, timeline=None):
     c = connect(run / "appdata" / DB_NAME)
     now = int(time.time() * 1000)
@@ -94,7 +99,7 @@ def prepare(run, snapshot, project, case):
     add_task(run, project, case, "main")
 
 
-def run_one(executable, run, snapshot, project, case, repeat):
+def run_one(executable, run, snapshot, project, case, repeat, evidence_gold=None):
     prepare(run, snapshot, project, case)
     started = time.monotonic()
     # 每例独立进程，Tauri / ONNX / 新鲜度缓存不跨用例；工具内部并发保持生产行为。
@@ -119,7 +124,8 @@ def run_one(executable, run, snapshot, project, case, repeat):
                 exit_code = "timeout"
         write_json(run / (phase + "-process.json"), {"exitCode": exit_code})
     export_evidence(run)
-    metrics = score(run, snapshot, case)
+    export_segment_contracts(executable, run / "appdata" / DB_NAME, run / "segment-evidence.json")
+    metrics = score(run, snapshot, case, evidence_gold_path=evidence_gold)
     metrics.update({"caseId": case["id"], "repeat": repeat, "elapsedSeconds": time.monotonic() - started})
     if case.get("followup"):
         add_local_metrics(run, metrics)
@@ -205,6 +211,16 @@ def report(output, cases, results, snapshot, version):
         columns = [case["id"], "历史输入" if "历史输入复现" in case["provenance"] else "新基线", str(sum(r["produced"] for r in runs)), statuses,
                    *(display(k) for k in ["planningReferenceCoveragePct", "referenceCoveragePct", "duplicateAssets", "sourceOverlapMs", "targetDeviationMs", "clarificationTurns", "receiptArtifactMismatches", "machineRiskSelectionsPrelabel"])]
         lines.append("| " + " | ".join(columns) + " |")
+    contract_runs = [r["evidenceContract"] for r in results if "evidenceContract" in r]
+    if contract_runs:
+        lines.extend(["", "## 片段证据契约", "", "风险事实覆盖不是识别正确率或体裁合格率；未知不算安全。", "",
+                      "| 契约指标 | 均值 | 最差 |", "|---|---:|---:|"])
+        for key, label in [("knownRiskCoveragePct", "非未知风险覆盖 %"), ("unknownPct", "未知比例 %"),
+                           ("primaryUnknownPct", "七项核心风险未知 %"), ("machinePrelabelRiskCoveragePct", "旧机器正向预标覆盖 %"),
+                           ("falseNegativePct", "漏检率金标 %"), ("falsePositivePct", "误杀率金标 %")]:
+            values = [r[key] for r in contract_runs if r[key] is not None]
+            worst = (min(values) if "Coverage" in key else max(values)) if values else None
+            lines.append(f"| {label} | {statistics.mean(values):.2f} | {worst:.2f} |" if values else f"| {label} | N/A | N/A |")
     lines.extend(["", "## 固定输入与关键样例", ""])
     for case in cases:
         lines.extend([f"### {case['id']}", "", f"{case['provenance']}；目标 {case['targetMs']} ms；配音 {case['voiceover']}；BGM {case['bgm']}；体裁意图 {case['genre']}。", "", case["request"], ""])
@@ -282,6 +298,8 @@ def main():
     parser.add_argument("--workers", type=int, help="默认全部用例同时发起；只在资源不足时显式降低")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--rescore", action="store_true")
+    parser.add_argument("--contract-replay", type=Path, help="只读历史基线，重跑证据适配/P5/计分；不调用模型生成")
+    parser.add_argument("--evidence-gold", type=Path, help="原始风险事实金标 CSV，与体裁淘汰金标分开")
     parser.add_argument("--gold", type=Path)
     args = parser.parse_args()
     if args.rescore and not args.output:
@@ -299,7 +317,7 @@ def main():
         for case in cases:
             for repeat in range(1, 4):
                 run = output / case["id"] / str(repeat)
-                value = score(run, snapshot, case, args.gold)
+                value = score(run, snapshot, case, args.gold, args.evidence_gold)
                 prior = json.loads((run / "metrics.json").read_text(encoding="utf-8")) if (run / "metrics.json").exists() else {}
                 if "elapsedSeconds" in prior:
                     value["elapsedSeconds"] = prior["elapsedSeconds"]
@@ -310,6 +328,15 @@ def main():
                 results.append(value)
         report(output, cases, results, snapshot, experiment["code"])
         write_json(output / "rescore-version.json", {"scoringCode": code_version(), "goldSha256": digest(args.gold) if args.gold else digest(snapshot / "gold.csv")})
+        return
+    if args.contract_replay:
+        if not args.snapshot:
+            parser.error("--contract-replay 需要 --snapshot")
+        from contract_replay import replay
+        if not args.skip_build:
+            subprocess.run(["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "--features", "footage-eval", "--bin", "footage-eval"], cwd=ROOT, check=True)
+        replay(ROOT, args.contract_replay.resolve(), args.snapshot.resolve(), output,
+               ROOT / "src-tauri/target/debug/footage-eval.exe", code_version(), args.evidence_gold)
         return
     snapshot = args.snapshot.resolve() if args.snapshot else output / "snapshot"
     if not args.snapshot:
@@ -338,7 +365,7 @@ def main():
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers or len(cases) * 3) as pool:
         pending = {pool.submit(run_one, executable, output / case["id"] / str(repeat), snapshot,
-                               frozen["projectId"], case, repeat): (case, repeat) for case in cases for repeat in range(1, 4)}
+                               frozen["projectId"], case, repeat, args.evidence_gold): (case, repeat) for case in cases for repeat in range(1, 4)}
         for future in concurrent.futures.as_completed(pending):
             results.append(future.result())
             report(output, cases, results, snapshot, version)

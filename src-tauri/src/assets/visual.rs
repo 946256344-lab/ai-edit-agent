@@ -265,6 +265,7 @@ fn coarse_visual_card(
     range_ms: Option<(i64, i64)>,
 ) -> VisualEvidence {
     VisualEvidence {
+        provenance: None,
         time_ms,
         subjects: item
             .subjects
@@ -1541,18 +1542,20 @@ fn run_visual_analysis_batch(app: AppHandle, task_id: String, input_json: String
             if !matched.insert(key.clone()) {
                 continue;
             }
-            cards_by_asset
-                .entry(item.asset_id.clone())
-                .or_default()
-                .push(coarse_visual_card(
-                    &item,
-                    unit_key_segment(&key),
-                    time_ms,
-                    group
-                        .iter()
-                        .find(|unit| unit_key(&unit.asset_id, &unit.segment_id) == key)
-                        .and_then(|unit| unit.range_ms),
-                ));
+            let mut card = coarse_visual_card(
+                &item, unit_key_segment(&key), time_ms,
+                group.iter().find(|unit| unit_key(&unit.asset_id, &unit.segment_id) == key)
+                    .and_then(|unit| unit.range_ms),
+            );
+            card.provenance = Some(crate::models::EvidenceSource {
+                analysis_id: format!("{task_id}/{key}"),
+                model: Some(access.custom_config().map(|c| {
+                    if c.coarse_visual_model.is_empty() { c.model.clone() } else { c.coarse_visual_model.clone() }
+                }).unwrap_or_else(|| "gpt-5.4".to_owned())),
+                method: "whole_shot_multiframe_visual".to_owned(),
+                analysis_version: 1,
+            });
+            cards_by_asset.entry(item.asset_id.clone()).or_default().push(card);
         }
     }
     if cards_by_asset.is_empty() {

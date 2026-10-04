@@ -89,5 +89,31 @@ class MetricsContract(unittest.TestCase):
         self.assertIsNone(value["acceptableBestWindowCountGold"])
 
 
+class EvidenceMetricsContract(unittest.TestCase):
+    def test_tristate_coverage_and_independent_gold(self):
+        from evidence_metrics import evidence_summary
+        e = {"assetId":"a","segmentId":"s","range":{"startMs":0,"endMs":5000},"risks":[
+            {"risk":"brand_logo","state":"hit","range":{"startMs":2000,"endMs":3000}},
+            {"risk":"shake","state":"unknown","range":{"startMs":0,"endMs":5000}}]}
+        coverage=evidence_summary([e],[{"asset_id":"a","segment_id":"s","machine_risks":"品牌标识|抖动"}])
+        self.assertEqual(coverage["unknownPct"],50)
+        self.assertEqual(coverage["machinePrelabelRiskCoveragePct"],50)
+        self.assertIsNone(coverage["falseNegativePct"])
+        self.assertIsNone(coverage["falsePositivePct"])
+        gold=[{"asset_id":"a","segment_id":"s","risk":"brand_logo","state":"not_hit"},
+              {"asset_id":"a","segment_id":"s","risk":"shake","state":"hit"}]
+        scored=evidence_summary([e],gold=gold)
+        self.assertEqual(scored["falseNegativePct"],100)
+        self.assertEqual(scored["falsePositivePct"],100)
+        self.assertEqual(scored["unknownOnGold"],1)
+        # A range away from the logo cannot be declared safe without an explicit negative.
+        gold=[{"asset_id":"a","segment_id":"s","risk":"brand_logo","state":"not_hit","start_ms":"0","end_ms":"1000"}]
+        self.assertEqual(evidence_summary([e],gold=gold)["unknownOnGold"],1)
+        e["risks"].append({"risk":"shake","state":"not_hit","confidence":0.9,"range":{"startMs":0,"endMs":1000}})
+        from evidence_metrics import pair_state
+        self.assertEqual(pair_state(e["risks"][1:],{"startMs":0,"endMs":1000}),"not_hit")
+        self.assertEqual(pair_state(e["risks"][1:],e["range"]),"unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -792,6 +792,7 @@ mod tests {
     fn required_visual_ranks_matching_scene_first() {
         let mut factory = make_source("factory", "video", Some(10_000), 0.5);
         factory.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["workers".to_owned()],
             scene: Some("factory production line".to_owned()),
@@ -809,6 +810,7 @@ mod tests {
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.9);
         office.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["staff".to_owned()],
             scene: Some("office meeting".to_owned()),
@@ -850,6 +852,7 @@ mod tests {
     fn chinese_beat_with_english_keywords_ranks_matching_asset_first() {
         let mut forklift = make_source("forklift", "video", Some(10_000), 0.4);
         forklift.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["forklift operator".to_owned()],
             scene: Some("outdoor loading area".to_owned()),
@@ -867,6 +870,7 @@ mod tests {
         }];
         let mut office = make_source("office", "video", Some(10_000), 0.95);
         office.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["staff".to_owned()],
             scene: Some("office meeting".to_owned()),
@@ -915,6 +919,7 @@ mod tests {
         let bare = make_source("bare", "video", Some(10_000), 0.9);
         let mut evidenced = make_source("evidenced", "video", Some(10_000), 0.2);
         evidenced.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["battery modules".to_owned()],
             scene: Some("battery testing rack".to_owned()),
@@ -1058,6 +1063,7 @@ mod tests {
     fn whole_asset_text_cannot_outrank_clip_when_image_vector_is_missing() {
         let mut whole = make_source("whole", "video", Some(10_000), 0.9);
         whole.visual_evidence = vec![crate::models::VisualEvidence {
+            provenance: None,
             time_ms: Some(0),
             subjects: vec!["orange cables".to_owned()],
             scene: Some("interior of electrical enclosure with cable routing".to_owned()),

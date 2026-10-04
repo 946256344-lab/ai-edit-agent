@@ -6,6 +6,8 @@ pub mod analysis;
 pub mod beats;
 pub mod controls;
 pub mod health;
+pub(crate) mod evidence_contract;
+pub(crate) mod evidence_verification;
 pub mod library;
 pub mod motion;
 mod progress;

@@ -13,7 +13,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-pub(crate) const SCHEMA_VERSION: i64 = 20;
+pub(crate) const SCHEMA_VERSION: i64 = 21;
 
 /// 新故事版 / 时间线版本的两个编号。`version_number` 列受建表时的
 /// `UNIQUE(project_id, version_number)` 约束，只作项目内递增序号（唯一与排序）；
@@ -446,6 +446,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), String> {
         [],
     ).map_err(|error| error.to_string())?;
     crate::shared_library::migrate(connection)?;
+    crate::assets::evidence_contract::migrate(connection)?;
     connection
         .execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",

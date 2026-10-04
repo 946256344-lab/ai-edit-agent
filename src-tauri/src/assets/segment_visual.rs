@@ -503,6 +503,7 @@ pub(crate) fn run_segment_visual_analysis_batch(
                 entry.insert(
                     item.segment_id.clone(),
                     VisualEvidence {
+                        provenance: None,
                         time_ms: item.time_ms,
                         subjects: item.subjects,
                         scene: item.scene,

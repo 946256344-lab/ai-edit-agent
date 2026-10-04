@@ -692,7 +692,10 @@ pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvide
             |row| {
                 let metadata: TechnicalMetadata =
                     serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default();
+                let segment_evidence = super::evidence_contract::load_asset(&connection, &asset_id, &metadata)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
                 Ok(AssetEvidence {
+                    segment_evidence,
                     id: row.get(0)?,
                     display_name: row.get(1)?,
                     kind: row.get(4)?,
