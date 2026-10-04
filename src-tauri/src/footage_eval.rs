@@ -48,6 +48,9 @@ pub(crate) fn model_access() -> Result<crate::provider::ModelAccess, String> {
 }
 
 pub fn run() -> Result<(), String> {
+    if std::env::args().nth(1).as_deref() == Some("--judge-eligibility") {
+        return crate::storyboard::eligibility::judge_contract_file();
+    }
     if std::env::args().nth(1).as_deref() == Some("--export-evidence") {
         return export_segment_evidence();
     }

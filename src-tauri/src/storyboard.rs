@@ -2,6 +2,7 @@
 //! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
 
 pub(crate) mod clip;
+pub(crate) mod eligibility;
 mod daypart;
 mod keyframes;
 mod length;
@@ -12,7 +13,7 @@ pub(crate) mod phase4;
 pub(crate) mod phases;
 mod provider_trace;
 pub(crate) mod repair;
-mod scoring;
+pub(crate) mod scoring;
 pub(crate) mod semantic;
 mod step_retry;
 pub(crate) mod timing;
@@ -3190,9 +3191,23 @@ fn generate_storyboard_internal(
                 timing::SpeechTiming::default()
             }
         });
-    let mut rough = phases::phase2_rough_shot_selection(
-        &narrative,
+    let eligible = eligibility::prepare_candidates(
+        &app,
+        &connection,
+        &project_id,
         &sources,
+        &narrative.beats,
+        &embeddings,
+        &clip_embeddings,
+        &usage_counts,
+        narrative.target_duration_ms / (narrative.beats.len().max(1) as i64),
+        // 真实体裁由后续任务接入；当前按自动无法判断时的默认宣传执行。
+        crate::models::Genre::Promotion,
+        media_options.map(|options| options.aspect_ratio).unwrap_or_default(),
+    )?;
+    let mut rough = phases::phase2_eligible_shot_selection(
+        &narrative,
+        &eligible,
         &usage_counts,
         &embeddings,
         &clip_embeddings,
