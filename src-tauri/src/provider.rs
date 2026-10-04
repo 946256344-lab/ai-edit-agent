@@ -311,6 +311,10 @@ pub(crate) enum ModelAccess {
 
 impl ModelAccess {
     pub(crate) fn resolve() -> Result<Self, String> {
+        #[cfg(feature = "footage-eval")]
+        if crate::footage_eval::trace_directory().is_some() {
+            return crate::footage_eval::model_access();
+        }
         if let Some(base_url) = crate::fellowcut_account::gateway_base_url()? {
             return Ok(ModelAccess::Gateway(CustomApiConfig {
                 base_url,

@@ -1,0 +1,12 @@
+[
+  {"id":"history-1","historyMessageId":"878c6dc5-48d9-4c16-bc41-8c95b0eb1ae0","request":"用素材库里的工业自动化与精密制造素材，剪一条 30 秒的产品宣传片：开场 2 秒内抓住注意力，中段展示精密加工、自动化产线和质量检测，节奏跟着音乐走，结尾有力收束。","targetMs":30000,"voiceover":false,"bgm":true,"genre":"auto"},
+  {"id":"history-2","historyMessageId":"ea3cf2bb-09b3-42b5-a6b1-2d22f0b030eb","request":"用素材库里的工业自动化与精密制造素材，剪一条 30 秒的产品宣传片：开场 2 秒内抓住注意力，中段展示精密加工、自动化产线和质量检测，节奏跟着音乐走，结尾有力收束。","targetMs":30000,"voiceover":true,"bgm":true,"genre":"auto"},
+  {"id":"history-3","historyMessageId":"09aee0b8-a46a-49f7-b1ca-eca64b65730c","request":"用素材库里的工业自动化与精密制造素材，剪一条 30 秒的产品宣传片：开场 2 秒内抓住注意力，中段展示精密加工、自动化产线和质量检测，节奏跟着音乐走，结尾有力收束。加开场标题、中段卖点花字和片尾卡。直接生成，不用问我。","targetMs":30000,"voiceover":false,"bgm":true,"genre":"auto"},
+  {"id":"zh-15-silent","request":"用工业素材做 15 秒横屏产品宣传片，展示自动化机械的运作，不配音，不加背景音乐。直接生成。","targetMs":15000,"voiceover":false,"bgm":false,"genre":"promotion"},
+  {"id":"en-30-silent","request":"Create a 30-second landscape promotional video from the industrial footage. Show precision machining, automation and inspection using real shots. No voiceover or background music. Generate directly.","targetMs":30000,"voiceover":false,"bgm":false,"genre":"promotion","uiLocale":"en"},
+  {"id":"en-15-voice","request":"Make a 15-second landscape promotional video with voiceover. Read this narration verbatim: Precision starts with every movement. Machines turn ideas into real parts. Automation keeps production moving. Build the future with confidence. No background music.","targetMs":15000,"voiceover":true,"bgm":false,"genre":"promotion","uiLocale":"en"},
+  {"id":"missing-visual","request":"用工业素材剪一条 30 秒宣传片，必须展示宇航员在月球表面行走的真实画面。没有这个画面就明确说明缺口，不能用机器画面代替。不要配音和背景音乐。","targetMs":30000,"voiceover":false,"bgm":false,"genre":"promotion","expectedMissing":true},
+  {"id":"local-replace","request":"先用工业素材生成 15 秒横屏宣传片，不配音、不加音乐。","followup":"只替换第一个镜头，换成更清楚的机械臂操作画面，其余镜头、时长和声音保持不变。","targetMs":15000,"voiceover":false,"bgm":false,"genre":"promotion"},
+  {"id":"narrative-gap","request":"按叙事体裁，用工业素材做一条 30 秒短片，讲同一工人遇到故障、修复、成功恢复生产的因果故事。没有同一事件的起因、变化和结果就只说明缺口，不编故事。不配音、不加音乐。","targetMs":30000,"voiceover":false,"bgm":false,"genre":"narrative","expectedMissing":true},
+  {"id":"bts-industrial","request":"按花絮体裁，用工业素材做 20 秒幕后片，优先自然互动和幕后时刻，保留现场声音，不配音，开背景音乐。素材没有这些时刻就如实说明。","targetMs":20000,"voiceover":false,"bgm":true,"genre":"bts"}
+]

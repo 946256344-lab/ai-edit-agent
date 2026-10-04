@@ -1,5 +1,6 @@
 [package]
 name = "assembly-video-agent"
+default-run = "assembly-video-agent"
 version = "0.1.2"
 description = "A Windows-first local video editing Agent"
 authors = ["Voycut"]
@@ -12,6 +13,14 @@ rust-version = "1.77.2"
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+footage-eval = []
+
+[[bin]]
+name = "footage-eval"
+path = "src/bin/footage_eval.rs"
+required-features = ["footage-eval"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

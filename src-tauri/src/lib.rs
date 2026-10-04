@@ -85,6 +85,10 @@ mod timeline_voice;
 /// ElevenLabs 配音凭据、合成、指纹缓存与 alignment 字幕。
 mod voice_provider;
 
+/// 独立无窗口评测入口，仅显式 feature 构建可用。
+#[cfg(feature = "footage-eval")]
+pub mod footage_eval;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

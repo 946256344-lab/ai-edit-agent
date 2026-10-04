@@ -736,7 +736,7 @@ pub(crate) fn persisted_task_status(app: &AppHandle, agent_task_id: &str) -> Str
     }
 }
 
-fn run_agent_edit_pipeline(
+pub(crate) fn run_agent_edit_pipeline(
     app: AppHandle,
     agent_task_id: &str,
     project_id: String,

@@ -58,6 +58,10 @@ enum Attempt {
 
 /// 渲染一张卡片，返回 PNG 字节。工作线程失联时换新线程重发一次，超时如实报错。
 pub(crate) fn render_png(user_data_dir: &Path, job: RenderJob) -> Result<Vec<u8>, String> {
+    #[cfg(feature = "footage-eval")]
+    if crate::footage_eval::trace_directory().is_some() {
+        return Err("eval_card_webview_disabled".to_owned());
+    }
     match attempt(user_data_dir, job.clone()) {
         Attempt::Done(result) => result,
         Attempt::WorkerGone => match attempt(user_data_dir, job) {

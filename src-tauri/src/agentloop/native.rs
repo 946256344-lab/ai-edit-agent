@@ -1066,6 +1066,9 @@ fn execute_native_tool(
     step_number: usize,
 ) -> Result<Value, String> {
     let allowed = NATIVE_TOOL_NAMES.contains(&call.name.as_str());
+    #[cfg(feature = "footage-eval")]
+    let allowed = allowed && !(crate::footage_eval::trace_directory().is_some()
+        && matches!(call.name.as_str(), "request_asset_analysis" | "retry_failed_asset_analysis" | "create_jianying_draft"));
     let persisted_name = if allowed {
         call.name.as_str()
     } else {

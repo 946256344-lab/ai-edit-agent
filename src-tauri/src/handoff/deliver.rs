@@ -117,6 +117,10 @@ pub fn deliver_to_editor(
     timeline_version_id: String,
     editor_id: Option<String>,
 ) -> Result<EditorDeliveryResult, String> {
+    #[cfg(feature = "footage-eval")]
+    if crate::footage_eval::trace_directory().is_some() {
+        return Err("eval_editor_delivery_disabled: external editor directories are outside the evaluation scope".to_owned());
+    }
     let connection = open_connection(&app)?;
     let timeline = load_timeline_version(&connection, &timeline_version_id)?;
     let editor = match editor_id.as_deref() {

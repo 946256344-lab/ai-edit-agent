@@ -225,9 +225,14 @@ pub(crate) fn phase1_generate_narrative(
         "text": { "format": { "type": "json_object" } }
     });
 
+    #[cfg(feature = "footage-eval")]
+    crate::storyboard::provider_trace::append_storyboard_trace("Phase 1", None, 1, "request", &request);
     let body = post_model_payload(access, &request, Some(STORYBOARD_TIMEOUT))?;
     let text = model_response_json_text(access, &body)
         .ok_or_else(|| "Phase 1 response did not contain JSON.".to_owned())?;
+    #[cfg(feature = "footage-eval")]
+    crate::storyboard::provider_trace::append_storyboard_trace("Phase 1", None, 1, "response",
+        &serde_json::from_str::<Value>(&text).unwrap_or(Value::Null));
 
     log::info!(
         "Phase 1 complete: received narrative structure, json_length={} bytes",
@@ -546,6 +551,12 @@ pub(crate) fn build_beat_pool(
     };
     let (pool, scores, library_exhausted) =
         pick_segment_pool(&ranked, effective_pool_size, score_first_slots);
+    #[cfg(feature = "footage-eval")]
+    crate::storyboard::provider_trace::append_pool_trace("Phase 2 ranked inventory", &beat.id,
+        &json!({"ranked": ranked.iter().map(|c| json!({"assetId": c.source.asset_id,
+            "range": candidate_range_ms(&c.source), "score": c.score,
+            "inPool": pool.iter().any(|p| p.asset_id == c.source.asset_id && candidate_range_ms(p) == candidate_range_ms(&c.source))
+        })).collect::<Vec<_>>(), "poolQuota": effective_pool_size}));
     let sample = pool
         .iter()
         .zip(scores.iter())
@@ -673,10 +684,14 @@ fn add_pool_candidate(
         existing.asset_id == source.asset_id
             && ranges_overlap(candidate_range_ms(existing), candidate_range_ms(source))
     }) {
+        #[cfg(feature = "footage-eval")]
+        trace_pool_attempt(source, "overlapping_same_asset", pool.len());
         return false;
     }
     let count = *per_asset.get(&source.asset_id).unwrap_or(&0);
     if count >= PHASE2_MAX_SEGMENTS_PER_ASSET_IN_POOL {
+        #[cfg(feature = "footage-eval")]
+        trace_pool_attempt(source, "per_asset_segment_limit", pool.len());
         return false;
     }
     let similar = pool
@@ -684,12 +699,23 @@ fn add_pool_candidate(
         .filter(|existing| sources_are_similar(existing, source))
         .count();
     if similar >= PHASE2_MAX_SIMILAR_IN_POOL {
+        #[cfg(feature = "footage-eval")]
+        trace_pool_attempt(source, "similarity_limit", pool.len());
         return false;
     }
     per_asset.insert(source.asset_id.clone(), count + 1);
     pool.push(source.clone());
     scores.push(candidate.score.clone());
+    #[cfg(feature = "footage-eval")]
+    trace_pool_attempt(source, "accepted", pool.len());
     true
+}
+
+#[cfg(feature = "footage-eval")]
+fn trace_pool_attempt(source: &StoryboardSource, reason: &str, pool_len: usize) {
+    crate::storyboard::provider_trace::append_pool_trace("Phase 2 pool attempt", "-",
+        &json!({"assetId": source.asset_id, "range": candidate_range_ms(source),
+            "reason": reason, "poolLen": pool_len}));
 }
 
 fn candidate_range_ms(source: &StoryboardSource) -> (i64, i64) {

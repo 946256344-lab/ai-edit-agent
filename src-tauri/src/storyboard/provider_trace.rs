@@ -22,6 +22,10 @@ pub(crate) fn pool_trace_enabled() -> bool {
 }
 
 fn target_trace_dir() -> Option<PathBuf> {
+    #[cfg(feature = "footage-eval")]
+    if let Some(directory) = crate::footage_eval::trace_directory() {
+        return Some(directory);
+    }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     Some(manifest_dir.join("target"))
 }
@@ -96,6 +100,11 @@ fn now_ms() -> u128 {
 }
 
 fn append_jsonl_record(path: &PathBuf, record: Value) {
+    // 评测的并发 P3/P4 不能把正文与换行交叉追加，避免轨迹对象粘连；不改变模型结果。
+    #[cfg(feature = "footage-eval")]
+    static TRACE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(feature = "footage-eval")]
+    let _guard = TRACE_WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

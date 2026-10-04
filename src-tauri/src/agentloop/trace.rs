@@ -77,7 +77,12 @@ fn emit_native_provider_full_trace(
         direction: direction.to_owned(),
         adapter: adapter.to_owned(),
         http_status,
-        body: body.to_owned(),
+        body: {
+            #[cfg(feature = "footage-eval")]
+            { crate::footage_eval::redact_body(body) }
+            #[cfg(not(feature = "footage-eval"))]
+            { body.to_owned() }
+        },
         created_at,
     };
     let path = native_provider_trace_path();
@@ -86,6 +91,10 @@ fn emit_native_provider_full_trace(
 }
 
 fn native_provider_trace_path() -> PathBuf {
+    #[cfg(feature = "footage-eval")]
+    if let Some(directory) = crate::footage_eval::trace_directory() {
+        return directory.join(FULL_TRACE_FILE_NAME);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join(FULL_TRACE_FILE_NAME)
