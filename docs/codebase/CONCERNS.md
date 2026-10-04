@@ -1,91 +1,58 @@
 # 代码库关注点
 
-## 1）优先风险
+本页按当前源码列风险，不沿用旧扫描的行数、提交频率或已经完成的拆分计划。产品优先级由 TASKS.md / decisions.md 所有；本次静态核实不证明桌面可用。
 
-| 严重度 | 关注点 | 证据 | 影响 | 建议动作 |
-| --- | --- | --- | --- | --- |
-| 高 | `agentloop.rs` 3599 行，仍混合路由、prompt、快照、循环、技能派发和测试；纯 policy 已提取 | `src-tauri/src/agentloop.rs`、`agentloop/policy.rs` | executor 改动仍可能污染路由和状态恢复 | policy 保持无副作用；后续抽 router/state，最后搬 executor |
-| 高 | `assets.rs` 4114 行，混合六类领域职责和两类 worker | `src-tauri/src/assets.rs` | 导入、目录、分析或健康变更互相污染 | 按 import/technical/visual/library/health/metadata 拆子模块 |
-| 高 | 完整 Agent 多步 fixture 不能执行 | `src-tauri/tests/fixtures/README.md` | prompt/schema/状态组合回归只能靠局部测试和实机发现 | 增加 scripted decision seam 与临时 SQLite runner |
-| 中 | 默认直推 master 且无 CI | `.githooks/pre-commit` 只拦 detached HEAD 与文档同步，仓库无 `.github/workflows/` | 本机检查被跳过时，回归只靠后续实机发现 | 保持直推；需要时再补 Windows CI，不要用分支保护抵消该流程 |
-| 中 | `timeline.rs` 1848 行，文本、音乐、镜头编辑共存 | `src-tauri/src/timeline.rs` | 下一轮轨道能力会继续膨胀 | 在 Agent/assets 稳定后按 editing/text/music/repository 拆 |
-| 中 | 前端入口仍接近预算 | `App.tsx` 515 行；artifact controller 363 行 | 新功能可能再次把 task 和产物职责混回 | 下一次功能前拆 conversation/task controller 与 artifact 子域 |
+## 优先风险
 
-## 2）技术债务
+| 关注点 | 当前证据与影响 | 验收边界 |
+|---|---|---|
+| 删除/清缓存的前端确认 | App.tsx、ProjectSettingsModal、useNavigationEditController 仍使用 window.confirm；后端 confirmed=true 不能证明前端取得有效确认 | 已登记在 TASKS.md；必须实测取消不删除、确认才执行，本文不修业务 |
+| 策划方向与实现阶段不同 | storyboard.rs 仍先按 brief/库存摘要写 narrative，再 P2→P3 选片；未实现体裁控制，库存提示不能保证逐段先引用镜头 | 不把「素材先行策划 + 体裁」方向宣传为已实现 |
+| ASR 是占位 | subtitle.rs::transcribe_asset 按真实时长生成最多 40 条固定占位句、engine=local_stub_v1、confidence=0.55 | 不能把工具名/Schema 描述当真实语音识别；代码没有加载 whisper 模型自动升级路径 |
+| 原生文字兼容判定不一致 | storyboard_text_tracks 可把带描边/阴影字幕标 verified，timeline::validate_text_tracks 对这类样式判 local_preview_only；jianying 依赖 cue 判定交付 | TASKS.md 已登记；需剪映/CapCut 实测并统一判定 |
+| FCPXML 变速取窗待验证 | handoff/fcpxml.rs 的 timeMap/timept 与 asset-clip 源起点组合已有待查 | 用真实放慢镜头导入 Resolve/FCP 核对画面，写文件成功不证明语义正确 |
+| 重复文件夹导入 | assets.rs::store_assets 每次新建 ID，不按源路径去重 | TASKS.md 已登记，不能把共享库复用描述为所有导入都会去重 |
+| 发行/编辑器效果未闭环 | 四端口、旁白/品牌/转场有写入代码，但桌面/干净机/签名等证据独立于源码 | 以 release-checklist.md 的当前待确认项为准 |
 
-| 债务 | 现状原因 | 位置 | 忽略风险 | 修复方向 |
-| --- | --- | --- | --- | --- |
-| 领域 SQL 分散 | 本地应用直接使用 rusqlite，早期速度优先 | 多个 `src-tauri/src/*.rs` | 拆模块时破坏跨表事务 | 不先造通用 repository；先提取每个领域的 scoped query/transaction 函数 |
-| 手写 TS 工具镜像 | `agent-tools.ts` 不参与运行时 | `src/lib/agent-tools.ts` | 再次与 Rust 白名单漂移 | 待确认生成或删除策略，见问题 3 |
-| `local-store.ts` 平铺 562 行 | 一个 bridge 集中全部命令 | `src/lib/local-store.ts` | 类型和命令查找变慢、跨域改动冲突 | 按 projects/assets/artifacts/agent/provider 分文件，由单一 index 汇总 |
-| TypeScript 未开启 `strict` 总开关 | 当前只启用了若干局部严格选项 | `tsconfig.app.json` | null、函数参数方差等类型缺口不能由现有 build 完整发现 | 单独建立迁移基线后逐项开启，不在一次提交中制造大量无关修复 |
-| `PartiallyDone` 分支未构造 | 终态枚举保留了未使用变体 | `agentloop.rs`、`cargo check` | 每次 Rust 构建产生 dead-code warning，可能遮蔽新增警告 | 确认不再需要后删除，或在真实部分完成路径中明确使用并补测试 |
-| ADR 编号/状态不完全整齐 | 连续恢复期频繁追加 | `docs/decisions.md` | 新成员难判断取代关系 | 单独做文档索引，不重写历史 ADR 正文 |
-| Agent 语义理解不可机器证明 | Markdown 和正则检查只能提供入口与边界 | 三份 `AGENTS.md`、`.harness/agent-context.json` | Agent 可能满足字面检查却误解产品目标 | 保持当前窗口短小、重要规则下沉 Rust/测试、用独立审查与真实验收闭环 |
-| 扫描包含自定义 target | 构建目录名不等于默认 `target/` | `src-tauri/target-mvp-verify/` | 代码度量被二进制污染 | 更新扫描排除或把 target 移至统一构建缓存 |
+## 当前结构与契约风险
 
-## 3）安全关注
+- assets 已拆 library/analysis/health/visual/controls/progress/segments/motion/retry/beats；agentloop 已拆 native/tools/skills/snapshot/context/prompt 等。旧「仍混合全部职责、下一步提取 library/router/state」路线已过时；不要据此新开重构任务。
+- 领域 SQL 仍分散，receipt 占用/消费、终态消息、局部故事版+时间线和审计依赖原子事务；搬迁不能拆断作用域与恢复行为。
+- tools.rs、policy.rs、native 白名单、TS 工具镜像及版本化 fixture 是多个同步点。当前 33 工具一致，但手工维护仍有漂移风险；harness 的名称检查不证明领域契约和模型行为正确。
+- fixture 文档仍标完整场景为 fixture_only，局部 scripted 响应测试不能替代所有场景在临时 SQLite 上运行的多轮 E2E；既有单测与工具契约检查各自只覆盖自己的边界。
+- tsconfig.app.json 未开启 strict 总开关；局部严格选项/build 不能等同完整 strict。改动验证遵守 CONTRIBUTING.md，不由本页要求默认全量测试。
+- local-store.ts 集中 invoke，module 扩大时要保留单一公开命令面；不能因 IDE 工具镜像存在就开放前端任意工具调用。
 
-| 风险 | 类别 | 证据 | 当前缓解 | 缺口 |
-| --- | --- | --- | --- | --- |
-| 自定义 Provider URL 只校验非空 | OWASP A10/配置风险 | `custom_api::validate_input` | 用户显式配置、凭据在 Credential Manager | 待确认 HTTP/localhost 边界，见问题 2 |
-| 实验性 OAuth 依赖非官方稳定契约 | N/A | `oauth.rs`、`provider.rs` | 明确标为实验性、失败封闭 | 上游 URL/scope/model 可变化，仍需真实刷新验证 |
-| Jamendo 凭据缺失与读取失败未区分 | 配置/诊断 | `music_provider.rs` | 保存失败返回 `failed`，不泄露凭据 | 状态读取把所有 keyring 错误都映射为 `disconnected`，应增加安全原因状态 |
-| 外部进程终止不能保证完整 | N/A | `process.rs` | 超时、`taskkill /T /F`、不无限等待 | 终止失败后缺少系统级孤儿进程观测 |
-| preview/Jianying 部分同步进程无超时 | 可用性 | `preview.rs`、`jianying.rs` | 统一无窗口创建，素材分析阶段已有超时 | FFmpeg/Python 异常挂起时可能阻塞交付；应复用可终止的超时执行器 |
-| 本地路径可能进入内部错误 | OWASP A09/隐私 | 多个 `Result<T,String>` | UI 固定文案、审计安全码、禁止模型原文日志 | 新日志/诊断必须持续审查，不应输出底层 error 原文 |
-| Google Fonts 产生网络请求 | 隐私/供应链 | `src/index.css` | CSP 仅允许指定字体域 | 离线/严格本地产品是否应内置字体尚未决策 |
+## 外部、安全与本地边界
 
-## 4）性能与扩展关注
+| 边界 | 当前缓解 | 尚需注意 |
+|---|---|---|
+| Voycut 网关与凭据 | 内置网关构建不回退本机 Provider/配音 key；Windows Credential Manager 保存秘密 | 服务端资格/额度/服务商选择不由此仓库静态验证；get_voice_availability 探测失败不等于明确无能力 |
+| 无网关开发连接 | custom_api 用户配置、实验性 OAuth；凭据读取失败封闭 | custom_api 输入校验主要为非空，HTTP/localhost 等 URL 策略仍需单独决定；不虚称 TASKS 已登记新的待决问题 |
+| 无网关配音回退 | Fish 传输类失败可用已配置 ElevenLabs，认证失败不回退 | 与「失败不静默换 Provider」原则存在需主会话澄清的范围差异，网关模式无回退 |
+| 路径/日志/媒体上传 | 库投影/快照不暴露源路径，read_logs 固定范围并遮蔽；release 关闭 debug 全量转储 | 媒体图片和文本仍发远端模型，不能写「不上传任何内容」；部分底层错误/log 包含路径，应持续审查 |
+| 进程与截止时间 | process.rs 无窗口创建、超时、taskkill 进程树回收；同步 Agent 步骤共享截止时间 | ONNX/文件操作无法强制中断；独立 preview/适配器不是统一用户可取消作业，终止失败/孤儿进程仍需运行证据 |
+| OCR / 模型资源 | Tesseract 随包 eng，ONNX 下载校验/续传，DirectML 失败回 CPU | eng 不识别中文招牌；缺 BGE/CLIP 会降级，启动状态不能冒充完整模型分析质量 |
+| 编辑器能力降级 | FCPXML 基础 Title、OTIO marker，黑场转场说明；品牌图片文字不可编辑 | 不能把四端口都称为完整原生字幕/动态一致，普通图片主镜头与品牌 PNG 能力不同 |
 
-| 关注点 | 证据 | 当前表现 | 扩展风险 | 建议 |
-| --- | --- | --- | --- | --- |
-| 轮询多个本地投影 | assets 1.5s、Agent 1.2s、health 2s、OAuth 2s | 当前单项目可用 | 更大项目增加重复 SQL | 保持有界查询；未来用状态事件唤醒但保留轮询恢复 |
-| 多数持久化领域命令按调用新开 SQLite connection 并 migrate | `db::open_connection` 与各领域命令 | WAL + busy timeout 已缓解锁 | 高频命令重复迁移检查 | 度量后再考虑受控连接管理，不在无证据时引入全局池 |
-| 视觉/技术 worker 位于巨型模块 | `assets.rs` atomics/thread | 已有 2 技术 worker、1 视觉 worker | 新分析类型使全局状态复杂 | 拆 worker coordinator 与纯分析 stage |
-| Preview 顺序渲染 | `preview.rs` | 适合当前短视频 | 更长/多轨会放大临时文件和耗时 | 加阶段耗时、磁盘预算和取消策略后再并行化 |
+CSP 仍允许 Google Fonts 域，但当前 index.css 未发现远端字体 import；不能沿用「正在发 Google Fonts 请求」的旧结论。是否有其他运行时网络字体请求本次未核实。
 
-## 5）高变更/脆弱区域
+## 性能与恢复
 
-| 区域 | 脆弱原因 | 变更信号 | 安全修改策略 |
-| --- | --- | --- | --- |
-| `App.tsx` | 路由、消息和工作区历史集中 | 最近 20 次提交中出现 8 次 | 保持预算，新增 task 行为先抽 controller |
-| `assets.rs` | 媒体/路径/DB/worker 交叉 | 最近提交多次修复性能与目录 | 先写/保留纯路径和队列测试，再搬代码 |
-| `agentloop.rs` / `agent.rs` | 权限、模型、终态事实耦合 | 多个连续 Agent ADR | 所有改动跑 fixture、事务和负向约束回归 |
-| 长期文档 | 恢复期高频同步 | TASKS/architecture/decisions 各 10 次 | 新增索引与证据，不覆盖历史事实 |
+技术并发为核数 1/4、夹到 2–8，视觉最多 16 个任务且同素材互斥；不再是旧「2 个技术 worker、1 个视觉 worker」。Phase 3 各拍并发，Phase 4 拆批并保存成功进度，BGE/CLIP 同模型推理串行、DirectML 优先。实际耗时取决于机器/素材/Provider，本次未重测。
 
-## 6）后端拆分顺序
+素材刷新按活动分析/扫描和事件唤醒；不能沿用「始终每 1.5 秒全库轮询」说法。SQLite 每次打开仍迁移检查，高频查询/源文件访问及远端共享盘延迟要用实际证据评估。preview 分层哈希缓存有项目 2 GiB 上限，成功才复用；长片/多轨的磁盘和渲染耗时、全流程取消仍需实测。
 
-1. [已完成] `agentloop/policy.rs`：已搬工具常量、`RequestToolPolicy`、goal/完成门纯函数；行为测试继续从父模块覆盖公开运行语义。
-2. `assets/library.rs`：只搬安全路径/目录投影和只读搜索，保持 Tauri 命令在原模块转发。
-3. `agentloop/router.rs` 与 `state.rs`：保留公开 crate 函数签名。
-4. `assets/technical.rs` 与 `visual.rs`：每次只迁移一个 worker，验证启动恢复和熔断。
-5. `agentloop/executor.rs`：最后移动 `apply_skill/run_step`，因为它连接所有副作用。
-6. 再处理 timeline、local-store 和 App；不同时拆前后端同一契约。
+## 文档与事实边界
 
-## 7）`[ASK USER]` 问题
+长期文档只描述现状，历史进入 changes；decisions 是主会话所有的有效决策，执行会话发现偏差只回报。代码已实现、静态检查通过、真实桌面验收、发布完成是不同事实，不能互相替代。交接必须保留当前 Git 状态、任务窗口、提交号和验证结果。
 
-1. [ASK USER] 自定义模型是否必须支持局域网 `http://`/localhost？这决定 Base URL 应强制 HTTPS，还是允许显式不安全本地连接。（已列入 `TASKS.md` 待决问题，阻断 `custom_api.rs` URL 校验加固）
-2. [ASK USER] `src/lib/agent-tools.ts` 未来要成为可发布 SDK 契约，还是仅作为 IDE 镜像？建议由版本化 Rust fixture 自动生成，避免第三份手工白名单。（已列入 `TASKS.md` 待决问题，阻断 agent-tools 生成/删除决策）
+## 证据
 
-## 8）意图与现实偏差
-
-| 长期意图 | 当前现实 | 处理方向 |
-| --- | --- | --- |
-| 领域模块清晰、`App.tsx` 聚焦组合 | 前端已明显分层，Agent 纯 policy 已独立；父 `agentloop.rs` / `assets.rs` 仍是物理热点 | 下一步 `assets/library`，再按第 6 节交替渐进搬迁 |
-| “严格 TypeScript 检查” | build 有多项严格选项，但 `tsconfig.app.json` 未开启 `strict` | 先建立迁移基线，再决定启用顺序 |
-| 版本化 Agent fixture 防止工具/场景回归 | 工具目录契约可执行，完整 scripted Provider 多步 runner 尚未实现 | 增加可注入 decision seam 与临时 SQLite runner |
-| 另一编码 Agent 可从文档接手 | 分层入口和硬门已建立，但未提交工作、隐含用户意图和真实桌面状态仍不能只靠文档恢复 | 交接时保持 Git 状态、当前任务窗口、变更记录和验收证据准确 |
-| Windows 本地产品可独立安装运行 | FFmpeg/FFprobe、Python/草稿 SDK 与 Tesseract/英文数据已随包 | 下一步做干净机完整剪辑验收 |
-
-## 9）证据
-
-- 2026-08-15 终端扫描输出（目录树、代码度量、最近 20 次提交与高变更文件）
-- `.harness/architecture-budgets.json`
-- `src-tauri/src/agentloop.rs`
-- `src-tauri/src/agentloop/policy.rs`
-- `src-tauri/src/assets.rs`
-- `src-tauri/tests/fixtures/README.md`
-- `src/lib/local-store.ts`
-- `git log -20`（2026-08-15 扫描）
-- `.harness/agent-context.json`
+- TASKS.md、docs/decisions.md、docs/release-checklist.md（只读）
+- src/App.tsx、src/components/ProjectSettingsModal.tsx、src/hooks/useNavigationEditController.ts
+- src-tauri/src/subtitle.rs、storyboard.rs、timeline.rs、handoff/{mod,fcpxml}.rs
+- src-tauri/src/agentloop/{tools,policy,native,schema,skills}.rs、src/lib/agent-tools.ts
+- src-tauri/src/assets/{analysis,visual,segments,library,retry}.rs、assets.rs
+- src-tauri/src/provider.rs、custom_api.rs、music_provider.rs、process.rs、runtime_models.rs、onnx_device.rs
+- src-tauri/tests/fixtures/README.md、tsconfig.app.json、src/index.css、src-tauri/tauri.conf.json

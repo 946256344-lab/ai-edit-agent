@@ -21,3 +21,9 @@
 - `docs/api.md`
 - `docs/architecture.md`
 - `TASKS.md`
+
+## 原长期文档补充：2026-09-07：Phase 4 精修拆批
+
+来源：`docs/api.md`，文档整理前的历史表述；现状以长期文档为准。
+
+Phase 4 Pass B/C 不减少每镜抽帧数；同一镜定时帧拼成一张网格，按最多 4 镜一批请求、各批并发，合并时锁定 `assetId`。不新增 Tauri 命令。见 `docs/changes/2026-09-07-phase4-refine-batch.md`。

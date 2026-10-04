@@ -86,8 +86,8 @@ src/main.tsx
 | `agentloop.rs` | Agent 模块入口与 Native 技能派发 |
 | `agentloop/native.rs` | 统一原生 Function Tool 循环；function_call 继续、自然语言结束，RunReceipt 裁决真实终态 |
 | `agentloop/context.rs` | 完整 Provider payload 的 o200k token 计量、40K/30K/60K 压缩边界与保护项选择 |
-| `agentloop/policy.rs` | 工具白名单、请求权限、负向约束与真实性辅助 |
-| `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema 与动态目录；Provider 常驻 `load_tools` 并最多加载 5 个业务工具 |
+| `agentloop/policy.rs` | 观察/编辑工具名清单；执行由 native 全局白名单与领域校验守边界 |
+| `agentloop/tools.rs` | 原生 Function Tool 的集中 strict JSON Schema 与完整目录；每次 Provider 请求直接携带完整 33 个业务工具 Schema |
 | `agentloop/logs.rs` | 固定读取当前应用日志文件，提供有界行范围、分页及凭据/路径遮蔽 |
 | `assets.rs` | 导入、分析、目录、搜索、健康、重链路、收集；瞬时失败补跑在 `assets/retry.rs` |
 | `storyboard.rs` | 证据候选、模型提案、校验和版本；Phase 4 当次精修进度在 `storyboard/phase4.rs` |
@@ -104,7 +104,8 @@ src/main.tsx
 | `capcut.rs` | CapCut 链接器：按本机注册表识别草稿库并新建 |
 | `provider.rs` | Provider 选择、传输转换、优先级和熔断 |
 | `oauth.rs`、`custom_api.rs`、`music_provider.rs`、`outbound_http.rs`、`runtime_models.rs` | 外部集成、凭据、共享出站 HTTP、发行后本地模型下载 |
-| `music_plan.rs` | 音乐先行：音乐窗口选择、切点吸附到节拍、配音模式容差吸附、分镜 `musicPlan` 读写 || `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
+| `music_plan.rs` | 音乐先行：音乐窗口选择、切点吸附到节拍、配音模式容差吸附、分镜 `musicPlan` 读写 |
+| `voice_provider.rs` | 配音指纹缓存、alignment 字幕与时间线写入 |
 | `db.rs`、`models.rs`、`audit.rs`、`process.rs`、`onnx_device.rs` | 数据库、边界类型、审计、外部进程基础设施、本地 ONNX 推理设备（显卡优先、CPU 回退） |
 
 ## 5）命名与组织规则

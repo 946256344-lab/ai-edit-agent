@@ -1,168 +1,72 @@
 # 架构导览
 
-## 1）架构风格
+本页沿当前源码定位职责和调用方向；产品链路见 [../architecture.md](../architecture.md)，注册契约见 [../api.md](../api.md)。本次只做静态核对，桌面/远端服务/编辑器效果未核实。
 
-这是本地优先的分层桌面 Agent，不是浏览器直接调用云 API 的 Web 应用，也不是传统剪辑器。
-
-- React/WebView 负责意图输入、状态投影与工作区展示。
-- TypeScript bridge 把前端调用限制为命名 Tauri 命令。
-- Rust 是可信执行边界：校验作用域、访问 SQLite/文件、运行媒体进程、调用 Provider、创建版本和审计。
-- 模型只在封闭技能空间中选择动作；真实产物完成门由 Rust 判断。
-- storyboard、timeline、preview、编辑器链接器交付物是逐级派生关系；内部 timeline 是事实来源。输出端口可选剪映 / CapCut / FCPXML / OTIO。
-- 编码 Agent 的上下文按根/React/Rust 三层加载；机器 harness 只强制可确定的跨层所有权，不能替代领域测试。
-
-## 2）总览
+## 分层与所有权
 
 ```mermaid
 flowchart LR
-  UI["React 工作区"] --> CTRL["领域 controllers"]
-  CTRL --> BRIDGE["local-store.ts / Tauri invoke"]
-  BRIDGE --> CMD["Rust 命令边界"]
-  CMD --> DB[("SQLite local project")]
-  CMD --> AGENT["Task Resolver + NativeToolLoop"]
-  AGENT --> DOMAIN["素材 / storyboard / timeline"]
-  DOMAIN --> MEDIA["FFprobe / FFmpeg / Tesseract"]
-  AGENT --> MODEL["OAuth 或自定义 Provider"]
-  DOMAIN --> DRAFT["local preview / 所选编辑器交付"]
-  CMD -. "事件仅通知" .-> CTRL
+  UI[React components] --> Controllers[src/hooks controllers]
+  Controllers --> Bridge[local-store.ts / invoke]
+  Bridge --> Commands[Rust 命令与作用域校验]
+  Commands --> DB[(SQLite)]
+  Commands --> Agent[taskrouter / agent / NativeToolLoop]
+  Agent --> Domain[assets / storyboard / timeline]
+  Domain --> Media[FFmpeg / FFprobe / Tesseract / ONNX]
+  Agent --> Provider[Voycut 网关或开发 Provider]
+  Domain --> Artifacts[preview / HandoffPlan / 四输出端口]
 ```
 
-## 3）自然语言请求链路
+| 所有者 | 当前职责 | 边界 |
+|---|---|---|
+| components / hooks | 展示、分析门、请求快照、查询和事件/轮询对账 | 不直接 SQL/Provider；invoke 集中 bridge |
+| taskrouter.rs | 活动 task 归属、pending route、单次 receipt | 不选择工具，不向路由模型注入兄弟任务 |
+| agent.rs | queued run、后台调用、终态/回复原子提交、取消 | 模型文本不裁决产物事实 |
+| agentloop/native.rs | 完整工具 Schema、call_id、RunReceipt、有界循环 | policy/native 白名单、LoopState 作用域与领域校验 |
+| agentloop/tools.rs / policy.rs | 33 个 strict Schema / 观察与编辑工具名 | TS 名称镜像不参与授权；没有动态加载工具协议 |
+| assets/ | analysis、segments/motion、visual/segment_visual、progress/controls、library/health、retry/beats | 原媒体只读；共享范围通过 project_asset_access |
+| storyboard/ | P1–P5、BGE/CLIP 召回、网格、局部精修 session、local_edit/recommendations/music_cuts | 检查真实 ID/源窗后落库；局部编辑冻结其他镜头 |
+| timeline / studio / timeline_voice / timeline_graphics | 新版本、轨道、换镜、音文轨、图层与转场 | 不覆盖旧版本；Studio 试选不等于已提交 |
+| preview / preview_audio / preview_graphics / preview_cache | 画幅、ASS/图片/转场、混音、缓存与 QC | preview 不是最终导出 |
+| handoff/ / jianying / capcut | timeline→HandoffPlan→新草稿或 FCPXML/OTIO | 单向、不覆盖；交付限制写 notes |
+| provider / music_provider / voice_provider / fellowcut_account | 网关/开发 Provider、配音、Jamendo、凭据投影 | 内置网关失败不回退本机 key |
+| db / audit / process / runtime_models / onnx_device | 只追加迁移、审计、无窗口进程、权重下载、DirectML/CPU | 不能由模型任意操作底层能力 |
 
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant A as App.tsx
-  participant B as local-store.ts / Tauri IPC
-  participant P as projects.rs
-  participant T as taskrouter.rs
-  participant C as agent.rs
-  participant L as agentloop.rs
-  participant D as Domain tools
-  participant S as SQLite
+## 请求到终态
 
-  U->>A: 发送请求
-  A->>B: resolveConversationTask
-  B->>T: resolve_conversation_task
-  T->>S: 读取 task_state_snapshots
-  T-->>B: TaskRouteResult
-  B-->>A: camelCase route result
-  alt Task Resolver 需要归属澄清
-    A-->>U: 显示临时澄清；不写消息、不提交 conversation turn
-  else task + conversation + one-use receipt 已确定
-    A->>B: createMessage + receipt
-    B->>P: create_message
-    P->>T: claim receipt for exact message
-    P->>S: 写入 user message
-    A->>B: submitConversationTurn
-    B->>C: submit_conversation_turn
-    C->>T: consume claimed receipt
-    T->>S: 原子消费 receipt
-    C->>S: 插入 queued agent_task
-    C-->>B: agentTaskId
-    B-->>A: agentTaskId
-    C->>L: 后台 bounded NativeToolLoop
-    L->>D: 原生观察/编辑/交付 function_call
-    D->>S: 校验后创建版本或审计
-    C->>S: 同一事务提交终态+最终回复+conversation
-    C-->>B: agent-edit-completed 通知
-    B-->>A: scoped event
-    A->>B: 事件或轮询后调用 list/load 命令
-    B->>D: 读取持久化 task/message/artifact 状态
-    D->>S: 查询权威状态
-  end
-```
+1. 前端冻结本轮文案、媒体选项和 uiLocale，分析未完成时由分析门确认只用 ready 素材。
+2. resolve_conversation_task 选当前任务或创建 task/conversation，返回绑定完整请求的 receipt。
+3. create_message 占用 receipt；submit_conversation_turn 消费一次、插入 queued task、返回 agentTaskId。
+4. NativeLoop 加载本会话消息、权威快照和完整 33 项 Schema；模型选工具，Rust 参数/作用域/领域校验后执行，结果按 call_id 返回。
+5. 有界循环最多 10 步、单步 180 秒、整轮 1800 秒；上下文 40K→30K、硬上限 60K。失败保留真实中间产物，终态由收据判定。
+6. task 终态、完成消息和 conversation 同事务保存后通知；前端重新读持久化消息/产物，事件丢失可由轮询恢复。
 
-关键不变量：任务归属确定前不写消息；receipt 只能消费一次；项目事实问答必须真实观察；明确负向要求缩小工具权限；事件丢失不能丢失最终回复。
+高层状态快照本身构成观察；没有「事实问答每次必调观察工具」或「关键词缩小全部工具权限」规则。卡片、转场等能力在领域执行处保留明确意图要求。
 
-## 4）媒体与产物链路
+## 媒体到交付
 
-```mermaid
-flowchart TD
-  IMPORT["显式导入文件/文件夹"] --> REF["SQLite 保存源引用"]
-  REF --> TECH["技术分析队列"]
-  TECH --> PROBE["FFprobe 元数据"]
-  TECH --> FRAMES["FFmpeg 缩略图/关键帧"]
-  FRAMES --> OCR["Tesseract OCR"]
-  OCR --> VISION["有界视觉批次"]
-  VISION --> EVIDENCE["持久化证据"]
-  EVIDENCE --> STORY["storyboard 提案+Rust 校验+版本"]
-  STORY --> TL["内部 timeline 新版本"]
-  TL --> PREVIEW["540x960 local preview + QC"]
-  TL --> HANDOFF["HandoffPlan"]
-  HANDOFF --> JY["所选编辑器链接器"]
-```
+导入保存源引用和共享库成员 → 技术队列（核数 1/4，2–8 worker）→ FFmpeg 硬切/CLIP 验真、运动可用窗与样本帧 → 每段多图视觉证据（最多 4 图/请求，16 个任务并发）→ P1 按 brief 拆拍 → P2 每拍 9 段召回 → P3 各拍看图并发选片 → P4 锁段入出点/cropFocus → P5 本地校验/版本/推荐池。
 
-素材列表读取持久化投影，不逐条探测源路径。健康检查、重链路、分析、下载和交付都是独立具名副作用。
+Agent 生成随后自动时间线、配音/BGM/品牌应用、preview 和所选编辑器交付，子产物失败不回滚已存版本。公开 Tauri 同名 generate_storyboard 不包含完整 Agent 后续编排。画布为 540×960 / 960×540 / 720×720，preview 混入旁白与音乐。四端口有旁白写入代码，剪映/CapCut 普通图片主镜头仍不支持，品牌 PNG 为独立图层。FCPXML 文本为基础 Title，OTIO 为 marker。
 
-## 5）模块职责与依赖方向
+## 数据与恢复
 
-| 模块 | 拥有 | 不应拥有 | 证据 |
-| --- | --- | --- | --- |
-| React components | 展示和局部开合状态 | Tauri 调用、任务路由 | `src/components/` |
-| React controllers | 领域投影、轮询、用户动作编排 | SQL、模型 prompt | `src/hooks/` |
-| `taskrouter` | task 归属和 receipt | 具体工具选择 | `src-tauri/src/taskrouter.rs` |
-| `agent` | conversation run 生命周期、原子终态 | 媒体实现、工具选择 | `src-tauri/src/agent.rs` |
-| `agentloop/policy` | 工具风险分层、请求负向约束与真实性辅助 | 数据库、文件、Tauri、Provider、外部进程 | `src-tauri/src/agentloop/policy.rs` |
-| `agentloop` | Native 循环、状态、prompt、技能派发 | 前置 Router、固定 LoopGoal、绕过 policy | `src-tauri/src/agentloop.rs`、`src-tauri/src/agentloop/native.rs` |
-| 领域模块 | 作用域校验后的领域读写 | 用户意图分类 | `assets.rs`、`timeline.rs` 等 |
-| `provider` | 可替换模型传输和调度 | 产物完成事实 | `src-tauri/src/provider.rs` |
-| `db` / `audit` | schema、连接策略、安全审计 | UI 文案与模型原文 | `db.rs`、`audit.rs` |
+- UI 剪辑会话以 editing task 为单位；timeline 通过 storyboard 归任务，查询按 project/task 校验。
+- 素材共享访问、预览中间缓存和素材新鲜度是项目级；不会把其他任务的产物作为当前事实。
+- task_version_number 供 UI/Agent 展示任务内版本，旧空值回退历史项目编号，不回填。
+- receipt、pending 路由/澄清、快照持久化；中断 Agent 标 needs_review，不重放未知副作用。分析任务另有队列恢复和取消/隐藏写回守卫。
+- 删除要求后端 confirmed=true；当前前端 window.confirm 可靠性问题尚待修，不可把参数门等同桌面确认有效。
 
-## 6）反复出现的模式
+## 当前关注边界
 
-| 模式 | 位置 | 目的 |
-| --- | --- | --- |
-| Adapter | `local-store.ts`、`provider.rs`、`handoff/`、`jianying.rs`、`capcut.rs` | 隔离 IPC、模型协议和外部编辑器格式 |
-| Append-only version | storyboard/timeline 表与创建函数 | 不覆盖历史创作产物 |
-| Transactional finalization | `agent::finalize_agent_task` | 任务、回复、conversation 和审计同一事务；提交后再通知 |
-| Event + polling reconciliation | `useAgentRunReconciliation` | 事件提供低延迟，SQLite 提供恢复事实 |
-| Bounded worker/loop | `assets.rs`、`agentloop.rs` | 防止媒体或模型无限占用资源 |
-| Strategy enum | `provider::ModelAccess` | 自定义 API 优先，OAuth 后备且错误封闭 |
-| Scope receipt | `taskrouter.rs` | 防止消息或副作用落入错误任务 |
+模块已拆出 assets/library、analysis、health、visual、controls、progress、segments/motion，以及 agentloop/native、tools、skills、snapshot、context 等；这些不能继续写成待拆模块。SQL 仍分散在领域文件，搬迁需保留跨表事务。工具目录/白名单/TS 镜像仍要同步；fixture_only 场景不等于完整多轮 Agent E2E。transcribe_asset 为占位，不是真实 ASR。风险见 [CONCERNS.md](CONCERNS.md)，流程按 CONTRIBUTING.md，不能由代码地图另派重构路线。
 
-## 7）巨型模块的安全拆分图
+## 证据
 
-当前应处理，但按“搬迁职责、保持命令名”逐步拆，不重写行为。
-
-```text
-agentloop.rs
-  -> agentloop/native.rs       原生工具循环、RunReceipt 与有界终止
-  -> agentloop/native_policy.rs 敏感能力显式授权与终态产物期望
-  -> agentloop/policy.rs       风险分层、负向约束与工具集合
-  -> agentloop/prompt.rs       会话历史与安全上下文
-  -> agentloop/skills.rs       apply_skill 与领域状态桥接
-  -> agentloop/mod.rs          crate API 入口
-
-assets.rs
-  -> assets/import.rs          导入、store、重链路、收集
-  -> assets/technical.rs       FFprobe/FFmpeg/Tesseract 与 worker
-  -> assets/visual.rs          批次、排序、Provider、熔断恢复
-  -> assets/library.rs         page、目录投影、Agent 搜索/片段
-  -> assets/health.rs          显式健康扫描与快照
-  -> assets/metadata.rs        标签/集合/用户元数据
-  -> assets/mod.rs             保持现有 Tauri 命令 re-export
-```
-
-Native 对话已迁入统一 `agentloop/native.rs`，不再保留前置 Router 或固定 LoopGoal。后续结构工作仍应保持 `lib.rs` 注册名、TypeScript wrapper、SQL schema 和 fixture 不变。
-
-## 8）已知架构风险
-
-- Native loop、策略、prompt 和技能已分模块，但 `native.rs` 仍同时包含执行编排与较多 fixture 测试；`assets.rs` 仍是热点。
-- `timeline.rs` 1848 行同时含镜头、文本、音乐和查询；应在前两个热点稳定后处理。
-- SQL 分散在多个领域模块，跨表事务移动时容易破坏原子性。
-- Agent fixture 目前验证白名单结构，但完整多轮 provider-script runner 尚未实现。
-- 前端已分层，但 `App.tsx` 仍承担 task/conversation 编排并接近硬预算。
-- Agent 交接仍依赖准确的 Git 状态、当前任务窗口和验收证据；机器检查不能证明模型理解了全部产品语义。
-
-## 9）证据
-
-- `src-tauri/src/lib.rs`
-- `src-tauri/src/agent.rs`
-- `src-tauri/src/agentloop.rs`
-- `src-tauri/src/agentloop/policy.rs`
-- `src-tauri/src/assets.rs`
-- `src-tauri/src/taskrouter.rs`
-- `src/App.tsx`
-- `src/hooks/useAgentRunReconciliation.ts`
-- `.harness/agent-context.json`
+- src-tauri/src/lib.rs、src/lib/local-store.ts、src/lib/agent-tools.ts
+- src-tauri/src/taskrouter.rs、agent.rs、agentloop/{native,tools,policy,schema,skills,snapshot,context}.rs
+- src-tauri/src/assets/、storyboard.rs、storyboard/、studio.rs、timeline.rs
+- src-tauri/src/handoff/、jianying.rs、capcut.rs、src-tauri/scripts/create_jianying_draft.py
+- src-tauri/src/media_options.rs、preview.rs、preview_audio.rs、preview_cache.rs
+- src/hooks/useAgentRunReconciliation.ts、useAnalysisGateController.ts
+- .harness/agent-context.json、src-tauri/tests/fixtures/README.md
