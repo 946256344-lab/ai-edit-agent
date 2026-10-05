@@ -51,6 +51,44 @@ pub(crate) struct Inventory {
     pub causal_reason: String,
     pub request_fulfillable: bool,
     pub coverage_count: usize,
+    /// 请求中的临时画面需求及原事实支持；无人工素材类目。旧记录缺项不可当完成证明。
+    #[serde(default)]
+    pub requirements: Vec<VisualRequirement>,
+    #[serde(default)]
+    pub rejected_causal_links: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VisualRequirement {
+    pub id: String,
+    pub text: String,
+    pub mandatory: bool,
+    pub supports: Vec<EvidenceReference>,
+}
+
+/// 正向支持优先于自由文本的缺口声明；最终缺口完全从同一份对账表投影。
+pub(crate) fn requirement_gaps(requirements: &[VisualRequirement]) -> Vec<String> {
+    requirements.iter().filter(|r| r.supports.is_empty())
+        .map(|r| format!("缺画面 [{}]：{}", r.id, r.text)).collect()
+}
+
+/// 基础盘点可先于补核验；把支持重绑到当前合格 ID/窗，未合格支持不能挡住真实缺口。
+pub(crate) fn restrict_to_eligible(inventory: &Inventory, eligible: &[SegmentEvidence]) -> Inventory {
+    let mut bound = inventory.clone();
+    for requirement in &mut bound.requirements {
+        requirement.supports = requirement.supports.iter().filter_map(|r| {
+            eligible.iter().find(|e| e.asset_id == r.asset_id && e.segment_id == r.segment_id
+                && contains_range(&r.range,&e.range) && source_contains_quote(e,&r.supports)
+                && inventory.items.iter().any(|item| item_matches(item,e)))
+                .map(|e| reference(e,r.supports.clone()))
+        }).collect();
+    }
+    if !bound.requirements.is_empty() {
+        bound.gaps = requirement_gaps(&bound.requirements);
+        bound.request_fulfillable = bound.requirements.iter().all(|r| !r.mandatory || !r.supports.is_empty());
+    }
+    bound
 }
 
 /// 补核验或封印合格子窗后证据 ID 可更新，素材理解仍绑定同一基础分析。
@@ -65,19 +103,9 @@ pub(crate) fn item_matches(item: &InventoryItem, segment: &SegmentEvidence) -> b
 #[serde(rename_all = "camelCase")]
 struct InventorySummary {
     talkable_content: Vec<String>,
-    gaps: Vec<String>,
     causal_links: Vec<CausalLink>,
     causal_chain_complete: bool,
     causal_reason: String,
-    request_fulfillable: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequestCoverage {
-    missing_mandatory_visuals: Vec<String>,
-    optional_visual_gaps: Vec<String>,
-    reason: String,
 }
 
 pub(crate) fn reference(segment: &SegmentEvidence, supports: String) -> EvidenceReference {
@@ -227,13 +255,25 @@ fn output_schema(example: &Value) -> Value {
 
 fn response_format(access: &ModelAccess, stage: &str, request: &Value) -> Value {
     let mut schema = output_schema(&request["schema"]);
-    if let Some(segments) = request["segments"].as_array() {
+    if let Some(segments) = request["segments"].as_array().filter(|_| request["schema"].get("items").is_some()) {
         schema["properties"]["items"]["minItems"] = json!(segments.len());
         schema["properties"]["items"]["maxItems"] = json!(segments.len());
         schema["properties"]["items"]["items"]["properties"]["segmentIndex"]["enum"] = json!((0..segments.len()).collect::<Vec<_>>());
     }
     if request["schema"].get("genre").is_some() {
         schema["properties"]["genre"]["enum"] = json!(["narrative","promotion","bts"]);
+    }
+    if request["schema"].get("requirements").is_some() {
+        schema["properties"]["requirements"]["items"]["properties"]["kind"]["enum"] = json!(["visual","editing_instruction","narration_expression"]);
+    }
+    if request["schema"].get("supports").is_some() {
+        if let Some(segments) = request["segments"].as_object() {
+            for (key, segment) in segments {
+                if let Some(anchors) = segment["anchors"].as_array() {
+                    schema["properties"]["supports"]["properties"][key]["properties"]["evidenceAnchorIndex"]["enum"] = json!((0..anchors.len()).collect::<Vec<_>>());
+                }
+            }
+        }
     }
     if request["schema"].get("sections").is_some() {
         if let Some(evidence) = request["eligibleEvidence"].as_array() {
@@ -267,6 +307,35 @@ fn response_format(access: &ModelAccess, stage: &str, request: &Value) -> Value 
     }
 }
 
+#[cfg(test)]
+mod calibration_schema_tests {
+    use super::*;
+
+    #[test]
+    fn calibration_schema_bounds_source_keys_anchors_and_requirement_kinds() {
+        let access = ModelAccess::Custom(crate::custom_api::CustomApiConfig {
+            base_url: "http://unused.invalid".into(), model: "unused".into(),
+            coarse_visual_model: String::new(), api_key: String::new(),
+        });
+        let format = response_format(&access, "inventory-requirement-support", &json!({
+            "segments":{"segment-0":{"anchors":[{},{}]},"segment-1":{"anchors":[{}]}},
+            "schema":{"supports":{"segment-0":{"supported":true,"evidenceAnchorIndex":0,"reason":""},"segment-1":{"supported":true,"evidenceAnchorIndex":0,"reason":""}}}
+        }));
+        let schema = &format["json_schema"]["schema"];
+        assert!(schema["properties"].get("items").is_none());
+        assert_eq!(schema["required"],json!(["supports"]));
+        let supports = &schema["properties"]["supports"];
+        assert_eq!(supports["required"],json!(["segment-0","segment-1"]));
+        assert_eq!(supports["additionalProperties"],json!(false));
+        assert_eq!(supports["properties"]["segment-0"]["properties"]["evidenceAnchorIndex"]["enum"],json!([0,1]));
+        assert_eq!(supports["properties"]["segment-1"]["properties"]["evidenceAnchorIndex"]["enum"],json!([0]));
+        let requirements = response_format(&access, "inventory-requirements", &json!({
+            "schema":{"requirements":[{"text":"","mandatory":true,"kind":"visual"}]}
+        }));
+        assert_eq!(requirements["json_schema"]["schema"]["properties"]["requirements"]["items"]["properties"]["kind"]["enum"],json!(["visual","editing_instruction","narration_expression"]));
+    }
+}
+
 pub(crate) fn ask_many<T: DeserializeOwned>(
     access: &ModelAccess,
     stage: &str,
@@ -278,8 +347,24 @@ pub(crate) fn ask_many<T: DeserializeOwned>(
     ],"text":{"format":response_format(access,stage,request)},"max_output_tokens":16000})).collect();
     #[cfg(feature = "footage-eval")]
     trace(stage, "input", &json!(requests))?;
-    let results =
-        post_model_payloads_concurrently(access, &payloads, Some(Duration::from_secs(180)));
+    // 只重发失败请求；成功的并发结果保留原位。429 已由 Provider 退避耗尽，不再重套预算。
+    let mut results = post_model_payloads_concurrently(access, &payloads, Some(Duration::from_secs(180)));
+    for attempt in 0..super::step_retry::DEFAULT_TRANSPORT_ATTEMPTS {
+        let pending: Vec<_> = results.iter().enumerate().filter_map(|(i, result)| {
+            result.as_ref().err().filter(|e| !crate::provider::is_final_model_failure(e)
+                && (super::step_retry::is_transport_or_parse_error(e)
+                    || matches!(crate::provider::classify_model_request_failure(e).code.as_str(), "provider_network" | "provider_timeout")
+                    || e.contains("TLS") || e.contains("HTTP 5"))).map(|_| i)
+        }).collect();
+        if pending.is_empty() { break; }
+        #[cfg(feature = "footage-eval")]
+        trace(stage, "transport_retry", &json!({"attempt":attempt+1,"indices":pending}))?;
+        #[cfg(not(feature = "footage-eval"))]
+        let _ = attempt;
+        let retry_payloads: Vec<_> = pending.iter().map(|i| payloads[*i].clone()).collect();
+        let retried = post_model_payloads_concurrently(access, &retry_payloads, Some(Duration::from_secs(180)));
+        for (index, result) in pending.into_iter().zip(retried) { results[index] = result; }
+    }
     let mut parsed = Vec::new();
     let mut failures = Vec::new();
     for result in results {
@@ -324,10 +409,13 @@ fn trace(stage: &str, direction: &str, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn build_inventory(
-    access: &ModelAccess,
-    request: &str,
-    input: &[SegmentEvidence],
+pub(crate) fn build_inventory(access: &ModelAccess, request: &str, input: &[SegmentEvidence]) -> Result<Inventory, String> {
+    build_inventory_with_requirements(access, request, input, None)
+}
+
+/// 评测可冻结需求定义，但仍重新独立理解素材、查找支持和判断因果；不能复用支持结论冒充稳定。
+pub(crate) fn build_inventory_with_requirements(
+    access: &ModelAccess, request: &str, input: &[SegmentEvidence], fixed_requirements: Option<&[VisualRequirement]>,
 ) -> Result<Inventory, String> {
     validate_input(input)?;
     if input.is_empty() {
@@ -404,60 +492,80 @@ pub(crate) fn build_inventory(
             input.len()
         ));
     }
-    // 不截断、不按词频归并；汇总仍能看到所有逐片表达及原始关系。
-    let mut summaries: Vec<Value> = ask_many(
-        access,
-        "inventory-summary",
-        vec![json!({
-            "task":"Summarize talkableContent and honest FOOTAGE CONTENT gaps for the request. requestFulfillable=false ONLY if a mandatory visual subject/action/event is absent AND the user does not allow a fallback. Audio switches, duration, music rhythm, hook timing, powerful closing, crop-fit and risk eligibility belong to later steps and are NOT missing footage subjects; do not reject requests for these editing choices. Optional content omissions go in gaps. A causalChainComplete requires the SAME evidenced person/event with cause, development, actual change/turn and result. Similar machinery, adjacent file IDs, abstract concepts and generic shot changes are NOT causality. causalLinks evidenceQuote must be an EXACT whole string from one linked segment's actual caption/visualEvidence/relations, explicitly describing the event relation. Otherwise return causalLinks=[], causalChainComplete=false with a reason. No fixed material categories.",
-            "request":request,"items":items,"sourceEvidence":input.iter().map(planning_evidence).collect::<Vec<_>>(),
-            "schema":{"talkableContent":[""],"gaps":[""],"causalLinks":[{"beforeEvidenceId":"","afterEvidenceId":"","expression":"","evidenceQuote":""}],"causalChainComplete":false,"causalReason":"","requestFulfillable":true}
-        }), json!({
-            "task":"Independently review ONLY the user's visual requirements against ALL inventory items. Return missingMandatoryVisuals ONLY for an absent required person, object, action or event that the user does not allow to waive. Return optionalVisualGaps for missing optional subject/action/event content. Never list hook timing, duration, music rhythm, voiceover, subtitles, powerful closing, crop or hard-risk eligibility: these are editing choices, not missing objects/actions. Precision-machining footage means visible machining; do not require numerical tolerances or infer them. If the user explicitly allows an independent-moments fallback for a missing fault/repair story, those causal events are optional gaps, not a mandatory failure. Narrative causal completeness is independently decided in the other review. No numerical performance claims. Explain briefly. Empty request has no mandatory visual requirements.",
-            "request":request,"items":items,
-            "schema":{"missingMandatoryVisuals":[],"optionalVisualGaps":[],"reason":""}
-        })],
-    )?;
-    let coverage: RequestCoverage = serde_json::from_value(summaries.pop().ok_or("inventory_missing_request_review")?)
-        .map_err(|error| format!("inventory_request_review_schema:{error}"))?;
-    if coverage.reason.trim().is_empty() {
-        return Err("inventory_missing_request_review_reason".into());
-    }
-    let mut summary: InventorySummary = serde_json::from_value(summaries.remove(0))
-        .map_err(|error| format!("inventory_summary_schema:{error}"))?;
-    // 汇总与需求审核独立并发；不把盘点模型对剪辑参数的误判当成强制停工事实。
-    summary.request_fulfillable = coverage.missing_mandatory_visuals.is_empty();
-    summary.gaps = coverage.missing_mandatory_visuals.into_iter().chain(coverage.optional_visual_gaps).collect();
-    for link in &summary.causal_links {
-        let before = input
-            .iter()
-            .find(|s| s.id == link.before_evidence_id)
-            .ok_or("inventory_unknown_causal_reference")?;
-        let after = input
-            .iter()
-            .find(|s| s.id == link.after_evidence_id)
-            .ok_or("inventory_unknown_causal_reference")?;
-        if before.id == after.id
-            || link.expression.trim().is_empty()
-            || !(source_contains_quote(before, &link.evidence_quote)
-                || source_contains_quote(after, &link.evidence_quote))
-        {
-            return Err("inventory_unanchored_causal_link".into());
+    // 缺口不由两个模型相互否定：先提取本请求的临时画面需求，再逐片找支持，代码取并集。
+    #[derive(Deserialize)]
+    struct Requirements { requirements: Vec<RequestedVisual> }
+    #[derive(Deserialize)]
+    struct RequestedVisual { text: String, mandatory: bool, kind: RequirementKind }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum RequirementKind { Visual, EditingInstruction, NarrationExpression }
+    let mut requirements: Vec<VisualRequirement> = if let Some(fixed) = fixed_requirements {
+        fixed.iter().map(|r| VisualRequirement { id:r.id.clone(), text:r.text.clone(), mandatory:r.mandatory, supports:vec![] }).collect()
+    } else {
+        let extracted: Vec<Requirements> = ask_many(access, "inventory-requirements", vec![json!({
+        "task":"Extract request requirements with kind: visual=concrete visible subject/action/event; editing_instruction=duration, audio, music, voiceover, titles, opening/hook/closing placement; narration_expression=abstract metaphor, slogan, future/confidence CTA or performance promise to read. Code ONLY checks visual entries for footage gaps. Supplied narration can be illustrated by visible machine movement/manufacturing/automation; express these as modest observable visual entries, not verbatim narration sentences. Reading narration verbatim is a later audio obligation, never a literal footage requirement for its metaphors. Preserve an explicitly mandatory unusual subject/event exactly; never replace it with industrial imagery. No fixed footage categories. Precision machining means visible machining, quality inspection means visible inspection, not necessarily a laboratory. If fallback to moments is explicitly allowed, causal fault/repair events are optional. Empty request => requirements=[]. Do not decide presence or absence yet.",
+        "request":request,"schema":{"requirements":[{"text":"","mandatory":true,"kind":"visual"}]}
+    })])?;
+        extracted.into_iter().next().ok_or("inventory_missing_requirements")?.requirements
+        .into_iter().filter(|requirement| matches!(requirement.kind, RequirementKind::Visual))
+        .enumerate().map(|(i,r)| VisualRequirement {id:format!("visual-{}",i+1), text:r.text, mandatory:r.mandatory, supports:vec![]}).collect()
+    };
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SupportReview { supported: bool, evidence_anchor_index: usize, reason: String }
+    #[derive(Deserialize)]
+    struct SupportBatch { supports: std::collections::BTreeMap<String, SupportReview> }
+    let requests: Vec<_> = requirements.iter().flat_map(|requirement| input.chunks(BATCH_SIZE).map(|batch| {
+        let segments: serde_json::Map<String,Value> = batch.iter().enumerate().map(|(index,segment)|
+            (format!("segment-{index}"),anchored_evidence(segment))).collect();
+        let schema: serde_json::Map<String,Value> = segments.keys().map(|key|
+            (key.clone(),json!({"supported":true,"evidenceAnchorIndex":0,"reason":""}))).collect();
+        json!({
+        "task":"Judge this ONE concrete visual requirement independently against EVERY original segment. Return a verdict for EVERY supplied segment key, including unsupported ones. Does that segment DIRECTLY show the requested subject/action/event? Evaluate only original anchors, not generic tags, mood or unrelated industrial scenery. Modest machining/manual inspection/automatic movement does not require a causal connection or numerical performance proof. If an astronaut/repair/other requested subject is absent, supported=false. Uncertainty => supported=false. evidenceAnchorIndex selects an anchor of THAT segment key only. Do not judge narration style or availability of other shots. Return a reason for every verdict.",
+        "requirement":requirement.text,"segments":segments,
+        "schema":{"supports":schema}
+    })})).collect();
+    if !requirements.is_empty() {
+        let reviewed: Vec<SupportBatch> = ask_many(access,"inventory-requirement-support",requests)?;
+        let mut reviewed = reviewed.into_iter();
+        for requirement in &mut requirements {
+            for batch in input.chunks(BATCH_SIZE) {
+                let mut reviews = reviewed.next().ok_or("inventory_incomplete_requirement_audit")?.supports;
+                if reviews.len() != batch.len() { return Err("inventory_incomplete_requirement_audit".into()); }
+                for (index,segment) in batch.iter().enumerate() {
+                    let review = reviews.remove(&format!("segment-{index}")).ok_or("inventory_unknown_requirement_segment")?;
+                    if !review.supported || review.reason.trim().is_empty() { continue; }
+                    let Some(quote) = evidence_anchors(segment).get(review.evidence_anchor_index).cloned() else { continue; };
+                    requirement.supports.push(reference(segment,quote));
+                }
+            }
         }
     }
-    let complete = summary.causal_chain_complete && summary.causal_links.len() >= 3;
-    let mut gaps = summary.gaps;
-    if !complete {
-        gaps.push(format!("叙事缺因果证据：{}", summary.causal_reason));
-    }
+    // 因果只在原事实确有关系时保留；模型伪造关系被拒绝并记录，不使宣传盘点成为运行失败。
+    let mut summaries: Vec<InventorySummary> = ask_many(access, "inventory-summary", vec![json!({
+        "task":"Summarize talkableContent from all inventory items. Do not decide request gaps. causalChainComplete requires the SAME evidenced person/event with cause, development, actual change and result. Similar machines, file ordering and generic shot changes are not causality. causalLinks need exact IDs and an EXACT original anchor explicitly describing the event relation, otherwise causalLinks=[] and causalChainComplete=false. Do not invent a repair story.",
+        "request":request,"items":items,"sourceEvidence":input.iter().map(planning_evidence).collect::<Vec<_>>(),
+        "schema":{"talkableContent":[""],"causalLinks":[{"beforeEvidenceId":"","afterEvidenceId":"","expression":"","evidenceQuote":""}],"causalChainComplete":false,"causalReason":""}
+    })])?;
+    let mut summary = summaries.remove(0);
+    let mut rejected_causal_links = Vec::new();
+    summary.causal_links.retain(|link| {
+        let before = input.iter().find(|s| s.id == link.before_evidence_id);
+        let after = input.iter().find(|s| s.id == link.after_evidence_id);
+        let valid = before.zip(after).is_some_and(|(before,after)| before.id != after.id
+            && !link.expression.trim().is_empty()
+            && (source_contains_quote(before,&link.evidence_quote) || source_contains_quote(after,&link.evidence_quote)));
+        if !valid { rejected_causal_links.push(format!("拒绝未锚定因果关系：{}",link.expression)); }
+        valid
+    });
+    let complete = summary.causal_chain_complete && summary.causal_links.len() >= 3 && rejected_causal_links.is_empty();
+    let gaps = requirement_gaps(&requirements);
+    let fulfillable = requirements.iter().all(|r| !r.mandatory || !r.supports.is_empty());
     Ok(Inventory {
-        items,
-        talkable_content: summary.talkable_content,
-        gaps,
-        causal_links: summary.causal_links,
-        causal_chain_complete: complete,
-        causal_reason: summary.causal_reason,
-        request_fulfillable: summary.request_fulfillable,
-        coverage_count: seen.len(),
+        items, talkable_content:summary.talkable_content, gaps,
+        causal_links:summary.causal_links, causal_chain_complete:complete,
+        causal_reason:summary.causal_reason, request_fulfillable:fulfillable,
+        coverage_count:seen.len(), requirements, rejected_causal_links,
     })
 }

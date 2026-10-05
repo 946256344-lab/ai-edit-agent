@@ -6,21 +6,29 @@
 
 ### 预留素材策划内部接口（任务 4，尚未接入生成）
 
-`storyboard/inventory.rs::build_inventory(access, request, &[SegmentEvidence])` 分批覆盖完整分析集合，返回 `Inventory`：逐片 `InventoryItem.reference`（assetId / segmentId / evidenceId / range / supports）及 `analysisSnapshotId`、自由表达 `statements`（expression / evidenceQuote / direct）、可讲内容、缺口与带原文锚点的因果关系。模型只回传理解、批内片段序号与原文锚点序号，代码绑定完整源窗、身份和原分析逐字引文；漏报 direct 不当直证。缺片、重复引用或不存在的锚点均失败，不建立素材场景/功能类目。全库汇总与独立需求覆盖审核并发，代码用后者的必需画面缺项控制 `requestFulfillable`，避免汇总把剪辑参数当缺素材；原始两份模型判断都保留轨迹，因果链仍单独核对。
+`storyboard/inventory.rs::build_inventory(access, request, &[SegmentEvidence])` 分批覆盖完整分析集合，返回 `Inventory`：逐片 `InventoryItem.reference`（assetId / segmentId / evidenceId / range / supports）及 `analysisSnapshotId`、自由表达 `statements`（expression / evidenceQuote / direct）、可讲内容、缺口与带原文锚点的因果关系。模型只回传理解、批内片段序号与原文锚点序号，代码绑定完整源窗、身份和原分析逐字引文；漏报 direct 不当直证。缺片、重复引用或不存在的锚点均失败，不建立素材场景/功能类目。临时请求需求使用 `kind=visual/editing_instruction/narration_expression` 区分具体画面、编辑参数和抽象口播；代码只让 visual 进入画面缺口对账，不给素材分类。对每个需求逐片段核验，每六个片段组成一个独立并发请求；严格 Schema 强制返回全部固定片段键的真假判定，身份由代码绑定，每个键的锚点序号单独枚举，不再让模型在全库检索时猜批次索引。代码用全部有效支持的并集生成缺口和 `requestFulfillable`，不把自由缺口文本当事实。因果链仍单独核对，模型原始判断保留轨迹。
 
-`storyboard/genre.rs::decide_genre(access, selection, request, inventory, previous)` 使用 `GenreSelection=auto/narrative/promotion/bts`；手选固定，自动只发一次判断，信息不足默认宣传；自动叙事缺因果改花絮，手选叙事保留体裁且受限。`GenreDecision.snapshotId` 绑定需求、手选和完整盘点；同输入复用 `previous` 不请求模型，输入改变拒绝旧快照。
+`storyboard/genre.rs::decide_genre(access, selection, request, inventory, previous)` 使用 `GenreSelection=auto/narrative/promotion/bts`；手选固定；明确体裁意图由版本化代码裁决，无需模型请求。未写明体裁的非空需求由 AI 判断意图和信息是否充分；含糊默认宣传。自动叙事缺因果且需求明确允许时刻合集时改花絮，否则保留叙事只交缺口。`GenreDecision.snapshotId` 绑定规则版本、需求、手选和完整盘点，`basis[]` 保存实际 AI 意图（如有）与代码裁决依据；同输入复用 `previous` 不请求模型，输入改变拒绝旧快照。
 
-`build_recipe(decision, durationMs?, eligibleEvidence, inventory)` 返回版本 `genre-recipe-2026-10-05-v1` 的 `GenreRecipe`。默认叙事/宣传 30 秒、花絮 20 秒；用户毫秒优先。正常结构叙事 4 段 20/35/25/20%，宣传 4–6 段 15/70/15%（卖点按直证数量分预算），花絮 3–5 段 10/80/10%。每段 `budgetMs/minReadableMs/maxShots` 由代码算；过短宣传/花絮合并可选过渡，叙事短于四段可读时间失败。合格窗不足收缩预算，不回放淘汰画面。
+`bind_genre_to_inventory(decision, request, inventory)` 把已决定的体裁重绑最终合格盘点快照，只更新受限状态、证据依据与哈希，不再请求模型或改体裁。planning-only 在底线裁决前判定一次，之后通过该接口绑定实际合格证据，防止审核使用的体裁与入池底线不同。
 
-`storyboard/planning.rs::plan_with_evidence(access, request, inventory, decision, recipe, eligibleEvidence, userFacts)` **只消费调用方已过底线的证据列表**，不依赖 eligibility 模块，也不自己判断风险合格。返回 `PlanningResult.status=accepted/limited/gap_only/rejected`、有引用的段/具体表达/备选、真实代码预算、缺口和拒绝原因。`rejectedAttempts` 保留每次被拒提案的原因；最多基于失败原因提出一次新策划，新提案重新经过全部校验，最终仍不合格即返回 rejected。Provider 失败不走这条内容校正。模型选择的原文锚点由代码回填为 `evidenceQuote`；引用身份、允许窗、原分析引文、配方顺序、可读镜数、重复源窗和数字来源由代码检查。宣传卖点禁用气氛支持，模型另并发逐段审核主选及备选直证，再审核标题/必需画面/因果链。审核失败不提供可落地策划；模型审核是可追溯的判断，不是人工金标或视觉真值。
+`build_recipe(decision, durationMs?, eligibleEvidence, inventory)` 返回版本 `genre-recipe-2026-10-05-v2` 的 `GenreRecipe`。默认叙事/宣传 30 秒、花絮 20 秒；用户毫秒优先。正常结构叙事 4 段 20/35/25/20%，宣传 4–6 段 15/70/15%（卖点按直证数量分预算），花絮 3–5 段 10/80/10%。每段 `budgetMs/minReadableMs/maxShots` 由代码算；过短宣传/花絮合并可选过渡，叙事短于四段可读时间失败。合格窗不足收缩预算，不回放淘汰画面。
 
-`UserFact{id,text,source="user_request"}` 必须逐字出自本次请求；数字表达必须逐字等于对应事实且携带 `userFactId`，不能从机器画面推产能。缺必需画面/手选叙事缺因果返回 `gap_only`，零合格片段明确错误。备选不足如实记缺口。`PlanningResult.metadata` 使用任务 2 的 `StoryboardEvidenceMetadata`，提供 pipelineVersion / genre / recipeVersion / 完整合格证据快照 / 主选与备选引用，任务 6 在新版本事务中持久化；本接口不写历史产物。
+`storyboard/planning.rs::plan_with_evidence(access, request, inventory, decision, recipe, eligibleEvidence, userFacts)` **只消费调用方已过底线的证据列表**，不依赖 eligibility 模块，也不自己判断风险合格。返回 `PlanningResult.status=accepted/limited/gap_only/rejected`、有引用的段/具体表达/备选、真实代码预算、缺口和拒绝原因。`rejectedAttempts` 保留每次被拒提案的原因；最多基于失败原因修订 `MAX_PLAN_REVISIONS=6` 次，新提案重新经过全部校验，最终仍不合格即返回 rejected。Provider 失败不走这条内容校正。模型选择的原文锚点由代码回填为 `evidenceQuote`；引用身份、允许窗、原分析引文、配方顺序、可读镜数、重复源窗和数字来源由代码检查。宣传卖点禁用气氛支持，模型另并发逐段审核主选及备选直证，再按 `audit_rules(genre)` 审核标题及所选体裁的关系。宣传审核 Schema 没有因果字段；叙事才要求因果，花絮要求真实瞬间并按代码预算核算空镜 ≤20%，未知空镜不放行。必需画面由盘点支持表与主引用对账，不重新自由判断缺失。审核失败不提供可落地策划；模型审核是可追溯的判断，不是人工金标或视觉真值。
+
+`UserFact{id,text,source="user_request"}` 必须逐字出自本次请求；数字表达必须逐字等于对应事实且携带 `userFactId`，不能从机器画面推产能。缺必需画面/手选叙事缺因果返回 `gap_only`，直接向 `plan_with_evidence` 传零合格片段会返回明确错误；调用方可用 `no_eligible_result` 如实交零合格缺口。备选不足如实记缺口。`PlanningResult.metadata` 使用任务 2 的 `StoryboardEvidenceMetadata`，提供 pipelineVersion / genre / recipeVersion / 完整合格证据快照 / 主选与备选引用，任务 6 在新版本事务中持久化；本接口不写历史产物。
 
 合格集合仍须提供有效、已封印的 `SegmentEvidence`；补核验或收窄合格窗改变内容时由上游重新封印，不沿用旧 evidenceId。盘点按 assetId / segmentId / analysisSnapshotId 和源窗包含关系绑定同一分析，策划输入的引用重新绑定为合格集合当前 ID/窗；旧盘点 ID 不作为放行 ID。当前接口每个基础片段最多一个合格窗，不表示支持多个离散窗。
 
-模型策划仅需回传 evidenceId 和原文锚点序号，代码回填身份、完整合格窗及 supports=expression；若模型仍主动提供身份/源窗，照常验证，伪造或越窗仍拒绝。最佳源窗由任务 5 精修。段审核与全局审核互不依赖并发执行，Schema 限定审核数组长度和索引，代码仍检查缺项/重复；短于最短可读时长的源窗不进入提案候选，但仍保留在事实快照。2D/3D 技术名称须有直证但不当作产能数字，性能/产能/百分比等数量仍须逐字用户事实。盘点遗漏或锚点无效时只补读缺项一轮，仍不完整失败；媒体开关、时钟与风险放行不作为本阶段的缺画面理由。
+模型策划仅需回传 evidenceId 和原文锚点序号，代码回填身份、完整合格窗及 supports=expression；若模型仍主动提供身份/源窗，照常验证，伪造或越窗仍拒绝。最佳源窗由任务 5 精修。段审核与全局审核互不依赖并发执行，Schema 限定审核数组长度和索引，代码仍检查缺项/重复；短于最短可读时长的源窗不进入提案候选，但仍保留在事实快照。2D/3D 技术名称须有直证但不当作产能数字，性能/产能/百分比等数量仍须逐字用户事实；逐字引用原锚点的可见人数、仪表读数可由原分析支持，不能推广为性能。盘点遗漏或锚点无效时只补读缺项一轮，仍不完整失败；媒体开关、时钟与风险放行不作为本阶段的缺画面理由。
 
 本阶段请求携带严格 JSON Schema（必需字段、数组元素、批次数量、片段序号和允许证据 ID）；使用统一 Provider，Custom/Gateway 走 Chat 嵌套 json_schema，OAuth 走 Responses 格式。不支持该格式的 Provider 返回真实错误，不自动改走宽松 JSON 或另一模型。
+
+任务 4b 增加 `Inventory.requirements[]: {id,text,mandatory,supports: EvidenceReference[]}`。本请求临时画面需求逐片寻找原锚点支持，代码取并集；每个需求完整核验全库固定片段键并汇总支持，不再以稀疏检索或临时补查决定缺口，不继承旧运行的支持结论。`requirement_gaps` 只对没有支持的需求报缺口，策划模型的自由缺口文本在审核前及返回前均被投影为这份对账结果。无效因果关系保存在 `rejectedCausalLinks`，不放入有效链；缺项旧盘点不能被提升为完整证明。`build_inventory_with_requirements(..., fixedRequirements?)` 可冻结需求定义，但重算素材理解/支持/因果，供独立评测三次运行。
+
+模型截短了含可见数量的原文时，仅原文逐字前缀可由代码补回完整锚点；表达、引用支持文本和对应段内容同步使用完整原文，仍经同一套数字及语义门。性能/产能/比例等数字不使用这个校正。明确体裁词前的中英文直接否定不算该体裁意图。
+
+盘点与策划通过 `ask_many` 保持独立请求并发；Provider 既有 429 退避用尽不再套预算，超时/网络/TLS/5xx 仅重发失败请求，采用既有 `DEFAULT_TRANSPORT_ATTEMPTS=2` 的补发预算、不额外等待、不切换 Provider。`no_eligible_result` 把零合格片段投影为真实 `gap_only`，不归类为外部服务错误。
 
 ## 桌面命令边界
 

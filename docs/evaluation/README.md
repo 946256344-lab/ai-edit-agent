@@ -125,7 +125,7 @@ python scripts/footage-eval/run.py --planning-only --snapshot D:\自动剪辑系
 
 使用真实 Provider，无 GUI、开发服务器、Agent、配音/BGM、时间线、预览或编辑器；10 个基线 setup 请求加自动叙事降级/信息不足默认各 3 次。局部换镜仅测 setup 策划，声音开关不在本模式合成。进程 workers 限 1–4；进程内独立模型请求按需并发，每请求 0 张图。只读冻结源，SQLite 导出在本输出副本打开，结果带源码树/二进制哈希、模型身份、逐请求轨迹、逐片盘点、体裁快照、配方、策划与机器指标。
 
-可用 `--eligible-evidence <SegmentEvidence数组.json>` 提供任务 3 已过底线的冻结集合，核对 ID、分析快照和源窗。未提供时使用整个冻结集合做 **semantic_only_unqualified_frozen_input_not_safety_acceptance** 语义隔离轨道，不把旧风险未知当作安全，不宣称工业合格素材验收通过。主接口始终要求调用方交合格集合；评测轨道标签不能进入生产放行依据。
+可用 `--eligible-evidence <SegmentEvidence数组.json>` 提供任务 3 已补核验的冻结集合，核对 ID、分析快照和源窗。任务 4b 起，所有输入按实际体裁重新 `evaluate`；未提供补核验快照时旧未知不能放行。主接口始终要求调用方交合格集合；评测轨道标签不能进入生产放行依据。任务 4 历史报告的 `semantic_only_unqualified_frozen_input_not_safety_acceptance` 属旧评测方式。
 
 报告每段合法主选引用覆盖（目标 100%，对比旧基线 0%）、非法引用/越窗（目标 0）、无策划次数、手选遵守、体裁及理由、缺口与每条拒绝原因（含被拒旧提案 `rejectedAttempts`，校正后新提案也要重新验收）。空产物覆盖率 N/A；缺画面/叙事缺因果的 `gap_only` 是合法缺口输出，不计为策划成功。缺口诚实性与语义/体裁正确率无人工金标保持 N/A，机器缺口预标单列。冻结文件哈希和每次窗口数保存在 `isolation-audit.json`。
 
@@ -172,3 +172,17 @@ python scripts/footage-eval/agent_facts.py --answer-smoke --snapshot D:\自动�
 ```
 
 交付验证分别绑定生成/局部整组与最终普通问答：生成/局部为 task7-complete-live-2026-10-05 的 18 轮；最终问答为 task7-user-answer-live-2026-10-05 的 9 轮。整组问答发现内部推理标签后，仅改 answer 分支的公开事实投影/文案请求与安全出口，再用 --answer-smoke 重建补测；两组不可冒充同一二进制。具体哈希、失败与分母见变更记录。
+
+## 策划校准（任务 4b）
+
+```powershell
+python scripts/footage-eval/run.py --planning-only --snapshot D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01 --eligible-evidence .footage-eval/planning-input-2026-10-05/candidates.json --output .footage-eval/planning-calibration-2026-10-05 --workers 2
+```
+
+`--eligible-evidence` 接受片段数组，或 `{evidence: SegmentEvidence[], windows: {"assetId:segmentId": EvidenceRange}, source: ...}` 包装。包装窗必须来自上游真实底线结果，位于同一冻结原窗内；Rust 收窄后重新封印，仍按当前体裁调用任务 3 `evaluate`，不会放行未知风险。每例报告合格片段数。任务 4b 使用任务 3 一次 `zh-15-silent/1` 的真实核验快照及 25 个合格窗，不合并跨运行的风险事实；来源与哈希保存在输入包装。
+
+先运行 `prepareOnly` 得到需求定义和合格集合；三次正式运行分别重做逐片盘点、需求支持查找、体裁判定和策划/审核。只冻结素材与需求定义，不复用支持结论。每个需求覆盖全部片段，六个固定片段键组成一个并发请求，严格 Schema 强制完整真假判定；不再只检索少数支持片段。`preparation-summary.json` 独立记准备失败，未执行的三次不算模型运行失败。`summary.json` 分开记录 `gap_only`、`rejected`、外部服务错误和契约/运行器错误，增加 `eligibleSegments/genreStable/footageGapStable`。无产物引用率保持 N/A。这一模式仍不证明选镜/源窗最佳/配音/编辑器/三体裁桌面通过。
+
+中断后可在上述命令中加 `--planning-preparation <旧输出目录>` 并使用新输出目录，复用已成功的 prepare。代码逐例检查请求、体裁选择、目标时长、完整原证据、上游候选/窗及轨道完全一致，输出保存准备来源与文件哈希；三次正式运行仍重新 `evaluate`、盘点、查找支持、判体裁和生成/审核。旧盘点仅供冻结需求定义，不把旧支持结论当三次独立结果。
+
+2026-10-05 正式交付采用全新准备、12 例 × 3 次完整运行：24 份策划、12 次真实缺口、无最终审核拒绝或运行失败；8 个素材足够的宣传例全部 3/3，引用 100%、非法 ID/越窗 0。逐例任务 4 对比、18 次体裁补测、哈希与未验证边界见 [策划校准变更记录](../changes/2026-10-05-planning-calibration.md)。

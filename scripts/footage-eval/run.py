@@ -301,7 +301,8 @@ def main():
     parser.add_argument("--contract-replay", type=Path, help="只读历史基线，重跑证据适配/P5/计分；不调用模型生成")
     parser.add_argument("--evidence-gold", type=Path, help="原始风险事实金标 CSV，与体裁淘汰金标分开")
     parser.add_argument("--planning-only", action="store_true", help="仅盘点→体裁→配方→有引用策划，不生成成片")
-    parser.add_argument("--eligible-evidence", type=Path, help="上游已过底线的 SegmentEvidence JSON；未提供仅做语义隔离评测，不宣称合格")
+    parser.add_argument("--planning-preparation", type=Path, help="续跑策划：复用同一冻结输入的成功 prepare；只冻结需求定义，三次正式运行仍独立盘点/体裁/策划")
+    parser.add_argument("--eligible-evidence", type=Path, help="任务 3 已补核验的 SegmentEvidence JSON；各例按所选体裁再次 evaluate，未提供则原快照未知不放行")
     parser.add_argument("--gold", type=Path)
     args = parser.parse_args()
     if args.rescore and not args.output:

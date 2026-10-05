@@ -8,7 +8,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub(crate) const PIPELINE_VERSION: &str = "footage-first-v1";
-pub(crate) const RECIPE_VERSION: &str = "genre-recipe-2026-10-05-v1";
+pub(crate) const RECIPE_VERSION: &str = "genre-recipe-2026-10-05-v2";
+const DECISION_VERSION: &str = "genre-intent-2026-10-05-v2";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +28,8 @@ pub(crate) struct GenreDecision {
     pub reason: String,
     pub limited: bool,
     pub snapshot_id: String,
+    #[serde(default)]
+    pub basis: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -64,6 +67,14 @@ pub(crate) struct GenreRecipe {
     pub sections: Vec<RecipeSection>,
 }
 
+fn explicit_marker<'a>(text: &str, markers: &[&'a str]) -> Option<&'a str> {
+    markers.iter().copied().find(|marker| text.match_indices(marker).any(|(offset,_)| {
+        let prefix = text[..offset].trim_end();
+        !["不要", "不用", "不做", "无需", "不需要", "不是", "不要用", "not", "not a", "not an", "no", "without"]
+            .iter().any(|negative| prefix.ends_with(negative))
+    }))
+}
+
 pub(crate) fn decide_genre(
     access: &ModelAccess,
     selection: GenreSelection,
@@ -72,7 +83,7 @@ pub(crate) fn decide_genre(
     previous: Option<&GenreDecision>,
 ) -> Result<GenreDecision, String> {
     let bytes =
-        serde_json::to_vec(&json!({"selection":selection,"request":request,"inventory":inventory}))
+        serde_json::to_vec(&json!({"version":DECISION_VERSION,"selection":selection,"request":request,"inventory":inventory}))
             .map_err(|e| e.to_string())?;
     let snapshot_id = format!("genre-{:x}", Sha256::digest(bytes));
     if let Some(previous) = previous {
@@ -96,49 +107,60 @@ pub(crate) fn decide_genre(
         GenreSelection::Bts => Some(Genre::Bts),
         GenreSelection::Auto => None,
     };
+    // 明确需求/手选不依赖服务；只有未写明体裁的需求才需要 AI 理解意图。
+    let text = request.to_lowercase();
+    let narrative = explicit_marker(&text, &["叙事", "因果故事", "因果", "narrative", "causal story"]);
+    let promotion = explicit_marker(&text, &["宣传", "卖点", "promotional", "promotion", "selling point"]);
+    let bts = explicit_marker(&text, &["花絮", "幕后", "时刻合集", "behind-the-scenes", "behind the scenes", "bts"]);
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Intent { genre: Genre, reason: String, information_sufficient: bool }
+    let intent: Option<Intent> = if selection == GenreSelection::Auto && !request.trim().is_empty()
+        && narrative.is_none() && promotion.is_none() && bts.is_none() {
+        let mut proposals: Vec<Intent> = ask_many(access, "genre-intent", vec![json!({
+            "task":"Identify the user's intended editing genre (narrative/promotion/bts) and explain from the request. Distinguish desired genre from whether footage can fulfill it; a missing causal chain must not make a requested narrative a promotion. A fallback to independent moments may select bts. Set informationSufficient=false when the request is ambiguous; code will default to promotion.",
+            "request":request,"causalChainComplete":inventory.causal_chain_complete,
+            "schema":{"genre":"promotion","reason":"","informationSufficient":true}
+        })])?;
+        Some(proposals.remove(0))
+    } else { None };
+    // 显式需求由版本化意图规则钉死，缺素材影响可完成性，不能把叙事误路由为宣传。
+    // 这是需求体裁判定，不是给素材建立场景/功能分类。
+    let mut basis = vec![DECISION_VERSION.to_owned()];
+    if let Some(intent) = &intent {
+        basis.push(format!("ai_intent:{:?}:{}",intent.genre,intent.reason));
+    }
     let (mut genre, mut reason) = if let Some(genre) = manual {
+        basis.push("manual_selection".into());
         (genre, "采用用户手选体裁。".to_owned())
-    } else if request.trim().is_empty() || inventory.talkable_content.is_empty() {
-        (Genre::Promotion, "信息不足，默认宣传体裁。".to_owned())
+    } else if let Some(marker) = narrative {
+        basis.push(format!("explicit_request:{marker}"));
+        (Genre::Narrative, format!("需求明确指向叙事（{marker}）。"))
+    } else if let Some(marker) = promotion {
+        basis.push(format!("explicit_request:{marker}"));
+        (Genre::Promotion, format!("需求明确指向宣传（{marker}），按独立卖点直证策划。"))
+    } else if let Some(marker) = bts {
+        basis.push(format!("explicit_request:{marker}"));
+        (Genre::Bts, format!("需求明确指向花絮（{marker}）。"))
+    } else if let Some(intent) = intent.filter(|i| i.information_sufficient && !i.reason.trim().is_empty()) {
+        basis.push("inferred_request_intent".into());
+        (intent.genre, intent.reason)
     } else {
-        #[derive(Deserialize)]
-        struct Proposal {
-            genre: Genre,
-            reason: String,
-            #[serde(rename = "informationSufficient")]
-            information_sufficient: bool,
-        }
-        let mut response: Vec<Proposal> = ask_many(
-            access,
-            "genre-once",
-            vec![json!({
-                "task":"Choose genre from narrative/promotion/bts using the request AND the complete inventory. Narrative requires a causal story; promotion proves visible selling points; bts collects independent real moments. Explain the choice. If information is insufficient set informationSufficient=false; code will default to promotion. This is a single decision, not a repeated routing step.",
-                "request":request,"inventory":inventory,"schema":{"genre":"promotion","reason":"","informationSufficient":true}
-            })],
-        )?;
-        let response = response.remove(0);
-        if response.reason.trim().is_empty() {
-            return Err("genre_missing_reason".into());
-        }
-        if response.information_sufficient {
-            (response.genre, response.reason)
-        } else {
-            (
-                Genre::Promotion,
-                format!("信息不足，默认宣传体裁。{}", response.reason),
-            )
-        }
+        basis.push("ambiguous_default:promotion".into());
+        (Genre::Promotion, "需求没有明确体裁意图，信息不足，默认宣传体裁。".into())
     };
     if genre == Genre::Narrative && !inventory.causal_chain_complete {
-        if selection == GenreSelection::Auto {
+        let fallback = ["可改", "允许", "fallback", "may use", "can use"].iter().any(|w| text.contains(w));
+        if selection == GenreSelection::Auto && bts.is_some() && fallback {
             genre = Genre::Bts;
             reason = format!(
                 "{} 自动叙事缺完整因果证据，改用花絮时刻集合：{}",
                 reason, inventory.causal_reason
             );
+            basis.push("explicit_moments_fallback:missing_causal_chain".into());
         } else {
             reason.push_str(&format!(
-                " 手选叙事缺完整因果证据，只交缺口：{}",
+                " 叙事缺完整因果证据，只交缺口：{}",
                 inventory.causal_reason
             ));
         }
@@ -150,7 +172,25 @@ pub(crate) fn decide_genre(
         reason,
         limited,
         snapshot_id,
+        basis,
     })
+}
+
+pub(crate) fn bind_genre_to_inventory(
+    decision: &GenreDecision,
+    request: &str,
+    inventory: &Inventory,
+) -> Result<GenreDecision, String> {
+    let bytes = serde_json::to_vec(&json!({"version":DECISION_VERSION,"selection":decision.selection,
+        "request":request,"inventory":inventory})).map_err(|error| error.to_string())?;
+    let mut bound = decision.clone();
+    bound.snapshot_id = format!("genre-{:x}", Sha256::digest(bytes));
+    bound.limited = bound.genre == Genre::Narrative && !inventory.causal_chain_complete;
+    bound.basis.push(format!("eligible_inventory:{}", inventory.coverage_count));
+    if bound.limited {
+        bound.reason.push_str(&format!(" 最终合格盘点缺因果：{}", inventory.causal_reason));
+    }
+    Ok(bound)
 }
 
 pub(crate) fn build_recipe(
