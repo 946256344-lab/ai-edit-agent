@@ -16,7 +16,6 @@ export type AgentObservationToolName =
   | 'get_storyboard'
   | 'get_timeline'
   | 'get_text_capabilities'
-  | 'transcribe_asset'
 
 export type AgentSideEffectToolName =
   | 'download_music'

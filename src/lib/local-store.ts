@@ -239,6 +239,7 @@ export type AssetEvidence = {
 }
 
 export type StoryboardVersion = {
+  genre?: Exclude<GenreSelection, 'auto'> | null
   id: string
   projectId: string
   editingTaskId: string
@@ -394,7 +395,9 @@ export type TaskRouteResult = {
 export type AspectRatio = '9:16' | '16:9' | '1:1'
 export const aspectRatios: AspectRatio[] = ['9:16', '16:9', '1:1']
 // 旧任务记录没有 aspectRatio，按竖屏 9:16 显示；字幕不再单独开关，随配音一起发送。
-export type MediaOptions = { voiceover: boolean; subtitles: boolean; bgm: boolean; aspectRatio?: AspectRatio }
+export const genreSelections = ['auto', 'narrative', 'promotion', 'bts'] as const
+export type GenreSelection = typeof genreSelections[number]
+export type MediaOptions = { voiceover: boolean; subtitles: boolean; bgm: boolean; aspectRatio?: AspectRatio; genre?: GenreSelection }
 
 export type StoredAgentTask = {
   id: string

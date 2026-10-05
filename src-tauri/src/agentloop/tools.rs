@@ -192,15 +192,6 @@ pub(crate) fn native_function_tools_for_request(
             Vec::new(),
         ),
         function_tool(
-            "transcribe_asset",
-            "Transcribe spoken audio from a ready video/audio asset into timed subtitle segments. Returns segments the model can edit then write via replace_text_tracks.",
-            json!({
-                "assetId": bounded_required_string_schema("Ready video/audio asset id in current project.", 200),
-                "language": nullable_bounded_string("Optional BCP-47 language hint, e.g. zh, en. Null auto-detects.", 20)
-            }),
-            vec!["assetId", "language"],
-        ),
-        function_tool(
             READ_LOGS,
             "Read a bounded, sanitized line range from the current application log. Available only when the user explicitly requests logs.",
             json!({
@@ -304,7 +295,7 @@ fn main_chain_function_tools() -> Vec<Value> {
         ),
         function_tool(
             GENERATE_STORYBOARD,
-            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, look at up to nine candidate images, and pick one shot; replacements may only come from the first five. Aim for about 2-3 seconds per shot and one shot per beat; a second distinct non-similar clip is allowed only when two assets honestly fit, never to pad time. After the timeline is written, this tool renders preview and creates a new Jianying draft when clips are playable; qualityWarnings do not block preview. Completion gaps are still returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must already be the approved spoken script; if the user only gave a theme, draft the script, ask the user to confirm, and do not call this tool until they agree. Voiceover synthesizes the approved brief before beats are split; if that fails, do not generate. When the user named a finished duration, pass it as requestedDurationMs. When voiceover is off, do not write on-screen title markers unless the user asked for titles. Do not rewrite spoken narration on an existing storyboard after voiceover exists; later edits may change picture only. Always create a new storyboard version and switch the opened version to it.",
+            "Write beats and spoken narrationText per shot, then for each beat rank the full ready library, look at up to nine candidate images, and pick one shot; replacements may only come from the first five. Aim for about 2-3 seconds per shot and one shot per beat; a second distinct non-similar clip is allowed only when two assets honestly fit, never to pad time. After the timeline is written, this tool renders preview and creates a new Jianying draft when clips are playable; qualityWarnings do not block preview. Completion gaps are still returned as qualityWarnings and must be repaired with insert_clips/change_clip_duration/replace_clips before treating the edit as finished. Never use onScreenText as voiceover. When voiceover is on, brief must be user-provided or footage-supported spoken copy; if the user only gave a theme, read the footage evidence first, draft only supported spoken copy and generate directly with default choices. Do not ask for script approval. Voiceover synthesizes the supplied brief before beats are split; if that fails, do not generate. When the user named a finished duration, pass it as requestedDurationMs. When voiceover is off, do not write on-screen title markers unless the user asked for titles. Do not rewrite spoken narration on an existing storyboard after voiceover exists; later edits may change picture only. Always create a new storyboard version and switch the opened version to it.",
             json!({
                 "brief": {
                     "type": ["string", "null"],
@@ -325,13 +316,14 @@ fn main_chain_function_tools() -> Vec<Value> {
                         "voiceover": {"type": "boolean"},
                         "subtitles": {"type": "boolean"},
                         "bgm": {"type": "boolean"},
+                        "genre": {"type":"string","enum":["auto","narrative","promotion","bts"],"description":"Copy the composer genre. Manual choice is immutable; auto is resolved once by the generation pipeline."},
                         "aspectRatio": {
                             "type": "string",
                             "enum": ["9:16", "16:9", "1:1"],
                             "description": "Output frame. Copy the composer choice unless the user's current text names another ratio."
                         }
                     },
-                    "required": ["voiceover", "subtitles", "bgm"],
+                    "required": ["voiceover", "subtitles", "bgm", "aspectRatio", "genre"],
                     "additionalProperties": false
                 },
                 "requestedDurationMs": {

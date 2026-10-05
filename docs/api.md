@@ -259,9 +259,15 @@
 
 - `runtime-model-progress`、`assets-changed`（项目 ID）、`agent-edit-completed` 是通知；持久化查询仍是恢复事实。debug 的 Native Provider 完整转储只在显式开关/tauri:dev 下写 gitignored target，release 强制关闭，不能通过 read_logs 读取。
 
+### 本轮体裁与 Agent 完成回执（2026-10-05，任务 7）
+
+`submit_conversation_turn.mediaOptions.genre` 和 `generate_storyboard.mediaOptions.genre` 加性接受 `auto/narrative/promotion/bts`，缺字段默认 auto。用户手选值由 Rust 固定；发送快照随 `agent_tasks.input_json` 持久化。请求体裁与已判定故事版体裁分开，故事版事实只从任务 2 的附加元数据读取，生成链未填写时为 null。任务 6 接生成事务，不能把 auto 或用户选择写成已验证管线结果。
+
+Agent 完成条件只区分问答/新生成/局部改镜/其他编辑。问答不执行写工具，生成与局部改镜必须有对应的新产物回执；已落库但收尾未完成为 `partially_completed`，无产物如实失败。最终产物回复从持久化版本与实际音轨生成；问答文案整理只接收问题和公开事实，不携带模型草稿/工具/完整系统快照，危险内容被隐藏则回合 failed。`transcribe_asset` 已移出 Agent 目录（32 个业务工具），兼容分派返回未实现。`search_assets` 的可选过滤和分页在 Chat 调用省略时用 schema 默认；显式 query、闭合对象及范围校验仍生效。见 [变更记录](changes/2026-10-05-genre-entry-agent-facts.md)。
+
 ## 源码核对入口
 
-`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（33 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
+`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（32 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
 
 
 ## 片段证据契约 v1（2026-10-05）

@@ -26,6 +26,7 @@ use super::context::{
     MAX_CONTEXT_TOKENS,
 };
 use super::continuation::ContinuationState;
+use super::facts::{self, CompletionRequirement};
 use super::policy::{request_requires_project_observation, OBSERVATION_TOOLS};
 use super::schema::{
     AgentLoopResult, AgentLoopTerminalStatus, LoopState, AGENT_RUN_TIMEOUT, AGENT_STEP_TIMEOUT,
@@ -51,7 +52,6 @@ const NATIVE_TOOL_NAMES: &[&str] = &[
     "get_storyboard",
     "get_timeline",
     "get_text_capabilities",
-    "transcribe_asset",
     "render_preview",
     "request_asset_analysis",
     "retry_failed_asset_analysis",
@@ -120,7 +120,7 @@ pub(crate) fn run_native_tool_loop(
     )?;
     if let Some(options) = media_options {
         let instruction = format!(
-            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先写出完整旁白稿并向用户展示询问是否同意，本轮不要调用 generate_storyboard，用户同意后再用这篇稿作为 brief 生成。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。用户说了成片秒数时，把 requestedDurationMs 传给 generate_storyboard。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。aspectRatio 是成片画幅（9:16 / 16:9 / 1:1），用户本轮文字点名其他比例时按文字传，否则原样传。BGM 开启时 generate_storyboard 会自动配乐（先用素材库音频，没有再用 Jamendo），不要再为本轮另调音乐工具；按 appliedMedia 与 mediaNotApplied.bgm 的原因如实告诉用户，不得声称已加音乐。项目设置了品牌套件时 generate_storyboard 会自动加开场卡、片尾卡和角标 logo，并按项目默认转场处理切点；按 appliedMedia.brandCards 与 appliedMedia.transitions 如实汇报，品牌卡在编辑器里是图片、其中文字不可编辑，要告诉用户。只有用户本轮明确要求标题 / 字卡 / logo / 片尾或转场时才调用 add_title_cards 或 set_transitions，只填短文案。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。generate_storyboard 成功后会自动出预览并按当前输出端口交付到所选编辑器；能播的时间线不要因为 qualityWarnings 再拦预览。已有配音的故事版禁止改旁白，只改画面。不要再调用 create_jianying_draft，除非用户明确要求剪映且这次生成没有草稿。",
+            "本轮自动添加选项：{}。仅在用户要求制作或调整视频时应用；普通问答不得因此触发编辑。开启项是本轮剪辑要求，关闭项不自动添加。用户本轮自然语言明确要求添加或去除某项时优先执行文字要求。generate_storyboard 的 mediaOptions 必须传最终选择（无文字覆盖时原样传递），不能因为输入是完整文案就开启配音或字幕。关闭不表示删除既有轨道。配音开启时本轮必须配音：用户已给可念旁白稿则把原文作为 brief 调用 generate_storyboard，不要改写或翻译；用户只给了主题、没有可念稿时，先读取真实素材证据，再按这些画面起草有依据的旁白并直接生成，不询问稿件同意。起草旁白时，用户没说时长则建议 15–30 秒能念完，除非用户要更长。用户说了成片秒数时，把 requestedDurationMs 传给 generate_storyboard。配音关闭时不要自动配音，仍按用户要求的时长正常剪辑；用户没说时长时建议做成 15–45 秒，每个镜头大约 2–3 秒（15 秒大约 5–7 镜，不要三个五秒长镜），不要无故拉到一两分钟。genre 是用户本轮体裁选择（auto / narrative / promotion / bts），必须原样传递；手选不能改，auto 等待生成链判断，不能声称它已确定。aspectRatio 是成片画幅（9:16 / 16:9 / 1:1），用户本轮文字点名其他比例时按文字传，否则原样传。BGM 开启时 generate_storyboard 会自动配乐（先用素材库音频，没有再用 Jamendo），不要再为本轮另调音乐工具；按 appliedMedia 与 mediaNotApplied.bgm 的原因如实告诉用户，不得声称已加音乐。项目设置了品牌套件时 generate_storyboard 会自动加开场卡、片尾卡和角标 logo，并按项目默认转场处理切点；按 appliedMedia.brandCards 与 appliedMedia.transitions 如实汇报，品牌卡在编辑器里是图片、其中文字不可编辑，要告诉用户。只有用户本轮明确要求标题 / 字卡 / logo / 片尾或转场时才调用 add_title_cards 或 set_transitions，只填短文案。已存在的配音、字幕、音乐不重复添加。字幕开启但无配音时使用文案与镜头节奏，不声称已识别原片语音。选项仅是请求，不是产物完成证据。generate_storyboard 成功后会自动出预览并按当前输出端口交付到所选编辑器；能播的时间线不要因为 qualityWarnings 再拦预览。已有配音的故事版禁止改旁白，只改画面。不要再调用 create_jianying_draft，除非用户明确要求剪映且这次生成没有草稿。",
             serde_json::to_string(&options).map_err(|error| error.to_string())?
         );
         let prompt = input[0]["content"][0]["text"].as_str().unwrap_or_default();
@@ -216,9 +216,26 @@ pub(crate) fn run_native_tool_loop(
         }
         result
     };
+    // 理解本轮完成条件，不能以模型的“做完了”代替实际写入；普通问答禁止副作用。
+    let requirement_body = respond(&facts::requirement_payload(request, &input), remaining_timeout(run_deadline)
+        .ok_or_else(|| "native_tool_loop_deadline_exceeded".to_owned())?)?;
+    let requirement_turn = if is_custom { model_turn_from_chat_completions(&requirement_body) }
+        else { model_turn_from_responses(&requirement_body) }
+        .ok_or_else(|| "native_completion_requirement_unavailable".to_owned())?;
+    let intent = facts::requirement_from_turn(&requirement_turn)?;
+    let requirement = intent.requirement;
+    input[0]["content"][0]["text"] = json!(format!("{}\nCompletion requirement: {:?}. Answer-only turns must not call write functions or solicit a new generation request; give the requested explanation and stop without offers or followup questions. Edit turns require a verified new artifact; explain blockers without claiming success.",
+        input[0]["content"][0]["text"].as_str().unwrap_or_default(), requirement));
     let opened_storyboard_id = RefCell::new(storyboard.as_ref().map(|board| board.id.clone()));
+    let public_observations = RefCell::new(Vec::new());
     let mut execute = |call: &FunctionCall, step_number: usize| -> Result<Value, String> {
-        let result = execute_native_tool(&mut state, call, step_number)?;
+        if requirement == CompletionRequirement::Answer && !OBSERVATION_TOOLS.contains(&call.name.as_str()) {
+            return Ok(json!({"status":"failed","code":"answer_only_turn","retryable":false}));
+        }
+        let result = facts::adapt_narration_failure(execute_native_tool(&mut state, call, step_number)?, intent.preserve_narration);
+        if requirement == CompletionRequirement::Answer && result["status"] == "ok" {
+            public_observations.borrow_mut().push(facts::public_observation(&result));
+        }
         opened_storyboard_id.replace(state.storyboard.as_ref().map(|board| board.id.clone()));
         Ok(result)
     };
@@ -230,6 +247,8 @@ pub(crate) fn run_native_tool_loop(
     };
     let cancelled = || native_task_cancelled(connection, agent_task_id);
     let mut receipt = NativeRunReceipt {
+        requirement,
+        locale: crate::agent::task_ui_locale(connection, agent_task_id),
         requires_project_observation: request_requires_project_observation(request),
         successful_observation_this_turn: true,
         ..NativeRunReceipt::default()
@@ -262,6 +281,20 @@ pub(crate) fn run_native_tool_loop(
         },
     );
     drop(execute);
+    // 只有问答经过独立文案整理；没有工具、作用域快照或写入机会，生成/局部修改仍直接按回执回复。
+    let loop_result = if requirement == CompletionRequirement::Answer {
+        loop_result.and_then(|_draft| {
+            let snapshot = build_state_snapshot(connection, project_id, editing_task_id, opened_storyboard_id.borrow().as_deref())?;
+            let payload = facts::answer_payload(request, &snapshot, &public_observations.borrow(), receipt.locale);
+            let body = respond(&payload, remaining_timeout(run_deadline)
+                .ok_or_else(|| "native_tool_loop_deadline_exceeded".to_owned())?)?;
+            let turn = if is_custom { model_turn_from_chat_completions(&body) }
+                else { model_turn_from_responses(&body) }
+                .ok_or_else(|| "native_answer_reply_invalid".to_owned())?;
+            if turn.function_calls().next().is_some() { return Err("native_answer_reply_invalid".to_owned()); }
+            model_message_text(&turn).ok_or_else(|| "native_answer_reply_invalid".to_owned())
+        })
+    } else { loop_result };
     let _ = record_agent_timing_diagnostic(
         connection,
         project_id,
@@ -311,8 +344,8 @@ fn initial_native_input(
     Ok(input)
 }
 
-/// 只读本机项目事实的查询工具；不含 `search_music`、`list_voices`、`transcribe_asset`，
-/// 它们失败意味着配乐、配音或转写可能没落地。
+/// 只读本机项目事实的查询工具；不含 `search_music`、`list_voices`，
+/// 它们失败意味着配乐或配音能力可能不可用。
 const LOCAL_LOOKUP_TOOLS: &[&str] = &[
     "read_logs",
     "get_edit_status",
@@ -336,27 +369,65 @@ fn finish_native_result(
 ) -> Result<(AgentEditResult, AgentLoopTerminalStatus), String> {
     match loop_result {
         Ok(message) => {
-            // 只读查项目状态失败（多为模型传错参数）不缺任何交付物，不把整轮降为部分完成；
-            // 失败步骤仍在运行步骤里可见。外部查询与写工具失败照旧计入。
-            let unfinished = receipt
-                .failed_tools
-                .iter()
-                .any(|tool| !LOCAL_LOOKUP_TOOLS.contains(&tool.as_str()));
-            let status = if receipt.needs_confirmation {
+            let required_write = receipt.requirement_met();
+            let playable = last_outcome.as_ref().and_then(|o| o.timeline.as_ref())
+                .is_some_and(|t| t.clips.iter().any(|c| c.clip_kind == "source" && c.source_end_ms > c.source_start_ms && c.timeline_end_ms > c.timeline_start_ms));
+            let needs_picture = matches!(receipt.requirement, CompletionRequirement::Generate | CompletionRequirement::LocalEdit);
+            let incomplete = !required_write || (needs_picture && !playable) || !receipt.incomplete_stages.is_empty();
+            let unfinished = receipt.failed_tools.iter().any(|tool| !LOCAL_LOOKUP_TOOLS.contains(&tool.as_str()));
+            let has_editing_artifact = last_outcome.as_ref().is_some_and(|o| o.storyboard.is_some() || o.timeline.is_some() || o.preview.is_some() || o.jianying_draft.is_some());
+            let downloaded_music = receipt.successful_write_tools.contains("download_music");
+            let has_artifact = has_editing_artifact || downloaded_music;
+            let mut status = if receipt.needs_confirmation {
                 AgentLoopTerminalStatus::NeedsClarification
-            } else if unfinished && receipt.successful_tool_call {
+            } else if (incomplete || unfinished) && has_artifact {
                 AgentLoopTerminalStatus::PartiallyCompleted
-            } else if !receipt.failed_tools.is_empty() && !receipt.successful_tool_call {
-                AgentLoopTerminalStatus::Failed
+            } else if unfinished && receipt.successful_tool_call && receipt.requirement == CompletionRequirement::Answer {
+                AgentLoopTerminalStatus::PartiallyCompleted
             } else if !receipt.pending_tools.is_empty() {
                 AgentLoopTerminalStatus::PartiallyCompleted
+            } else if incomplete || (!receipt.failed_tools.is_empty() && !receipt.successful_tool_call) {
+                AgentLoopTerminalStatus::Failed
+            } else { AgentLoopTerminalStatus::Completed };
+            let mut result = native_result_from_message(agent_task_id, message, last_outcome);
+            if has_editing_artifact {
+                result.message = facts::artifact_reply(&result, locale, receipt.requirement == CompletionRequirement::LocalEdit && required_write);
+                if let Some(genre) = receipt.resolved_genre {
+                    let name = match genre {
+                        crate::models::Genre::Narrative => locale.pick("叙事", "Narrative"),
+                        crate::models::Genre::Promotion => locale.pick("宣传", "Promotion"),
+                        crate::models::Genre::Bts => locale.pick("花絮", "Behind the scenes"),
+                    };
+                    result.message.push_str(&format!("\n{}: {name}", locale.pick("体裁", "Genre")));
+                }
+                if status != AgentLoopTerminalStatus::Completed {
+                    result.message.push_str(locale.pick("\n本轮只完成了一部分，尚不能视为完成。", "\nThis run is incomplete."));
+                }
+            } else if downloaded_music {
+                result.message = locale.pick("音乐已下载到素材库；本轮尚未将它写入时间线。",
+                    "Music was downloaded to the library; it has not been applied to a timeline in this run.").to_owned();
+            } else if !receipt.pending_tools.is_empty() {
+                result.message = locale.pick("素材分析已排队，结果尚未返回；本轮尚未完成。",
+                    "Footage analysis was queued, but its results are not available yet; this run is incomplete.").to_owned();
+            } else if receipt.requirement != CompletionRequirement::Answer || unfinished {
+                result.message = locale.pick("本轮未创建或修改剪辑产物。", "No editing artifact was created or changed in this run.").to_owned();
             } else {
-                AgentLoopTerminalStatus::Completed
-            };
-            Ok((
-                native_result_from_message(agent_task_id, message, last_outcome),
-                status,
-            ))
+                result.message = match facts::safe_answer(result.message, locale) {
+                    Ok(answer) => answer,
+                    Err(hidden) => { status = AgentLoopTerminalStatus::Failed; hidden },
+                };
+            }
+            for reason in receipt.failure_messages.values() {
+                result.message.push_str("\n"); result.message.push_str(reason);
+            }
+            if !required_write && receipt.failure_messages.is_empty() && receipt.pending_tools.is_empty() {
+                result.message.push_str(locale.pick("\n本轮在执行生成或修改前结束，未取得对应产物回执。", "\nThis run stopped before the requested generation or change was executed; no matching artifact receipt was obtained."));
+            }
+            for stage in &receipt.incomplete_stages {
+                result.message.push_str("\n");
+                result.message.push_str(facts::incomplete_stage_message(stage, locale));
+            }
+            Ok((result, status))
         }
         Err(error) => Ok(interrupted_native_result(
             agent_task_id,
@@ -410,7 +481,7 @@ fn interrupted_native_result(
     };
     let Some(reason) = bounded_reason else {
         if let Some(mut outcome) = last_outcome {
-            outcome.message = if outcome.preview.is_some() {
+            let interruption = if outcome.preview.is_some() {
                 locale
                     .pick(
                         "预览已由工具生成并验证，但模型未能完成结果说明；预览已保留。",
@@ -418,9 +489,10 @@ fn interrupted_native_result(
                     )
                     .to_owned()
             } else {
-                native_model_reply_unavailable_result(agent_task_id, receipt, error, locale)
-                    .message
+                locale.pick("已保存部分产物，但模型连接或结果说明失败，本轮未完成。",
+                    "Partial artifacts were saved, but the model connection or summary failed; this run is incomplete.").to_owned()
             };
+            outcome.message = format!("{}\n{interruption}", facts::artifact_reply(&outcome, locale, false));
             let status = if receipt.needs_confirmation {
                 AgentLoopTerminalStatus::NeedsClarification
             } else {
@@ -527,8 +599,8 @@ fn native_result_from_message(
     message: String,
     last_outcome: Option<AgentEditResult>,
 ) -> AgentEditResult {
-    if let Some(mut outcome) = last_outcome {
-        outcome.message = message;
+    if let Some(outcome) = last_outcome {
+        // 模型文本不能覆盖产物执行说明；最终出口再从事实回执按界面语言生成。
         return outcome;
     }
     AgentEditResult {
@@ -552,6 +624,8 @@ fn merge_native_outcomes(
     if tool == "generate_storyboard" {
         return current;
     }
+    let timeline_changed = current.timeline.as_ref().is_some_and(|t|
+        previous.timeline.as_ref().is_none_or(|old| old.id != t.id));
     if current.storyboard.is_none() {
         current.storyboard = previous.storyboard;
     }
@@ -579,7 +653,7 @@ fn merge_native_outcomes(
             current.preview = previous.preview;
         }
     }
-    if current.jianying_draft.is_none() {
+    if current.jianying_draft.is_none() && !timeline_changed {
         current.jianying_draft = previous.jianying_draft;
     }
     current
@@ -591,6 +665,12 @@ type NativeRefreshSnapshot<'a> = dyn FnMut() -> Result<Option<Value>, String> + 
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct NativeRunReceipt {
+    requirement: CompletionRequirement,
+    locale: UiLocale,
+    missing_write_continuations: usize,
+    failure_messages: std::collections::BTreeMap<String, String>,
+    incomplete_stages: std::collections::BTreeSet<String>,
+    resolved_genre: Option<crate::models::Genre>,
     requires_project_observation: bool,
     successful_observation_this_turn: bool,
     tool_called: bool,
@@ -602,6 +682,35 @@ struct NativeRunReceipt {
     latest_timeline_version_id: Option<String>,
     preview_timeline_version_id: Option<String>,
     observation_sources: std::collections::BTreeSet<String>,
+}
+
+impl NativeRunReceipt {
+    fn record_artifact_gaps(&mut self, tool: &str, result: &Value) {
+        if tool == "generate_storyboard" { self.incomplete_stages.clear(); }
+        let mut stage = |name: &str, incomplete: bool| {
+            if incomplete { self.incomplete_stages.insert(name.to_owned()); }
+            else { self.incomplete_stages.remove(name); }
+        };
+        // 独立预览只证明预览，不能顺带清掉选镜/配音/交付的缺口。
+        if let Some(warnings) = result.get("qualityWarnings").and_then(Value::as_array) {
+            stage(if tool == "render_preview" { "preview_quality" } else { "quality" }, !warnings.is_empty());
+        }
+        if result.get("timelineError").is_some() { stage("timeline", true); }
+        else if TIMELINE_VERSION_WRITE_TOOLS.contains(&tool) && result_timeline_version_id(result).is_some() { stage("timeline", false); }
+        if result.get("previewError").is_some() { stage("preview", true); }
+        else if tool == "render_preview" || result.get("previewTimelineVersionId").is_some() { stage("preview", false); }
+        if result.get("jianyingError").is_some() { stage("delivery", true); }
+        else if tool == "create_jianying_draft" { stage("delivery", false); }
+    }
+
+    fn requirement_met(&self) -> bool {
+        match self.requirement {
+            CompletionRequirement::Answer => true,
+            CompletionRequirement::Generate => self.successful_write_tools.contains("generate_storyboard"),
+            CompletionRequirement::LocalEdit => ["reselect_shots", "refine_shot_ranges", "replace_clips"].iter().any(|tool| self.successful_write_tools.contains(*tool)),
+            CompletionRequirement::Edit => !self.successful_write_tools.is_empty(),
+        }
+    }
 }
 
 const TIMELINE_VERSION_WRITE_TOOLS: &[&str] = &[
@@ -735,6 +844,15 @@ fn drive_native_loop(
             let Some(message) = model_message_text(&turn) else {
                 return Err("native_tool_loop_response_missing_message".to_owned());
             };
+            // 辅助查询失败不等于生成失败；还没尝试写入时继续按默认值执行，避免检索失败提前收工。
+            let failed_write = receipt.failed_tools.iter().any(|tool| !OBSERVATION_TOOLS.contains(&tool.as_str()));
+            if !receipt.requirement_met() && !failed_write && !receipt.needs_confirmation
+                && receipt.missing_write_continuations < 2 && step_number < MAX_STEPS {
+                receipt.missing_write_continuations += 1;
+                input.push(json!({"role":"system","content":[{"type":"input_text","text":
+                    "The user requested generation or an artifact change, but no matching write receipt exists in this turn. Execute the requested operation now using the allowed functions and default choices. For a local shot complaint use reselect_shots/refine_shot_ranges; do not merely describe a change. If impossible, explain the blocker; never claim success or ask about defaults."}]}));
+                continue;
+            }
             if continue_after_natural_language(
                 input,
                 requires_observation,
@@ -786,7 +904,8 @@ fn drive_native_loop(
                 storyboard_confirmation_pending = true;
                 receipt.needs_confirmation = true;
             }
-            if result["code"] == "storyboard_needs_user_decision" {
+            // 原稿与明确秒数的冲突需要用户取舍；缺素材只报告缺口，不问默认选项。
+            if result["code"] == "storyboard_needs_user_decision" && result["stage"] == "storyboard_duration" {
                 receipt.needs_confirmation = true;
             }
             if is_project_observation && result_status == Some("ok") {
@@ -799,6 +918,7 @@ fn drive_native_loop(
             ) {
                 receipt.successful_tool_call = true;
                 receipt.failed_tools.remove(&call.name);
+                receipt.failure_messages.remove(&call.name);
                 if result_status == Some("queued") {
                     receipt.pending_tools.insert(call.name.clone());
                 } else {
@@ -809,6 +929,13 @@ fn drive_native_loop(
                 }
             } else {
                 receipt.failed_tools.insert(call.name.clone());
+                receipt.failure_messages.insert(call.name.clone(), facts::failure_reason(&result, receipt.locale, &call.name));
+            }
+            if result_status == Some("ok") && !is_observation {
+                if call.name == "generate_storyboard" {
+                    receipt.resolved_genre = serde_json::from_value(result["genre"].clone()).ok();
+                }
+                receipt.record_artifact_gaps(&call.name, &result);
             }
             step_results.push((call.name.clone(), result.clone(), is_observation));
             if executed
@@ -876,6 +1003,11 @@ You are a local video project assistant.\n\
 FACTS: The system state snapshot and function outputs are the only project and artifact facts. \
 Answer ordinary questions directly from the snapshot; call observation functions only when more detail is needed. \
 For export readiness, call get_edit_status — do not infer it from the snapshot alone.\n\
+\n\
+DEFAULTS: Answer the user's question or execute their request in this turn. \
+Use the composer choices and generation defaults; do not ask for genre, duration, music style or script approval when defaults suffice. \
+Explain missing footage as a gap, without asking about default choices. Do not end ordinary answers with unsolicited followup questions. \
+Only ask for an actual user tradeoff or required confirmation of an irreversible action.\n\
 \n\
 BEFORE ACTING: All functions in the directory below are already available; call them directly when they match the user's request. \
 A generated storyboard with status needs_confirmation must be summarized for user review; \
@@ -1068,7 +1200,7 @@ fn execute_native_tool(
     let allowed = NATIVE_TOOL_NAMES.contains(&call.name.as_str());
     #[cfg(feature = "footage-eval")]
     let allowed = allowed && !(crate::footage_eval::trace_directory().is_some()
-        && matches!(call.name.as_str(), "request_asset_analysis" | "retry_failed_asset_analysis" | "create_jianying_draft"));
+        && matches!(call.name.as_str(), "analyze_asset" | "request_asset_analysis" | "retry_failed_asset_analysis" | "create_jianying_draft"));
     let persisted_name = if allowed {
         call.name.as_str()
     } else {
@@ -1123,11 +1255,6 @@ fn execute_native_tool(
     let started_at = Instant::now();
     let previous_outcome = state.last_outcome.take();
     let result = apply_skill(state, &call.name, &args);
-    let current_outcome = state.last_outcome.take();
-    state.last_outcome = match (previous_outcome, current_outcome) {
-        (previous, Some(current)) => Some(merge_native_outcomes(previous, current, &call.name)),
-        (previous, None) => previous,
-    };
     let _ = record_agent_timing_diagnostic(
         state.connection,
         state.project_id,
@@ -1138,11 +1265,12 @@ fn execute_native_tool(
         AgentTimingMetric::SkillExecution,
         started_at.elapsed(),
     );
-    match result {
+    let tool_result = match result {
         Ok(value) => {
             let value = match prepare_native_tool_result(&call.name, value) {
                 Ok(value) => value,
                 Err(error) => {
+                    state.last_outcome = previous_outcome;
                     finish_agent_run_step(
                         state.connection,
                         state.project_id,
@@ -1165,6 +1293,15 @@ fn execute_native_tool(
                 state.successful_observation = true;
             }
             let artifact = persisted_artifact_for_tool(state, &call.name);
+            if (call.name == "download_music" && !facts::downloaded_music_verified(state.connection, state.project_id, &value))
+                || (super::skills::produced_artifact_for_tool(&call.name).is_some()
+                && (artifact.is_none() || !facts::persisted_outcome_verified(state.connection, state.project_id,
+                    state.editing_task_id, state.last_outcome.as_ref(), &call.name, &value))) {
+                state.last_outcome = previous_outcome;
+                finish_agent_run_step(state.connection, state.project_id, state.editing_task_id,
+                    state.agent_task_id, &step_id, "failed", None, None, Some("artifact_receipt_unverified"))?;
+                return Ok(json!({"status":"failed","code":"artifact_receipt_unverified","retryable":false}));
+            }
             finish_agent_run_step(
                 state.connection,
                 state.project_id,
@@ -1194,16 +1331,51 @@ fn execute_native_tool(
             state.last_failed_tool_error_code = Some(code);
             Ok(safe_tool_failure_context(&call.name, &error))
         }
-    }
+    };
+    // 先核对本工具产生的回执，再合并历史产物，避免旧版本替新写入证明成功。
+    let current_outcome = state.last_outcome.take();
+    state.last_outcome = match (previous_outcome, current_outcome) {
+        (previous, Some(current)) => Some(merge_native_outcomes(previous, current, &call.name)),
+        (previous, None) => previous,
+    };
+    tool_result
 }
 
 fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
     let mut value = serde_json::from_str::<Value>(arguments).map_err(|_| invalid_arguments())?;
+    // 可空版本引用的旧 Provider 占位不能被当成真实版本 ID，仍由当前会话选择默认版本。
+    if matches!(value["timelineVersionId"].as_str(), Some("None" | "null")) {
+        value["timelineVersionId"] = Value::Null;
+    }
     match tool {
         "search_assets" => {
-            coerce_blank_strings_to_null(&mut value, &["query", "kind", "tag", "collectionId"])
+            coerce_blank_strings_to_null(&mut value, &["query", "kind", "tag", "collectionId", "minDurationMs", "maxDurationMs", "minRating"]);
+            // Provider 的旧式工具文本可能把 Python None 保留成字符串；仅可空过滤兼容，查询原文不变。
+            if let Some(object) = value.as_object_mut() {
+                for key in ["kind", "minDurationMs", "maxDurationMs", "minRating", "tag", "collectionId"] {
+                    if object.get(key).and_then(Value::as_str).is_some_and(|text| matches!(text.trim(), "None" | "null")) {
+                        object.insert(key.to_owned(), Value::Null);
+                    }
+                }
+            }
+            // Chat 适配器不强制 strict；只补 schema 中的可选过滤与分页默认，查询仍须显式传。
+            if let Some(object) = value.as_object_mut() {
+                if object.contains_key("query") {
+                    for key in ["kind", "minDurationMs", "maxDurationMs", "minRating", "tag", "collectionId"] {
+                        object.entry(key).or_insert(Value::Null);
+                    }
+                    object.entry("favoriteOnly").or_insert(json!(false));
+                    object.entry("offset").or_insert(json!(0));
+                    object.entry("limit").or_insert(json!(20));
+                }
+            }
         }
-        "search_asset_segments" => coerce_blank_strings_to_null(&mut value, &["assetId"]),
+        "search_asset_segments" => {
+            coerce_blank_strings_to_null(&mut value, &["assetId"]);
+            if matches!(value["assetId"].as_str(), Some("None" | "null")) {
+                value["assetId"] = Value::Null;
+            }
+        }
         "get_timeline" | "render_preview" | "create_jianying_draft" => {
             coerce_blank_strings_to_null(&mut value, &["timelineVersionId"]);
         }
@@ -1346,7 +1518,8 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 }
             }
             if let Some(media) = object.get("mediaOptions") {
-                if !(media.is_null() || media.is_object()) {
+                if !(media.is_null() || media.is_object())
+                    || (!media.is_null() && crate::media_options::parse_media_options(media).is_err()) {
                     return Err(invalid_arguments());
                 }
             }
@@ -1522,6 +1695,16 @@ fn parse_native_arguments(tool: &str, arguments: &str) -> Result<Value, Value> {
                 || !(object["offset"].as_i64().is_some() || object["offset"].as_u64().is_some())
                 || !(object["limit"].as_i64().is_some() || object["limit"].as_u64().is_some())
             {
+                return Err(invalid_arguments());
+            }
+            let nullable_text = |key: &str, max: usize| object[key].is_null()
+                || object[key].as_str().is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= max);
+            if !["query", "tag", "collectionId"].iter().all(|key| nullable_text(key, 200))
+                || !matches!(object["kind"].as_str(), None | Some("video" | "image" | "audio" | "other"))
+                || ["minDurationMs", "maxDurationMs"].iter().any(|key| !object[*key].is_null() && !object[*key].as_i64().is_some_and(|v| v >= 0))
+                || (!object["minRating"].is_null() && !object["minRating"].as_i64().is_some_and(|v| (0..=5).contains(&v)))
+                || !object["offset"].as_i64().is_some_and(|v| (0..=10_000).contains(&v))
+                || !object["limit"].as_i64().is_some_and(|v| (1..=20).contains(&v)) {
                 return Err(invalid_arguments());
             }
             Ok(value)
@@ -1988,6 +2171,14 @@ mod tests {
     }
 
     #[test]
+    fn hidden_answer_is_failed_instead_of_completed() {
+        let (result, status) = finish_native_result("task", Ok("mediaOptions: internal draft".to_owned()),
+            None, &NativeRunReceipt::default(), UiLocale::En).unwrap();
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert!(!result.message.contains("mediaOptions"));
+    }
+
+    #[test]
     fn one_model_turn_with_two_function_calls_uses_distinct_tool_step_numbers() {
         let call = json!({
             "id": "resp_two_tools",
@@ -2380,7 +2571,7 @@ mod tests {
     }
 
     #[test]
-    fn model_claim_without_tool_ends_loop_and_finishes_completed() {
+    fn model_claim_without_tool_cannot_complete_a_generation() {
         let mut input = vec![json!({
             "role": "user",
             "content": [{"type": "input_text", "text": "生成 storyboard"}]
@@ -2400,7 +2591,7 @@ mod tests {
         };
         let mut execute =
             |_call: &FunctionCall, _step: usize| panic!("the model claim must not execute a tool");
-        let mut receipt = NativeRunReceipt::default();
+        let mut receipt = NativeRunReceipt { requirement: CompletionRequirement::Generate, ..NativeRunReceipt::default() };
         let result = drive_native_loop(
             &mut input,
             false,
@@ -2417,7 +2608,8 @@ mod tests {
         assert_eq!(result, Ok("Storyboard 已生成。".to_owned()));
         let (_result, status) = finish_native_result("task-1", result, None, &receipt, UiLocale::ZhCn)
             .expect("natural-language claim ends the run");
-        assert_eq!(status, AgentLoopTerminalStatus::Completed);
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
+        assert_eq!(receipt.missing_write_continuations, 2);
     }
 
     #[test]
@@ -2928,6 +3120,11 @@ mod tests {
         let merged = merge_native_outcomes(Some(earlier), later, "get_edit_status");
         assert!(merged.storyboard.is_some());
         assert_eq!(merged.message, "observation");
+        let (saved, status) = finish_native_result("task-1", Err("provider error".to_owned()),
+            Some(merged), &NativeRunReceipt::default(), UiLocale::En).unwrap();
+        assert_eq!(status, AgentLoopTerminalStatus::PartiallyCompleted);
+        assert!(saved.message.contains("Storyboard v1 was saved"));
+        assert!(!saved.message.contains("no storyboard"));
     }
 
     #[test]
@@ -3144,7 +3341,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_claim_without_tool_ends_loop_and_finishes_completed() {
+    fn preview_request_without_tool_continues_then_fails_without_claiming_success() {
         let request = "帮我生成一个预览";
         let mut input = vec![json!({
             "role": "user",
@@ -3152,9 +3349,10 @@ mod tests {
         })];
         let mut respond = |_payload: &Value, _timeout: Duration| Ok::<_, String>(HELLO.to_owned());
         let mut execute = |_call: &FunctionCall, _step: usize| {
-            unreachable!("natural language must finish without forcing a tool call")
+            unreachable!("the fixture never supplies an actual tool call")
         };
-        let mut receipt = NativeRunReceipt::default();
+        let mut receipt = NativeRunReceipt { requirement: CompletionRequirement::Edit,
+            failed_tools: ["search_music".to_owned()].into_iter().collect(), ..NativeRunReceipt::default() };
         let message = drive_native_loop(
             &mut input,
             false,
@@ -3171,7 +3369,8 @@ mod tests {
         .expect("natural language ends the native loop");
         let (_result, status) = finish_native_result("task-1", Ok(message), None, &receipt, UiLocale::ZhCn)
             .expect("natural-language preview claim ends the run");
-        assert_eq!(status, AgentLoopTerminalStatus::Completed);
+        assert_eq!(receipt.missing_write_continuations, 2);
+        assert_eq!(status, AgentLoopTerminalStatus::Failed);
         assert!(receipt.successful_write_tools.is_empty());
     }
 
@@ -3306,23 +3505,23 @@ mod tests {
     }
 
     #[test]
-    fn voiceover_without_script_asks_for_user_consent_instead_of_generating() {
+    fn voiceover_without_script_recovers_with_footage_copy_without_consent_question() {
         let failure = safe_tool_failure_context(
             "generate_storyboard",
             "voiceover_script_confirmation_required: voiceover is on but the brief is not spoken narration.",
         );
         assert_eq!(failure["code"], "voiceover_script_confirmation_required");
-        assert_eq!(failure["retryable"], false);
+        assert_eq!(failure["retryable"], true);
         assert!(failure["recovery"]
             .as_str()
-            .is_some_and(|text| text.contains("ask whether they agree")));
+            .is_some_and(|text| text.contains("Do not ask for script approval")));
         assert!(failure["responseInstruction"]
             .as_str()
-            .is_some_and(|text| text.contains("confirm")));
+            .is_some_and(|text| text.contains("no approval question")));
     }
 
     #[test]
-    fn insufficient_footage_asks_the_user_instead_of_failing_selection() {
+    fn insufficient_footage_reports_the_gap_without_default_questions() {
         let failure = safe_tool_failure_context(
             "generate_storyboard",
             "storyboard_needs_user_decision: not enough playable footage for this storyboard. Ask the user whether to import more clips, skip beats, or change duration. facts=[]",
@@ -3331,7 +3530,7 @@ mod tests {
         assert_eq!(failure["retryable"], false);
         assert!(failure["recovery"]
             .as_str()
-            .is_some_and(|text| text.contains("import more clips")));
+            .is_some_and(|text| text.contains("do not ask about default choices")));
         assert!(!failure["facts"]
             .as_array()
             .into_iter()
@@ -3342,7 +3541,7 @@ mod tests {
     }
 
     #[test]
-    fn short_window_asks_the_user_instead_of_failing_selection() {
+    fn short_window_reports_the_gap_without_exposing_ids_or_asking_defaults() {
         let failure = safe_tool_failure_context(
             "generate_storyboard",
             r#"storyboard_needs_user_decision: a locked shot is shorter than its spoken beat after model repair. Ask the user how to continue. Do not persist this board. facts=[{"beatId":"engineered-together","narrationMs":3370}]"#,
@@ -3351,7 +3550,7 @@ mod tests {
         assert_eq!(failure["retryable"], false);
         assert!(failure["recovery"]
             .as_str()
-            .is_some_and(|text| text.contains("Ask the user")));
+            .is_some_and(|text| text.contains("without asking about defaults")));
         assert!(!failure["recovery"]
             .as_str()
             .is_some_and(|text| text.contains("partialCandidateSummary")));
@@ -3623,6 +3822,18 @@ mod tests {
             "limit": 20
         });
         assert!(parse_native_arguments("search_assets", &asset_search.to_string()).is_ok());
+        let short = parse_native_arguments("search_assets", r#"{"query":"mechanical arm"}"#).unwrap();
+        assert_eq!(short["limit"], 20);
+        assert!(short["minDurationMs"].is_null());
+        let legacy_nulls = parse_native_arguments("search_assets",
+            r#"{"query":"robotic arm","kind":"video","minDurationMs":0,"maxDurationMs":"None","minRating":"None","favoriteOnly":false,"tag":"None","collectionId":"None","offset":0,"limit":20}"#).unwrap();
+        assert!(legacy_nulls["maxDurationMs"].is_null());
+        assert!(legacy_nulls["collectionId"].is_null());
+        let blank_filters = parse_native_arguments("search_assets",
+            r#"{"collectionId":"","favoriteOnly":false,"kind":"video","limit":20,"maxDurationMs":"","minDurationMs":"","minRating":"","offset":0,"query":"工业自动化 精密制造 精密加工 产线 质量检测","tag":""}"#).unwrap();
+        assert!(blank_filters["minDurationMs"].is_null());
+        assert!(blank_filters["maxDurationMs"].is_null());
+        assert!(blank_filters["minRating"].is_null());
         let with_asset_search_value = |key: &str, value: Value| {
             let mut object = asset_search.as_object().unwrap().clone();
             object.insert(key.to_owned(), value);
@@ -3635,7 +3846,7 @@ mod tests {
             with_asset_search_value("offset", json!(10_001)),
             with_asset_search_value("limit", json!(0)),
         ] {
-            assert!(parse_native_arguments("search_assets", &valid_after_slim.to_string()).is_ok());
+            assert!(parse_native_arguments("search_assets", &valid_after_slim.to_string()).is_err());
         }
         assert!(parse_native_arguments("search_assets", &json!({}).to_string()).is_err());
 
@@ -3648,6 +3859,10 @@ mod tests {
         assert!(
             parse_native_arguments("search_asset_segments", &segment_search.to_string()).is_ok()
         );
+        assert!(parse_native_arguments("search_asset_segments",
+            r#"{"query":"robotic arm","assetId":"None","offset":0,"limit":12}"#).unwrap()["assetId"].is_null());
+        assert!(parse_native_arguments("reselect_shots",
+            r#"{"timelineVersionId":"None","beatIds":null,"shotIndexes":[1],"keepCurrent":false,"instruction":"clearer picture"}"#).unwrap()["timelineVersionId"].is_null());
         let blank_filters = parse_native_arguments(
             "search_assets",
             r#"{"query":"factory","kind":"video","minDurationMs":0,"maxDurationMs":30000,"minRating":0,"favoriteOnly":false,"tag":"","collectionId":"","offset":0,"limit":10}"#,
@@ -3918,7 +4133,7 @@ mod tests {
     }
 
     #[test]
-    fn native_result_keeps_model_reply_instead_of_last_outcome_message() {
+    fn native_result_preserves_receipt_message_instead_of_model_claim() {
         let outcome = AgentEditResult {
             agent_task_id: "task-1".to_owned(),
             message: "deterministic artifact message".to_owned(),
@@ -3932,7 +4147,7 @@ mod tests {
             "model summarized the real receipt".to_owned(),
             Some(outcome),
         );
-        assert_eq!(result.message, "model summarized the real receipt");
+        assert_eq!(result.message, "deterministic artifact message");
     }
 
     #[test]
@@ -4449,4 +4664,28 @@ mod tests {
             "Capacity is only one measure."
         ));
     }
+    #[test]
+    fn generation_and_local_edit_without_matching_artifact_never_complete() {
+        for requirement in [CompletionRequirement::Generate, CompletionRequirement::LocalEdit] {
+            let receipt = NativeRunReceipt { requirement, successful_tool_call: true, ..NativeRunReceipt::default() };
+            let (result, status) = finish_native_result("task", Ok("Done! 已经换好了。".to_owned()), None, &receipt, UiLocale::En).unwrap();
+            assert_eq!(status, AgentLoopTerminalStatus::Failed);
+            assert!(result.message.contains("No editing artifact"));
+            assert!(!result.message.contains("Done!"));
+        }
+    }
+
+    #[test]
+    fn preview_success_does_not_erase_quality_or_delivery_gaps() {
+        let mut receipt = NativeRunReceipt::default();
+        receipt.record_artifact_gaps("generate_storyboard", &json!({
+            "qualityWarnings":[{"category":"picture"}], "previewError":"failed", "jianyingError":"disabled"
+        }));
+        receipt.record_artifact_gaps("render_preview", &json!({"qualityWarnings":[],"timelineVersionId":"new"}));
+        assert_eq!(receipt.incomplete_stages, ["quality".to_owned(), "delivery".to_owned()].into_iter().collect());
+        receipt.record_artifact_gaps("replace_clips", &json!({"qualityWarnings":[],"timelineVersionId":"fixed"}));
+        assert!(receipt.incomplete_stages.contains("delivery"));
+        assert!(!receipt.incomplete_stages.contains("quality"));
+    }
+
 }

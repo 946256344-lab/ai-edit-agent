@@ -4,6 +4,8 @@
 
 ## 产品链路与分层
 
+任务 7 增加了本轮体裁请求入口与完成回执边界：媒体快照携带 `genre`，用户手选由 Rust 守住，自动选择留给生成链；无新链元数据不填写故事版已判定体裁。每轮先额外一次只读模型请求，以当前会话快照与最近文本识别完成条件；问答禁写，生成/局部改镜无对应回执时续步，最终产物说明从持久化事实生成。普通问答再用只携带问题/公开事实、无工具的文案请求整理用户回复，内部信息过滤后标失败。`agentloop/facts.rs` 拥有完成条件、安全回复及持久化回执核对；不接管素材策划或选镜。转写占位工具已移出 Agent 目录。详情见 [任务 7 变更](changes/2026-10-05-genre-entry-agent-facts.md)。
+
 Voycut 是 Windows 本地优先的策划与选镜 Agent 原型。当前仍按用户 brief 拆拍再召回/选镜；「先挑可用镜头再策划」和叙事/宣传/花絮体裁分流的产品方向不能当作已完成实现。
 
 ```mermaid
@@ -59,7 +61,7 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 
 `taskrouter.rs` 先绑定项目、editing task 和 conversation，只向归属模型提供当前活动任务，无活动任务则创建 task/conversation。确定后签发绑定完整请求的单次 receipt，user 消息占用它，提交消费后才创建 queued Agent task。
 
-普通聊天、澄清、状态问答与执行统一进入 NativeToolLoop。完整 **33** 个 strict 工具 Schema 直接随每次 Provider 请求发送；Rust 复核白名单、参数形状、作用域与领域校验。普通请求不由关键词裁剪目录，品牌卡/转场仍有本轮明确意图守卫。项目/任务/会话由 LoopState 注入，模型不能传任意路径、SQL 或 FFmpeg 参数。
+普通聊天、澄清、状态问答与执行统一进入 NativeToolLoop。完整 **32** 个 strict 工具 Schema 直接随每次 Provider 请求发送；Rust 复核白名单、参数形状、作用域与领域校验。普通请求不由关键词裁剪目录，品牌卡/转场仍有本轮明确意图守卫。项目/任务/会话由 LoopState 注入，模型不能传任意路径、SQL 或 FFmpeg 参数。
 
 每轮注入安全权威状态快照，写工具后刷新；高层事实可直接用快照，详情另调观察工具。最多 10 步，单步 180 秒、整轮 1800 秒；40K token 触发压缩到 30K，60K 硬上限保护快照、当前请求和最近调用/结果对。同步 HTTP/配音/媒体使用剩余截止时间，ONNX 仅在阶段边界检查，不能强制中断。
 
@@ -93,7 +95,7 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 
 Agent `generate_storyboard` 同一调用自动时间线、媒体应用、preview 与所选编辑器交付；后续失败保留已保存版本，实际结果用 appliedMedia/mediaNotApplied、musicTiming、qualityWarnings。公开同名 Tauri 命令负责生成故事版，不等同 Agent 编排。
 
-文本时间/样式/布局/动态由后端校验，ASS preview 与编辑器原生文字分别判兼容。配音写独立旁白轨与 alignment 字幕，voiceoverApplied 才证明旁白落地，字幕失败不回滚旁白。`transcribe_asset` 当前只有 `local_stub_v1` 占位分句，没有真实 ASR。
+文本时间/样式/布局/动态由后端校验，ASS preview 与编辑器原生文字分别判兼容。配音写独立旁白轨与 alignment 字幕，voiceoverApplied 才证明旁白落地，字幕失败不回滚旁白。`transcribe_asset` 没有真实 ASR，已移出 Agent 目录，兼容分派返回未实现；不向 Agent 返回占位字幕。
 
 品牌套件为项目设置，logo/字体按内容哈希复制到 app_data/brand。模板编译期嵌入，独立线程隐藏 WebView2 本地渲染 PNG；模型给模板/短文案，Rust 算时间/样式。图片文字不可编辑。转场为默认+逐刀覆盖、切点居中、不改总时长；fit_graphics 随版本重新贴合。
 

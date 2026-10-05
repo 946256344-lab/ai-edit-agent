@@ -661,6 +661,7 @@ function App() {
                 openArtifacts: () => setActiveView('chat'),
                 toggleMedia: composerMedia.toggle,
                 setAspectRatio: composerMedia.setAspectRatio,
+                setGenre: composerMedia.setGenre,
                 sendMessage: (event) => { event.preventDefault(); shotReplacement.actions.requestAction(() => void sendMessage()) },
                 stopAgentRun,
               }}
