@@ -110,6 +110,10 @@
 
 ### 故事版、时间线与镜头编辑
 
+体裁底线内部接口（2026-10-05）：`storyboard/eligibility::evaluate(SegmentEvidence, Genre, AspectRatio, BrandIdentity, sourceWindow, RelationEvidence[], finalCheck)` 返回 `EligibilityDecision`，状态为 `eligible/rejected/pending_verification`，带原因、证据 ID、源窗、所需补核验风险与合格可用窗。宣传关键风险未知先请求任务 2 的 `verify_candidates`，最终仍未知/失败则排除；花絮的摆拍/广告未知、叙事关系未知保留待核验，不能算合格。叙事关系用本模块的加性 `RelationEvidence`（矛盾/跳轴/无关插入、三态、来源/源窗/置信度），缺上下文不从运镜方向推断。花絮空镜 ≤20% 是后续组合门，不在单镜入口全部删除。
+
+`prepare_candidates` 返回 `EligibleInventory { sources, evidence_snapshot, decisions, usability }`。仅新生成 Phase 2 通过 `phase2_eligible_shot_selection` 消费；当前明确默认宣传，真实体裁、最终源窗重验与旧版局部重选由任务 5/6/7 接入。`scoring::usability_score` 保留技术可读、主体可见、按画幅主体水平裁切保留、动作完整、高光覆盖、源窗容量；缺项为 null。候选池 `scores[].usability` 是加性字段，旧池缺省 null；新池 `total` 为独立内容召回分，不再包含质量/时长分。淘汰项不能因匹配分高或候选不足恢复。
+
 | 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
 |---|---|---|---|
 | `generate_storyboard` | `projectId: String, editingTaskId: String, brief: String, voiceId: Option<String>` | `Result<StoryboardVersion, String>` | 公开命令以 brief 创建经过 P1–P5 校验的任务内故事版；配音/媒体快照与自动 preview/交付编排属于 Agent 同名工具，见下表。 |
@@ -277,9 +281,15 @@
 
 - `runtime-model-progress`、`assets-changed`（项目 ID）、`agent-edit-completed` 是通知；持久化查询仍是恢复事实。debug 的 Native Provider 完整转储只在显式开关/tauri:dev 下写 gitignored target，release 强制关闭，不能通过 read_logs 读取。
 
+### 本轮体裁与 Agent 完成回执（2026-10-05，任务 7）
+
+`submit_conversation_turn.mediaOptions.genre` 和 `generate_storyboard.mediaOptions.genre` 加性接受 `auto/narrative/promotion/bts`，缺字段默认 auto。用户手选值由 Rust 固定；发送快照随 `agent_tasks.input_json` 持久化。请求体裁与已判定故事版体裁分开，故事版事实只从任务 2 的附加元数据读取，生成链未填写时为 null。任务 6 接生成事务，不能把 auto 或用户选择写成已验证管线结果。
+
+Agent 完成条件只区分问答/新生成/局部改镜/其他编辑。问答不执行写工具，生成与局部改镜必须有对应的新产物回执；已落库但收尾未完成为 `partially_completed`，无产物如实失败。最终产物回复从持久化版本与实际音轨生成；问答文案整理只接收问题和公开事实，不携带模型草稿/工具/完整系统快照，危险内容被隐藏则回合 failed。`transcribe_asset` 已移出 Agent 目录（32 个业务工具），兼容分派返回未实现。`search_assets` 的可选过滤和分页在 Chat 调用省略时用 schema 默认；显式 query、闭合对象及范围校验仍生效。见 [变更记录](changes/2026-10-05-genre-entry-agent-facts.md)。
+
 ## 源码核对入口
 
-`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（33 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
+`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（32 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
 
 
 ## 片段证据契约 v1（2026-10-05）

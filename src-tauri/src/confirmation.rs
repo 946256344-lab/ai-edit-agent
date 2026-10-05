@@ -81,9 +81,9 @@ fn queue_storyboard_confirmation(
     let transaction = connection
         .unchecked_transaction()
         .map_err(|_| "Storyboard confirmation could not be queued.".to_owned())?;
-    let (clarification_id, updated_at, source_status, source_result_json) = transaction
+    let (clarification_id, updated_at, source_status, source_result_json, source_task_id) = transaction
         .query_row(
-            "SELECT pending.id, pending.updated_at, source.status, source.result_json
+            "SELECT pending.id, pending.updated_at, source.status, source.result_json, source.id
              FROM pending_clarifications AS pending
              JOIN agent_tasks AS source
                ON source.id = pending.source_agent_task_id
@@ -106,6 +106,7 @@ fn queue_storyboard_confirmation(
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
@@ -124,6 +125,7 @@ fn queue_storyboard_confirmation(
     if !receipt_matches {
         return Err("The requested storyboard is not the pending confirmed operation.".to_owned());
     }
+    let locale = crate::agent::task_ui_locale(&transaction, &source_task_id);
 
     resolve_pending_clarification(
         &transaction,
@@ -139,7 +141,10 @@ fn queue_storyboard_confirmation(
             params![
                 format!("confirm-storyboard-{}", Uuid::new_v4()),
                 conversation_id,
-                format!("确认 storyboard v{storyboard_version_number}"),
+                match locale {
+                    crate::agent::UiLocale::ZhCn => format!("确认分镜 v{storyboard_version_number}"),
+                    crate::agent::UiLocale::En => format!("Confirm storyboard v{storyboard_version_number}"),
+                },
                 now
             ],
         )
@@ -156,6 +161,7 @@ fn queue_storyboard_confirmation(
                 conversation_id,
                 json!({
                     "storyboardVersionId": storyboard_version_id,
+                    "uiLocale": locale.as_str(),
                     "autoSequence": ["create_timeline_draft", "render_preview"]
                 })
                 .to_string(),
@@ -235,6 +241,7 @@ mod tests {
     fn confirmation_queue_is_scope_bound_atomic_and_single_use() {
         let now = 10_000_000;
         let connection = confirmation_database(now);
+        connection.execute("UPDATE agent_tasks SET input_json='{\"uiLocale\":\"en\"}' WHERE id='source-task'", []).unwrap();
         for (project_id, editing_task_id, conversation_id, storyboard_id) in [
             ("wrong-project", "task-1", "conversation-1", "storyboard-1"),
             ("project-1", "wrong-task", "conversation-1", "storyboard-1"),
@@ -279,6 +286,9 @@ mod tests {
             .expect("count confirmation messages");
         assert_eq!(queued_count, 1);
         assert_eq!(message_count, 1);
+        assert_eq!(crate::agent::task_ui_locale(&connection, &confirmation_task_id), crate::agent::UiLocale::En);
+        assert!(!super::confirmation_artifact_message(crate::agent::UiLocale::En, 1, 1)
+            .chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
 
         assert!(queue_storyboard_confirmation(
             &connection,
@@ -467,16 +477,12 @@ fn run_confirmation_sequence_pipeline(
     // 步骤 2: render_preview
     let preview = crate::preview::render_preview_inner(app.clone(), timeline.id.clone())?;
 
+    let locale = crate::agent::task_ui_locale(&connection, agent_task_id);
     let message = if voiceover_failed.is_some() {
-        format!(
-            "已确认 storyboard v{}，已创建时间线 v{} 并生成预览。配音服务拒绝了本次语音请求。可再说一次「配音」重试。",
-            storyboard.version_number, timeline_version_number
-        )
+        format!("{} {}", confirmation_artifact_message(locale, storyboard.version_number, timeline_version_number),
+            locale.pick("配音合成失败，可再说一次「配音」重试。", "Voiceover synthesis failed. Say ‘add voiceover’ to retry."))
     } else {
-        format!(
-            "已确认 storyboard v{}，自动创建了时间线 v{} 并生成了预览。",
-            storyboard.version_number, timeline_version_number
-        )
+        confirmation_artifact_message(locale, storyboard.version_number, timeline_version_number)
     };
 
     let result = AgentEditResult {
@@ -533,4 +539,12 @@ fn run_confirmation_sequence_pipeline(
     transaction.commit().map_err(|error| error.to_string())?;
 
     Ok(result)
+}
+
+// 确认路径的用户文案同样跟随任务界面语言。
+fn confirmation_artifact_message(locale: crate::agent::UiLocale, storyboard: i64, timeline: i64) -> String {
+    match locale {
+        crate::agent::UiLocale::ZhCn => format!("已确认分镜 v{storyboard}，已创建时间线 v{timeline} 并生成预览。"),
+        crate::agent::UiLocale::En => format!("Storyboard v{storyboard} was confirmed; timeline v{timeline} and its preview were created."),
+    }
 }

@@ -17,7 +17,6 @@ pub(super) const MAX_REFINE_CONTINUATIONS: usize = 2;
 /// 本轮不可再修、应诚实结束或等人确认的失败码；即使工具标了 retryable 也不续步。
 const NOT_IN_TURN_RECOVERABLE: &[&str] = &[
     "storyboard_confirmation_required",
-    "voiceover_script_confirmation_required",
     "user_restricted_tool",
     "tool_not_allowed",
     "unsafe_tool_result",
@@ -277,7 +276,7 @@ mod tests {
             json!({"status":"failed","code":"voiceover_script_confirmation_required","retryable":true}),
             false,
         )]);
-        assert_eq!(state.decide(1, false), None);
+        assert_eq!(state.decide(1, false), Some(ContinuationKind::Recovery));
     }
 
     #[test]

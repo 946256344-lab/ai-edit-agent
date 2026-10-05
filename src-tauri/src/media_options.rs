@@ -5,6 +5,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::TimelineVersion;
 
+/// 本轮用户选择；自动只是请求，已判定体裁另存故事版证据元数据。
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenreSelection {
+    #[default]
+    Auto,
+    Narrative,
+    Promotion,
+    Bts,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum AspectRatio {
     #[default]
@@ -41,6 +52,8 @@ pub struct MediaOptions {
     pub bgm: bool,
     #[serde(default)]
     pub aspect_ratio: AspectRatio,
+    #[serde(default)]
+    pub genre: GenreSelection,
 }
 
 const VOICEOVER_WORDS: &[&str] = &["voiceover", "voice-over", "voice over", "narrat", "配音", "旁白", "口播", "解说"];
@@ -67,6 +80,8 @@ pub(crate) fn guard_model_options(
         if mentioned { model_value } else { composer_value }
     };
     MediaOptions {
+        // 手选由代码守住；自动体裁只由生成链判断，模型工具参数不能提前冒充已判定。
+        genre: composer.genre,
         voiceover: keep(mentions(request, VOICEOVER_WORDS), model.voiceover, composer.voiceover),
         subtitles: keep(
             mentions(request, SUBTITLE_WORDS) || mentions(request, VOICEOVER_WORDS),
@@ -118,6 +133,7 @@ mod tests {
             }))
             .unwrap(),
             MediaOptions {
+                genre: GenreSelection::Auto,
                 voiceover: true,
                 subtitles: false,
                 bgm: false,
@@ -143,9 +159,11 @@ mod tests {
         );
         // 回归：配音关、原话没提配音时，模型自行打开的配音与字幕被拦回；点名时才采纳。
         let composer = MediaOptions {
+            genre: GenreSelection::Promotion,
             voiceover: false, subtitles: false, bgm: true, aspect_ratio: AspectRatio::Landscape,
         };
         let model = MediaOptions {
+            genre: GenreSelection::Bts,
             voiceover: true, subtitles: true, bgm: true, aspect_ratio: AspectRatio::Portrait,
         };
         let recap = "Turn our weekend road trip into a 30-second recap. Upbeat and cinematic.";
@@ -156,6 +174,7 @@ mod tests {
         assert_eq!(storyboard_options(&connection, "storyboard").unwrap(), None);
         for mask in 0..8 {
             let options = MediaOptions {
+                genre: GenreSelection::Narrative,
                 voiceover: mask & 1 != 0,
                 subtitles: mask & 2 != 0,
                 bgm: mask & 4 != 0,

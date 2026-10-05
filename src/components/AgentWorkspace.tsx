@@ -5,8 +5,8 @@ import { AgentRunCard } from './AgentRunCard'
 import { MessageMarkdown } from './MessageMarkdown'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { BrandMark } from './BrandMark'
-import { aspectRatios } from '../lib/local-store'
-import type { AssetAnalysisProgress as AnalysisProgress, AspectRatio, MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
+import { aspectRatios, genreSelections } from '../lib/local-store'
+import type { AssetAnalysisProgress as AnalysisProgress, AspectRatio, GenreSelection, MediaOptions, StoryboardVersion, StoredAgentTask } from '../lib/local-store'
 import type { MediaToggle } from '../hooks/useComposerMediaController'
 import type { ConversationMessage, EditingSessionView } from './workspace-types'
 import { useI18n } from '../lib/i18n'
@@ -42,6 +42,7 @@ export type AgentWorkspaceActions = {
   stopAgentRun: () => void
   toggleMedia: (name: MediaToggle) => void
   setAspectRatio: (ratio: AspectRatio) => void
+  setGenre: (genre: GenreSelection) => void
 }
 
 type AgentWorkspaceProps = {
@@ -56,6 +57,7 @@ const mediaIcons = { voiceover: 'microphone', bgm: 'music' } as const
 function mediaSummary(options: MediaOptions, t: Messages) {
   return [
     t.chat.aspectState(options.aspectRatio ?? '9:16'),
+    `${t.chat.genreLabel}: ${t.chat.genres[options.genre ?? 'auto']}`,
     ...mediaKeys.map((key) => t.chat.mediaState(t.chat.media[key], options[key])),
   ].join(' · ')
 }
@@ -180,6 +182,14 @@ export function AgentWorkspace({ model, actions }: AgentWorkspaceProps) {
                 disabled={analysis.waiting}
                 onChange={(event) => actions.setAspectRatio(event.target.value as AspectRatio)}>
                 {aspectRatios.map((ratio) => <option key={ratio} value={ratio}>{copy.aspectOption(ratio)}</option>)}
+              </select>
+            </label>
+            <label className="composer-ratio" title={copy.genreTitle}>
+              <span className="composer-media-label">{copy.genres[model.mediaOptions.genre ?? 'auto']}</span>
+              <select aria-label={copy.genreLabel} value={model.mediaOptions.genre ?? 'auto'}
+                disabled={analysis.waiting}
+                onChange={(event) => actions.setGenre(event.target.value as GenreSelection)}>
+                {genreSelections.map((genre) => <option key={genre} value={genre}>{copy.genres[genre]}</option>)}
               </select>
             </label>
             {mediaKeys.filter((key) => key !== 'voiceover' || model.voiceAvailable).map((key) => (

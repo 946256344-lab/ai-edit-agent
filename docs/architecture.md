@@ -4,6 +4,8 @@
 
 ## 产品链路与分层
 
+任务 7 增加了本轮体裁请求入口与完成回执边界：媒体快照携带 `genre`，用户手选由 Rust 守住，自动选择留给生成链；无新链元数据不填写故事版已判定体裁。每轮先额外一次只读模型请求，以当前会话快照与最近文本识别完成条件；问答禁写，生成/局部改镜无对应回执时续步，最终产物说明从持久化事实生成。普通问答再用只携带问题/公开事实、无工具的文案请求整理用户回复，内部信息过滤后标失败。`agentloop/facts.rs` 拥有完成条件、安全回复及持久化回执核对；不接管素材策划或选镜。转写占位工具已移出 Agent 目录。详情见 [任务 7 变更](changes/2026-10-05-genre-entry-agent-facts.md)。
+
 Voycut 是 Windows 本地优先的策划与选镜 Agent 原型。当前仍按用户 brief 拆拍再召回/选镜；「先挑可用镜头再策划」和叙事/宣传/花絮体裁分流的产品方向不能当作已完成实现。
 
 ```mermaid
@@ -67,7 +69,7 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 
 `taskrouter.rs` 先绑定项目、editing task 和 conversation，只向归属模型提供当前活动任务，无活动任务则创建 task/conversation。确定后签发绑定完整请求的单次 receipt，user 消息占用它，提交消费后才创建 queued Agent task。
 
-普通聊天、澄清、状态问答与执行统一进入 NativeToolLoop。完整 **33** 个 strict 工具 Schema 直接随每次 Provider 请求发送；Rust 复核白名单、参数形状、作用域与领域校验。普通请求不由关键词裁剪目录，品牌卡/转场仍有本轮明确意图守卫。项目/任务/会话由 LoopState 注入，模型不能传任意路径、SQL 或 FFmpeg 参数。
+普通聊天、澄清、状态问答与执行统一进入 NativeToolLoop。完整 **32** 个 strict 工具 Schema 直接随每次 Provider 请求发送；Rust 复核白名单、参数形状、作用域与领域校验。普通请求不由关键词裁剪目录，品牌卡/转场仍有本轮明确意图守卫。项目/任务/会话由 LoopState 注入，模型不能传任意路径、SQL 或 FFmpeg 参数。
 
 每轮注入安全权威状态快照，写工具后刷新；高层事实可直接用快照，详情另调观察工具。最多 10 步，单步 180 秒、整轮 1800 秒；40K token 触发压缩到 30K，60K 硬上限保护快照、当前请求和最近调用/结果对。同步 HTTP/配音/媒体使用剩余截止时间，ONNX 仅在阶段边界检查，不能强制中断。
 
@@ -76,6 +78,10 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 证据：`taskrouter.rs`、`agent.rs`、`agentloop/{native,schema,snapshot,context,tools,skills}.rs`、`useAgentRunReconciliation.ts`。
 
 ### 各 Phase 的当前行为
+
+新生成在 Phase 2 入池前执行 `storyboard/eligibility.rs`：按明确默认宣传读取片段契约与项目品牌套件名称，先挡住主体失焦、不可接受抖动、未识别为本项目的标识、展会/展台/展厅、杂乱背景。无品牌身份时带标识均排除，旧无时段正向事实覆盖整段。只为本拍召回需要的待核验候选请求未知风险，多候选并发，每请求沿用四图上限和仅 429 退避；淘汰后向下补候选，不放回硬风险。无单一片段契约的旧跨硬切双段组合先排除，零合格镜头返回带原因统计的 `storyboard_no_eligible_footage`。
+
+合格集合进入独立可用性排序，再保留各拍内容匹配/多样性召回。主体裁切分根据源宽高、所选画幅和已采样水平边界计算；涉及裁切却没有相应边界时保持未知，不沿用写死竖屏标签。目标画幅更宽、需要上下裁切时也保持未知。该分是代理，缺纵向边界与最终裁切跟踪验证。叙事关系证据接口预留于 eligibility 模块，花絮空镜比例属于组合；真实体裁与最终源窗/旧版局部重选重验仍由任务 5/6/7 接入，现有 P1 策划时序未在本任务重做。
 
 | 阶段 | 行为与事实边界 | 源码 |
 |---|---|---|
@@ -101,7 +107,7 @@ FFprobe 读取时长/尺寸/帧率/音轨；FFmpeg 生成缩略图、样本帧�
 
 Agent `generate_storyboard` 同一调用自动时间线、媒体应用、preview 与所选编辑器交付；后续失败保留已保存版本，实际结果用 appliedMedia/mediaNotApplied、musicTiming、qualityWarnings。公开同名 Tauri 命令负责生成故事版，不等同 Agent 编排。
 
-文本时间/样式/布局/动态由后端校验，ASS preview 与编辑器原生文字分别判兼容。配音写独立旁白轨与 alignment 字幕，voiceoverApplied 才证明旁白落地，字幕失败不回滚旁白。`transcribe_asset` 当前只有 `local_stub_v1` 占位分句，没有真实 ASR。
+文本时间/样式/布局/动态由后端校验，ASS preview 与编辑器原生文字分别判兼容。配音写独立旁白轨与 alignment 字幕，voiceoverApplied 才证明旁白落地，字幕失败不回滚旁白。`transcribe_asset` 没有真实 ASR，已移出 Agent 目录，兼容分派返回未实现；不向 Agent 返回占位字幕。
 
 品牌套件为项目设置，logo/字体按内容哈希复制到 app_data/brand。模板编译期嵌入，独立线程隐藏 WebView2 本地渲染 PNG；模型给模板/短文案，Rust 算时间/样式。图片文字不可编辑。转场为默认+逐刀覆盖、切点居中、不改总时长；fit_graphics 随版本重新贴合。
 

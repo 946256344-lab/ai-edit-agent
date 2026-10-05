@@ -12,7 +12,7 @@ use crate::models::{
 };
 use crate::music_provider::{attribution_for, download_track, eligible_track, search_tracks};
 use crate::preview::render_preview_inner as render_preview;
-use crate::subtitle::{subtitle_style_presets, transcribe_asset};
+use crate::subtitle::subtitle_style_presets;
 use crate::timeline::{
     change_clip_duration, create_timeline_draft_with_options, insert_clips, reorder_clips,
     replace_clips, replace_music_tracks, replace_text_tracks, select_timeline_candidate,
@@ -97,7 +97,11 @@ pub(super) fn persisted_artifact_for_tool(
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub(super) fn safe_step_error_code(error: &str) -> &'static str {
-    if error.starts_with("voiceover_script_confirmation_required") {
+    if error.starts_with("local_edit_no_change") {
+        "local_edit_no_change"
+    } else if error.starts_with("storyboard_local_reselect_failed") {
+        "storyboard_local_reselect_failed"
+    } else if error.starts_with("voiceover_script_confirmation_required") {
         "voiceover_script_confirmation_required"
     } else if error.starts_with("storyboard_needs_user_decision:") {
         "storyboard_needs_user_decision"
@@ -158,9 +162,9 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
             "stage": "voiceover_script",
             "code": "voiceover_script_confirmation_required",
             "facts": ["Voiceover is on, but the current brief is not spoken narration."],
-            "retryable": false,
-            "recovery": "Draft a complete spoken voiceover script in the user's language, show it to the user, and ask whether they agree. Do not call generate_storyboard in this turn. After they agree, call generate_storyboard with that approved script as brief.",
-            "responseInstruction": "Write a spoken narration draft for the user's theme, quote it clearly, and ask them to confirm before generating the video. Do not claim a storyboard or voiceover was created."
+            "retryable": true,
+            "recovery": "Read the ready footage evidence. Draft supported spoken copy in the user's language and call generate_storyboard directly with the draft and default choices. Do not ask for script approval.",
+            "responseInstruction": "Use ready footage evidence to draft supported spoken narration and retry generation directly; no approval question is needed. Do not claim an artifact before a successful receipt."
         });
     }
     if error.starts_with("storyboard_needs_user_decision:") {
@@ -180,8 +184,8 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
                     "Storyboard generation stopped because no playable shot could be selected from the ready library."
                 ],
                 "retryable": false,
-                "recovery": "Stop this run. Ask the user whether to import more clips, skip beats, or change duration. Do not call generate_storyboard again until they answer.",
-                "responseInstruction": "Tell the user generation paused because there was not enough matching footage. Ask whether to import more clips, skip beats, or change duration. Do not claim a storyboard was saved."
+                "recovery": "Stop this run and explain the missing footage. Do not call generate_storyboard again for the same request. More matching clips would be needed; do not ask about default choices.",
+                "responseInstruction": "State the footage gap honestly without a question. Do not claim a storyboard was saved."
             });
         }
         if error.contains("requestedMs") || error.contains("user asked for") {
@@ -210,8 +214,8 @@ pub(super) fn safe_tool_failure_context(tool: &str, error: &str) -> Value {
                 format!("beats={facts}")
             ],
             "retryable": false,
-            "recovery": "Stop this run. Explain which beat is short and why. Ask the user whether to change duration, pick another clip, or skip that beat. Do not call generate_storyboard again until they answer.",
-            "responseInstruction": "Tell the user generation paused on a beat whose footage is shorter than the narration. Quote the beat id and durations from facts. Ask how they want to continue. Do not claim a storyboard was saved."
+            "recovery": "Stop this run. Explain the source-range shortage without asking about defaults. Do not call generate_storyboard again for the same request.",
+            "responseInstruction": "State that the available source ranges could not cover the narration. Do not expose internal beat IDs or claim a storyboard was saved."
         });
     }
     if error.starts_with("storyboard_voiceover_failed:") {
@@ -1012,21 +1016,7 @@ pub(super) fn apply_skill(
                 "timeline": build_timeline_snapshot(state, timeline_id)
             }))
         }
-        "transcribe_asset" => {
-            let asset_id = args
-                .get("assetId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "transcribe_asset needs assetId.".to_owned())?;
-            let language = args.get("language").and_then(Value::as_str);
-            let result = transcribe_asset(state.app, state.project_id, asset_id, language)?;
-            // 转写是只读观察，不产生 timeline version；模型拿到分句后自行调用 replace_text_tracks 选样式写入
-            Ok(json!({
-                "tool": "transcribe_asset",
-                "status": "ok",
-                "result": serde_json::to_value(&result).unwrap_or(json!({})),
-                "nextStepHint": "Edit segment texts if needed, then call replace_text_tracks with a textRecipe from get_text_capabilities (e.g. subtitle_douyin) and your chosen preset style."
-            }))
-        }
+        "transcribe_asset" => Err("transcription_not_implemented: real speech recognition is not implemented.".to_owned()),
         "get_text_capabilities" => Ok(json!({
             "tool": "get_text_capabilities",
             "status": "ok",
@@ -1052,7 +1042,7 @@ pub(super) fn apply_skill(
             ],
             "textRecipes": text_recipe_capabilities(),
             "subtitlePresets": subtitle_style_presets(),
-            "styleGuide": "For花字: call transcribe_asset -> pick a textRecipe templateId (subtitle_douyin/variety/newsbar...) and/or supply style overrides (color/strokeColor/strokeWidth/shadow/backgroundColor). Setting templateId auto-fills a curated style; omitting it allows full custom via replace_text_tracks style field.",
+            "styleGuide": "For styled text: use user-provided copy -> pick a textRecipe templateId (subtitle_douyin/variety/newsbar...) and/or supply style overrides (color/strokeColor/strokeWidth/shadow/backgroundColor). Setting templateId auto-fills a curated style; omitting it allows full custom via replace_text_tracks style field.",
             "jianyingRestrictions": "Verified delivery requires jianying_default, no stroke, shadow, background, or loop animation; only fade may be an exit, and only fade/slide_up/slide_down/pop may be an entrance. Custom花字 maps to local preview + ffmpeg ass burn; Jianying marks local_preview_only.",
             "brandCardTemplates": crate::cards::templates::card_templates().iter().map(|template| json!({
                 "templateId": template.manifest.id,
@@ -1146,6 +1136,7 @@ pub(super) fn apply_skill(
                 requested_duration_ms,
                 music_choice.as_ref(),
             )?;
+            let generation_evidence = crate::assets::evidence_contract::read_storyboard_metadata(state.connection, &generated.id)?;
             let storyboard_version_id = generated.id.clone();
             let version_number = generated.version_number;
             let summary = generated.summary.clone();
@@ -1356,6 +1347,7 @@ pub(super) fn apply_skill(
                         "timelineVersionNumber": timeline.version_number,
                         "qualityWarnings": quality_warnings,
                         "requestedMedia": media_options,
+                        "genre": generation_evidence.genre,
                         "appliedMedia": applied_media,
                     });                    if let Some(timing) = music_timing {
                         result["musicTiming"] = timing;
@@ -1412,6 +1404,7 @@ pub(super) fn apply_skill(
                         "storyboardVersionId": storyboard_version_id,
                         "versionNumber": version_number,
                         "timelineError": error,
+                        "genre": generation_evidence.genre,
                         "qualityWarnings": quality_warnings,
                     }))
                 }
@@ -1498,6 +1491,8 @@ pub(super) fn apply_skill(
             let timeline_version_id = result.id.clone();
             let version_number = result.version_number;
             let quality_warnings = text_track_quality_warnings(&result.text_tracks);
+            let changed = existing.clips.iter().map(|c| (&c.asset_id, c.source_start_ms, c.source_end_ms)).collect::<Vec<_>>()
+                != result.clips.iter().map(|c| (&c.asset_id, c.source_start_ms, c.source_end_ms)).collect::<Vec<_>>();
             upsert(&mut state.timelines, result.clone());
             state.last_outcome = Some(AgentEditResult {
                 agent_task_id,
@@ -1507,6 +1502,7 @@ pub(super) fn apply_skill(
                 preview: None,
                 jianying_draft: None,
             });
+            if !changed { return Err("local_edit_no_change: no source identity or source range changed.".to_owned()); }
             Ok(json!({
                 "tool": "replace_clips",
                 "status": "ok",
@@ -1670,6 +1666,22 @@ pub(super) fn apply_skill(
                     instruction,
                 )?
             };
+            let before_picture = existing.clips.iter().map(|clip| (&clip.asset_id, clip.source_start_ms, clip.source_end_ms)).collect::<Vec<_>>();
+            let after_picture = outcome.timeline.clips.iter().map(|clip| (&clip.asset_id, clip.source_start_ms, clip.source_end_ms)).collect::<Vec<_>>();
+            if before_picture == after_picture {
+                // 领域事务已另存；诚实保留该事实，但不能把版本号变化算换镜成功。
+                state.storyboard = Some(outcome.storyboard.clone());
+                upsert(&mut state.timelines, outcome.timeline.clone());
+                state.last_outcome = Some(AgentEditResult {
+                    agent_task_id,
+                    message: String::new(),
+                    storyboard: Some(outcome.storyboard),
+                    timeline: Some(outcome.timeline),
+                    preview: None,
+                    jianying_draft: None,
+                });
+                return Err("local_edit_no_change: no source identity or source range changed.".to_owned());
+            }
             if tool == "reselect_shots" {
                 state
                     .reselected_beats

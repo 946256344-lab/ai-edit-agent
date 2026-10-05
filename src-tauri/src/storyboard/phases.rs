@@ -405,6 +405,38 @@ pub(crate) fn phase2_rough_shot_selection(
     speech_timing: super::timing::SpeechTiming,
     score_first_slots: usize,
 ) -> Result<RoughStoryboard, String> {
+    phase2_selection_impl(
+        narrative, sources, usage_counts, embeddings, clip_embeddings,
+        speech_timing, score_first_slots, None,
+    )
+}
+
+/// 新生成的唯一入池入口；硬底线不可被弱匹配扩池/数量回退撤销。
+pub(crate) fn phase2_eligible_shot_selection(
+    narrative: &NarrativeStructure,
+    inventory: &super::eligibility::EligibleInventory,
+    usage_counts: &HashMap<String, i32>,
+    embeddings: &[Vec<f32>],
+    clip_embeddings: &[Vec<f32>],
+    speech_timing: super::timing::SpeechTiming,
+    score_first_slots: usize,
+) -> Result<RoughStoryboard, String> {
+    phase2_selection_impl(
+        narrative, &inventory.sources, usage_counts, embeddings, clip_embeddings,
+        speech_timing, score_first_slots, Some(inventory),
+    )
+}
+
+fn phase2_selection_impl(
+    narrative: &NarrativeStructure,
+    sources: &[StoryboardSource],
+    usage_counts: &HashMap<String, i32>,
+    embeddings: &[Vec<f32>],
+    clip_embeddings: &[Vec<f32>],
+    speech_timing: super::timing::SpeechTiming,
+    score_first_slots: usize,
+    eligibility: Option<&super::eligibility::EligibleInventory>,
+) -> Result<RoughStoryboard, String> {
     log::info!(
         "Phase 2: Shortlisting {} segments for {} beats (max {} per asset, max {} similar)",
         PHASE2_POOL_SIZE,
@@ -435,7 +467,7 @@ pub(crate) fn phase2_rough_shot_selection(
                 sources.len()
             );
         }
-        match build_beat_pool(
+        match build_beat_pool_impl(
             beat,
             &beat_sources,
             usage_counts,
@@ -444,6 +476,7 @@ pub(crate) fn phase2_rough_shot_selection(
             target_each,
             score_first_slots,
             &shared_terms,
+            eligibility,
         ) {
             Some(pool) => candidate_pools.push(pool),
             None => uncovered_beat_ids.push(beat.id.clone()),
@@ -523,7 +556,24 @@ pub(crate) fn build_beat_pool(
     score_first_slots: usize,
     shared_terms: &HashSet<String>,
 ) -> Option<BeatCandidatePool> {
-    let ranked = scoring::rank_segment_candidates(
+    build_beat_pool_impl(
+        beat, sources, usage_counts, beat_embedding, beat_clip,
+        target_each, score_first_slots, shared_terms, None,
+    )
+}
+
+fn build_beat_pool_impl(
+    beat: &StoryboardBeat,
+    sources: &[StoryboardSource],
+    usage_counts: &HashMap<String, i32>,
+    beat_embedding: Option<&[f32]>,
+    beat_clip: Option<&[f32]>,
+    target_each: i64,
+    score_first_slots: usize,
+    shared_terms: &HashSet<String>,
+    eligibility: Option<&super::eligibility::EligibleInventory>,
+) -> Option<BeatCandidatePool> {
+    let mut ranked = scoring::rank_segment_candidates(
         sources.to_vec(),
         beat,
         target_each,
@@ -533,6 +583,9 @@ pub(crate) fn build_beat_pool(
         beat_clip,
         shared_terms,
     );
+    if let Some(inventory) = eligibility {
+        scoring::apply_eligible_ranking(&mut ranked, inventory);
+    }
     // 若最高分低于阈值且库内候选充足，静默扩展到 PHASE2_EXTENDED_POOL_SIZE。
     let best_score = ranked.first().map(|c| c.score.total).unwrap_or(0.0);
     let effective_pool_size = if best_score < PHASE2_LOW_MATCH_THRESHOLD
@@ -1152,6 +1205,7 @@ mod tests {
         crate::storyboard::scoring::ScoredCandidate {
             source,
             score: crate::storyboard::scoring::CandidateScore {
+                usability: None,
                 total,
                 semantic: 0.0,
                 lexical: 0.0,
@@ -3383,6 +3437,7 @@ fn pool_trace_candidates(
                     "lexical": (score.lexical * 10.0).round() / 10.0,
                     "clip": (score.clip * 10.0).round() / 10.0,
                     "quality": (score.quality * 10.0).round() / 10.0,
+                    "usability": score.usability,
                     "duration": (score.duration * 10.0).round() / 10.0,
                     "freshness": (score.freshness * 10.0).round() / 10.0,
                     "hasEvidence": score.has_evidence,
