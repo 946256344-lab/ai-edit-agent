@@ -123,6 +123,23 @@ python scripts/footage-eval/run.py --contract-replay D:\自动剪辑系统\workt
 
 补核验的隔离评测可创建 `job.json`，字段为 `mode=verify-evidence`、`projectId` 和 `candidates[]`（见 API 的 `EvidenceVerificationRequest`），把冻结 SQLite 复制到同目录的 `appdata/assembly-video-agent.sqlite3` 后调用 `src-tauri/target/debug/footage-eval.exe <job.json>`。不会创建窗口、调用生成链或修改原分析，只在该次副本追加核验表与 cache。结果在 `verification-result.json`，真实模型身份在 `provider.json`，均不含凭据。相同输入再次执行时已知项不再发请求；缺帧、错项目或过期快照均如实报错。
 
+## 体裁底线与入池对比（任务 3）
+
+2026-10-05 的 10 例 × 3 次真实复跑及同片三体裁裁决结果见 [体裁底线评测](2026-10-05-genre-eligibility.md)，含未进入底线阶段、旧版局部换镜与缺金标的限制。
+
+新生成 Phase 2 暂按宣传执行，先补核验召回所需候选的关键未知，再过代码硬门。按同一冻结快照真实复跑，显式限制进程并发为 4：
+
+```powershell
+python scripts/footage-eval/run.py --snapshot D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01 --output .footage-eval/genre-eligibility-live-2026-10-05 --workers 4
+src-tauri/target/debug/footage-eval.exe --export-evidence D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01/assembly-video-agent.sqlite3 .footage-eval/eligibility-audit/segment-evidence.json
+src-tauri/target/debug/footage-eval.exe --judge-eligibility .footage-eval/eligibility-audit/segment-evidence.json .footage-eval/eligibility-audit/frozen-judgments.json
+python scripts/footage-eval/eligibility_report.py --output .footage-eval/genre-eligibility-live-2026-10-05 --baseline D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\baseline-final-2026-10-01 --binary src-tauri/target/debug/footage-eval.exe --frozen-judgments .footage-eval/eligibility-audit/frozen-judgments.json
+```
+
+`--judge-eligibility` 是无模型、无应用数据访问的三体裁同片裁决回放，明确 `liveGeneration=false`；品牌身份和邻镜关系上下文为空。`eligibility-summary.json` / `eligibility-report.md` 汇总逐例基线与真实复跑的已命中硬风险入池数、无产物与淘汰/核验失败原因、最终机器风险预标变化和同片抽样。新入口的风险计数以入池前裁决快照为准，不能用之后追加的事实倒改当时的判断。旧池以冻结契约回放对照，未知不算阴性。
+
+新入口的 `guardedHardRiskAdmissions` 与 `guardedUnqualifiedAdmissions` 非零会令报告命令失败；缺 Phase 2 的运行另报未测，零入池也不能称为出片通过。旧版局部重选不在本任务接线范围，`legacyPoolAdmissions` 单列，不能计为新入口验证。人工金标未纠正时硬风险识别正确率、误杀率及三体裁质量仍为 N/A；纯裁决抽样不能替代三套真实素材的用户看片验收。
+
 ## Agent 事实与体裁入口回归（任务 7）
 
 ```powershell

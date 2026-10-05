@@ -1,9 +1,8 @@
-//! 候选片段综合评分与排序。
+//! 合格片段可用性分与内容匹配分：独立保留分项，风险先由 eligibility 裁决。
 //!
-//! 为每个候选片段计算综合分数（画面质量、时长匹配、语义相关性、多样性、新鲜度），
-//! 并按分数降序排序，供 storyboard 生成时优先选择高质量镜头。
+//! 旧路径保留综合召回分；新生成先过硬门，再按可用性排序，内容匹配不抵消风险。
 
-use crate::models::{StoryboardBeat, StoryboardSource};
+use crate::models::{EvidenceRange, SegmentEvidence, StoryboardBeat, StoryboardSource};
 use crate::storyboard::semantic::ocr_is_meaningful;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -19,6 +18,9 @@ pub(crate) struct ScoredCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CandidateScore {
+    /// 仅新管线的合格候选填写；旧池读取仍为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usability: Option<UsabilityScore>,
     pub total: f64,
     pub semantic: f64,
     pub lexical: f64,
@@ -251,6 +253,7 @@ fn calculate_candidate_score(
     }
 
     CandidateScore {
+        usability: None,
         total,
         semantic,
         lexical,
@@ -262,6 +265,183 @@ fn calculate_candidate_score(
         has_evidence,
         matched_keywords,
     }
+}
+
+/// 0..1 的可用性代理，未知保持 None；sourceCapacityMs 为真实可用源窗容量。
+/// 这些是排序事实，不是风险阴性、语义直证或“最佳窗”的证明。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsabilityScore {
+    pub technical_readability: Option<f64>,
+    pub subject_visibility: Option<f64>,
+    pub crop_retention: Option<f64>,
+    pub action_completeness: Option<f64>,
+    pub highlight_coverage: Option<f64>,
+    pub source_capacity_ms: i64,
+    pub source_capacity: f64,
+    pub total: f64,
+    pub known_components: usize,
+    pub notes: Vec<String>,
+}
+
+pub(crate) fn usability_score(
+    evidence: &SegmentEvidence,
+    window: &EvidenceRange,
+    aspect: crate::media_options::AspectRatio,
+    source_width: Option<i64>,
+    source_height: Option<i64>,
+) -> UsabilityScore {
+    let detail = evidence.relations.as_ref();
+    let technical = detail.and_then(|d| match d.focus.as_deref() {
+        Some("sharp" | "shallow_depth_of_field") => Some(1.0),
+        Some("motion_blur") => Some(0.5),
+        Some("out_of_focus") => Some(0.2),
+        _ => None,
+    });
+    let visibility = evidence
+        .visual_evidence
+        .iter()
+        .any(|v| !v.subjects.is_empty())
+        .then_some(1.0);
+    let canvas = aspect.canvas();
+    let crop_width = source_width
+        .zip(source_height)
+        .filter(|(w, h)| *w > 0 && *h > 0)
+        .and_then(|(w, h)| {
+            let ratio = (canvas.width as f64 / canvas.height as f64) / (w as f64 / h as f64);
+            // 横向跨度无法证明上下裁切安全；源画幅比目标窄时保持未知。
+            (ratio <= 1.0 + f64::EPSILON).then_some(ratio.min(1.0))
+        });
+    let spans = detail
+        .map(|d| {
+            d.subject_spans
+                .iter()
+                .filter(|s| {
+                    s.time_ms >= window.start_ms
+                        && s.time_ms < window.end_ms
+                        && s.left.is_finite()
+                        && s.right.is_finite()
+                        && s.left >= 0.0
+                        && s.right <= 1.0
+                        && s.right > s.left
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let crop = crop_width.and_then(|width| {
+        if spans.is_empty() {
+            (width >= 1.0 && visibility.is_some()).then_some(1.0)
+        } else {
+            Some(
+                spans
+                    .iter()
+                    .map(|s| (width / (s.right - s.left)).min(1.0))
+                    .fold(1.0, f64::min),
+            )
+        }
+    });
+    let action = detail.and_then(|d| {
+        let changes: Vec<_> = d
+            .changes
+            .iter()
+            .filter(|c| c.start_ms < window.end_ms && c.end_ms > window.start_ms)
+            .collect();
+        if !changes.is_empty() {
+            Some(
+                changes
+                    .iter()
+                    .filter(|c| c.start_ms >= window.start_ms && c.end_ms <= window.end_ms)
+                    .count() as f64
+                    / changes.len() as f64,
+            )
+        } else {
+            (window.start_ms == evidence.range.start_ms && window.end_ms == evidence.range.end_ms)
+                .then_some(
+                    d.clean_start
+                        .zip(d.clean_end)
+                        .map(|(start, end)| (u8::from(start) as f64 + u8::from(end) as f64) / 2.0),
+                )
+                .flatten()
+        }
+    });
+    let highlight = detail.filter(|d| !d.highlights.is_empty()).map(|d| {
+        d.highlights
+            .iter()
+            .filter(|h| h.time_ms >= window.start_ms && h.time_ms < window.end_ms)
+            .count() as f64
+            / d.highlights.len() as f64
+    });
+    let capacity_ms = (window.end_ms - window.start_ms).max(0);
+    let capacity = (capacity_ms as f64 / 3_500.0).min(1.0);
+    let parts = [
+        technical,
+        visibility,
+        crop,
+        action,
+        highlight,
+        Some(capacity),
+    ];
+    let known = parts.iter().filter(|s| s.is_some()).count();
+    let mut notes = Vec::new();
+    for (name, value) in [
+        "technical_readability",
+        "subject_visibility",
+        "crop_retention",
+        "action_completeness",
+        "highlight_coverage",
+    ]
+    .into_iter()
+    .zip(parts)
+    {
+        if value.is_none() {
+            notes.push(format!("{name}: unknown; not treated as verified"));
+        }
+    }
+    notes.push("Crop retention is a sampled horizontal-boundary proxy; vertical bounds and final crop tracking require Phase 4 validation.".to_owned());
+    UsabilityScore {
+        technical_readability: technical,
+        subject_visibility: visibility,
+        crop_retention: crop,
+        action_completeness: action,
+        highlight_coverage: highlight,
+        source_capacity_ms: capacity_ms,
+        source_capacity: capacity,
+        total: parts.into_iter().flatten().sum::<f64>() / known as f64,
+        known_components: known,
+        notes,
+    }
+}
+
+/// 已过底线的集合才可比较；可用性优先，内容匹配独立用于同可用性排序/多样性名额。
+pub(crate) fn apply_eligible_ranking(
+    ranked: &mut Vec<ScoredCandidate>,
+    inventory: &super::eligibility::EligibleInventory,
+) {
+    ranked.retain(|item| {
+        inventory
+            .usability
+            .contains_key(&super::eligibility::source_key(&item.source))
+    });
+    for item in ranked.iter_mut() {
+        item.score.usability = inventory
+            .usability
+            .get(&super::eligibility::source_key(&item.source))
+            .cloned();
+        item.score.total -= item.score.quality + item.score.duration;
+    }
+    ranked.sort_by(|a, b| {
+        let a_use = a.score.usability.as_ref().unwrap();
+        let b_use = b.score.usability.as_ref().unwrap();
+        b_use
+            .total
+            .total_cmp(&a_use.total)
+            .then_with(|| b_use.known_components.cmp(&a_use.known_components))
+            .then_with(|| b.score.total.total_cmp(&a.score.total))
+            .then_with(|| {
+                super::eligibility::source_key(&a.source)
+                    .cmp(&super::eligibility::source_key(&b.source))
+            })
+    });
 }
 
 fn cap_text_without_clip(
@@ -991,6 +1171,77 @@ mod tests {
         assert_eq!(ranked[0].source.asset_id, "high");
         assert_eq!(ranked[1].source.asset_id, "mid");
         assert_eq!(ranked[2].source.asset_id, "low");
+    }
+
+    #[test]
+    fn genre_floor_contract_ranking_never_rescues_excluded_source() {
+        let source = make_source("qualified", "video", Some(5_000), 0.3);
+        let mut ranked = vec![
+            ScoredCandidate {
+                source: make_source("excluded", "video", Some(100_000), 1.0),
+                score: calculate_candidate_score(
+                    &make_source("excluded", "video", Some(100_000), 1.0),
+                    &StoryboardBeat::default(),
+                    5000,
+                    &[],
+                    &std::collections::HashMap::new(),
+                    None,
+                    None,
+                    &ScoringContext {
+                        shared_terms: HashSet::new(),
+                        clip_range: None,
+                    },
+                ),
+            },
+            ScoredCandidate {
+                source: source.clone(),
+                score: calculate_candidate_score(
+                    &source,
+                    &StoryboardBeat::default(),
+                    5000,
+                    &[],
+                    &std::collections::HashMap::new(),
+                    None,
+                    None,
+                    &ScoringContext {
+                        shared_terms: HashSet::new(),
+                        clip_range: None,
+                    },
+                ),
+            },
+        ];
+        ranked[0].score.total = 1_000_000.0;
+        let metadata = crate::models::TechnicalMetadata {
+            duration_ms: Some(5000),
+            ..Default::default()
+        };
+        let evidence =
+            crate::assets::evidence_contract::adapt_asset("qualified", &metadata).remove(0);
+        let mut inventory = super::super::eligibility::EligibleInventory {
+            sources: vec![source.clone()],
+            evidence_snapshot: vec![evidence.clone()],
+            decisions: vec![],
+            usability: std::collections::HashMap::new(),
+        };
+        inventory.usability.insert(
+            super::super::eligibility::source_key(&source),
+            usability_score(
+                &evidence,
+                &evidence.range,
+                crate::media_options::AspectRatio::Landscape,
+                None,
+                None,
+            ),
+        );
+        apply_eligible_ranking(&mut ranked, &inventory);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].source.asset_id, "qualified");
+        assert!(ranked[0].score.usability.is_some());
+        let legacy: CandidateScore =
+            serde_json::from_value(serde_json::json!({"total":1,"semantic":1,
+            "lexical":0,"quality":0,"duration":0,"freshness":0,"hasEvidence":true}))
+            .unwrap();
+        assert!(legacy.usability.is_none());
     }
 
     #[test]

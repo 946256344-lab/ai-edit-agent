@@ -92,6 +92,10 @@
 
 ### 故事版、时间线与镜头编辑
 
+体裁底线内部接口（2026-10-05）：`storyboard/eligibility::evaluate(SegmentEvidence, Genre, AspectRatio, BrandIdentity, sourceWindow, RelationEvidence[], finalCheck)` 返回 `EligibilityDecision`，状态为 `eligible/rejected/pending_verification`，带原因、证据 ID、源窗、所需补核验风险与合格可用窗。宣传关键风险未知先请求任务 2 的 `verify_candidates`，最终仍未知/失败则排除；花絮的摆拍/广告未知、叙事关系未知保留待核验，不能算合格。叙事关系用本模块的加性 `RelationEvidence`（矛盾/跳轴/无关插入、三态、来源/源窗/置信度），缺上下文不从运镜方向推断。花絮空镜 ≤20% 是后续组合门，不在单镜入口全部删除。
+
+`prepare_candidates` 返回 `EligibleInventory { sources, evidence_snapshot, decisions, usability }`。仅新生成 Phase 2 通过 `phase2_eligible_shot_selection` 消费；当前明确默认宣传，真实体裁、最终源窗重验与旧版局部重选由任务 5/6/7 接入。`scoring::usability_score` 保留技术可读、主体可见、按画幅主体水平裁切保留、动作完整、高光覆盖、源窗容量；缺项为 null。候选池 `scores[].usability` 是加性字段，旧池缺省 null；新池 `total` 为独立内容召回分，不再包含质量/时长分。淘汰项不能因匹配分高或候选不足恢复。
+
 | 命令 | 输入（类型） | 返回（Rust） | 行为与边界 |
 |---|---|---|---|
 | `generate_storyboard` | `projectId: String, editingTaskId: String, brief: String, voiceId: Option<String>` | `Result<StoryboardVersion, String>` | 公开命令以 brief 创建经过 P1–P5 校验的任务内故事版；配音/媒体快照与自动 preview/交付编排属于 Agent 同名工具，见下表。 |
