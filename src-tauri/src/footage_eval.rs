@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 use std::{fs, path::PathBuf, sync::OnceLock};
 use tauri::Manager;
 
+#[path = "footage_eval/planning.rs"]
+mod planning;
+
 static OUTPUT: OnceLock<PathBuf> = OnceLock::new();
 
 pub(crate) fn trace_directory() -> Option<PathBuf> {
@@ -94,6 +97,9 @@ pub fn run() -> Result<(), String> {
     }
     if !handle.webview_windows().is_empty() { return Err("eval_window_created".to_owned()); }
     fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    if job["mode"].as_str() == Some("planning-only") {
+        return planning::run(&job, &directory, &data);
+    }
     if job["mode"].as_str() == Some("verify-evidence") {
         let candidates: Vec<crate::models::EvidenceVerificationRequest> = serde_json::from_value(job["candidates"].clone()).map_err(|e|e.to_string())?;
         let results = crate::assets::evidence_verification::verify_candidates(handle,job["projectId"].as_str().ok_or("missing project")?,&candidates)?;

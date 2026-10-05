@@ -4,6 +4,24 @@
 
 选镜 / 策划评测运行器是 `footage-eval` feature 下的独立 CLI 二进制，不新增也不修改任何 Tauri IPC 命令或 Agent 工具；用法见 [docs/evaluation/README.md](evaluation/README.md)。
 
+### 预留素材策划内部接口（任务 4，尚未接入生成）
+
+`storyboard/inventory.rs::build_inventory(access, request, &[SegmentEvidence])` 分批覆盖完整分析集合，返回 `Inventory`：逐片 `InventoryItem.reference`（assetId / segmentId / evidenceId / range / supports）及 `analysisSnapshotId`、自由表达 `statements`（expression / evidenceQuote / direct）、可讲内容、缺口与带原文锚点的因果关系。模型只回传理解、批内片段序号与原文锚点序号，代码绑定完整源窗、身份和原分析逐字引文；漏报 direct 不当直证。缺片、重复引用或不存在的锚点均失败，不建立素材场景/功能类目。全库汇总与独立需求覆盖审核并发，代码用后者的必需画面缺项控制 `requestFulfillable`，避免汇总把剪辑参数当缺素材；原始两份模型判断都保留轨迹，因果链仍单独核对。
+
+`storyboard/genre.rs::decide_genre(access, selection, request, inventory, previous)` 使用 `GenreSelection=auto/narrative/promotion/bts`；手选固定，自动只发一次判断，信息不足默认宣传；自动叙事缺因果改花絮，手选叙事保留体裁且受限。`GenreDecision.snapshotId` 绑定需求、手选和完整盘点；同输入复用 `previous` 不请求模型，输入改变拒绝旧快照。
+
+`build_recipe(decision, durationMs?, eligibleEvidence, inventory)` 返回版本 `genre-recipe-2026-10-05-v1` 的 `GenreRecipe`。默认叙事/宣传 30 秒、花絮 20 秒；用户毫秒优先。正常结构叙事 4 段 20/35/25/20%，宣传 4–6 段 15/70/15%（卖点按直证数量分预算），花絮 3–5 段 10/80/10%。每段 `budgetMs/minReadableMs/maxShots` 由代码算；过短宣传/花絮合并可选过渡，叙事短于四段可读时间失败。合格窗不足收缩预算，不回放淘汰画面。
+
+`storyboard/planning.rs::plan_with_evidence(access, request, inventory, decision, recipe, eligibleEvidence, userFacts)` **只消费调用方已过底线的证据列表**，不依赖 eligibility 模块，也不自己判断风险合格。返回 `PlanningResult.status=accepted/limited/gap_only/rejected`、有引用的段/具体表达/备选、真实代码预算、缺口和拒绝原因。`rejectedAttempts` 保留每次被拒提案的原因；最多基于失败原因提出一次新策划，新提案重新经过全部校验，最终仍不合格即返回 rejected。Provider 失败不走这条内容校正。模型选择的原文锚点由代码回填为 `evidenceQuote`；引用身份、允许窗、原分析引文、配方顺序、可读镜数、重复源窗和数字来源由代码检查。宣传卖点禁用气氛支持，模型另并发逐段审核主选及备选直证，再审核标题/必需画面/因果链。审核失败不提供可落地策划；模型审核是可追溯的判断，不是人工金标或视觉真值。
+
+`UserFact{id,text,source="user_request"}` 必须逐字出自本次请求；数字表达必须逐字等于对应事实且携带 `userFactId`，不能从机器画面推产能。缺必需画面/手选叙事缺因果返回 `gap_only`，零合格片段明确错误。备选不足如实记缺口。`PlanningResult.metadata` 使用任务 2 的 `StoryboardEvidenceMetadata`，提供 pipelineVersion / genre / recipeVersion / 完整合格证据快照 / 主选与备选引用，任务 6 在新版本事务中持久化；本接口不写历史产物。
+
+合格集合仍须提供有效、已封印的 `SegmentEvidence`；补核验或收窄合格窗改变内容时由上游重新封印，不沿用旧 evidenceId。盘点按 assetId / segmentId / analysisSnapshotId 和源窗包含关系绑定同一分析，策划输入的引用重新绑定为合格集合当前 ID/窗；旧盘点 ID 不作为放行 ID。当前接口每个基础片段最多一个合格窗，不表示支持多个离散窗。
+
+模型策划仅需回传 evidenceId 和原文锚点序号，代码回填身份、完整合格窗及 supports=expression；若模型仍主动提供身份/源窗，照常验证，伪造或越窗仍拒绝。最佳源窗由任务 5 精修。段审核与全局审核互不依赖并发执行，Schema 限定审核数组长度和索引，代码仍检查缺项/重复；短于最短可读时长的源窗不进入提案候选，但仍保留在事实快照。2D/3D 技术名称须有直证但不当作产能数字，性能/产能/百分比等数量仍须逐字用户事实。盘点遗漏或锚点无效时只补读缺项一轮，仍不完整失败；媒体开关、时钟与风险放行不作为本阶段的缺画面理由。
+
+本阶段请求携带严格 JSON Schema（必需字段、数组元素、批次数量、片段序号和允许证据 ID）；使用统一 Provider，Custom/Gateway 走 Chat 嵌套 json_schema，OAuth 走 Responses 格式。不支持该格式的 Provider 返回真实错误，不自动改走宽松 JSON 或另一模型。
+
 ## 桌面命令边界
 
 命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **101** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。

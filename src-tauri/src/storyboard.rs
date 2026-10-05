@@ -2,6 +2,9 @@
 //! 文件名和路径只能用于本地组织，不能冒充媒体内容证据。
 
 pub(crate) mod clip;
+pub(crate) mod genre;
+pub(crate) mod inventory;
+pub(crate) mod planning;
 mod daypart;
 mod keyframes;
 mod length;

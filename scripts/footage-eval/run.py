@@ -300,6 +300,8 @@ def main():
     parser.add_argument("--rescore", action="store_true")
     parser.add_argument("--contract-replay", type=Path, help="只读历史基线，重跑证据适配/P5/计分；不调用模型生成")
     parser.add_argument("--evidence-gold", type=Path, help="原始风险事实金标 CSV，与体裁淘汰金标分开")
+    parser.add_argument("--planning-only", action="store_true", help="仅盘点→体裁→配方→有引用策划，不生成成片")
+    parser.add_argument("--eligible-evidence", type=Path, help="上游已过底线的 SegmentEvidence JSON；未提供仅做语义隔离评测，不宣称合格")
     parser.add_argument("--gold", type=Path)
     args = parser.parse_args()
     if args.rescore and not args.output:
@@ -309,6 +311,10 @@ def main():
     if any(output == source or source in output.parents for source in protected):
         raise RuntimeError("评测输出不能位于真实应用数据目录内")
     output.mkdir(parents=True, exist_ok=args.rescore)
+    if args.planning_only:
+        from planning_only import run_suite
+        run_suite(args, output, ROOT, resolve_cases, code_version)
+        return
     if args.rescore:
         experiment = json.loads((output / "experiment.json").read_text(encoding="utf-8"))
         snapshot = Path(experiment["snapshot"])

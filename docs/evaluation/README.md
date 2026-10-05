@@ -117,6 +117,18 @@ python scripts/footage-eval/run.py --contract-replay D:\自动剪辑系统\workt
 
 输出 `contract-replay-report.json`、两次字节相同的契约导出、30 例旧核心指标比较、各例 `p5-replay.json`，并核对冻结数据库/分析/gold 哈希。只读源 worktree，不修改其中任何文件。`liveGeneration=false` 明确这是保存产物的规则回放；产物与指标不变不能证明真实模型重新生成仍选同一组镜头。真实模型全套复跑仍使用原 `--snapshot` 命令。
 
+## 只跑盘点、体裁、配方与引用策划（任务 4）
+
+```powershell
+python scripts/footage-eval/run.py --planning-only --snapshot D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01 --output .footage-eval/planning-2026-10-05 --workers 4
+```
+
+使用真实 Provider，无 GUI、开发服务器、Agent、配音/BGM、时间线、预览或编辑器；10 个基线 setup 请求加自动叙事降级/信息不足默认各 3 次。局部换镜仅测 setup 策划，声音开关不在本模式合成。进程 workers 限 1–4；进程内独立模型请求按需并发，每请求 0 张图。只读冻结源，SQLite 导出在本输出副本打开，结果带源码树/二进制哈希、模型身份、逐请求轨迹、逐片盘点、体裁快照、配方、策划与机器指标。
+
+可用 `--eligible-evidence <SegmentEvidence数组.json>` 提供任务 3 已过底线的冻结集合，核对 ID、分析快照和源窗。未提供时使用整个冻结集合做 **semantic_only_unqualified_frozen_input_not_safety_acceptance** 语义隔离轨道，不把旧风险未知当作安全，不宣称工业合格素材验收通过。主接口始终要求调用方交合格集合；评测轨道标签不能进入生产放行依据。
+
+报告每段合法主选引用覆盖（目标 100%，对比旧基线 0%）、非法引用/越窗（目标 0）、无策划次数、手选遵守、体裁及理由、缺口与每条拒绝原因（含被拒旧提案 `rejectedAttempts`，校正后新提案也要重新验收）。空产物覆盖率 N/A；缺画面/叙事缺因果的 `gap_only` 是合法缺口输出，不计为策划成功。缺口诚实性与语义/体裁正确率无人工金标保持 N/A，机器缺口预标单列。冻结文件哈希和每次窗口数保存在 `isolation-audit.json`。
+
 原始风险事实金标单独用 CSV：`asset_id,segment_id,risk,state,start_ms,end_ms`，`risk` 用 API 中 11 项名称，`state` 只填 `hit/not_hit`；时段为空按整片段。回放生成空白 `evidence-gold-template.csv`，填完传 `--evidence-gold <CSV>`，或放在输出快照 `evidence-gold.csv`。不写源快照。体裁 `gold_risks=none` 只说明对应体裁没有硬风险，不能用作所有原始风险的阴性金标。
 
 指标分别报告金标阳性漏检（未知也记未检出，并单列未知数）与金标阴性误报率；误报是后续误杀风险的代理，本任务没有淘汰逻辑，不能声称测了真正的体裁误杀率。没有明确金标或相应分母为零就报 N/A；未知阴性样本不计为已证实 true negative。
