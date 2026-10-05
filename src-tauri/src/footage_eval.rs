@@ -5,6 +5,8 @@ use tauri::Manager;
 
 #[path = "footage_eval/planning.rs"]
 mod planning;
+#[path = "footage_eval/shot_relations.rs"]
+mod shot_relations;
 
 static OUTPUT: OnceLock<PathBuf> = OnceLock::new();
 
@@ -64,7 +66,7 @@ pub fn run() -> Result<(), String> {
     let input = fs::canonicalize(input).map_err(|e| e.to_string())?;
     let directory = input.parent().ok_or("missing output directory")?.to_path_buf();
     OUTPUT.set(directory.clone()).map_err(|_| "already initialized")?;
-    let job: Value = serde_json::from_slice(&fs::read(input).map_err(|e| e.to_string())?)
+    let mut job: Value = serde_json::from_slice(&fs::read(input).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     std::env::set_var("STORYBOARD_PROVIDER_TRACE", "1");
     std::env::set_var("NATIVE_PROVIDER_FULL_TRACE", "1");
@@ -102,6 +104,14 @@ pub fn run() -> Result<(), String> {
     fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
     if job["mode"].as_str() == Some("planning-only") {
         return planning::run(&job, &directory, &data);
+    }
+    if job["mode"].as_str() == Some("planning-shots") {
+        crate::process::install_bundled_media_tools(handle);
+        model_access()?;
+        if job["verifyCandidates"].as_bool()==Some(true) {shot_relations::verify(handle,&mut job,&directory)?;}
+        planning::run(&job,&directory,&data)?;
+        if job["prepareOnly"].as_bool()!=Some(true) {shot_relations::run(handle,&job,&directory)?;}
+        return Ok(());
     }
     if job["mode"].as_str() == Some("verify-evidence") {
         let candidates: Vec<crate::models::EvidenceVerificationRequest> = serde_json::from_value(job["candidates"].clone()).map_err(|e|e.to_string())?;

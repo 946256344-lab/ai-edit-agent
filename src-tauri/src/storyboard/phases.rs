@@ -458,8 +458,14 @@ fn phase2_selection_impl(
         let target_each = speech_timing.duration(&beat.id).unwrap_or(target_each);
         // 简报白天→夜晚：夜拍之前不召回夜景，夜拍不召回白天素材。
         let rule = daypart_rules[beat_index];
-        let beat_sources = super::daypart::sources_for_rule(sources, rule, PHASE2_POOL_SIZE);
+        let beat_sources = super::daypart::sources_for_rule(sources, rule);
         if beat_sources.len() != sources.len() {
+            super::provider_trace::append_pool_trace(
+                "Phase 2 daypart",
+                &beat.id,
+                &json!({"rule":format!("{rule:?}"),"input":sources.len(),"kept":beat_sources.len(),
+                    "insufficient":beat_sources.len()<PHASE2_POOL_SIZE,"relaxed":false}),
+            );
             log::info!(
                 "Beat '{}': daypart rule {rule:?} kept {} of {} sources",
                 beat.id,

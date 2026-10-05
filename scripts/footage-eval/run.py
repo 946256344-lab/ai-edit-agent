@@ -297,10 +297,13 @@ def main():
     parser.add_argument("--project")
     parser.add_argument("--workers", type=int, help="默认全部用例同时发起；只在资源不足时显式降低")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--eval-binary", type=Path, help="已有评测二进制；与 --skip-build 同用，输出绑定其 SHA256")
     parser.add_argument("--rescore", action="store_true")
     parser.add_argument("--contract-replay", type=Path, help="只读历史基线，重跑证据适配/P5/计分；不调用模型生成")
     parser.add_argument("--evidence-gold", type=Path, help="原始风险事实金标 CSV，与体裁淘汰金标分开")
     parser.add_argument("--planning-only", action="store_true", help="仅盘点→体裁→配方→有引用策划，不生成成片")
+    parser.add_argument("--planning-shots", action="store_true", help="策划→代码全片组合→证据精修；不生成时间线或交付")
+    parser.add_argument("--verify-candidates", action="store_true", help="planning-shots 三次正式运行各自补核验全库关键未知；准备阶段仍用给定合格快照")
     parser.add_argument("--planning-preparation", type=Path, help="续跑策划：复用同一冻结输入的成功 prepare；只冻结需求定义，三次正式运行仍独立盘点/体裁/策划")
     parser.add_argument("--eligible-evidence", type=Path, help="任务 3 已补核验的 SegmentEvidence JSON；各例按所选体裁再次 evaluate，未提供则原快照未知不放行")
     parser.add_argument("--gold", type=Path)
@@ -312,7 +315,7 @@ def main():
     if any(output == source or source in output.parents for source in protected):
         raise RuntimeError("评测输出不能位于真实应用数据目录内")
     output.mkdir(parents=True, exist_ok=args.rescore)
-    if args.planning_only:
+    if args.planning_only or args.planning_shots:
         from planning_only import run_suite
         run_suite(args, output, ROOT, resolve_cases, code_version)
         return

@@ -11,6 +11,26 @@ use serde_json::{json, Value};
 use std::{fs, path::Path, time::Duration};
 use tauri::{AppHandle, Manager};
 
+/// 响应/越窗/瞬时网络错误最多补发两次；429 的 Provider 预算耗尽后不再套预算。
+pub(crate) const MAX_VERIFICATION_RETRIES: usize = 2;
+
+pub(crate) fn retryable_verification_error(error: &str) -> bool {
+    !crate::provider::is_final_model_failure(error)
+        && (error.starts_with("verification_response_")
+            || error == "verification_range_invalid"
+            || error == "verification_confidence_invalid"
+            || error == "verification_unrequested_risk"
+            || crate::storyboard::step_retry::is_transport_or_parse_error(error)
+            || matches!(
+                crate::provider::classify_model_request_failure(error)
+                    .code
+                    .as_str(),
+                "provider_network" | "provider_timeout"
+            )
+            || error.contains("TLS")
+            || error.contains("HTTP 5"))
+}
+
 fn scoped_metadata(
     connection: &Connection,
     project: &str,
@@ -251,33 +271,67 @@ pub(crate) fn verify_candidates(
     if jobs.is_empty() {
         return Ok(results);
     }
+    #[cfg(feature = "footage-eval")]
+    let access = crate::footage_eval::model_access()?;
+    #[cfg(not(feature = "footage-eval"))]
     let access = ModelAccess::resolve()?;
-    let payloads = jobs.iter().map(|j| j.3.clone()).collect::<Vec<_>>();
-    // 统一交互 Provider，无视觉队列限速/熔断重试；传输层仅 429 按 Retry-After 退避。
-    let responses =
-        post_model_payloads_concurrently(&access, &payloads, Some(Duration::from_secs(120)));
-    for ((index, evidence, missing, payload, scoped), response) in jobs.into_iter().zip(responses) {
-        results[index] = (|| {
-            let body = response?;
-            let text =
-                model_response_json_text(&access, &body).ok_or("verification_response_invalid")?;
-            let source = EvidenceSource {
-                analysis_id: content_id(
-                    "verification-analysis-v1",
-                    &json!({"snapshot": evidence.analysis_snapshot_id,"request":content_id("verification-request-v1",&payload),"response":text,"model":access.custom_config().map(|c| &c.model)}),
-                ),
-                model: Some(
-                    access
-                        .custom_config()
-                        .map(|c| c.model.clone())
-                        .unwrap_or_else(|| "gpt-5.4".to_owned()),
-                ),
-                method: "candidate_multiframe_verification".to_owned(),
-                analysis_version: 1,
-            };
-            let findings = parse_findings(&text, &scoped, &missing, &source)?;
-            persist(&mut connection, project, &evidence, &findings)
-        })();
+    let mut pending: Vec<usize> = (0..jobs.len()).collect();
+    let mut attempts = vec![0usize; jobs.len()];
+    let mut first_errors = vec![None; jobs.len()];
+    for attempt in 0..=MAX_VERIFICATION_RETRIES {
+        let payloads = pending
+            .iter()
+            .map(|i| jobs[*i].3.clone())
+            .collect::<Vec<_>>();
+        let responses =
+            post_model_payloads_concurrently(&access, &payloads, Some(Duration::from_secs(120)));
+        let mut retry = Vec::new();
+        for (job_index, response) in pending.into_iter().zip(responses) {
+            let (index, evidence, missing, payload, scoped) = &jobs[job_index];
+            attempts[job_index] += 1;
+            crate::storyboard::provider_trace::append_pool_trace("Evidence verification attempt", &evidence.id,
+                &json!({"attempt":attempts[job_index],"imageCount":payload["input"][0]["content"].as_array().map(|c|c.iter().filter(|v|v["type"]=="input_image").count()),"error":response.as_ref().err()}));
+            results[*index] = (|| {
+                let body = response?;
+                let text = model_response_json_text(&access, &body)
+                    .ok_or("verification_response_invalid")?;
+                let source = EvidenceSource {
+                    analysis_id: content_id(
+                        "verification-analysis-v1",
+                        &json!({"snapshot": evidence.analysis_snapshot_id,"request":content_id("verification-request-v1",&payload),"response":text,"model":access.custom_config().map(|c| &c.model)}),
+                    ),
+                    model: Some(
+                        access
+                            .custom_config()
+                            .map(|c| c.model.clone())
+                            .unwrap_or_else(|| "gpt-5.4".to_owned()),
+                    ),
+                    method: "candidate_multiframe_verification".to_owned(),
+                    analysis_version: 1,
+                };
+                let findings = parse_findings(&text, scoped, missing, &source)?;
+                persist(&mut connection, project, evidence, &findings)
+            })();
+            if let Err(error) = &results[*index] {
+                first_errors[job_index].get_or_insert_with(|| error.clone());
+                if attempt < MAX_VERIFICATION_RETRIES && retryable_verification_error(error) {
+                    retry.push(job_index);
+                }
+            }
+        }
+        if retry.is_empty() {
+            break;
+        }
+        pending = retry;
+    }
+    for (j, (index, evidence, _, _, _)) in jobs.iter().enumerate() {
+        crate::storyboard::provider_trace::append_pool_trace(
+            "Evidence verification retry",
+            &evidence.id,
+            &json!({"assetId":evidence.asset_id,"segmentId":evidence.segment_id,"attempts":attempts[j],
+                "firstError":first_errors[j],"retrySuccess":attempts[j]>1 && results[*index].is_ok(),
+                "finalError":results[*index].as_ref().err()}),
+        );
     }
     Ok(results)
 }
@@ -287,6 +341,12 @@ mod tests {
     use super::*;
     #[test]
     fn evidence_contract_verification_only_missing_and_never_invents_negatives() {
+        assert!(retryable_verification_error("verification_response_empty"));
+        assert!(retryable_verification_error("verification_range_invalid"));
+        assert!(!retryable_verification_error(
+            "verification_analysis_changed"
+        ));
+        assert!(!retryable_verification_error("HTTP 429"));
         let metadata: TechnicalMetadata = serde_json::from_value(json!({"durationMs":2000,
             "sceneSegments":[{"id":"s1","startMs":0,"endMs":2000,"visualEvidence":{"detail":{"brandLogos":["ACME"]}}}]})).unwrap();
         let e = super::super::evidence_contract::adapt_asset("a", &metadata).remove(0);

@@ -8,6 +8,15 @@ from pathlib import Path
 
 from snapshot import DB_NAME, digest, write_json
 
+SHOT_OPTIONS = {}
+
+
+def shot_aspect(case):
+    aspect = case.get("aspectRatio", case.get("historicalMediaOptions", {}).get("aspectRatio", "16:9"))
+    if aspect not in {"16:9", "9:16", "1:1"}:
+        raise ValueError("shot evaluation aspectRatio must be explicit and supported")
+    return aspect
+
 
 def planning_metrics(result, job):
     plan = result.get("result", {})
@@ -56,6 +65,16 @@ def run_one(executable, root, directory, case, repeat, evidence, eligible, scope
     if candidate_windows is not None:
         job["candidateWindows"] = candidate_windows
     job["prepareOnly"] = prepare
+    if SHOT_OPTIONS:
+        import shutil
+        shutil.copy2(SHOT_OPTIONS["database"], directory / "appdata" / DB_NAME)
+        job["mode"] = "planning-shots"
+        job["aspectRatio"] = shot_aspect(case)
+        job["projectId"] = SHOT_OPTIONS["projectId"]
+        job["verifyCandidates"] = SHOT_OPTIONS["verify"] and not prepare
+        job["frozenInventoryForShotEvaluation"] = not job["verifyCandidates"] and not prepare
+        if job["verifyCandidates"]:
+            job["eligibleEvidence"] = evidence
     if frozen_inventory is not None:
         job["frozenInventory"] = frozen_inventory
     write_json(directory / "job.json", job)
@@ -76,6 +95,9 @@ def run_one(executable, root, directory, case, repeat, evidence, eligible, scope
     metrics["inputCandidates"] = len(eligible)
     metrics["failureCategory"] = result.get("failureCategory")
     metrics["prepareOnly"] = prepare
+    if SHOT_OPTIONS and not prepare:
+        from shot_metrics import score_shots
+        metrics["shotRelations"] = score_shots(directory)
     for filename, key in [("genre.json", "decision"), ("inventory.json", "inventory")]:
         p = directory / filename
         if p.exists():
@@ -96,9 +118,9 @@ def run_one(executable, root, directory, case, repeat, evidence, eligible, scope
 
 def report(output, cases, results, scope, preparations=None):
     preparations = preparations or {}
-    lines = ["# 任务 4b：策划校准", "", f"底线输入范围：`{scope}`。",
-             "所有策划输入均重新执行任务 3 evaluate；未知不放行。每例冻结底线集合与需求定义；三次均重新盘点、查找支持和生成策划，不复用盘点支持结论。体裁判定每次重新执行，未复用上次判定。",
-             "本模式不合成配音/BGM、不跑局部换镜、选镜、时间线、预览或编辑器。局部换镜用例仅评测其 setup 请求。",
+    lines = ["# 任务 5：策划、组合与证据精修" if SHOT_OPTIONS else "# 任务 4b：策划校准", "", f"底线输入范围：`{scope}`。",
+             ("所有输入重过任务 3 底线。每例冻结完整合格盘点，三次独立生成/审核策划和看图选镜，隔离任务 5 效果；体裁每次重新执行。" if SHOT_OPTIONS and not SHOT_OPTIONS["verify"] else "所有策划输入均重新执行任务 3 evaluate；未知不放行。每例冻结底线集合与需求定义；三次均重新盘点、查找支持和生成策划，不复用盘点支持结论。体裁判定每次重新执行，未复用上次判定。"),
+             ("组合与精修指标见 shot-report.md。本模式不合成配音/BGM、不跑局部换镜、时间线、预览或编辑器。" if SHOT_OPTIONS else "本模式不合成配音/BGM、不跑局部换镜、选镜、时间线、预览或编辑器。") + "局部换镜用例仅评测其 setup 请求。",
              "人工语义、体裁及缺口金标为空，正确率为 N/A。缺口诚实字段只是机器预标；空结果引用率为 N/A。旧基线策划引用覆盖率 0%。", "",
              "| 用例 | 合格片段 | 准备状态 | 产策划/已开始尝试 | 未开始/3 | 每段引用均值/最差 | 非法 ID / 越窗 | 体裁一致 | 缺口一致 | 拒绝 / 仅缺口 / 服务失败 / 内部失败 |", "|---|---:|---|---:|---:|---|---|---|---|---|"]
     summary = {}
@@ -148,9 +170,11 @@ def run_suite(args, output, root, resolve_cases, code_version):
     import shutil
     local_database = output / DB_NAME
     shutil.copy2(snapshot / DB_NAME, local_database)
+    if args.planning_shots:
+        SHOT_OPTIONS.update({"database":local_database,"projectId":frozen["projectId"],"verify":args.verify_candidates})
     if not args.skip_build:
         subprocess.run(["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "--features", "footage-eval", "--bin", "footage-eval"], cwd=root, check=True)
-    executable = root / "src-tauri/target/debug/footage-eval.exe"
+    executable = args.eval_binary.resolve() if args.eval_binary else root / "src-tauri/target/debug/footage-eval.exe"
     subprocess.run([str(executable), "--export-evidence", str(local_database), str(output / "segment-evidence.json")], cwd=root, check=True)
     evidence = json.loads((output / "segment-evidence.json").read_text(encoding="utf-8"))
     manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
@@ -165,6 +189,8 @@ def run_suite(args, output, root, resolve_cases, code_version):
         supplied = json.loads(args.eligible_evidence.read_text(encoding="utf-8"))
         eligible = supplied["evidence"] if isinstance(supplied, dict) else supplied
         candidate_windows = supplied.get("windows") if isinstance(supplied, dict) else None
+        if args.planning_shots and isinstance(supplied, dict) and supplied.get("source", {}).get("scope", "").startswith("one_live_verification_run"):
+            write_json(output / "verification-audit.json", supplied["source"])
         base = {(e["assetId"], e["segmentId"], e["analysisSnapshotId"]): e for e in evidence}
         for item in eligible:
             origin = base.get((item["assetId"], item["segmentId"], item["analysisSnapshotId"]))
@@ -185,8 +211,9 @@ def run_suite(args, output, root, resolve_cases, code_version):
     version["recipeVersion"] = "genre-recipe-2026-10-05-v2"
     write_json(output / "cases.json", cases)
     write_json(output / "experiment.json", {"code": version, "snapshot": str(snapshot), "snapshotHashes": before,
-               "eligibilityScope": scope, "track": "live_planning_only_frozen_analysis", "repeats": 3,
-               "workers": args.workers or 4, "inventoryTrack": "frozen_requirements_then_three_independent_live_inventories_and_plans", "binarySha256": digest(executable), "baselinePlanningCoveragePct": 0})
+               "eligibilityScope": scope, "track": "live_planning_combination_refinement_frozen_analysis" if args.planning_shots else "live_planning_only_frozen_analysis", "repeats": 3,
+               "shotRelationsVersion": "shot-relations-v1" if args.planning_shots else None,
+               "workers": args.workers or 4, "inventoryTrack": "frozen_inventory_three_live_plans_relations_refinements" if args.planning_shots and not args.verify_candidates else "frozen_requirements_then_three_independent_live_inventories_and_plans", "binarySha256": digest(executable), "baselinePlanningCoveragePct": 0})
     # 单独保存准备阶段。冻结每例的合格集合与需求定义；每次仍独立盘点和对账。
     preparations = {}
     if args.planning_preparation:
@@ -197,7 +224,8 @@ def run_suite(args, output, root, resolve_cases, code_version):
             if (job["request"] != case["request"] or job["selection"] != case["genre"]
                     or job.get("durationMs") != case.get("targetMs") or job["evidence"] != evidence
                     or job["eligibleEvidence"] != eligible or job.get("candidateWindows") != candidate_windows
-                    or job.get("eligibilityScope") != scope):
+                    or job.get("eligibilityScope") != scope
+                    or (args.planning_shots and job.get("aspectRatio", "16:9") != shot_aspect(case))):
                 raise ValueError(f"{case['id']}: 冻结准备阶段与本轮输入不一致")
             value = json.loads((previous / "metrics.json").read_text(encoding="utf-8"))
             if value["status"] != "prepared":
@@ -208,7 +236,10 @@ def run_suite(args, output, root, resolve_cases, code_version):
             for name in ("inventory.json", "eligible-evidence.json", "genre.json", "eligibility.json"):
                 shutil.copy2(previous / name, directory / name)
                 hashes[name] = digest(directory / name)
+            # 再次中断后仍可核对完整输入并续跑，不能只留下支持结果却丢掉 job/metrics。
+            shutil.copy2(previous / "job.json", directory / "job.json")
             value.update({"frozenFrom": str(previous), "frozenArtifactHashes": hashes})
+            write_json(directory / "metrics.json", value)
             preparations[case["id"]] = value
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers or 4) as pool:
@@ -240,6 +271,9 @@ def run_suite(args, output, root, resolve_cases, code_version):
             report(output, cases, results, scope, preparations)
             print(f"{value['caseId']}/{value['repeat']}: {value['status']} sections={value['sections']} coverage={value['planningReferenceCoveragePct']}", flush=True)
     report(output, cases, results, scope, preparations)
+    if args.planning_shots:
+        from shot_metrics import report_shots
+        report_shots(output, results, snapshot.parent / "baseline-final-2026-10-01")
     after = {str(p): digest(p) for p in protected_files}
     write_json(output / "isolation-audit.json", {"before": before, "after": after, "frozenUnchanged": before == after,
                "windowCounts": [json.loads(p.read_text(encoding="utf-8")).get("isolation", {}).get("windows") for p in output.glob("*/*/planning-result.json")]})

@@ -186,3 +186,19 @@ python scripts/footage-eval/run.py --planning-only --snapshot D:\自动剪辑系
 中断后可在上述命令中加 `--planning-preparation <旧输出目录>` 并使用新输出目录，复用已成功的 prepare。代码逐例检查请求、体裁选择、目标时长、完整原证据、上游候选/窗及轨道完全一致，输出保存准备来源与文件哈希；三次正式运行仍重新 `evaluate`、盘点、查找支持、判体裁和生成/审核。旧盘点仅供冻结需求定义，不把旧支持结论当三次独立结果。
 
 2026-10-05 正式交付采用全新准备、12 例 × 3 次完整运行：24 份策划、12 次真实缺口、无最终审核拒绝或运行失败；8 个素材足够的宣传例全部 3/3，引用 100%、非法 ID/越窗 0。逐例任务 4 对比、18 次体裁补测、哈希与未验证边界见 [策划校准变更记录](../changes/2026-10-05-planning-calibration.md)。
+
+## 策划 → 全片组合 → 证据源窗精修（任务 5）
+
+```powershell
+python scripts/footage-eval/run.py --planning-shots --snapshot D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\frozen-2026-10-01 --eligible-evidence .footage-eval/shot-verification-resumed-2026-10-05/candidates.json --output .footage-eval/shot-relations-rerun-new --workers 4
+```
+
+12 例 × 3 次，真实 Provider、冻结风险快照与完整盘点，每次独立生成/审核策划、逐槽位看图评分、邻镜关系观察、代码组合及精修。此模式隔离任务 5 的效果，固定盘点及需求支持结论；任务 4b 的 `--planning-only` 仍三次重算盘点。没有声音、时间线、预览、编辑器或 GUI。`--planning-preparation` 只允许复用完整相同输入的成功准备阶段；`--skip-build --eval-binary <路径>` 可绑定已有评测二进制的 SHA256。运行中源文件冻结，不把旧二进制的结果绑定到新源码。
+
+可选 `--verify-candidates` 在每次正式运行独立核验本体裁关键未知，花絮同时核验空镜比例所需的 EmptyShot 未知；因候选池改变而重新盘点，成功候选不重发，有限补发由代码参数控制。固定风险快照时，`verification-audit.json` 只统计快照来源那一次真实核验，不将其乘成 36 次。重试前合格数从当前最终合格集合中扣除依靠补发恢复的片段，后者仍须通过原底线；首轮/最终请求失败与重试成功分别计数，HTTP 429 耗尽原 Provider 退避不再套预算。与任务 4b 的受限比例比较不能单独归因为重试，因为新一轮重新策划、输入核验也可能变化。
+
+`shot-result.json` 记录组合/精修/最终关系状态，`combination.json` 保存最少复用结果及同约束穷举不足证明；搜索预算耗尽明确失败，不当无解。`relations-input.json`、`refined-shots.json`、`final-relations*.json`、逐请求轨迹保存机器事实与实际源窗。精修后关系重新看实际端点，未改范围的成功关系缓存；关系错误只修后镜，其他镜头冻结。
+
+`shot-metrics.json` 由 Python 独立对账实际源窗、风险证据、邻镜事实和隔离 SQLite，不采信 Rust 自报的零值。`shot-summary.json` / `shot-report.md` 汇总重复 assetId、相似复用与未知对数、相邻同场景次数、在窗高光率、动作截断、裁切出画/未知、越窗、跨硬切、合格池和受限比例，包含均值、最差及实测分母；完整精修与零输出分开报告。无镜头/未精修约束保持 N/A；动作、高光和裁切的机器样本不是人工真值，最佳窗、关系、裁切金标均 N/A。旧基线只比较已有的重复/越窗/硬切指标，旧 sameSegmentReuseProxy 不冒充视觉相似。
+
+最小新增契约检查：`python scripts/footage-eval/test_shot_metrics.py`（空结果及旧端点关系不可借用）、`cargo test --manifest-path src-tauri/Cargo.toml --lib relations_contract`（组合/关系与源窗边界）。三体裁真实成片和桌面验收仍属任务 6/8。

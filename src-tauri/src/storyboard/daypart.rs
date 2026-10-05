@@ -1,5 +1,5 @@
 //! 昼夜顺序：按拍文字里明说的时段和素材证据 timeOfDay 过滤召回，保持简报的白天→夜晚顺序。
-//! 只信证据字段（day / night），unknown 与旧证据不参与过滤；过滤后候选太少就不过滤。
+//! 只信证据字段（day / night）；候选不足如实留空，不撤销过滤。
 
 use crate::models::{StoryboardBeat, StoryboardSource};
 use std::borrow::Cow;
@@ -86,11 +86,10 @@ fn source_daypart(source: &StoryboardSource) -> Option<&str> {
         .find(|value| matches!(*value, "day" | "night"))
 }
 
-/// 按规则剔除时段相反的候选；剩下的视频/图片候选少于 `min_keep` 时原样返回，交给召回排序。
+/// 按规则剔除时段相反的候选；不足也不放回。
 pub(crate) fn sources_for_rule<'a>(
     sources: &'a [StoryboardSource],
     rule: DaypartRule,
-    min_keep: usize,
 ) -> Cow<'a, [StoryboardSource]> {
     let excluded = match rule {
         DaypartRule::Any => return Cow::Borrowed(sources),
@@ -102,11 +101,7 @@ pub(crate) fn sources_for_rule<'a>(
         .filter(|source| source_daypart(source) != Some(excluded))
         .cloned()
         .collect::<Vec<_>>();
-    let visual = kept
-        .iter()
-        .filter(|source| matches!(source.kind.as_str(), "video" | "image"))
-        .count();
-    if kept.len() == sources.len() || visual < min_keep {
+    if kept.len() == sources.len() {
         Cow::Borrowed(sources)
     } else {
         Cow::Owned(kept)
@@ -147,5 +142,32 @@ mod tests {
                 DaypartRule::NotDay,
             ]
         );
+    }
+
+    #[test]
+    fn insufficient_candidates_never_restore_the_opposite_daypart() {
+        let source = StoryboardSource {
+            asset_id: "night".into(),
+            kind: "video".into(),
+            duration_ms: Some(2000),
+            scene_segments: vec![],
+            ocr_evidence: vec![],
+            visual_evidence: vec![crate::models::VisualEvidence {
+                detail: Some(crate::models::ShotDetail {
+                    time_of_day: Some("night".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            visual_quality_score: None,
+            evidence_embedding: None,
+            keyframe_grid_path: None,
+            keyframes: vec![],
+            source_path: None,
+            segment: None,
+            segment_embedding: None,
+            segment_clip_embedding: None,
+        };
+        assert!(sources_for_rule(&[source], DaypartRule::NotNight).is_empty());
     }
 }

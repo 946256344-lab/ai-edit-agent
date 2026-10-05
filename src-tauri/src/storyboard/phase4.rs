@@ -25,6 +25,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tauri::AppHandle;
 
+#[path = "source_windows.rs"]
+pub(crate) mod evidence;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum Phase4Pass {
     A,
@@ -144,9 +147,44 @@ pub(crate) struct Phase4Session {
     pub(crate) aspect_ratio: crate::media_options::AspectRatio,
     /// 音乐先行时的音乐窗口：内容定长后切点吸附到节拍上；整条生成且配音关、有可卡点的曲子时才有。
     pub(crate) music_plan: Option<crate::music_plan::MusicPlan>,
+    /// 新链路显式绑定证据精修结果；历史调用缺项仍按旧流程，任务 6 接线时必须填写。
+    evidence_windows: HashMap<i64, evidence::RefinedEvidenceShot>,
 }
 
 impl Phase4Session {
+    pub(crate) fn bind_evidence_windows(
+        &mut self,
+        windows: HashMap<i64, evidence::RefinedEvidenceShot>,
+    ) -> Result<(), String> {
+        if self.initialized {
+            return Err("Phase 4 evidence must be bound before initialization".into());
+        }
+        self.evidence_windows = windows;
+        Ok(())
+    }
+
+    /// 时钟/重叠修正之后再守证据；失败只标相应镜头，不把不安全画面补回来。
+    pub(crate) fn evidence_issues(&self, content: &StoryboardContent) -> Vec<StoryboardIssue> {
+        let mut issues = Vec::new();
+        for (order, bound) in &self.evidence_windows {
+            let valid = content.shots.iter().find(|s| s.order_index == *order).is_some_and(|s| {
+                s.asset_id == bound.selected.reference.asset_id
+                    && s.segment_id.as_deref() == Some(bound.selected.reference.segment_id.as_str())
+                    && s.source_start_ms >= bound.selected.reference.range.start_ms
+                    && s.source_end_ms <= bound.selected.reference.range.end_ms
+                    && bound.protected_highlights.iter().all(|t| *t >= s.source_start_ms && *t < s.source_end_ms)
+                    && bound.protected_actions.iter().all(|r| r.start_ms >= s.source_start_ms && r.end_ms <= s.source_end_ms)
+                    && s.source_start_ms == bound.source_range.start_ms
+                    && s.source_end_ms == bound.source_range.end_ms
+                    && s.crop_focus == Some(bound.crop_focus)
+            });
+            if !valid {
+                issues.push(StoryboardIssue::new("evidence_window_violation",
+                    "Evidence highlight/action/crop or allowed single-shot window was changed; repair only this shot.", true).for_shots(vec![*order]));
+            }
+        }
+        issues
+    }
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -1333,6 +1371,7 @@ User instruction for these shots (follow it inside the locked window; never swap
     resolve_overlaps_within_chosen_windows_scoped(&mut refined, &pick_map, mutable.as_ref());
     crate::execution_deadline::check()?;
     issues.extend(collect_phase4_issues(&mut refined, selected));
+    issues.extend(session.evidence_issues(&refined));
     refined.brief = brief.to_owned();
     refined.title = rough.title.clone();
     refined.summary = rough.summary.clone();

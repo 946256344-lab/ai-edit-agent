@@ -270,7 +270,7 @@ fn glyph(character: char) -> Option<[u8; 5]> {
 }
 
 /// 左上角黑底白字，每个点放大为 4×4 像素。
-fn draw_cell_label(cell: &mut RgbImage, label: &str) {
+pub(crate) fn draw_cell_label(cell: &mut RgbImage, label: &str) {
     const SCALE: u32 = 4;
     const PAD: u32 = 4;
     let glyphs = label.chars().filter_map(glyph).collect::<Vec<_>>();

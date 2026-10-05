@@ -27,6 +27,7 @@ pub(super) fn run(job: &Value, directory: &Path, data: &Path) -> Result<(), Stri
     }
     let selection: genre::GenreSelection = serde_json::from_value(job["selection"].clone()).map_err(|e| e.to_string())?;
     let request = job["request"].as_str().ok_or("planning_eval_missing_request")?;
+    let aspect: crate::media_options::AspectRatio = serde_json::from_value(job.get("aspectRatio").cloned().unwrap_or(json!("16:9"))).map_err(|e|e.to_string())?;
     let facts: Vec<planning::UserFact> = serde_json::from_value(job.get("userFacts").cloned().unwrap_or(json!([]))).map_err(|e| e.to_string())?;
     let access = super::model_access()?;
     let outcome = (|| -> Result<Value, String> {
@@ -36,16 +37,22 @@ pub(super) fn run(job: &Value, directory: &Path, data: &Path) -> Result<(), Stri
         if let Some(frozen) = job.get("frozenInventory") {
             inventory = serde_json::from_value(frozen.clone()).map_err(|e| e.to_string())?;
         }
-        let preliminary = genre::decide_genre(&access, selection, request, &inventory, None)?;
+        let verified_decision:Option<genre::GenreDecision>=job.get("verifiedGenreDecision").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?;
+        let preliminary = genre::decide_genre(&access, selection, request, &inventory, verified_decision.as_ref())?;
         save(directory,"genre-before-eligibility.json",&preliminary)?;
         let decisions: Vec<_> = candidates.iter().map(|s| eligibility::evaluate(s, preliminary.genre,
-            crate::media_options::AspectRatio::Landscape, &eligibility::BrandIdentity::default(), &s.range, &[], true)).collect();
+            aspect, &eligibility::BrandIdentity::default(), &s.range, &[], true)).collect();
         let eligible: Vec<_> = candidates.iter().zip(&decisions).filter(|(_,d)| d.status == eligibility::EligibilityStatus::Eligible)
             .map(|(s,_)| s.clone()).collect();
         save(directory,"eligibility.json",&json!({"policyVersion":eligibility::POLICY_VERSION,"genre":preliminary.genre,
             "inputCount":candidates.len(),"eligibleCount":eligible.len(),"decisions":decisions}))?;
         save(directory,"eligible-evidence.json",&eligible)?;
-        if !eligible.is_empty() {
+        let frozen_shot_inventory = job["mode"].as_str()==Some("planning-shots")
+            && job["frozenInventoryForShotEvaluation"].as_bool()==Some(true);
+        if frozen_shot_inventory && job.get("frozenInventory").is_none() {
+            return Err("shot_eval_frozen_inventory_missing".into());
+        }
+        if !eligible.is_empty() && !frozen_shot_inventory {
             inventory = if job.get("frozenInventory").is_some() {
                 inventory::build_inventory_with_requirements(&access, request, &eligible, Some(&inventory.requirements))?
             } else { inventory::build_inventory(&access, request, &eligible)? };
@@ -80,7 +87,8 @@ pub(super) fn run(job: &Value, directory: &Path, data: &Path) -> Result<(), Stri
         }
     };
     result["isolation"] = json!({"dataDirectory":data,"windows":0});
-    result["modelEvaluation"] = json!("live_planning_only_frozen_requirements_independent_inventory");
+    result["modelEvaluation"] = json!(if job["frozenInventoryForShotEvaluation"].as_bool()==Some(true) {
+        "task5_frozen_inventory_independent_live_plan" } else { "live_planning_only_frozen_requirements_independent_inventory" });
     result["eligibilityScope"] = json!("genre_eligibility_evaluate_v1");
     save(directory,"planning-result.json",&result)
 }

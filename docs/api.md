@@ -30,6 +30,22 @@
 
 盘点与策划通过 `ask_many` 保持独立请求并发；Provider 既有 429 退避用尽不再套预算，超时/网络/TLS/5xx 仅重发失败请求，采用既有 `DEFAULT_TRANSPORT_ATTEMPTS=2` 的补发预算、不额外等待、不切换 Provider。`no_eligible_result` 把零合格片段投影为真实 `gap_only`，不归类为外部服务错误。
 
+### 预留全片组合与证据源窗（任务 5，尚未接入生成）
+
+`storyboard/relations::slots(plan, eligible)` 从已接受/受限策划产生 `ShotSlot{sectionId,expression,supportMode,reference,candidates}`，只使用本段主引用与备选。`FitFact` 保存逐槽位看图适配分与事实来源；`PairFacts` 保存有向邻镜动作前后状态、人物/场景、视线、机位、方向、时间或当次主题关联，以及相似三态/置信度/来源。`PairFacts::narrative_evidence(range)` 转为任务 3 的 `RelationEvidence[]`：动作/视线证明矛盾，人物或场景与动作证明关联，跳轴必须有两机位相对于同一轴线的事实；仅方向反转保持未知，不放行。
+
+`score_slots(access, slots, grids, genre)` 和 `observe_pairs(access, references, grids)` 分别提供适配事实及邻镜事实，独立请求并发，每批至多 4 个适配候选或 2 对双向关系，最多 4 图；模型索引缺项/重复/越界拒绝，身份与源范围由代码绑定；响应错误不生成默认关系。沿用任务 4 每基础片段一个合格窗的约束：同一 evidenceId 混用不同候选范围会以 `relations_conflicting_candidate_windows` 拒绝，网格必须只展示引用允许窗。`PairFacts.beforeRange/afterRange` 固定事实适用的端点，精修后用新范围重看，并调用 `validate_sequence(genre, shots, pairs, evidence, aspect, brand)`，不能把旧窗关系直接贴到新窗。`observe_pairs_cached` 只复用双向均成功且源范围未改的事实；精修后的关系失败按错误索引只重修后镜，其他镜头冻结。
+
+`combine(plan, eligible, slots, fits, pairs, aspect, brand, frozenReferences)` 重新核对槽位与策划、底线及冻结冲突，代码在全片范围搜索主选与备选、保持配方段序、在段内排序，优先景别变化；已证实相似画面和同片同段不可连用或全片复用，相似未知未核验也不放行。先搜索 0 次重复 assetId，失败后逐层搜索最少复用，`CombinationResult.availabilityProof` 保存同约束候选集、被拒原因与已穷举无解的复用层。达到 `MAX_SEARCH_NODES=1_000_000` 直接报预算耗尽，不能当素材不足或允许复用。花絮按有证据的有向时序或本次主题关联组合，初始空镜预算比例 ≤20%；任务 6 还须在最终时钟上再次守比例。代码不把适配高分当底线放行权。
+
+`CombinationResult.shots` 的数组顺序是最终组合顺序；`SelectedShot.slot` 是原策划 claim 的索引及局部修复键，不等于成片 `orderIndex`。任务 6 按组合数组顺序从 `EvidenceRefinementSession.completed[slot]` 取结果，再映射到最终镜头编号；不能直接迭代 HashMap 落镜。`frozenReferences` 表示本次待分配策划之外的冻结镜头，须由调用方提供其与候选的同窗双向关系事实。
+
+`storyboard/phase4::evidence::EvidenceRefinementSession::refine(access, selections, evidence, grids, geometry, aspect)` 是新链路精修入口。`constrain_window` 只接受单片段允许窗，优先证据最佳区间、保护高光、完整动作、干净端点与主体边界。`WindowObservation.changeReview` 逐条核对旧变化描述，离散动作保护实际完整区间，连续运动不机械要求从原片头用到片尾，未复核/未知仍失败；这是动作时间事实，不是素材场景/功能分类。模型没覆盖高光/动作时只补发该镜并反馈所需范围。动作跨出合格窗、主体放不进画幅或缺纵向边界时如实失败，不延伸到被淘汰时段。`MAX_WINDOW_REPAIRS=2` 限制窗约束与最终关系的有限修复；传输补发耗尽不重新套预算。返回 `RefinedEvidenceShot` 与逐镜错误，成功结果在本次 session 冻结；`retry_affected([(slot,reason)])` 仅解除错误镜头的成功缓存并带反馈，原身份及其他镜头冻结。同槽位换身份/画幅拒绝，精修不决定槽位时钟。
+
+`Phase4Session::bind_evidence_windows(HashMap<orderIndex,RefinedEvidenceShot>)` 必须在初始化前调用；已有 Phase 4 的时钟/裁窗/重叠处理后 `evidence_issues` 再核对身份、允许窗、动作、高光和裁切，仅标受影响镜头。缺绑定的历史调用不具有新证据验收。任务 6 负责接线与时钟冲突处理，不可将源窗精修成功等同于最终分镜/时间线成功。
+
+候选风险核验增加 `MAX_VERIFICATION_RETRIES=2`：只补发响应错误、越窗及瞬时传输错误，成功候选不重发；429 耗尽统一 Provider 退避后不再套预算，作用域/过期分析/缺帧不重试。`Evidence verification retry` 轨迹保存尝试数、首次/最终错误、重试成功，`SegmentEvidence` 公共字段不变。
+
 ## 桌面命令边界
 
 命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **101** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。
