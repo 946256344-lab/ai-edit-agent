@@ -1,4 +1,4 @@
-// 应用组合根：选择项目/会话，装配领域 controller 与并排对话、粗剪预览。
+// 应用组合根：选择项目，装配素材库与可选对话/粗剪预览；生成入口由产品开关控制。
 import { useEffect, useRef, useState } from 'react'
 import './styles/shell.css'
 import './styles/conversation.css'
@@ -16,6 +16,7 @@ import { AssetManagementPanel } from './components/AssetManagementPanel'
 import { ProviderSettingsModal } from './components/ProviderSettingsModal'
 import { ReleaseReadinessBanner } from './components/ReleaseReadinessBanner'
 import { EditorOutputPort } from './components/EditorOutputPort'
+import { McpConnectPanel } from './components/McpConnectPanel'
 import { WorkspaceHeader } from './components/WorkspaceHeader'
 import { FellowCutAccountModal } from './components/FellowCutAccountModal'
 import { useFellowCutAccountController } from './hooks/useFellowCutAccountController'
@@ -33,6 +34,7 @@ import { useAssetWorkspaceController } from './hooks/useAssetWorkspaceController
 import { useAnalysisGateController } from './hooks/useAnalysisGateController'
 import { useProviderController } from './hooks/useProviderController'
 import { useNavigationEditController } from './hooks/useNavigationEditController'
+import { useMcpConnectController } from './hooks/useMcpConnectController'
 import {
   confirmUserAction,
   createConversation as createStoredConversation,
@@ -56,6 +58,7 @@ import { toMessage } from './lib/message'
 import { describeSendError } from './lib/send-error'
 import { analysisAmbientStatus, analysisSummary } from './lib/asset-analysis'
 import { formatClockTime, getLocale, messages as uiMessages, useI18n } from './lib/i18n'
+import { IN_APP_GENERATION_ENABLED } from './lib/product-mode'
 
 function toEditingSession(session: StoredEditingSession): EditingSessionView {
   return {
@@ -80,7 +83,7 @@ function App() {
   const [activeEditingSessionId, setActiveEditingSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [pendingUserMessage, setPendingUserMessage] = usePendingUserMessageController()
-  const [activeView, setActiveView] = useState<WorkspaceView>('chat')
+  const [activeView, setActiveView] = useState<WorkspaceView>(IN_APP_GENERATION_ENABLED ? 'chat' : 'assets')
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [composerNotice, setComposerNotice] = useState<string | null>(null)
@@ -124,6 +127,7 @@ function App() {
     setComposerNotice,
     applyCompletion: applyAgentEditCompletion,
   })
+  const mcpConnect = useMcpConnectController(desktopRuntime)
   const assetWorkspace = useAssetWorkspaceController({
     desktopRuntime,
     storeReady: storeState === 'ready',
@@ -135,6 +139,7 @@ function App() {
       appendStoredMessage(conversationId, sessionId, 'agent', content)
     ),
     refreshEditingSessions,
+    recordImportInSession: IN_APP_GENERATION_ENABLED,
   })
   const analysisGate = useAnalysisGateController(activeProjectId, activeEditingSessionId, assetWorkspace.model.importing || assetWorkspace.model.retrying)
   const shotReplacement = useShotReplacementController({
@@ -231,10 +236,13 @@ function App() {
     if (!desktopRuntime) return
     const project = await createStoredProject(name, libraryIds)
     setProjects((current) => [project, ...current])
+    await selectProject(project.id)
+    if (!IN_APP_GENERATION_ENABLED) {
+      setActiveView('assets')
+      return
+    }
     const storedSession = await createStoredEditingSession(project.id, uiMessages().app.newSessionTitle)
     const session = toEditingSession(storedSession)
-    setActiveProjectId(project.id)
-    activeProjectRef.current = project.id
     await selectEditingSession(project.id, session.id, [session])
   }
 
@@ -589,7 +597,8 @@ function App() {
           deleteProject: (projectId) => void navigationEditing.actions.deleteProject(projectId),
           renameSession: navigationEditing.actions.renameSession,
           openProvider: provider.actions.open,
-          openAssets: () => shotReplacement.actions.requestAction(() => setActiveView(activeView === 'assets' ? 'chat' : 'assets')),
+          openAssets: () => shotReplacement.actions.requestAction(() => setActiveView(IN_APP_GENERATION_ENABLED && activeView === 'assets' ? 'chat' : 'assets')),
+          openConnect: () => shotReplacement.actions.requestAction(() => setActiveView('connect')),
         }}
       />
 
@@ -607,7 +616,7 @@ function App() {
 
         <div className="workspace-canvas">
         <ReleaseReadinessBanner enabled={storeState === 'ready'} />
-        {activeView !== 'assets' && <header className="cut-heading">
+        {IN_APP_GENERATION_ENABLED && activeView === 'chat' && <header className="cut-heading">
           <div>
             <h1 title={artifactWorkspace.storyboard?.title ?? activeEditingSession?.title}>{artifactWorkspace.storyboard?.title ?? activeEditingSession?.title ?? t.app.headingFallback}</h1>
             <div className="cut-meta">
@@ -629,8 +638,9 @@ function App() {
           />
         </header>}
         {activeView === 'assets' && <div className="asset-overlay"><AssetManagementPanel model={assetWorkspace.model} actions={assetWorkspace.actions} /></div>}
-        <PairedWorkspace
-          hidden={activeView === 'assets'}
+        {activeView === 'connect' && <div className="asset-overlay"><McpConnectPanel model={mcpConnect.model} /></div>}
+        {IN_APP_GENERATION_ENABLED && <PairedWorkspace
+          hidden={activeView !== 'chat'}
           chat={(
             <AgentWorkspace
               model={{
@@ -673,11 +683,11 @@ function App() {
               actions={{ artifact: artifactWorkspace.actions, replacement: shotReplacement.actions }}
             />
           )}
-        />
+        />}
         </div>
       </section>
 
-      <AnalysisIncompleteDialog
+      {IN_APP_GENERATION_ENABLED && <AnalysisIncompleteDialog
         open={analysisGate.prompting}
         progress={analysisGate.progress}
         importing={assetWorkspace.model.importing}
@@ -687,7 +697,7 @@ function App() {
           analysisGate.cancel()
           shotReplacement.actions.requestAction(() => setActiveView('assets'))
         }}
-      />
+      />}
       <AssetAnalysisModal controller={assetWorkspace.analysis} />
       <ProviderSettingsModal controller={provider} />
       <FellowCutAccountModal controller={fellowcutAccount} />

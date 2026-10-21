@@ -58,6 +58,20 @@ fn env_override(name: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// 当前可执行文件所在目录及其上一级（sidecar 与主程序同目录，或偶发子目录）。
+pub(crate) fn exe_ancestor_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.to_path_buf());
+            if let Some(grandparent) = parent.parent() {
+                dirs.push(grandparent.to_path_buf());
+            }
+        }
+    }
+    dirs
+}
+
 fn bundled_media_candidates(app: Option<&AppHandle>, name: &str, file_name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let Some(directory) = bundled_tool_directory(name) else {
@@ -79,11 +93,10 @@ fn bundled_media_candidates(app: Option<&AppHandle>, name: &str, file_name: &str
                 .join(file_name),
         );
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            paths.push(parent.join(file_name));
-            paths.push(parent.join("resources").join(directory).join(file_name));
-        }
+    for dir in exe_ancestor_dirs() {
+        paths.push(dir.join(file_name));
+        paths.push(dir.join("resources").join(directory).join(file_name));
+        paths.push(dir.join(directory).join(file_name));
     }
     paths
 }
@@ -125,12 +138,10 @@ fn bundled_python_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
                 .join(file_name),
         );
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            paths.push(parent.join("resources").join("python").join(file_name));
-            paths.push(parent.join("python").join(file_name));
-            paths.push(parent.join(file_name));
-        }
+    for dir in exe_ancestor_dirs() {
+        paths.push(dir.join("resources").join("python").join(file_name));
+        paths.push(dir.join("python").join(file_name));
+        paths.push(dir.join(file_name));
     }
     paths
 }

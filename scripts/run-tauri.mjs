@@ -157,12 +157,47 @@ function ensureThirdPartyNoticesForBuild() {
   console.log('安装包：第三方许可声明已更新')
 }
 
+// Release / dev 都把 voycut-mcp 放到 sidecar 位置，安装包不必再手工拷贝。
+// 不写进 tauri.conf.json，避免 cargo check 在未构建 sidecar 时失败。
+let mcpExternalBin = null
+function hostTriple() {
+  const result = spawnSync('rustc', ['-vV'], { encoding: 'utf8', env, cwd: repoRoot })
+  const match = result.stdout?.match(/^host:\s+(\S+)/m)
+  return match?.[1] ?? 'x86_64-pc-windows-msvc'
+}
+
+function ensureMcpSidecar() {
+  if (tauriArgs[0] !== 'build' && tauriArgs[0] !== 'dev') return
+  const release = tauriArgs[0] === 'build' && !tauriArgs.includes('--debug')
+  const profile = release ? 'release' : 'debug'
+  const cargoArgs = ['build', '--manifest-path', 'src-tauri/Cargo.toml', '--bin', 'voycut-mcp']
+  if (release) cargoArgs.push('--release')
+  console.log(`安装包：构建 sidecar voycut-mcp (${profile})`)
+  const built = spawnSync('cargo', cargoArgs, { stdio: 'inherit', cwd: repoRoot, env })
+  if (built.status !== 0) {
+    console.error('无法构建 voycut-mcp sidecar。')
+    process.exit(1)
+  }
+  const source = path.join(repoRoot, 'src-tauri', 'target', profile, 'voycut-mcp.exe')
+  if (!existsSync(source)) {
+    console.error(`未找到 ${source}`)
+    process.exit(1)
+  }
+  const binariesDir = path.join(repoRoot, 'src-tauri', 'binaries')
+  mkdirSync(binariesDir, { recursive: true })
+  const destination = path.join(binariesDir, `voycut-mcp-${hostTriple()}.exe`)
+  writeFileSync(destination, readFileSync(source))
+  mcpExternalBin = ['binaries/voycut-mcp']
+  console.log(`安装包：写入 sidecar ${destination}`)
+}
+
 ensureGatewayForBuild()
 ensureFfmpegForBuild()
 ensurePythonForBuild()
 ensureTesseractForBuild()
 ensureDirectmlForRun()
 ensureThirdPartyNoticesForBuild()
+ensureMcpSidecar()
 if (fullModelsFlag) {
   const requiredOnnx = [
     'src-tauri/resources/models/bge-small-zh-v1.5/onnx/model.onnx',
@@ -181,21 +216,26 @@ if (fullModelsFlag) {
   console.log('完整版：准备捆绑 BGE/CLIP ONNX')
 }
 
-if (extraResourceConfigs.length > 0) {
-  const baseConfig = JSON.parse(
-    readFileSync(path.join(repoRoot, 'src-tauri', 'tauri.conf.json'), 'utf8'),
-  )
-  const resources = [...(baseConfig.bundle?.resources ?? [])]
-  for (const configPath of extraResourceConfigs) {
-    const json = JSON.parse(readFileSync(configPath, 'utf8'))
-    resources.push(...(json.bundle?.resources ?? []))
+if (extraResourceConfigs.length > 0 || mcpExternalBin) {
+  const bundle = {}
+  if (extraResourceConfigs.length > 0) {
+    const baseConfig = JSON.parse(
+      readFileSync(path.join(repoRoot, 'src-tauri', 'tauri.conf.json'), 'utf8'),
+    )
+    const resources = [...(baseConfig.bundle?.resources ?? [])]
+    for (const configPath of extraResourceConfigs) {
+      const json = JSON.parse(readFileSync(configPath, 'utf8'))
+      resources.push(...(json.bundle?.resources ?? []))
+    }
+    bundle.resources = resources
   }
+  if (mcpExternalBin) bundle.externalBin = mcpExternalBin
   const mergedDir = path.join(repoRoot, 'src-tauri', 'target')
   mkdirSync(mergedDir, { recursive: true })
   const mergedPath = path.join(mergedDir, 'tauri.merged-resources.conf.json')
-  writeFileSync(mergedPath, `${JSON.stringify({ bundle: { resources } }, null, 2)}\n`)
+  writeFileSync(mergedPath, `${JSON.stringify({ bundle }, null, 2)}\n`)
   tauriArgs.push('--config', mergedPath)
-  console.log(`安装包：写入合并资源 ${mergedPath}（${resources.length} 项）`)
+  console.log(`安装包：写入合并资源 ${mergedPath}${bundle.resources ? `（${bundle.resources.length} 项）` : ''}${mcpExternalBin ? ' + voycut-mcp sidecar' : ''}`)
 }
 
 const child = spawn(process.execPath, [tauriJs, ...tauriArgs], {

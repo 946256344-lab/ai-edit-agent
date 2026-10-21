@@ -39,6 +39,13 @@
 .asset-list-card__head strong { font-size: var(--text-md); font-weight: 600; }
 .asset-list-card__head p { margin: 4px 0 0; color: var(--text-2); font-size: var(--text-xs); line-height: 1.5; }
 .asset-list-card__head small { color: var(--text-2); font-family: var(--font-mono); font-size: var(--text-xs); }
+.asset-list-card__tools { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.asset-search input {
+  width: min(220px, 36vw); height: 32px; padding: 0 10px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--text-xs);
+}
+.asset-search input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-wash); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .asset-edit-toolbar { display: flex; align-items: center; gap: 10px; padding: 4px 2px 12px; color: var(--text-2); font-size: var(--text-xs); }
 .asset-edit-toolbar button { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--text-xs); }
 .asset-edit-toolbar button:hover:not(:disabled) { background: var(--bg-sunken); }

@@ -25,7 +25,7 @@ flowchart LR
   Timeline --> Handoff[HandoffPlan / 编辑器输出]
 ```
 
-React 19 / TypeScript / Vite 运行于 Tauri 2 WebView。`App.tsx` 组合工作区，controllers 管状态与动作，components 展示，`src/lib/local-store.ts` 集中 invoke。Rust 校验作用域、访问 SQLite/媒体/凭据、请求模型、创建产物和审计。模型输出是提案；产物事实由数据库、文件与工具收据决定。代码地图见 [codebase/STRUCTURE.md](codebase/STRUCTURE.md)。
+React 19 / TypeScript / Vite 运行于 Tauri 2 WebView。`App.tsx` 组合工作区，controllers 管状态与动作，components 展示，`src/lib/local-store.ts` 集中 invoke。默认界面由 `src/lib/product-mode.ts` 的 `IN_APP_GENERATION_ENABLED` 控制：关闭时主路径是登录/设置 → 项目 → 导入分析 → 浏览检索素材与片段证据 → 「接入 Claude Code / Codex」；输入框、体裁、故事版、时间线、预览、配音和交付按钮不可见，后端命令保留。Rust 校验作用域、访问 SQLite/媒体/凭据、请求模型、创建产物和审计。模型输出是提案；产物事实由数据库、文件与工具收据决定。代码地图见 [codebase/STRUCTURE.md](codebase/STRUCTURE.md)。
 
 ## 导入、共享范围与分析
 
@@ -147,7 +147,7 @@ timeline 先投影 HandoffPlan，项目 settings_json.outputEditor 记选择；�
 
 ### 外部 Agent MCP
 
-`voycut-mcp` 是无窗口 stdio MCP 进程，不启动桌面 GUI 或开发服务器。默认打开与桌面应用同一 identifier 下的 SQLite，因此应用开着时也能读库和交付；WAL 与 5 秒 busy timeout 避免并发写坏数据库。工具只复用已有列表/检索、`load_asset_evidence` 与 `deliver_to_editor`：外部 Agent 自己决定镜头清单，Voycut 负责校验源窗并写出新草稿。不提供分析工具，不读凭据库。可选 `VOYCUT_APP_DATA_DIR` 把数据根指到隔离目录（验收脚本用），生产接入不要设。接入配置见 README，契约见 [api.md](api.md)「本地 MCP 工具」。
+`voycut-mcp` 是无窗口 stdio MCP 进程，不启动桌面 GUI 或开发服务器。Release 安装包通过 `scripts/run-tauri.mjs` 注入 Tauri `externalBin`，把 `voycut-mcp.exe` 放进与主程序相同的安装目录；进程按可执行文件目录查找随包 Python 与剪映适配脚本，不必设 `PYTHON_PATH`。默认打开与桌面应用同一 identifier 下的 SQLite，因此应用开着时也能读库和交付；WAL 与 5 秒 busy timeout 避免并发写坏数据库。工具只复用已有列表/检索、`load_asset_evidence` 与 `deliver_to_editor`：外部 Agent 自己决定镜头清单，Voycut 负责校验源窗并写出新草稿。不提供分析工具，不读凭据库。可选 `VOYCUT_APP_DATA_DIR` 把数据根指到隔离目录（验收脚本用），生产接入不要设。桌面「接入 Claude Code / Codex」面板调用 `get_mcp_install_info` 展示本机实际路径和可复制命令。接入配置见 README，契约见 [api.md](api.md)「本地 MCP 工具」。
 
 证据：`src-tauri/src/mcp.rs`、`mcp/{protocol,tools}.rs`、`src-tauri/src/bin/voycut_mcp.rs`。
 

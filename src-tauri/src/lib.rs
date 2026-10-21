@@ -194,6 +194,7 @@ pub fn run() {
             preview_cache::get_preview_cache_status,
             preview_cache::clear_preview_cache,
             release_readiness::get_release_readiness,
+            mcp::get_mcp_install_info,
             runtime_models::get_runtime_model_status,
             runtime_models::start_runtime_model_download,
             jianying::create_jianying_draft,

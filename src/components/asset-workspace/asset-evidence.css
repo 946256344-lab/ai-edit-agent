@@ -29,6 +29,14 @@
 .asset-detail__segment-play .asset-detail__play-label { margin-left: auto; color: var(--accent); font-size: var(--text-xs); }
 .asset-detail__segment-play:disabled .asset-detail__play-label { color: var(--text-3); }
 .asset-detail__segment > p { margin-top: 8px; }
+.asset-detail__risks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.asset-detail__risk {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-pill);
+  background: var(--fill); color: var(--text-2); font-size: var(--text-xs);
+}
+.asset-detail__risk--hit { background: var(--danger-wash, var(--accent-wash)); color: var(--danger-text); }
+.asset-detail__risk--not_hit { background: var(--ok-wash, var(--fill)); color: var(--ok, var(--text)); }
+.asset-detail__risk--unknown { background: var(--fill); color: var(--text-2); }
 .asset-detail__facts { margin-top: 8px; }
 .asset-detail__facts summary { color: var(--text-2); font-size: var(--text-xs); cursor: pointer; }
 .asset-detail__facts dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 6px 0 0; font-size: var(--text-xs); }

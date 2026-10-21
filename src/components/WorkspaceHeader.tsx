@@ -19,7 +19,7 @@ export function WorkspaceHeader({ model, actions }: { model: WorkspaceHeaderMode
   const { openAccount, windowControls } = actions
   const { t } = useI18n()
   const copy = t.header
-  const current = model.view === 'assets' ? t.sidebar.library : model.sessionTitle
+  const current = model.view === 'assets' ? t.sidebar.library : model.view === 'connect' ? t.sidebar.connect : model.sessionTitle
   return (
     <header className="topbar" data-tauri-drag-region>
       <div className="crumbs" data-tauri-drag-region title={`${model.projectName} / ${current}`}>{model.projectName}<span data-tauri-drag-region>/</span><strong data-tauri-drag-region>{current}</strong></div>

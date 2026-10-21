@@ -48,7 +48,7 @@
 
 ## 桌面命令边界
 
-命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **101** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。
+命令清单以 `src-tauri/src/lib.rs::generate_handler!` 为准，共 **102** 个；包括仍注册的兼容命令。前端 invoke 只在 `src/lib/local-store.ts`，并非每个注册命令都有 wrapper。参数用 camelCase；表内类型为 Rust 声明，`AppHandle` 由 Tauri 注入、不属于输入，`Option<T>` 为可省略/空值，`Result<T, String>` 成功返回 T、失败拒绝 Promise。DTO 的序列化字段以 `models.rs` 及各命令模块的 serde 声明、bridge 类型为准。
 
 ### 账号、模型与外部服务
 
@@ -163,6 +163,7 @@
 | `get_preview_cache_status` | `projectId: String` | `Result<PreviewCacheStatus, String>` | 读取当前项目预览中间缓存占用；不访问源媒体。 |
 | `clear_preview_cache` | `projectId: String, confirmed: bool` | `Result<PreviewCacheStatus, String>` | 删除 `previews/cache/<projectId>`。必须 `confirmed=true`；不删除 timeline 最终 preview 目录、素材或 SQLite 记录。 |
 | `get_release_readiness` | `无` | `Result<ReleaseReadinessReport, String>` | 启动/发行就绪检查。`overall`=`ready\|degraded\|blocked`；每项 `id/title/status/message/messageKey/messageParams`（`status`=`ok\|warn\|fail`；`messageKey` 如 `diskSpace.low` 为稳定文案键，前端按界面语言翻译，未知键回落中文 `message`）。FFmpeg/FFprobe 与 Tesseract/英文数据优先探测安装包资源。不探测源媒体内容，不写库。 |
+| `get_mcp_install_info` | `无` | `Result<McpInstallInfo, String>` | 解析本机 `voycut-mcp` 路径（安装目录 sidecar，其次开发 target），返回 `executablePath/exists/claudeCommand/codexToml` 供界面复制。不启动 MCP、不读凭据、不改数据。路径找不到时仍给出安装目录期望路径且 `exists=false`。 |
 | `get_runtime_model_status` | `无` | `Result<RuntimeModelStatus, String>` | 查询 BGE/CLIP ONNX 是否已在 `app_data` 或安装包就绪，以及下载进度。`messageParams.model` 为产物 id，前端按界面语言显示模型名。 |
 | `start_runtime_model_download` | `无` | `Result<RuntimeModelStatus, String>` | 后台下载缺失的 ONNX 并校验 SHA-256；官方/国内镜像轮换、断点续传与自动重试；幂等；不挡 UI。 |
 
@@ -313,7 +314,7 @@ Agent 完成条件只区分问答/新生成/局部改镜/其他编辑。问答�
 
 ## 本地 MCP 工具（外部 Agent）
 
-独立二进制 `voycut-mcp` 通过 stdio 提供 JSON-RPC MCP（newline 分隔，兼容 Content-Length）。与桌面应用共用 `assembly-video-agent.sqlite3`（WAL + busy timeout），应用开着或关着都能读库和交付；不启动窗口，不暴露凭据，不提供会花模型额度的分析工具。接入示例见根 README。实现：`src-tauri/src/mcp.rs`、`mcp/{protocol,tools}.rs`、`src-tauri/src/bin/voycut_mcp.rs`。环境变量 `VOYCUT_APP_DATA_DIR` 可改数据根（测试隔离用），缺省为桌面应用数据目录。
+独立二进制 `voycut-mcp` 通过 stdio 提供 JSON-RPC MCP（newline 分隔，兼容 Content-Length）。Release 安装包由 `scripts/run-tauri.mjs` 以 Tauri `externalBin` sidecar 带上 `voycut-mcp.exe`，与主程序同目录，运行时按可执行文件目录解析随包 Python / `create_jianying_draft.py`，不必设 `PYTHON_PATH`。与桌面应用共用 `assembly-video-agent.sqlite3`（WAL + busy timeout），应用开着或关着都能读库和交付；不启动窗口，不暴露凭据，不提供会花模型额度的分析工具。接入命令由桌面 `get_mcp_install_info` 按本机实际路径生成；实现：`src-tauri/src/mcp.rs`、`mcp/{protocol,tools}.rs`、`src-tauri/src/bin/voycut_mcp.rs`。环境变量 `VOYCUT_APP_DATA_DIR` 可改数据根（测试隔离用），缺省为桌面应用数据目录。
 
 工具结果以 JSON 文本放在 MCP `content[0].text`，并带 `structuredContent`。领域失败返回 `isError=true` 和真实原因，不假成功。
 
@@ -329,7 +330,7 @@ Agent 完成条件只区分问答/新生成/局部改镜/其他编辑。问答�
 
 ## 源码核对入口
 
-`src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（32 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
+`src-tauri/src/lib.rs`（102 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（96 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（32 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。
 
 
 ## 片段证据契约 v1（2026-10-05）

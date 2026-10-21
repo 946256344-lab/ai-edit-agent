@@ -1,7 +1,7 @@
 // 素材详情：原片预览、源片段播放与真实视觉内容（含导入时整段识别的细节）；OCR 按需展开，不修改素材或时间线。
-import { useRef, useState, type MouseEvent } from 'react'
+import { useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
-import type { AssetEvidence, ShotDetail } from '../../lib/local-store'
+import type { AssetEvidence, RiskEvidence, SegmentEvidence, ShotDetail } from '../../lib/local-store'
 import './asset-evidence.css'
 import { messages, useI18n } from '../../lib/i18n'
 import type { Messages } from '../../lib/i18n'
@@ -31,6 +31,8 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
   const [mediaReady, setMediaReady] = useState(false)
   const [mediaError, setMediaError] = useState(false)
   const segments = evidence.segments ?? []
+  const segmentEvidence = evidence.segmentEvidence ?? []
+  const evidenceBySegment = new Map(segmentEvidence.map((item) => [item.segmentId, item]))
   const mediaUrl = convertFileSrc(evidence.mediaPath)
   const isVideo = evidence.kind === 'video'
 
@@ -101,6 +103,7 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
           </button>
           <MotionEnergyChart segment={segment} onSeek={isVideo && mediaReady && !mediaError ? seekTo : undefined} />
           <p>{segment.visualEvidence ? evidenceLabel(segment.visualEvidence, t) : copy.noSegmentDescription}</p>
+          <SegmentRisks evidence={evidenceBySegment.get(segment.id)} />
           {segment.visualEvidence?.detail && <ShotDetailFacts detail={segment.visualEvidence.detail} />}
         </article>)}
       </section>}
@@ -108,6 +111,18 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
       {segments.length === 0 && evidence.keyframes.length > 0 && <section className="asset-detail__section"><h4>{copy.keyframes}</h4><div className="asset-detail__frames">
         {evidence.keyframes.map(frame => <figure key={frame.imagePath}><img src={convertFileSrc(frame.imagePath)} alt={copy.keyframeAlt(formatTimeMs(frame.timeMs))} loading="lazy" /><figcaption>{formatTimeMs(frame.timeMs)}</figcaption></figure>)}
       </div></section>}
+
+      {segments.length === 0 && segmentEvidence.length > 0 && (
+        <section className="asset-detail__section" aria-label={copy.evidenceTitle}>
+          <h4>{copy.evidenceTitle}</h4>
+          {segmentEvidence.map((item) => (
+            <article className="asset-detail__segment" key={item.id}>
+              <p>{item.caption || copy.noSegmentDescription}</p>
+              <SegmentRisks evidence={item} />
+            </article>
+          ))}
+        </section>
+      )}
 
       {evidence.visualEvidence.length > 0 && <section className="asset-detail__section" aria-label={copy.visualAnalysis}>
         <h4>{copy.visualAnalysis}</h4>
@@ -118,6 +133,26 @@ export function AssetEvidenceInspector({ evidence, onClose }: { evidence: AssetE
         {evidence.ocrEvidence.map(item => <p key={`${item.timeMs}-${item.text}`}><span>{formatTimeMs(item.timeMs)}</span>{item.text}</p>)}
       </details>}
     </section>
+  )
+}
+
+function SegmentRisks({ evidence }: { evidence: SegmentEvidence | undefined }) {
+  const copy = useI18n().t.assetDetail
+  const risks = evidence?.risks ?? []
+  if (risks.length === 0) return evidence ? <p className="asset-detail__motion-empty">{copy.evidenceEmpty}</p> : null
+  return (
+    <div className="asset-detail__risks" aria-label={copy.evidenceTitle}>
+      {risks.map((risk: RiskEvidence) => {
+        const state = copy.riskStates[risk.state] ?? risk.state
+        const name = copy.risks[risk.risk] ?? risk.risk
+        const percent = risk.confidence == null ? '' : ` ${copy.riskConfidence(Math.round(risk.confidence * 100))}`
+        return (
+          <span key={risk.id} className={`asset-detail__risk asset-detail__risk--${risk.state}`}>
+            {name} · {state}{percent}
+          </span>
+        )
+      })}
+    </div>
   )
 }
 

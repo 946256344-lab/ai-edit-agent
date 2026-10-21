@@ -16,6 +16,7 @@ dist-ssr
 *.local
 src-tauri/target
 src-tauri/target-*
+src-tauri/binaries/*.exe
 
 # CLIP ONNX weights exceed GitHub's 100MB file limit; fetch via scripts/fetch-clip-models.ps1
 src-tauri/resources/models/clip-ViT-B-32-vision/model.onnx

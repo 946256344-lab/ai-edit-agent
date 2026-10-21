@@ -1,0 +1,26 @@
+/* 接入 Claude Code / Codex：阅读路径与可复制配置，颜色只引用全局变量。 */
+.mcp-connect {
+  display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0;
+  overflow: auto; padding: 8px 24px 24px 16px; color: var(--text);
+}
+.mcp-connect__header h1 { margin: 6px 0 8px; font: 600 var(--text-xl)/1.3 var(--font-display); letter-spacing: -.3px; }
+.mcp-connect__header p { max-width: 640px; margin: 0; color: var(--text-2); font-size: var(--text-sm); line-height: 1.7; }
+.mcp-connect__path { margin: 0; }
+.mcp-connect__path > div { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+.mcp-connect__path dt { color: var(--text-2); font-size: var(--text-xs); }
+.mcp-connect__path dd { display: flex; align-items: center; gap: 12px; margin: 0; min-width: 0; }
+.mcp-connect__path code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-xs); }
+.mcp-connect__status { margin: 0; color: var(--warn-text); font-size: var(--text-sm); line-height: 1.6; }
+.mcp-connect__snippet, .mcp-connect__tools {
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.mcp-connect__snippet header, .mcp-connect__tools h2 { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mcp-connect h2 { margin: 0; font-size: var(--text-sm); font-weight: 600; }
+.mcp-connect pre {
+  margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: var(--radius-sm);
+  background: var(--bg-sunken); color: var(--text); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.6;
+}
+.mcp-connect__tools p { margin: 8px 0 10px; color: var(--text-2); font-size: var(--text-sm); line-height: 1.7; }
+.mcp-connect__tools ul { margin: 0; padding-left: 18px; color: var(--text); font-size: var(--text-sm); line-height: 1.7; }
+.mcp-connect__tools code { font-family: var(--font-mono); font-size: var(--text-xs); }

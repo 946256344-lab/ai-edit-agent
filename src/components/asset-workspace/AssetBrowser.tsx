@@ -66,11 +66,13 @@ type AssetBrowserProps = {
   matchingAssetCount: number
   assets: AssetView[]
   filtered?: boolean
+  search?: string
+  onSearch?: (value: string) => void
   onInspect: (id: string) => void
   analysis?: ReactNode
 }
 
-export function AssetBrowser({ title, breadcrumb, isRoot, matchingAssetCount, assets, filtered, onInspect, editing, analysis }: AssetBrowserProps) {
+export function AssetBrowser({ title, breadcrumb, isRoot, matchingAssetCount, assets, filtered, search, onSearch, onInspect, editing, analysis }: AssetBrowserProps) {
   const { t } = useI18n()
   const copy = t.assets
   return (
@@ -80,7 +82,21 @@ export function AssetBrowser({ title, breadcrumb, isRoot, matchingAssetCount, as
           <strong>{title}</strong>
           <p>{breadcrumb}</p>
         </div>
-        <small>{assets.length} / {matchingAssetCount}</small>
+        <div className="asset-list-card__tools">
+          {onSearch && (
+            <label className="asset-search">
+              <span className="visually-hidden">{copy.searchLabel}</span>
+              <input
+                type="search"
+                value={search ?? ''}
+                onChange={(event) => onSearch(event.target.value)}
+                placeholder={copy.searchPlaceholder}
+                aria-label={copy.searchLabel}
+              />
+            </label>
+          )}
+          <small>{assets.length} / {matchingAssetCount}</small>
+        </div>
       </header>
       {analysis}
       {assets.length > 0 && <div className="asset-edit-toolbar"><button onClick={editing.actions.selectAll}>{editing.model.selectedIds.length === assets.length ? t.common.clearSelection : copy.selectAllInList}</button><span>{copy.selectedCount(editing.model.selectedIds.length)}</span><button disabled={!editing.model.selectedIds.length || editing.model.busy} onClick={editing.actions.remove}>{copy.removeFromLibrary}</button></div>}
@@ -90,7 +106,7 @@ export function AssetBrowser({ title, breadcrumb, isRoot, matchingAssetCount, as
         </div>
       ) : (
         <div className="asset-list-card__empty">
-          {filtered ? copy.emptyFiltered : matchingAssetCount === 0 && isRoot
+          {search?.trim() ? copy.emptySearch : filtered ? copy.emptyFiltered : matchingAssetCount === 0 && isRoot
             ? copy.emptyAll
             : copy.emptyDirect}
         </div>

@@ -27,6 +27,7 @@ export type AssetWorkspaceModel = {
   unfiledAssetCount: number
   assets: AssetView[]
   selectedDirectoryKey: string
+  search: string
   health: AssetHealthScanSummary | null
   relinkPreview: AssetRelinkPreview | null
   hasRelinkSource: boolean
@@ -40,6 +41,7 @@ export type AssetWorkspaceActions = {
   resumeAnalysis: () => void
   editing: AssetLibraryEditController['actions']
   selectDirectory: (directoryKey: string) => void
+  setSearch: (value: string) => void
   inspectAsset: (assetId: string) => void
   closeEvidence: () => void
   importFiles: () => void
@@ -112,7 +114,9 @@ export function AssetManagementPanel({ model, actions }: { model: AssetWorkspace
             isRoot={model.selectedDirectoryKey === 'all'}
             matchingAssetCount={model.page.total}
             assets={model.assets}
-            filtered={model.analysisFilter !== null}
+            filtered={model.analysisFilter !== null || Boolean(model.search.trim())}
+            search={model.search}
+            onSearch={actions.setSearch}
             onInspect={actions.inspectAsset}
             editing={{ model: model.editing, actions: actions.editing }}
             analysis={(model.page.progress.total > 0 || model.importing || model.analysisNotice) ? (

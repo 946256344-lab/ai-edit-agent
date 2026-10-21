@@ -105,7 +105,7 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .session-row:hover .session-actions, .session-row:focus-within .session-actions, .session-actions[open] { opacity: 1; }
 .switcher-empty { margin: 10px; color: var(--text-2); font-size: var(--text-xs); line-height: 1.7; }
 
-.project-sidebar-footer { display: grid; gap: 2px; flex-shrink: 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.project-sidebar-footer { display: grid; gap: 2px; flex-shrink: 0; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); }
 .project-sidebar-footer .workspace-icon { color: var(--text-2); }
 .project-sidebar-footer button { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-strong); font-size: var(--text-sm); text-align: left; }
 .project-sidebar-footer button:hover { background: var(--fill-strong); }

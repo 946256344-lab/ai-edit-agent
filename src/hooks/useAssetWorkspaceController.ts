@@ -48,6 +48,7 @@ type AssetWorkspaceControllerOptions = {
   ensureEditingSession: () => Promise<EditingContext>
   appendAgentMessage: (conversationId: string, sessionId: string, content: string) => Promise<void>
   refreshEditingSessions: (projectId: string) => Promise<unknown>
+  recordImportInSession: boolean
 }
 
 const EMPTY_PAGE: Pick<AssetPage, 'total' | 'directories' | 'unfiledCount' | 'counts' | 'progress'> = {
@@ -104,6 +105,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
   const [directoryKey, setDirectoryKey] = useState('all')
   const [evidence, setEvidence] = useState<AssetEvidence | null>(null)
   const [analysisFilter, setAnalysisFilter] = useState<AssetAnalysisState | null>(null)
+  const [search, setSearch] = useState('')
   const [importingProjectId, setImportingProjectId] = useState<string | null>(null)
   const [retryingProjectId, setRetryingProjectId] = useState<string | null>(null)
   const importing = importingProjectId !== null && importingProjectId === options.projectId
@@ -122,6 +124,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       void listAssetPage(projectId, {
         directoryKey: directoryKey === 'all' ? undefined : directoryKey,
         analysisState: analysisFilter ?? undefined,
+        search: search.trim() || undefined,
         offset: 0,
         limit: 100,
       }).then((nextPage) => {
@@ -147,7 +150,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [analysisFilter, directoryKey, options.activeProjectRef, options.desktopRuntime, options.projectId, pageRevision])
+  }, [analysisFilter, directoryKey, options.activeProjectRef, options.desktopRuntime, options.projectId, pageRevision, search])
 
   useEffect(() => {
     if (!options.desktopRuntime || !options.projectId) return
@@ -213,6 +216,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     setRelinkSourceDirectory(null)
     setEvidence(null)
     setAnalysisFilter(null)
+    setSearch('')
     setAnalysisNotice(null)
   }
 
@@ -228,7 +232,10 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
 
   async function importSelectedAssets() {
     if (!options.desktopRuntime) return
-    const context = await currentOrNewEditingContext()
+    const projectId = options.recordImportInSession
+      ? (await currentOrNewEditingContext()).projectId
+      : options.projectId
+    if (!projectId) return
     const selected = await open({
       multiple: true,
       filters: [{
@@ -238,52 +245,61 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
     })
     if (!selected) return
     const sources = Array.isArray(selected) ? selected : [selected]
-    setImportingProjectId(context.projectId)
+    setImportingProjectId(projectId)
     setAnalysisNotice(null)
     try {
-      const imported = await importAssets(context.projectId, sources)
-      if (options.activeProjectRef.current === context.projectId) {
-        analysis.showImported(context.projectId, imported.map(asset => asset.id))
+      const imported = await importAssets(projectId, sources)
+      if (options.activeProjectRef.current === projectId) {
+        analysis.showImported(projectId, imported.map(asset => asset.id))
         setPageRevision((value) => value + 1)
         setHealthRevision((value) => value + 1)
       }
-      await options.appendAgentMessage(
-        context.conversationId,
-        context.sessionId,
-        messages().assets.imported(imported.length),
-      )
-      await options.refreshEditingSessions(context.projectId)
+      if (options.recordImportInSession) {
+        const context = await currentOrNewEditingContext()
+        await options.appendAgentMessage(
+          context.conversationId,
+          context.sessionId,
+          messages().assets.imported(imported.length),
+        )
+        await options.refreshEditingSessions(context.projectId)
+      }
     } catch {
-      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice(messages().assets.importFilesFailed)
+      if (options.activeProjectRef.current === projectId) setAnalysisNotice(messages().assets.importFilesFailed)
     } finally {
-      setImportingProjectId(current => current === context.projectId ? null : current)
+      setImportingProjectId(current => current === projectId ? null : current)
     }
   }
 
   async function importSelectedFolder() {
     if (!options.desktopRuntime) return
-    const context = await currentOrNewEditingContext()
+    const projectId = options.recordImportInSession
+      ? (await currentOrNewEditingContext()).projectId
+      : options.projectId
+    if (!projectId) return
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
-    setImportingProjectId(context.projectId)
+    setImportingProjectId(projectId)
     setAnalysisNotice(null)
     try {
-      const imported = await importAssetFolder(context.projectId, selected)
-      if (options.activeProjectRef.current === context.projectId) {
-        analysis.showImported(context.projectId, imported.map(asset => asset.id))
+      const imported = await importAssetFolder(projectId, selected)
+      if (options.activeProjectRef.current === projectId) {
+        analysis.showImported(projectId, imported.map(asset => asset.id))
         setPageRevision((value) => value + 1)
         setHealthRevision((value) => value + 1)
       }
-      await options.appendAgentMessage(
-        context.conversationId,
-        context.sessionId,
-        messages().assets.importedFolder(imported.length),
-      )
-      await options.refreshEditingSessions(context.projectId)
+      if (options.recordImportInSession) {
+        const context = await currentOrNewEditingContext()
+        await options.appendAgentMessage(
+          context.conversationId,
+          context.sessionId,
+          messages().assets.importedFolder(imported.length),
+        )
+        await options.refreshEditingSessions(context.projectId)
+      }
     } catch {
-      if (options.activeProjectRef.current === context.projectId) setAnalysisNotice(messages().assets.importFolderFailed)
+      if (options.activeProjectRef.current === projectId) setAnalysisNotice(messages().assets.importFolderFailed)
     } finally {
-      setImportingProjectId(current => current === context.projectId ? null : current)
+      setImportingProjectId(current => current === projectId ? null : current)
     }
   }
 
@@ -390,6 +406,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       unfiledAssetCount: page.unfiledCount,
       assets,
       selectedDirectoryKey: directoryKey,
+      search,
       health,
       relinkPreview,
       hasRelinkSource: Boolean(relinkSourceDirectory),
@@ -402,6 +419,7 @@ export function useAssetWorkspaceController(options: AssetWorkspaceControllerOpt
       selectAnalysisFilter: (state: AssetAnalysisState | null) => { editing.actions.clear(); setAssets([]); setAnalysisFilter(state) },
       retryFailed: () => void retryFailed(),
       selectDirectory,
+      setSearch,
       inspectAsset: (assetId: string) => void inspectAsset(assetId),
       closeEvidence: () => setEvidence(null),
       importFiles: () => void importSelectedAssets(),

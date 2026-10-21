@@ -236,6 +236,53 @@ export type AssetEvidence = {
       detail?: ShotDetail | null
     } | null
   }>
+  segmentEvidence?: SegmentEvidence[]
+}
+
+export type EvidenceState = 'hit' | 'not_hit' | 'unknown'
+export type RiskKind =
+  | 'brand_logo'
+  | 'exhibition'
+  | 'out_of_focus'
+  | 'shake'
+  | 'clutter'
+  | 'on_screen_text'
+  | 'crowd'
+  | 'motion_blur'
+  | 'staged'
+  | 'advertising'
+  | 'empty_shot'
+
+export type EvidenceRange = { startMs: number; endMs: number }
+export type EvidenceSource = {
+  analysisId: string
+  model: string | null
+  method: string
+  analysisVersion: number
+}
+export type RiskEvidence = {
+  id: string
+  risk: RiskKind | string
+  state: EvidenceState | string
+  source: EvidenceSource
+  range: EvidenceRange
+  confidence: number | null
+  value?: unknown
+}
+export type SegmentEvidence = {
+  schemaVersion: number
+  id: string
+  analysisSnapshotId: string
+  assetId: string
+  segmentId: string
+  range: EvidenceRange
+  source: EvidenceSource
+  risks: RiskEvidence[]
+  visualEvidence?: unknown[]
+  relations?: ShotDetail | null
+  motionProfile?: unknown
+  caption?: string | null
+  narrativeRole?: string | null
 }
 
 export type StoryboardVersion = {
@@ -681,6 +728,18 @@ export type ReleaseReadinessReport = {
 export async function getReleaseReadiness() {
   requireDesktopRuntime()
   return invoke<ReleaseReadinessReport>('get_release_readiness')
+}
+
+export type McpInstallInfo = {
+  executablePath: string | null
+  exists: boolean
+  claudeCommand: string
+  codexToml: string
+}
+
+export async function getMcpInstallInfo() {
+  requireDesktopRuntime()
+  return invoke<McpInstallInfo>('get_mcp_install_info')
 }
 
 export type RuntimeModelArtifactStatus = {

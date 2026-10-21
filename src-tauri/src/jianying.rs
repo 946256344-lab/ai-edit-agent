@@ -148,16 +148,14 @@ fn jianying_adapter_script(app: &AppHandle) -> Result<PathBuf, String> {
             paths.push(parent.join("scripts").join("create_jianying_draft.py"));
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            paths.push(parent.join("scripts").join("create_jianying_draft.py"));
-            paths.push(
-                parent
-                    .join("resources")
-                    .join("scripts")
-                    .join("create_jianying_draft.py"),
-            );
-        }
+    for dir in crate::process::exe_ancestor_dirs() {
+        paths.push(dir.join("scripts").join("create_jianying_draft.py"));
+        paths.push(
+            dir.join("resources")
+                .join("scripts")
+                .join("create_jianying_draft.py"),
+        );
+        paths.push(dir.join("create_jianying_draft.py"));
     }
     paths
         .into_iter()

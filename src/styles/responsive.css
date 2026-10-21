@@ -37,7 +37,7 @@
   .project-sidebar { overflow: visible; padding: 14px 8px; }
   .assembly-wordmark { justify-content: center; padding: 4px 0 20px; }
   .assembly-wordmark > span { display: none; }
-  .sidebar-label, .project-selector strong, .project-selector > .workspace-icon, .sidebar-library span, .sidebar-library small, .new-edit span, .session-copy, .session-actions, .project-sidebar-footer button span, .local-status span, .switcher-empty { display: none; }
+  .sidebar-label, .project-selector strong, .project-selector > .workspace-icon, .sidebar-library span, .sidebar-library small, .new-edit span, .session-copy, .session-actions, .project-sidebar-footer button span, .local-status span, .switcher-empty, .mcp-connect__header p { display: none; }
   .project-selector { justify-content: center; min-height: 48px; padding: 5px; }
   .sidebar-library, .new-edit { justify-content: center; padding: 0; }
   .session-select { justify-content: center; padding: 6px 0; }

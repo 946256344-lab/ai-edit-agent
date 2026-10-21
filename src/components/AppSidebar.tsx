@@ -8,6 +8,7 @@ import { NameEditDialog } from './NameEditDialog'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { BrandMark } from './BrandMark'
 import { useI18n } from '../lib/i18n'
+import { IN_APP_GENERATION_ENABLED } from '../lib/product-mode'
 
 export type AppSidebarModel = {
   projects: StoredProject[]
@@ -33,6 +34,7 @@ export type AppSidebarActions = {
   renameSession: (sessionId: string, title: string) => Promise<void>
   openProvider: () => void
   openAssets: () => void
+  openConnect: () => void
 }
 export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions: AppSidebarActions }) {
   const sidebar = useRef<HTMLElement>(null)
@@ -71,7 +73,7 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
                 <summary aria-label={copy.editItem(project.name)} title={copy.projectActions}>•••</summary>
                 <div className="item-menu">
                   <button onClick={() => setRenameTarget({ kind: 'project', id: project.id, name: project.name })}>{t.common.rename}</button>
-                  <button onClick={() => setSettingsProjectId(project.id)}>{copy.projectSettings}</button>
+                  {IN_APP_GENERATION_ENABLED && <button onClick={() => setSettingsProjectId(project.id)}>{copy.projectSettings}</button>}
                   <button className="danger" onClick={() => actions.deleteProject(project.id)}>{copy.deleteProject}</button>
                 </div>
               </details>
@@ -83,9 +85,12 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
           <WorkspaceIcon name="library" /><span><strong>{copy.library}</strong><small>{copy.libraryCount(model.assetCount)}</small></span>
           {model.analysisStatus !== 'idle' && <i className={`sidebar-library__status sidebar-library__status--${model.analysisStatus}`} aria-hidden="true" />}
         </button>
-        <button className="new-edit" onClick={actions.createSession} title={copy.newSessionTitle}><WorkspaceIcon name="plus" /><span>{copy.newEdit}</span></button>
+        <button className={`sidebar-library ${model.view === 'connect' ? 'selected' : ''}`} aria-label={copy.connect} aria-pressed={model.view === 'connect'} title={copy.connectTitle} onClick={actions.openConnect}>
+          <WorkspaceIcon name="arrow" /><span><strong>{copy.connect}</strong></span>
+        </button>
+        {IN_APP_GENERATION_ENABLED && <button className="new-edit" onClick={actions.createSession} title={copy.newSessionTitle}><WorkspaceIcon name="plus" /><span>{copy.newEdit}</span></button>}
       </div>
-      <nav className="sidebar-sessions" aria-label={copy.sessions}>
+      {IN_APP_GENERATION_ENABLED && <nav className="sidebar-sessions" aria-label={copy.sessions}>
         <span className="sidebar-label">{copy.sessions}</span>
         {!model.sessions.length && <p className="switcher-empty">{copy.sessionsEmpty}</p>}
         {model.sessions.map((session) => <div className={`session-row ${session.id === model.activeSessionId && model.view !== 'assets' ? 'selected' : ''} ${session.state === 'working' ? 'is-working' : ''}`} key={session.id}>
@@ -101,10 +106,10 @@ export function AppSidebar({ model, actions }: { model: AppSidebarModel; actions
             </div>
           </details>
         </div>)}
-      </nav>
+      </nav>}
       <div className="project-sidebar-footer">
         <button title={copy.modelSettingsTitle(model.providerLabel)} aria-label={copy.modelSettings} onClick={actions.openProvider}><WorkspaceIcon name="model" /><span>{copy.modelSettings}</span></button>
-        <button title={copy.projectSettings} aria-label={copy.projectSettings} onClick={() => setSettingsProjectId(model.activeProjectId)}><WorkspaceIcon name="settings" /><span>{copy.projectSettings}</span></button>
+        {IN_APP_GENERATION_ENABLED && <button title={copy.projectSettings} aria-label={copy.projectSettings} onClick={() => setSettingsProjectId(model.activeProjectId)}><WorkspaceIcon name="settings" /><span>{copy.projectSettings}</span></button>}
         <button title={t.language.switchTitle} aria-label={`${t.language.label}: ${t.language.switchTo}`} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><WorkspaceIcon name="language" /><span>{t.language.switchTo}</span></button>
         <span className="local-status"><i className={`connection-dot ${model.storeState}`} /><span>{model.storeState === 'ready' ? t.common.localWorkspace : t.common.localDisconnected}</span></span>
       </div>

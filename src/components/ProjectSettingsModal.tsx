@@ -5,6 +5,7 @@ import type { PreviewCacheStatus } from '../lib/local-store'
 import { messages, useI18n } from '../lib/i18n'
 import { useBrandKitController } from '../hooks/useBrandKitController'
 import { BrandKitSection } from './BrandKitSection'
+import { IN_APP_GENERATION_ENABLED } from '../lib/product-mode'
 
 type ProjectSettingsModalProps = {
   open: boolean
@@ -102,9 +103,9 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
         <h2>{copy.title}</h2>
         <p>{projectName ? copy.projectLine(projectName) : copy.selectProjectFirst}</p>
 
-        <BrandKitSection brand={brand} disabled={!projectId} />
+        {IN_APP_GENERATION_ENABLED && <BrandKitSection brand={brand} disabled={!projectId} />}
 
-        <label className="provider-option chosen">
+        {IN_APP_GENERATION_ENABLED && <label className="provider-option chosen">
           <span>
             <strong>{copy.slotsTitle}</strong>
             <small>{copy.slotsHint}</small>
@@ -117,9 +118,9 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
           >
             {[3, 4, 5, 6, 7, 8, 9].map((count) => <option key={count} value={count}>{copy.slotsOption(count)}</option>)}
           </select>
-        </label>
+        </label>}
 
-        <div className="provider-option chosen">
+        {IN_APP_GENERATION_ENABLED && <div className="provider-option chosen">
           <span>
             <strong>{copy.cacheTitle}</strong>
             <small>
@@ -127,20 +128,20 @@ export function ProjectSettingsModal({ open, projectId, projectName, onClose }: 
             </small>
           </span>
           <b>{status ? formatBytes(status.bytesUsed) : busy ? copy.reading : '—'}</b>
-        </div>
-        {status && (
+        </div>}
+        {IN_APP_GENERATION_ENABLED && status && (
           <p className="oauth-status">
             {copy.cacheFiles(status.fileCount, formatBytes(status.limitBytes))}
           </p>
         )}
         {error && <p className="oauth-status">{error}</p>}
-        <button
+        {IN_APP_GENERATION_ENABLED && <button
           className="outline-button modal-button"
           onClick={() => void handleClear()}
           disabled={!projectId || busy}
         >
           {busy ? t.common.processing : copy.clearCache}
-        </button>
+        </button>}
       </section>
     </dialog>
   )

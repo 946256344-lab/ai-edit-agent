@@ -31,7 +31,7 @@ Voycut 提供本地 stdio MCP 进程 `voycut-mcp`：外部 Agent 查询已分析
 cargo build --manifest-path src-tauri/Cargo.toml --bin voycut-mcp
 ```
 
-开发产物默认在 `src-tauri\target\debug\voycut-mcp.exe`。安装包分发时把该可执行文件与 Voycut 放在同一目录。
+开发产物默认在 `src-tauri\target\debug\voycut-mcp.exe`。`npm run tauri:build` / `tauri:dev` 会把该二进制写成 sidecar，Release 安装包自动包含 `voycut-mcp.exe`，装好后不必手工拷贝；在安装目录运行时按可执行文件位置查找随包 Python 与资源，不必设 `PYTHON_PATH`。应用内「接入 Claude Code / Codex」会显示本机实际路径。
 
 Claude Code：
 
