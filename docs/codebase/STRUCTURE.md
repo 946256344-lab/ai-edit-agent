@@ -50,11 +50,12 @@
 ## 2）入口点与启动顺序
 
 1. `src-tauri/src/main.rs` 只调用 `app_lib::run()`。
-2. `src-tauri/src/lib.rs` 安装 log/dialog/opener 插件并注册稳定 Tauri 命令表。
-3. `src/main.tsx` 将 `<App />` 挂载到 WebView。
-4. `src/App.tsx` 调用 `initializeLocalStore()`，再加载首个项目和剪辑任务。
-5. `projects::initialize_local_store` 执行中断任务恢复、素材分析恢复和剪映 / CapCut 注册恢复。
-6. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由剪映 / CapCut 链接器以版本化 JSON 调用。FCPXML/OTIO 由 `handoff/` 直接写出。
+2. `src-tauri/src/bin/voycut_mcp.rs` 只调用 `app_lib::mcp::run()`，无窗口 stdio MCP。
+3. `src-tauri/src/lib.rs` 安装 log/dialog/opener 插件并注册稳定 Tauri 命令表。
+4. `src/main.tsx` 将 `<App />` 挂载到 WebView。
+5. `src/App.tsx` 调用 `initializeLocalStore()`，再加载首个项目和剪辑任务。
+6. `projects::initialize_local_store` 执行中断任务恢复、素材分析恢复和剪映 / CapCut 注册恢复。
+7. `src-tauri/scripts/create_jianying_draft.py` 不是独立入口，只能由剪映 / CapCut 链接器以版本化 JSON 调用。FCPXML/OTIO 由 `handoff/` 直接写出。
 
 ## 3）前端边界
 
@@ -80,6 +81,7 @@ src/main.tsx
 | 模块 | 当前职责 |
 | --- | --- |
 | `lib.rs` | 插件初始化与 Tauri 命令注册 |
+| `mcp.rs` | 无窗口 stdio MCP：列项目、检索素材证据、按镜头清单新建时间线并交付 |
 | `projects.rs` | 项目、任务、conversation、消息、启动恢复 |
 | `taskrouter.rs` | 项目内任务归属、快照、pending route、一次性 receipt |
 | `agent.rs` | conversation 异步 run 与原子终态提交 |

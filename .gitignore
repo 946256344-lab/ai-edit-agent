@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 .footage-eval/
+.mcp-verify/
 scripts/footage-eval/__pycache__/
 dist
 dist-ssr

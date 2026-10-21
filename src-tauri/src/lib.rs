@@ -39,6 +39,8 @@ mod models;
 /// Jamendo 凭据、搜索、授权资格与有界下载适配器。
 mod music_plan;
 mod music_provider;
+/// 本地 stdio MCP：外部 Agent 查素材并按镜头清单交付编辑器草稿。
+pub mod mcp;
 /// 实验性 loopback PKCE 流程与 Windows Credential Manager 访问。
 mod oauth;
 /// 本地 ONNX 推理设备：DirectML 显卡优先、CPU 回退，同一模型串行推理。

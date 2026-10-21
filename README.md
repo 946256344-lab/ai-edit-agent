@@ -21,6 +21,39 @@ npm run tauri:dev
 
 `npm run tauri:dev` 会在 debug 进程中开启 Native Provider JSONL 转储。完整请求/响应写入 `src-tauri/target/native-provider-full-trace.jsonl`，不进入界面；release 构建即使设置同名变量也保持关闭。
 
+## MCP：给 Claude Code / Codex 用
+
+Voycut 提供本地 stdio MCP 进程 `voycut-mcp`：外部 Agent 查询已分析的本机素材库，按镜头清单写出剪映 / CapCut / FCPXML / OTIO 草稿（只新建、不覆盖）。桌面应用开着或关着都能用；不暴露凭据，也不提供会花模型额度的分析工具。工具契约见 [docs/api.md](docs/api.md)「本地 MCP 工具」。
+
+先构建二进制：
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --bin voycut-mcp
+```
+
+开发产物默认在 `src-tauri\target\debug\voycut-mcp.exe`。安装包分发时把该可执行文件与 Voycut 放在同一目录。
+
+Claude Code：
+
+```powershell
+claude mcp add voycut -- "C:\Program Files\Voycut\voycut-mcp.exe"
+```
+
+开发机示例：
+
+```powershell
+claude mcp add voycut -- "D:\自动剪辑系统\worktrees\mcp-server\src-tauri\target\debug\voycut-mcp.exe"
+```
+
+Codex（`~/.codex/config.toml`）：
+
+```toml
+[mcp_servers.voycut]
+command = "C:\\Program Files\\Voycut\\voycut-mcp.exe"
+```
+
+工具包括：`list_projects`、`list_assets`、`search_assets`、`get_asset_evidence`、`create_and_deliver_timeline`。镜头清单为素材 id + 源入出点 + 顺序，可选字幕/旁白文本；非法参数返回真实错误。
+
 `npm run dev` 仅用于浏览器 UI 检查，不能访问本地项目、媒体工具或模型凭据，不能作为剪辑模式使用。
 
 Tauri 脚本会在进程 `PATH` 中加入当前用户的 Rust 安装目录，无需将 Cargo 写入系统全局 `PATH`。

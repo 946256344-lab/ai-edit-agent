@@ -311,6 +311,22 @@
 
 Agent 完成条件只区分问答/新生成/局部改镜/其他编辑。问答不执行写工具，生成与局部改镜必须有对应的新产物回执；已落库但收尾未完成为 `partially_completed`，无产物如实失败。最终产物回复从持久化版本与实际音轨生成；问答文案整理只接收问题和公开事实，不携带模型草稿/工具/完整系统快照，危险内容被隐藏则回合 failed。`transcribe_asset` 已移出 Agent 目录（32 个业务工具），兼容分派返回未实现。`search_assets` 的可选过滤和分页在 Chat 调用省略时用 schema 默认；显式 query、闭合对象及范围校验仍生效。见 [变更记录](changes/2026-10-05-genre-entry-agent-facts.md)。
 
+## 本地 MCP 工具（外部 Agent）
+
+独立二进制 `voycut-mcp` 通过 stdio 提供 JSON-RPC MCP（newline 分隔，兼容 Content-Length）。与桌面应用共用 `assembly-video-agent.sqlite3`（WAL + busy timeout），应用开着或关着都能读库和交付；不启动窗口，不暴露凭据，不提供会花模型额度的分析工具。接入示例见根 README。实现：`src-tauri/src/mcp.rs`、`mcp/{protocol,tools}.rs`、`src-tauri/src/bin/voycut_mcp.rs`。环境变量 `VOYCUT_APP_DATA_DIR` 可改数据根（测试隔离用），缺省为桌面应用数据目录。
+
+工具结果以 JSON 文本放在 MCP `content[0].text`，并带 `structuredContent`。领域失败返回 `isError=true` 和真实原因，不假成功。
+
+| 工具 | 参数 | 结果与执行边界 |
+|---|---|---|
+| `list_projects` | `{ }` | 列出本机项目 `id/name/createdAt/updatedAt`。复用 `projects::list_projects`。 |
+| `list_assets` | `{ projectId: string }` | 项目可访问素材摘要（显示名、种类、时长、分析状态、片段计数）。复用 Agent 只读列表，不唤醒分析、不返回凭据。项目不存在则失败。 |
+| `search_assets` | `{ projectId: string, query?: string \| null [字符:1..200], kind?: "video" \| "image" \| "audio" \| "other" \| null, offset?: integer [0..10000], limit?: integer [1..20] }` | 复用 `search_assets_for_agent` 文本检索，再按 `SegmentEvidence` 契约附上命中素材的片段、源窗、画面描述和风险三态（`hit/not_hit/unknown`，带来源方法与置信度）。只读已持久化证据，不补核验、不花模型额度。 |
+| `get_asset_evidence` | `{ projectId: string, assetId: string [字符:1..200] }` | 单条素材完整 `AssetEvidence`：`segmentEvidence[]`、片段、关键帧 `imagePath`、源媒体路径。须属于该项目且未移除；不授权 WebView，不跑分析。 |
+| `create_and_deliver_timeline` | `{ projectId: string, editorId: "jianying" \| "capcut" \| "fcpxml" \| "otio", title?: string \| null, aspectRatio?: "9:16" \| "16:9" \| "1:1" \| null, shots: Array<{ assetId: string, sourceStartMs: integer, sourceEndMs: integer, segmentId?: string \| null, subtitleText?: string \| null, audioText?: string \| null }> [项:1..100] }` | 按数组顺序校验镜头后新建故事版与时间线，再调用现有 `deliver_to_editor`。空清单、不存在的素材、越界/空源窗、未知片段、缺时长、源文件缺失均返回真实错误。`audioText` 只写入镜头旁白字段，不合成配音。交付只新建（剪映/CapCut 唯一草稿名，FCPXML/OTIO `unique_path`），返回 `outputPath` 与 `notes`。 |
+
+镜头校验：视频源窗须落在已分析时长内；图片必须 `0-0`；给出 `segmentId` 时源窗须落在该硬切段内。项目内复用标题为 `MCP` 的剪辑会话存放这些版本，不覆盖旧故事版或时间线。
+
 ## 源码核对入口
 
 `src-tauri/src/lib.rs`（101 项注册）→ 各命令函数参数/返回 → `src/lib/local-store.ts`（95 个静态 invoke 名称，注册的兼容命令可无 wrapper）；`agentloop/tools.rs`（32 项 Schema）→ `policy.rs` / `native.rs` 白名单 → `skills.rs` 分派与各领域校验。检查与协作规则见 [harness.md](harness.md) 和 `CONTRIBUTING.md`。官方 OAuth 的外部支持范围与刷新行为未核实；本页不把原型连接描述为官方稳定契约。

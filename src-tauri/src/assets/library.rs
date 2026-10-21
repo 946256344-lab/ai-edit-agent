@@ -682,60 +682,81 @@ pub fn list_asset_page(
     })
 }
 
-#[tauri::command(async)]
-pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvidence, String> {
-    let connection = open_connection(&app)?;
-    let evidence = connection
+/// 只读片段证据与关键帧路径；不授权 WebView、不触发分析。
+pub(crate) fn load_asset_evidence(
+    connection: &Connection,
+    asset_id: &str,
+) -> Result<AssetEvidence, String> {
+    let (id, display_name, analysis_status, metadata_json, kind, media_path): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = connection
         .query_row(
             "SELECT id, display_name, analysis_status, metadata_json, kind, source_reference FROM assets WHERE id = ?1",
             params![asset_id],
             |row| {
-                let metadata: TechnicalMetadata =
-                    serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default();
-                let segment_evidence = super::evidence_contract::load_asset(&connection, &asset_id, &metadata)
-                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-                Ok(AssetEvidence {
-                    segment_evidence,
-                    id: row.get(0)?,
-                    display_name: row.get(1)?,
-                    kind: row.get(4)?,
-                    media_path: row.get(5)?,
-                    analysis_status: row.get(2)?,
-                    duration_ms: metadata.duration_ms,
-                    visual_analysis_status: metadata.visual_analysis_status,
-                    analysis_version: metadata.analysis_version,
-                    keyframes: metadata.keyframes,
-                    ocr_evidence: metadata.ocr_evidence,
-                    visual_evidence: metadata.visual_evidence,
-                    visual_analysis_note: metadata.visual_analysis_note,
-                    segments: metadata
-                        .scene_segments
-                        .into_iter()
-                        .filter(|segment| !segment.id.is_empty())
-                        .map(|segment| {
-                            let profile = segment.motion_profile.as_ref();
-                            AssetEvidenceSegment {
-                                id: segment.id,
-                                start_ms: segment.start_ms,
-                                end_ms: segment.end_ms,
-                                frames: segment.frames,
-                                visual_evidence: segment.visual_evidence,
-                                usable_start_ms: profile.map(|item| item.usable_start_ms),
-                                usable_end_ms: profile.map(|item| item.usable_end_ms),
-                                motion_tail_settled: profile.map(|item| item.tail_settled),
-                                motion_uncertain: profile
-                                    .map(|item| item.uncertain)
-                                    .filter(|uncertain| *uncertain),
-                                motion_energy: profile
-                                    .map(|item| item.energy.clone())
-                                    .unwrap_or_default(),
-                            }
-                        })
-                        .collect(),
-                })
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
             },
         )
         .map_err(|_| "Asset evidence is unavailable.".to_owned())?;
+    let metadata: TechnicalMetadata = serde_json::from_str(&metadata_json).unwrap_or_default();
+    let segment_evidence = super::evidence_contract::load_asset(connection, &id, &metadata)?;
+    Ok(AssetEvidence {
+        segment_evidence,
+        id,
+        display_name,
+        kind,
+        media_path,
+        analysis_status,
+        duration_ms: metadata.duration_ms,
+        visual_analysis_status: metadata.visual_analysis_status,
+        analysis_version: metadata.analysis_version,
+        keyframes: metadata.keyframes,
+        ocr_evidence: metadata.ocr_evidence,
+        visual_evidence: metadata.visual_evidence,
+        visual_analysis_note: metadata.visual_analysis_note,
+        segments: metadata
+            .scene_segments
+            .into_iter()
+            .filter(|segment| !segment.id.is_empty())
+            .map(|segment| {
+                let profile = segment.motion_profile.as_ref();
+                AssetEvidenceSegment {
+                    id: segment.id,
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                    frames: segment.frames,
+                    visual_evidence: segment.visual_evidence,
+                    usable_start_ms: profile.map(|item| item.usable_start_ms),
+                    usable_end_ms: profile.map(|item| item.usable_end_ms),
+                    motion_tail_settled: profile.map(|item| item.tail_settled),
+                    motion_uncertain: profile
+                        .map(|item| item.uncertain)
+                        .filter(|uncertain| *uncertain),
+                    motion_energy: profile
+                        .map(|item| item.energy.clone())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command(async)]
+pub fn get_asset_evidence(app: AppHandle, asset_id: String) -> Result<AssetEvidence, String> {
+    let connection = open_connection(&app)?;
+    let evidence = load_asset_evidence(&connection, &asset_id)?;
     app.asset_protocol_scope()
         .allow_file(&evidence.media_path)
         .map_err(|_| "Asset media could not be made available for preview.".to_owned())?;

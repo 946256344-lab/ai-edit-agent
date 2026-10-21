@@ -22,6 +22,10 @@ name = "footage-eval"
 path = "src/bin/footage_eval.rs"
 required-features = ["footage-eval"]
 
+[[bin]]
+name = "voycut-mcp"
+path = "src/bin/voycut_mcp.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

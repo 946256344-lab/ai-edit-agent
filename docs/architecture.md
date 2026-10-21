@@ -145,6 +145,12 @@ timeline 先投影 HandoffPlan，项目 settings_json.outputEditor 记选择；�
 
 证据：`handoff/{mod,deliver,fcpxml,otio}.rs`、`jianying.rs`、`capcut.rs`、`src-tauri/scripts/create_jianying_draft.py`。
 
+### 外部 Agent MCP
+
+`voycut-mcp` 是无窗口 stdio MCP 进程，不启动桌面 GUI 或开发服务器。默认打开与桌面应用同一 identifier 下的 SQLite，因此应用开着时也能读库和交付；WAL 与 5 秒 busy timeout 避免并发写坏数据库。工具只复用已有列表/检索、`load_asset_evidence` 与 `deliver_to_editor`：外部 Agent 自己决定镜头清单，Voycut 负责校验源窗并写出新草稿。不提供分析工具，不读凭据库。可选 `VOYCUT_APP_DATA_DIR` 把数据根指到隔离目录（验收脚本用），生产接入不要设。接入配置见 README，契约见 [api.md](api.md)「本地 MCP 工具」。
+
+证据：`src-tauri/src/mcp.rs`、`mcp/{protocol,tools}.rs`、`src-tauri/src/bin/voycut_mcp.rs`。
+
 ## 数据与作用域
 
 ```text
