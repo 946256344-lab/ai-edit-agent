@@ -4,7 +4,7 @@
 
 ### 进行中
 
-- [ ] P0 定位改为「素材整理 + 外部 Agent 剪辑」（2026-10-21，用户定，见 decisions 一、产品方向首条）：① MCP 服务——Claude Code / Codex 查素材、按镜头清单交付剪映 / CapCut / FCPXML / OTIO 草稿，10-21 已合并 9f89f08（stdio 进程 `voycut-mcp`，5 个工具；实测检索、取证据、FCPXML 写出、剪映 / CapCut 草稿注册；未在编辑器 GUI 打开、应用开着时并发未实测）；② 隐藏应用内生成与对话 Agent 界面 + 安装包带上 `voycut-mcp` 与并发实测，10-21 已派 Cursor，分支 `feature/hide-generation`；③ 官网与文档改定位；④ 冒烟后上线。下面「选镜与策划重做」随之暂停，6c 已停，`feature/pipeline-integration` 保留不合并。
+- [ ] P0 定位改为「素材整理 + 外部 Agent 剪辑」（2026-10-21，用户定，见 decisions 一、产品方向首条）：① MCP 服务——Claude Code / Codex 查素材、按镜头清单交付剪映 / CapCut / FCPXML / OTIO 草稿，10-21 已合并 9f89f08（stdio 进程 `voycut-mcp`，5 个工具；实测检索、取证据、FCPXML 写出、剪映 / CapCut 草稿注册；未在编辑器 GUI 打开、应用开着时并发未实测）；② 隐藏应用内生成与对话 Agent 界面 + 安装包带上 `voycut-mcp` 与并发实测，10-21 已合并 3b0384d（集中开关 `IN_APP_GENERATION_ENABLED=false`，主路径为素材库 + 「接入 Claude Code / Codex」页；Release 构建经 `run-tauri.mjs` 注入 sidecar；两个 MCP 进程并发无锁；真实安装包与应用开着时并发待 Release 冒烟）；③ 官网改定位（与法律草案同分支 `docs/legal-draft`），10-21 已派 Cursor；④ 冒烟后上线。下面「选镜与策划重做」随之暂停，6c 已停，`feature/pipeline-integration` 保留不合并。
 - [ ] P0 选镜与策划重做（2026-09-27 起，10-01 上线推迟后的主线）：产品核心收敛为「策划 + 选镜」，09-27 三次宣传片实测暴露的问题（先编故事再硬凑画面、Agent 反问与说错结果、文字与画面对不上、别家品牌与展会画面入选）按素材先行重做，不在精修层打补丁。方案已审定：`docs/plans/2026-10-01-footage-first-rework.md`；体裁标准暂行版与拍板项默认见 `docs/decisions.md` 首条；可上线标准见 decisions「首发推迟」。8 个任务进度：
   1. 评测基线：已合并 d55d224。一条命令 `python scripts/footage-eval/run.py` 复跑 10 例 × 3 次。10-04 基线：10 例中 5 例无成片（历史宣传 2 停在等配音确认、英文 15 秒配音时长冲突暂停、缺画面与叙事缺因果按设计只报缺口、工业花絮无产物）；有产物的运行策划引用覆盖 0%；局部换镜实际成功 1/3；风险机器预标每片 2–4.5 处，待金标纠正。评测数据在 `D:\自动剪辑系统\worktrees\footage-eval\.footage-eval\`，该 worktree 保留。
   2. 证据契约与补核验：已合并 a86a20d。片段证据带风险三态（命中 / 未命中 / 未知）、来源与时段，候选可按需补核验；故事版预留 genre 等字段。141 个片段核心风险项 93% 为未知，后续底线过滤必须先补核验。
